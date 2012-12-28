@@ -6,10 +6,10 @@ w=['Null character', 'Start of Header', 'Start of Text', 'End of Text', 'End of 
 whitespace=[9,10,11,12,13,32]
 singleescape=[ord("\\")]
 multipleescape=[ord('"')]
-termmacro=[ord(i) for i in "'(),;`|{}:[]"]
+termmacro=[ord(i) for i in "'(),;`|{}[]"]
 ntermmacro=[ord(i) for i in "#"]
 digit=[ord(i) for i in "0123456789"]
-constituent=[ord(i) for i in "!$%&*+-./<=>?@^_0123456789~"]+range(ord("a"),ord("z")+1)+range(ord("A"),ord("Z")+1)
+constituent=[ord(i) for i in ":!$%&*+-./<=>?@^_0123456789~"]+range(ord("a"),ord("z")+1)+range(ord("A"),ord("Z")+1)
 
 iswhitespace=1
 print "#define ISWHITESPACE %d" % (iswhitespace)

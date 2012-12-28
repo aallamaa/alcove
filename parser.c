@@ -625,7 +625,7 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
     vnode=reader(stream,0,0);
     return make_quote(vnode);
   }
-  else if (x==':') {
+  else if (x=='|') {
     vnode=reader(stream,')',2);
     lnode=make_node(vnode);
       
@@ -1723,6 +1723,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
   if (e==NULL) return NULL;
   if isatom(e)  {
       if issymbol(e) {
+          if (((char*)e->ptr)[0] == ':') return e; // e is a keyword
           if ((tmpexp=lookup(e,env))) return tmpexp;
           else 
               return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
@@ -1737,6 +1738,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
             return tmpexp->fnc(e,env);
           }
         if (issymbol(tmpexp)) {
+          if (((char*)tmpexp->ptr)[0] == ':') return error(ERROR_ILLEGAL_VALUE,e,env,"Error keyword %s can not be used as function",tmpexp->ptr); // e is a keyword
           if ((tmpexp2=lookup(tmpexp,env))) { 
             if isinternal(tmpexp2) {
                 return tmpexp2->fnc(e,env);

@@ -1,0 +1,8 @@
+
+* fix macro / code expand-macro1
+* should we store 8 bytes values directly inside content pointer of pair instead of pointing to another object
+* fix error handling / freeing ressources with setjmp
+* add support for utf-8 in string indexing and char
+* add support for documentation in function header
+* add support for default parameters
+* add support for mutilple 
