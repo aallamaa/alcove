@@ -20,7 +20,7 @@ What will ALCOVE be ?
 
 When programming we always try to get as close as possible to the data through various abstraction layers. More and more database/storage technologies are greatly improving the developping experience (schema-less databases like mongodb, in memory nosql databases such as Redis).
 
-But I feel we need code to be even closer to the data, so that's what this project is about. Getting something similar to Redis (In-memory key-value store) with some concurrency features (agent, generators,..). Basicaly data can be code, and code can be data, so when fetching data from a key for instance, you could potentially be triggering a peace of code which would return data without even knowing it.
+But I feel we need code to be even closer to the data, so that's what this project is about. Getting something similar to Redis (In-memory key-value store) with some concurrency features (agent, generators,..). Basicaly data can be code, and code can be data, so when fetching data from a key for instance, you could potentially be triggering a piece of code which would return data without even knowing it.
 
 The first part of this project is creating an interpretor for the langage which will be the core of the database. The homoiconicity of LISP made it the default choice, plus I never had the chance when i was young, student, or even when working to code in LISP so LISP (and also SmallTalk) is for me like the lost atlantide of computer science.
 
