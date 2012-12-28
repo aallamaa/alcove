@@ -1,6 +1,6 @@
 
 ===================================================
-ALCOVE A YET TO DEFINE NEW KIND OF DATAABSE/LANGAGE
+ALCOVE A YET TO DEFINE NEW KIND OF DATABASE/LANGAGE
 ===================================================
 
 (PS: The coming text will become a blog post and leave the place to a real README when this project will be advanced enough, this is really an alpha alpha status of the project... )
