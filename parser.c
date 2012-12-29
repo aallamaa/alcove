@@ -1729,7 +1729,6 @@ exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *optimize(exp_t *e,env_t *env)
-#pragma GCC diagnostic warning "-Wunused-parameter"
 {
   /* TO DO UN REF VARS*/
   exp_t *tmpexp;
@@ -1761,6 +1760,7 @@ exp_t *optimize(exp_t *e,env_t *env)
   return e;
 
 }
+#pragma GCC diagnostic warning "-Wunused-parameter"
 
 exp_t *evaluate(exp_t *e,env_t *env)
 {
