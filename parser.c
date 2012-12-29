@@ -109,7 +109,7 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
   if (env->jmp_env){
     printf("trying to longjmp\n");
     env->jmp_ret=refexp(ret);
-    printf("env:%x jmp_emv:%x jmp_ret:%x\n",(unsigned int) env,(unsigned int) env->jmp_env,(unsigned int) env->jmp_ret);
+    printf("env:%lx jmp_emv:%lx jmp_ret:%lx\n",(unsigned long) env,(unsigned long) *env->jmp_env,(unsigned long) env->jmp_ret);
     longjmp(*(env->jmp_env),1);
   }
   return ret;
@@ -178,11 +178,11 @@ inline exp_t *set_return_point(env_t *env)
   if (setjmp(*(env->jmp_env))) {
     //exception handling here
     printf("in set return point exception handling");
-    printf("env:%x jmp_env:%x jmp_ret:%x\n",(unsigned int) env,(unsigned int) env->jmp_env, (unsigned int)env->jmp_ret);
+    printf("env:%lx jmp_env:%lx jmp_ret:%lx\n",(unsigned long) env,(unsigned long) *env->jmp_env, (unsigned long)env->jmp_ret);
     return (env->jmp_ret);
   }
 
-  printf("set return point initial value env:%x jmp_env:%x jmp_ret:%x\n",(unsigned int) env,(unsigned int) env->jmp_env, (unsigned int)env->jmp_ret);
+  printf("set return point initial value env:%lx jmp_env:%lx jmp_ret:%lx\n",(unsigned long) env,(unsigned long) *env->jmp_env, (unsigned long)env->jmp_ret);
 
   return NULL;
 }
@@ -241,7 +241,7 @@ unsigned int bernstein_hash(unsigned char *key, int len)
 {
   unsigned int hash = bernstein_seed;
   int i;
-  for (i=0; i<len; ++i) hash = (hash + hash<<5) ^ key[i];
+  for (i=0; i<len; ++i) hash = (hash + (hash<<5)) ^ key[i];
   return hash;
 }
 
@@ -250,7 +250,7 @@ unsigned int bernstein_uhash(unsigned char *key, int len)
 {
   unsigned int hash = bernstein_seed;
   int i;
-  for (i=0; i<len; ++i) hash = (hash + hash<<5) ^ tolower(key[i]);
+  for (i=0; i<len; ++i) hash = (hash + (hash<<5)) ^ tolower(key[i]);
   return hash;
 }
 
@@ -275,8 +275,9 @@ int destroy_dict(dict_t *d){
   // check if in use
   keyval_t *ckv;
   keyval_t *pkv;
-  for (int i=0;i<2;i++){
-    for (unsigned int j=0;j<d->ht[i].size;j++)
+  unsigned int i,j;
+  for (i=0;i<2;i++){
+    for (j=0;j<d->ht[i].size;j++)
       {
         ckv=d->ht[i].table[j];
         while(ckv){
@@ -435,7 +436,7 @@ void print_node(exp_t *node)
     printf("nil");
   else if (node->type==EXP_ERROR)
     {
-      printf("Error: %s\n",node->ptr);
+      printf("Error: %s\n",(char*) node->ptr);
     }
 	else if (node->type==EXP_TREE){
 		printf("[ ");
@@ -445,7 +446,7 @@ void print_node(exp_t *node)
 	}
   else if (node->type==EXP_CHAR){
     if (node->s64>32) printf("#\\%c",(char)node->s64);
-    else printf("#\\%lld",node->s64);
+    else printf("#\\%lld",(long long int)node->s64);
   }
 	else if (node->type==EXP_PAIR){
 		if (istrue(node)) {printf("(");
@@ -478,7 +479,7 @@ void print_node(exp_t *node)
 	else if (node->type==EXP_NUMBER) printf("%s%ld",verbose?"_num:":"",(long) node->s64);
 	else if (node->type==EXP_FLOAT) printf("%s%lf",verbose?"_flo:":"",node->f);
 	else {
-    printf("type: %d ptr: %x\n",node->type,(unsigned int) node->ptr);
+    printf("type: %d ptr: %lx\n",node->type,(unsigned long) node->ptr);
   }
 	
 }
@@ -1238,7 +1239,7 @@ exp_t *prcmd(exp_t *e, env_t *env){
   exp_t *val;
   while ((v=v->next)){
     val=evaluate(v->content,env);
-    if (val && isstring(val)) printf("%s",val->ptr);
+    if (val && isstring(val)) printf("%s",(char*)val->ptr);
     else print_node(val);
   }
   return NULL;
@@ -1432,7 +1433,7 @@ exp_t *forcmd(exp_t *e,env_t *env){
       printf("in for cmd exception handling");
       goto error;
     }
-  printf("for cmd ret value first pass:%x\n",(unsigned int)env->jmp_ret);
+  printf("for cmd ret value first pass:%lx\n",(unsigned long)env->jmp_ret);
 
   if ((curvar=e->next)) {
     if ((curval=curvar->next)){
@@ -1534,12 +1535,12 @@ exp_t *eachcmd(exp_t *e,env_t *env){
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *timecmd(exp_t *e,env_t *env){
-#pragma GCC diagnostic warning "-Wunused-parameter"
 
   struct timeval tv;
   gettimeofday(&tv,NULL);
   return make_integeri(tv.tv_sec*1000000+tv.tv_usec);
 }
+#pragma GCC diagnostic warning "-Wunused-parameter"
 
 
 exp_t *conscmd(exp_t *e, env_t *env){
@@ -1696,7 +1697,6 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env){
-#pragma GCC diagnostic warning "-Wunused-parameter"
   env_t *newenv=make_env(NULL); // NULL instead of env
   exp_t *ret;
 
@@ -1708,6 +1708,7 @@ exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env){
   destroy_env(newenv);
   return ret;
 }
+#pragma GCC diagnostic warning "-Wunused-parameter"
 
 exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
   /* e->content = fn name,
