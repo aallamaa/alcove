@@ -96,7 +96,8 @@ typedef struct dict_t {
 
 typedef struct env_t {
   struct env_t *root;
-  jmp_buf jmp_env;
+  jmp_buf *jmp_env; // exception handling return point
+  exp_t *jmp_ret; // exception handling message passing
   dict_t *d;
 } env_t;
 
@@ -117,9 +118,12 @@ exp_t *refexp(exp_t *e);
 void *memalloc(size_t count, size_t size);
 int unrefexp(exp_t *e);
 
-/* env management*/
+/* env management and exception handling inside env*/
 env_t * make_env(env_t *rootenv);
 void *destroy_env(env_t *env);
+exp_t *set_return_point(env_t *env);
+
+
 
 /* dict management */
 void * del_keyval_dict(dict_t* d, char *key);
@@ -142,9 +146,9 @@ exp_t *make_fromstr(char *str,int length);
 exp_t *make_string(char *str,int length);
 exp_t *make_symbol(char *str,int length);
 exp_t *make_quote(exp_t *node);
-exp_t *make_integer(char *str,int length);
-exp_t *make_integeri(int64_t *i);
-exp_t *make_float(char *str,int length);
+exp_t *make_integer(char *str);
+exp_t *make_integeri(int64_t i);
+exp_t *make_float(char *str);
 exp_t *make_floatf(expfloat f);
 exp_t *make_atom(char *str,int length);
 exp_t *callmacrochar(FILE *stream,unsigned char x);

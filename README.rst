@@ -3,7 +3,7 @@
 ALCOVE A YET TO DEFINE NEW KIND OF DATABASE/LANGAGE
 ===================================================
 
-(PS: The coming text will become a blog post and leave the place to a real README when this project will be advanced enough, this is really an alpha alpha status version of the project... )
+(PS: The following text will become a blog post and leave the place to a real README when this project will be advanced enough, this is really an alpha alpha status version of the project... )
 
 History
 =======

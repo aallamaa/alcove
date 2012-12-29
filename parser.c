@@ -102,9 +102,16 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
   va_start(ap,err_message);
   ret=make_nil();
   ret->type=EXP_ERROR;
-  vasprintf(&ret->ptr, err_message, ap);
+  ret->flags=errnum;
+  vasprintf((char**)&ret->ptr, err_message, ap);
   va_end(ap);
   ret->next=refexp(id);
+  if (env->jmp_env){
+    printf("trying to longjmp\n");
+    env->jmp_ret=refexp(ret);
+    printf("env:%x jmp_emv:%x jmp_ret:%x\n",(unsigned int) env,(unsigned int) env->jmp_env,(unsigned int) env->jmp_ret);
+    longjmp(*(env->jmp_env),1);
+  }
   return ret;
 }
 
@@ -131,7 +138,7 @@ int unrefexp(exp_t *e){
     if (e->next) unrefexp(e->next);
     if ((e->type==EXP_SYMBOL)||(e->type==EXP_STRING)||(e->type==EXP_ERROR))
       free(e->ptr);
-    else if ((e->type>=EXP_NUMBER)&&(e->type<=EXP_BOOLEAN)||(e->type==EXP_INTERNAL)) {}
+    else if ((e->type>=EXP_NUMBER)||(e->type<=EXP_BOOLEAN)||(e->type==EXP_INTERNAL)) {}
     else 
       unrefexp(e->content); //check if content type is exp
     free(e);
@@ -146,6 +153,8 @@ inline env_t * make_env(env_t *rootenv)
 {
   env_t *newenv=memalloc(1,sizeof(env_t));
   newenv->root=rootenv; //env;
+  newenv->jmp_env=NULL;
+  newenv->jmp_ret=NULL;
   return newenv;
 }
 
@@ -155,9 +164,30 @@ inline void *destroy_env(env_t *env)
   
   if (env->d) 
     destroy_dict(env->d);
+  if (env->jmp_env)
+    free(env->jmp_env);
+  if (env->jmp_ret)
+    unrefexp(env->jmp_ret);
   free(env);
-
+  return NULL;
 }
+
+inline exp_t *set_return_point(env_t *env)
+{
+  env->jmp_env=memalloc(1,sizeof(jmp_buf));
+  if (setjmp(*(env->jmp_env))) {
+    //exception handling here
+    printf("in set return point exception handling");
+    printf("env:%x jmp_env:%x jmp_ret:%x\n",(unsigned int) env,(unsigned int) env->jmp_env, (unsigned int)env->jmp_ret);
+    return (env->jmp_ret);
+  }
+
+  printf("set return point initial value env:%x jmp_env:%x jmp_ret:%x\n",(unsigned int) env,(unsigned int) env->jmp_env, (unsigned int)env->jmp_ret);
+
+  return NULL;
+}
+
+
 
 /* TOKEN MANAGEMENT FUNCTIONS */
 
@@ -246,7 +276,7 @@ int destroy_dict(dict_t *d){
   keyval_t *ckv;
   keyval_t *pkv;
   for (int i=0;i<2;i++){
-    for (int j=0;j<d->ht[i].size;j++)
+    for (unsigned int j=0;j<d->ht[i].size;j++)
       {
         ckv=d->ht[i].table[j];
         while(ckv){
@@ -262,6 +292,7 @@ int destroy_dict(dict_t *d){
   }
   // FREE META?
   free(d);
+  return 1;
 }
 
 keyval_t * set_get_keyval_dict(dict_t* d, char *key, exp_t *val){
@@ -316,6 +347,7 @@ void * del_keyval_dict(dict_t* d, char *key){
       else return NULL;
     }
   }
+  return NULL;
 }
 
 
@@ -352,10 +384,8 @@ inline exp_t *make_internal(lispCmd *cmd){
   return cur;
 }
 
-inline exp_t *make_error(exp_t*node, env_t *env) {
-  /* Error code */
 
-}
+
 
 void tree_add_node(exp_t *tree,exp_t *node){
   exp_t *cur=tree;
@@ -414,8 +444,8 @@ void print_node(exp_t *node)
 		printf("] ");
 	}
   else if (node->type==EXP_CHAR){
-    if (node->s64>32) printf("#\\%c",node->s64);
-    else printf("#\\%d",node->s64);
+    if (node->s64>32) printf("#\\%c",(char)node->s64);
+    else printf("#\\%lld",node->s64);
   }
 	else if (node->type==EXP_PAIR){
 		if (istrue(node)) {printf("(");
@@ -427,7 +457,7 @@ void print_node(exp_t *node)
       printf(")");} else printf("nil");
 	}
   else if (node->type==EXP_LAMBDA){
-    if (node->meta) printf("#<procedure:%s>",node->meta);
+    if (node->meta) printf("#<procedure:%s>",(char*)node->meta);
     else printf("#<procedure>");
     if (verbose) { 
       printf("\theader:"); print_node(node->content);
@@ -437,7 +467,7 @@ void print_node(exp_t *node)
         printf(")");*/
   }
   else if (node->type==EXP_MACRO){
-    if (node->meta) printf("#<macro:%s>",node->meta);
+    if (node->meta) printf("#<macro:%s>",(char *) node->meta);
     else printf("#<macro>");
     /*  if (node->content) print_node(node->content);
         printf(")");*/
@@ -448,7 +478,7 @@ void print_node(exp_t *node)
 	else if (node->type==EXP_NUMBER) printf("%s%ld",verbose?"_num:":"",(long) node->s64);
 	else if (node->type==EXP_FLOAT) printf("%s%lf",verbose?"_flo:":"",node->f);
 	else {
-    printf("type: %d ptr: %x\n",node->type,node->ptr);
+    printf("type: %d ptr: %x\n",node->type,(unsigned int) node->ptr);
   }
 	
 }
@@ -494,7 +524,7 @@ inline exp_t *make_quote(exp_t *node){
 	return cur;  
 }
 
-inline exp_t *make_integer(char *str,int length)
+inline exp_t *make_integer(char *str)
 {
 	exp_t *cur=make_nil();
 	cur->type=EXP_NUMBER;
@@ -503,7 +533,7 @@ inline exp_t *make_integer(char *str,int length)
 	return cur;
 }
 
-inline exp_t *make_integeri(int64_t *i)
+inline exp_t *make_integeri(int64_t i)
 {
 	exp_t *cur=make_nil();
 	cur->type=EXP_NUMBER;
@@ -513,7 +543,7 @@ inline exp_t *make_integeri(int64_t *i)
 }
 
 
-inline exp_t *make_float(char *str,int length)
+inline exp_t *make_float(char *str)
 {
 	exp_t *cur=make_nil();
 	cur->type=EXP_FLOAT;
@@ -582,8 +612,8 @@ exp_t *make_atom(char *str,int length)
 	else
     {
       if (test==1) return make_symbol(stro,len);
-      else if ((test==3) &&!dot) return make_integer(stro,len);
-      else if ((test==31) || (test==3)) return make_float(stro,len);
+      else if ((test==3) &&!dot) return make_integer(stro);
+      else if ((test==31) || (test==3)) return make_float(stro);
       else return make_symbol(stro,len);
     }
 }
@@ -791,6 +821,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
     return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
     // END OF FILE PROCESSING TO BE DONE STEP 1		
   }
+  return NULL;
 }
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
 
@@ -826,13 +857,13 @@ inline exp_t *lookup(exp_t *e,env_t *env)
  
 }
 exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
-  keyval_t *ret;
+  keyval_t *ret=NULL;
   exp_t *key;
   exp_t *key2;
   if (!(env->d)) env->d=create_dict();
   if (val==NULL) val=make_nil();
   if issymbol(keyv) { 
-      if (islambda(val) && val->meta==NULL) val->meta=strdup(keyv->ptr);
+      if (islambda(val) && val->meta==NULL) val->meta=(keyval_t *)strdup(keyv->ptr);
       ret=set_get_keyval_dict(env->d,keyv->ptr,val); return val;}
   else if (ispair(keyv)) { /*evaluate(keyv,env)=val*/ 
     key=car(keyv);
@@ -854,7 +885,7 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
         if (isstring(key)){
           key2=cadr(keyv);
           if (key2 && isnumber(key2) && ischar(val))
-            if ((key2->s64>=0) && (key2->s64<strlen(key->ptr)))
+            if ((key2->s64>=0) && (key2->s64<(int64_t)strlen(key->ptr)))
               {
                 *((char*) key->ptr +key2->s64)=(unsigned char) val->s64;
                 return val;
@@ -874,7 +905,6 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
 
 exp_t *fncmd(exp_t *e, env_t *env)
 {
-  keyval_t *ret;
   exp_t *val;
   exp_t *vali;
   exp_t *header;
@@ -916,7 +946,7 @@ exp_t *defcmd(exp_t *e, env_t *env)
           val=make_node(header);
           val->next=refexp(vali);
           val->type=EXP_LAMBDA;
-          val->meta=strdup(name->ptr);
+          val->meta=(keyval_t *)strdup(name->ptr);
           if (!(env->d)) env->d=create_dict();
           ret=set_get_keyval_dict(env->d,name->ptr,val);
           return val;
@@ -964,7 +994,7 @@ exp_t *defmacro(exp_t *e, env_t *env)
         val=make_node(header);
         val->next=refexp(vali);
         val->type=EXP_MACRO;
-        val->meta=strdup(name->ptr);
+        val->meta=(keyval_t *) strdup(name->ptr);
         if (!(env->d)) env->d=create_dict();
         ret=set_get_keyval_dict(env->d,name->ptr,val);
         return val;
@@ -978,10 +1008,13 @@ exp_t *defmacro(exp_t *e, env_t *env)
     return error(EXP_ERROR_MISSING_NAME,e,env,"Error missing name or name not a lambda");
     
 }
+
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *quotecmd(exp_t *e, env_t *env)
 {
   return cadr(e);
 }
+#pragma GCC diagnostic warning "-Wunused-parameter"
 
 exp_t *ifcmd(exp_t *e, env_t *env)
 {
@@ -1166,7 +1199,7 @@ exp_t *dividecmd(exp_t *e, env_t *env)
 
 exp_t *sqrtcmd(exp_t *e, env_t *env){
   exp_t *v;
-  if (v=e->next)
+  if ((v=e->next))
     v=evaluate(v->content,env);
   if (isfloat(v)) 
     return make_floatf(sqrt(v->f));
@@ -1177,7 +1210,7 @@ exp_t *sqrtcmd(exp_t *e, env_t *env){
 
 exp_t *expcmd(exp_t *e, env_t *env){
   exp_t *v;
-  if (v=e->next)
+  if ((v=e->next))
     v=evaluate(v->content,env);
   if (isfloat(v)) 
     return make_floatf(exp(v->f));
@@ -1189,8 +1222,8 @@ exp_t *expcmd(exp_t *e, env_t *env){
 exp_t *exptcmd(exp_t *e, env_t *env){
   exp_t *v;
   exp_t *v2;
-  if (v=e->next)
-    if (v2=v->next)
+  if ((v=e->next))
+    if ((v2=v->next))
       {
         v=evaluate(v->content,env);
         v2=evaluate(v2->content,env);
@@ -1203,7 +1236,7 @@ exp_t *exptcmd(exp_t *e, env_t *env){
 exp_t *prcmd(exp_t *e, env_t *env){
   exp_t *v=e;
   exp_t *val;
-  while (v=v->next){
+  while ((v=v->next)){
     val=evaluate(v->content,env);
     if (val && isstring(val)) printf("%s",val->ptr);
     else print_node(val);
@@ -1221,7 +1254,7 @@ exp_t *prncmd(exp_t *e, env_t *env){
 
 exp_t *oddcmd(exp_t *e, env_t *env){
   if (e->next && isnumber(e->next->content)) return (e->next->content->s64&1?make_symbol("t",1):make_nil());
-  else error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
+  return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
 }
 
 exp_t *docmd(exp_t *e, env_t *env){
@@ -1295,7 +1328,7 @@ exp_t *orcmd(exp_t *e, env_t *env){
   exp_t *ret;
   do {
     if (istrue(ret=evaluate(car(cur),env))) break;
-  } while (cur=cdr(cur));
+  } while ((cur=cdr(cur)));
   return ret;
 }
 
@@ -1366,8 +1399,8 @@ exp_t *incmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *val=evaluate(cadr(e),env);
   int ret=0;
-  while (cur=cdr(cur))
-    if (ret=isoequal(val,evaluate(car(cur),env))) break;
+  while ((cur=cdr(cur)))
+    if ((ret=isoequal(val,evaluate(car(cur),env)))) break;
   return (ret?make_symbol("t",1):make_nil());
 }
 
@@ -1375,7 +1408,7 @@ exp_t *casecmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *val=evaluate(cadr(e),env);
   exp_t *ret=NULL;
-  while (cur=cdr(cur))
+  while ((cur=cdr(cur)))
     if (cur->next) 
       if (isequal(val,car(cur))) { ret=cadr(cur); break;}
       else cur=cdr(cur);
@@ -1387,16 +1420,22 @@ exp_t *casecmd(exp_t *e, env_t *env){
 
 exp_t *forcmd(exp_t *e,env_t *env){
   env_t *newenv=make_env(env);
-  exp_t *ret=make_nil();
+  exp_t *ret;
   exp_t *curvar;
   exp_t *curval;
   exp_t *curin;
   exp_t *lastidx;
   exp_t *retval;
   keyval_t *keyv;
+  if ((ret=set_return_point(newenv)))
+    {
+      printf("in for cmd exception handling");
+      goto error;
+    }
+  printf("for cmd ret value first pass:%x\n",(unsigned int)env->jmp_ret);
 
-  if (curvar=e->next) {
-    if (curval=curvar->next){
+  if ((curvar=e->next)) {
+    if ((curval=curvar->next)){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
@@ -1409,19 +1448,19 @@ exp_t *forcmd(exp_t *e,env_t *env){
           } 
           else 
             { 
-              destroy_env(newenv);
-              return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter"); 
+              ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter");
+              goto error;
             }
         }
         else { 
-          destroy_env(newenv);
-          return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter"); 
+          ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter"); 
+          goto error;
         }
         
       }
       else { 
-        destroy_env(newenv);
-        return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in for"); 
+        ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in for"); 
+        goto error;
       }
       int idx=lastidx->s64+1;
       /*if (idx>100){
@@ -1444,8 +1483,11 @@ exp_t *forcmd(exp_t *e,env_t *env){
       
     }
   }
+ error:
+  //cleaning to be made unref exp ..
   destroy_env(newenv);
-  return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in for");
+  if (ret) return ret;
+  else return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in for");
 }
 
 
@@ -1454,12 +1496,11 @@ exp_t *eachcmd(exp_t *e,env_t *env){
   exp_t *curvar;
   exp_t *curval;
   exp_t *curin;
-  exp_t *lastidx;
   exp_t *retval;
   keyval_t *keyv;
 
-  if (curvar=e->next) {
-    if (curval=curvar->next){
+  if ((curvar=e->next)) {
+    if ((curval=curvar->next)){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
@@ -1491,8 +1532,10 @@ exp_t *eachcmd(exp_t *e,env_t *env){
   return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in each");
 }
 
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *timecmd(exp_t *e,env_t *env){
-  
+#pragma GCC diagnostic warning "-Wunused-parameter"
+
   struct timeval tv;
   gettimeofday(&tv,NULL);
   return make_integeri(tv.tv_sec*1000000+tv.tv_usec);
@@ -1540,8 +1583,8 @@ exp_t *letcmd(exp_t *e,env_t *env){
   exp_t *retval;
   keyval_t *keyv;
 
-  if (curvar=e->next) {
-    if (curval=curvar->next){
+  if ((curvar=e->next)) {
+    if ((curval=curvar->next)){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
@@ -1573,14 +1616,14 @@ exp_t *withcmd(exp_t *e,env_t *env){
   exp_t *curex;
   keyval_t *keyv;
   
-  if (curvar=e->next) {
+  if ((curvar=e->next)) {
     if (!ispair(curvar->content)) {
       destroy_env(newenv);
       return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in with"); 
     }
-    if (curex=curvar->next){
+    if ((curex=curvar->next)){
       curvar=curvar->content;
-      if (curval=curvar->next){
+      if ((curval=curvar->next)){
         if (!(newenv->d)) newenv->d=create_dict();
         
         while (curvar && curval) {
@@ -1645,13 +1688,15 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
     return ret;
   do
     ret=evaluate(body->content,newenv);
-  while (body=body->next);
+  while ((body=body->next));
   destroy_env(newenv);
   ncall--;
   return ret;
 }
 
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env){
+#pragma GCC diagnostic warning "-Wunused-parameter"
   env_t *newenv=make_env(NULL); // NULL instead of env
   exp_t *ret;
 
@@ -1681,7 +1726,9 @@ exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
   return ret;
 }
 
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *optimize(exp_t *e,env_t *env)
+#pragma GCC diagnostic warning "-Wunused-parameter"
 {
   /* TO DO UN REF VARS*/
   exp_t *tmpexp;
@@ -1757,7 +1804,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
         else if (isstring(tmpexp)) {
           tmpexp2=evaluate(cadr(e),env);
           if (isnumber(tmpexp2)){
-            if ((tmpexp2->s64>=0)&&(tmpexp2->s64<strlen(tmpexp->ptr))){
+            if ((tmpexp2->s64>=0)&&(tmpexp2->s64<(int64_t)strlen(tmpexp->ptr))){
               return make_char(*((char *) tmpexp->ptr+tmpexp2->s64));
             }
             else return error(ERROR_INDEX_OUT_OF_RANGE,e,env,"Error index out of range");
@@ -1778,15 +1825,16 @@ exp_t *evaluate(exp_t *e,env_t *env)
       // is ???
     return e;
   }
+  return e;
 } 
 
 int main(int argc, char *argv[])
 {
-  char *cmd_res;
+  //  char *cmd_res;
   char *strdict="test dict";
-  keyval_t* kv;
+  //keyval_t* kv;
   dict_t* dict=create_dict();
-  env_t *global=memalloc(1,sizeof(env_t));
+  env_t *global=make_env(NULL);
   FILE *stream;
 
   reserved_symbol=create_dict();
