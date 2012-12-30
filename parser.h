@@ -27,7 +27,7 @@ enum {
 #define isinternal(e) (e->type == EXP_INTERNAL)
 #define ismacro(e) (e->type == EXP_MACRO)
 #define isinternal(e) (e->type == EXP_INTERNAL)
-#define iserror(e) (e->type == EXP_ERROR)
+#define iserror(e) ((e) && (e->type == EXP_ERROR))
 #define car(e) ((e&&(e->type==EXP_PAIR))?(e->content):NULL)
 #define cdr(e) ((e&&(e->type==EXP_PAIR))?(e->next):NULL)
 #define cadr(e) car(cdr(e))
@@ -40,6 +40,8 @@ struct keyval_t;
 struct exp_t;
 struct env_t;
 typedef struct exp_t *lispCmd(struct exp_t *e,struct env_t *env);
+
+#define FLAG_TAILREC 1
 
 typedef struct exp_t {
   unsigned short int flags; /* bit 0 for disk persistance */
@@ -96,8 +98,7 @@ typedef struct dict_t {
 
 typedef struct env_t {
   struct env_t *root;
-  jmp_buf *jmp_env; // exception handling return point
-  exp_t *jmp_ret; // exception handling message passing
+  exp_t *callingfnc;
   dict_t *d;
 } env_t;
 

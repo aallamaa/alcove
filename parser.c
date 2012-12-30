@@ -34,7 +34,6 @@
 #include <sys/time.h>
 #include <string.h>
 #include <ctype.h>
-#include <setjmp.h>
 #include <math.h>
 #include "parser.h"
 
@@ -94,7 +93,7 @@ lispProc lispProcList[]={
 };
 
 
-
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
 {
   exp_t *ret;
@@ -106,14 +105,9 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
   vasprintf((char**)&ret->ptr, err_message, ap);
   va_end(ap);
   ret->next=refexp(id);
-  if (env->jmp_env){
-    printf("trying to longjmp\n");
-    env->jmp_ret=refexp(ret);
-    printf("env:%lx jmp_emv:%lx jmp_ret:%lx\n",(unsigned long) env,(unsigned long) *env->jmp_env,(unsigned long) env->jmp_ret);
-    longjmp(*(env->jmp_env),1);
-  }
   return ret;
 }
+#pragma GCC diagnostic warning "-Wunused-parameter"
 
 /* MEMORY MANAGEMENT FUNCTIONS */
 
@@ -153,8 +147,7 @@ inline env_t * make_env(env_t *rootenv)
 {
   env_t *newenv=memalloc(1,sizeof(env_t));
   newenv->root=rootenv; //env;
-  newenv->jmp_env=NULL;
-  newenv->jmp_ret=NULL;
+  newenv->callingfnc=NULL;
   return newenv;
 }
 
@@ -164,30 +157,11 @@ inline void *destroy_env(env_t *env)
   
   if (env->d) 
     destroy_dict(env->d);
-  if (env->jmp_env)
-    free(env->jmp_env);
-  if (env->jmp_ret)
-    unrefexp(env->jmp_ret);
+  if (env->callingfnc)
+    unrefexp(env->callingfnc);
   free(env);
   return NULL;
 }
-
-inline exp_t *set_return_point(env_t *env)
-{
-  env->jmp_env=memalloc(1,sizeof(jmp_buf));
-  if (setjmp(*(env->jmp_env))) {
-    //exception handling here
-    printf("in set return point exception handling");
-    printf("env:%lx jmp_env:%lx jmp_ret:%lx\n",(unsigned long) env,(unsigned long) *env->jmp_env, (unsigned long)env->jmp_ret);
-    return (env->jmp_ret);
-  }
-
-  printf("set return point initial value env:%lx jmp_env:%lx jmp_ret:%lx\n",(unsigned long) env,(unsigned long) *env->jmp_env, (unsigned long)env->jmp_ret);
-
-  return NULL;
-}
-
-
 
 /* TOKEN MANAGEMENT FUNCTIONS */
 
@@ -1019,26 +993,32 @@ exp_t *quotecmd(exp_t *e, env_t *env)
 
 exp_t *ifcmd(exp_t *e, env_t *env)
 {
-  exp_t *tmpexp;
+  exp_t *tmpexp=evaluate(cadr(e),env);
   exp_t *tmpexp2;
-  if (istrue(evaluate(cadr(e),env))) { return evaluate(caddr(e),env); }
+  if iserror(tmpexp)
+              return tmpexp;
+  if (istrue(tmpexp)) { return evaluate(caddr(e),env); }
   else {
-    tmpexp=cdddr(e);
-    do {
-      tmpexp2=evaluate(tmpexp->content,env);
-      if (tmpexp->next) {
-        if (istrue(tmpexp2)) return evaluate(cadr(tmpexp),env);
-        if (!(tmpexp=cddr(tmpexp))) return NULL;
+    if ((tmpexp=cdddr(e)))
+      do {
+        tmpexp2=evaluate(tmpexp->content,env);
+        if ((!iserror(tmpexp2)) && (tmpexp->next)) {
+          if (istrue(tmpexp2)) return evaluate(cadr(tmpexp),env);
+          if (!(tmpexp=cddr(tmpexp))) return NULL;
+        }
+        else return tmpexp2;
       }
-      else return tmpexp2;
-    }
-    while (1);
+      while (1);
+    else return NULL;
   }
 }
 
 exp_t *equalcmd(exp_t *e, env_t *env)
 {
-  return updatebang(cadr(e),env,evaluate(caddr(e),env));
+  exp_t *tmpexp=evaluate(caddr(e),env);
+  if iserror(tmpexp)
+              return tmpexp;
+  return updatebang(cadr(e),env,tmpexp);
 }
 
 
@@ -1049,6 +1029,8 @@ exp_t *cmpcmd(exp_t *e, env_t *env)
   exp_t *v2=evaluate(caddr(e),env);
   double d;
   int ret;
+  if iserror(v1) return v1;
+  if iserror(v2) return v2;
   if ((isnumber(v1)||isfloat(v1))&&(isnumber(v2)||isfloat(v2))){
     d=(isnumber(v1)?v1->s64:v1->f)-(isnumber(v2)?v2->s64:v2->f);
   } 
@@ -1083,6 +1065,7 @@ exp_t *pluscmd(exp_t *e, env_t *env)
         if ispair(v1) v=evaluate(v1,env);
         else if issymbol(v1) v=evaluate(v1,env);
         else v=v1; 
+        if iserror(v) return v;
         if (sum_f){
           if isnumber(v) sum_f+=v->s64;
           else if isfloat(v) sum_f+=v->f;
@@ -1112,7 +1095,8 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
       {
         if ispair(v1) v=evaluate(v1,env);
         else if issymbol(v1) v=evaluate(v1,env);
-        else v=v1; 
+        else v=v1;
+        if iserror(v) return v;
         if (sum_f!=1){
           if isnumber(v) sum_f*=v->s64;
           else if isfloat(v) sum_f*=v->f;
@@ -1146,6 +1130,7 @@ exp_t *minuscmd(exp_t *e, env_t *env)
         if ispair(v1) v=evaluate(v1,env);
         else if issymbol(v1) v=evaluate(v1,env);
         else v=v1; 
+        if iserror(v) return v;
         if (sum_f){
           if isnumber(v) sum_f-=v->s64;
           else if isfloat(v) sum_f-=v->f;
@@ -1178,6 +1163,7 @@ exp_t *dividecmd(exp_t *e, env_t *env)
         if ispair(v1) v=evaluate(v1,env);
         else if issymbol(v1) v=evaluate(v1,env);
         else v=v1; 
+        if iserror(v) return v;
         if (i>1) { 
           if (isnumber(v) && (v->s64==0)) return error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
           else if (isfloat(v) && (v->f==0)) return error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
@@ -1202,6 +1188,7 @@ exp_t *sqrtcmd(exp_t *e, env_t *env){
   exp_t *v;
   if ((v=e->next))
     v=evaluate(v->content,env);
+  if iserror(v) return v;
   if (isfloat(v)) 
     return make_floatf(sqrt(v->f));
   else if (isnumber(v))
@@ -1213,6 +1200,7 @@ exp_t *expcmd(exp_t *e, env_t *env){
   exp_t *v;
   if ((v=e->next))
     v=evaluate(v->content,env);
+  if iserror(v) return v;
   if (isfloat(v)) 
     return make_floatf(exp(v->f));
   else if (isnumber(v))
@@ -1227,7 +1215,9 @@ exp_t *exptcmd(exp_t *e, env_t *env){
     if ((v2=v->next))
       {
         v=evaluate(v->content,env);
+        if iserror(v) return v;
         v2=evaluate(v2->content,env);
+        if iserror(v2) return v2;
       }
   if ( (isfloat(v)||isnumber(v)) && (isfloat(v2)||isnumber(v2)))
     return make_floatf(pow(isfloat(v)?v->f:v->s64,isfloat(v2)?v2->f:v2->s64));
@@ -1239,6 +1229,7 @@ exp_t *prcmd(exp_t *e, env_t *env){
   exp_t *val;
   while ((v=v->next)){
     val=evaluate(v->content,env);
+    if iserror(val) return val;
     if (val && isstring(val)) printf("%s",(char*)val->ptr);
     else print_node(val);
   }
@@ -1273,8 +1264,9 @@ exp_t *docmd(exp_t *e, env_t *env){
 exp_t *whencmd(exp_t *e, env_t *env){
   exp_t *val=cadr(e);
   exp_t *cur=cddr(e);
-  exp_t *ret=NULL;
-  if (istrue(evaluate(val,env)))
+  exp_t *ret=evaluate(val,env);
+  if iserror(ret) return ret;
+  if (istrue(ret))
     do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
   if (ret && iserror(ret))
     return ret;
@@ -1286,7 +1278,7 @@ exp_t *whilecmd(exp_t *e, env_t *env){
   exp_t *cur=cddr(e);
   exp_t *curi=cur;
   exp_t *ret=NULL;
-  while (istrue(evaluate(val,env)))
+  while (istrue(ret=evaluate(val,env))&&(!iserror(ret)))
     {
       cur=curi;
       do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
@@ -1302,6 +1294,7 @@ exp_t *repeatcmd(exp_t *e, env_t *env){
   exp_t *curi=cur;
   exp_t *ret=NULL;
   int64_t counter;
+  if iserror(val) return val;
   if (isnumber(val)) counter=val->s64;
   else error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value for repeat counter"); 
   while (counter-->0)
@@ -1320,6 +1313,7 @@ exp_t *andcmd(exp_t *e, env_t *env){
   do
     {
       ret=evaluate(car(cur),env);
+      if iserror(ret) return ret;
     } while (istrue(ret) && (cur=cdr(cur)));
   return ret;
 }
@@ -1328,14 +1322,18 @@ exp_t *orcmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *ret;
   do {
-    if (istrue(ret=evaluate(car(cur),env))) break;
+    ret=evaluate(car(cur),env);
+    if iserror(ret) return ret;
+    if (istrue(ret)) break;
   } while ((cur=cdr(cur)));
   return ret;
 }
 
 exp_t *nocmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
-  if (istrue(evaluate(car(cur),env))) return make_nil();
+  exp_t *tmpexp=evaluate(car(cur),env);
+  if iserror(tmpexp) return tmpexp;
+  if (istrue(tmpexp)) return make_nil();
   else return make_symbol("t",1);
 }
 
@@ -1384,14 +1382,17 @@ int isoequal(exp_t *cur1,exp_t *cur2){
 
 exp_t *iscmd(exp_t *e, env_t *env){
   exp_t *cur1=evaluate(cadr(e),env);
+  if iserror(cur1) return cur1;
   exp_t *cur2=evaluate(caddr(e),env);
+  if iserror(cur2) return cur2;
   return (isequal(cur1,cur2)?make_symbol("t",1):make_nil());
 }
 
 exp_t *isocmd(exp_t *e, env_t *env){
   exp_t *cur1=evaluate(cadr(e),env);
+  if iserror(cur1) return cur1;
   exp_t *cur2=evaluate(caddr(e),env);
-
+  if iserror(cur2) return cur2;
   return (isoequal(cur1,cur2)?make_symbol("t",1):make_nil());
 }
 
@@ -1399,15 +1400,24 @@ exp_t *isocmd(exp_t *e, env_t *env){
 exp_t *incmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *val=evaluate(cadr(e),env);
+  exp_t *val2;
+  
+  if iserror(val) return val;
   int ret=0;
   while ((cur=cdr(cur)))
-    if ((ret=isoequal(val,evaluate(car(cur),env)))) break;
+    {
+      val2=evaluate(car(cur),env);  
+      if iserror(val2) return val2;
+      if ((ret=isoequal(val,val2))) break;
+    }
+  
   return (ret?make_symbol("t",1):make_nil());
 }
 
 exp_t *casecmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *val=evaluate(cadr(e),env);
+  if iserror(val) return val;
   exp_t *ret=NULL;
   while ((cur=cdr(cur)))
     if (cur->next) 
@@ -1428,12 +1438,6 @@ exp_t *forcmd(exp_t *e,env_t *env){
   exp_t *lastidx;
   exp_t *retval;
   keyval_t *keyv;
-  if ((ret=set_return_point(newenv)))
-    {
-      printf("in for cmd exception handling");
-      goto error;
-    }
-  printf("for cmd ret value first pass:%lx\n",(unsigned long)env->jmp_ret);
 
   if ((curvar=e->next)) {
     if ((curval=curvar->next)){
@@ -1449,12 +1453,14 @@ exp_t *forcmd(exp_t *e,env_t *env){
           } 
           else 
             { 
-              ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter");
+              if iserror(lastidx) ret=lastidx;
+              else ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter");
               goto error;
             }
         }
         else { 
-          ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter"); 
+          if iserror(retval) ret=retval;
+          else ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter"); 
           goto error;
         }
         
@@ -1475,7 +1481,10 @@ exp_t *forcmd(exp_t *e,env_t *env){
       while (retval->s64<idx)
         {
           curval=curin;
-          while (curval) { unrefexp(evaluate(curval->content,newenv)); curval=curval->next;}
+          while (curval) { 
+            ret=evaluate(curval->content,newenv);
+            if iserror(ret) return ret;
+            unrefexp(ret); curval=curval->next;}
           retval->s64++;
         }
       destroy_env(newenv);
@@ -1498,6 +1507,7 @@ exp_t *eachcmd(exp_t *e,env_t *env){
   exp_t *curval;
   exp_t *curin;
   exp_t *retval;
+  exp_t *tmpexp;
   keyval_t *keyv;
 
   if ((curvar=e->next)) {
@@ -1511,14 +1521,17 @@ exp_t *eachcmd(exp_t *e,env_t *env){
           while (retval) {
             keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,car(retval));
             curval=curin;
-            while (curval) { unrefexp(evaluate(curval->content,newenv)); curval=curval->next;}
+            while (curval) { tmpexp=evaluate(curval->content,newenv);
+              if iserror(tmpexp) return tmpexp;
+              unrefexp(tmpexp); curval=curval->next;}
             retval=retval->next;
           }
           destroy_env(newenv);
           return NULL;
         } 
-        else { 
+        else {
           destroy_env(newenv);
+          if iserror(retval) return retval;
           return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not list) in each"); 
         }
         
@@ -1546,6 +1559,8 @@ exp_t *timecmd(exp_t *e,env_t *env){
 exp_t *conscmd(exp_t *e, env_t *env){
   exp_t *a=evaluate(cadr(e),env);
   exp_t *b=evaluate(caddr(e),env);
+  if iserror(a) return a;
+  if iserror(b) return b;
   exp_t *ret=make_node(a);
   if (istrue(b)) ret->next=refexp(b);
   else ret->next=NULL;
@@ -1554,20 +1569,28 @@ exp_t *conscmd(exp_t *e, env_t *env){
 }
 
 exp_t *cdrcmd(exp_t *e, env_t *env){
-  return cdr(evaluate(cadr(e),env));
+  exp_t *tmpexp=evaluate(cadr(e),env);
+  if iserror(tmpexp) return tmpexp;
+  return cdr(tmpexp);
 }
 
 exp_t *carcmd(exp_t *e, env_t *env){
-  return car(evaluate(cadr(e),env));
+  exp_t *tmpexp=evaluate(cadr(e),env);
+  if iserror(tmpexp) return tmpexp;
+  return car(tmpexp);
 }
 
 exp_t *listcmd(exp_t *e, env_t *env){
   exp_t *a=cdr(e);
-  exp_t *ret=make_node(evaluate(car(a),env));
+  exp_t *tmpexp=evaluate(car(a),env);
+  if iserror(tmpexp) return tmpexp;
+  exp_t *ret=make_node(tmpexp);
   exp_t *cur=ret;
   while ((a=a->next))
     {
-      cur=cur->next=make_node(evaluate(car(a),env));
+      tmpexp=evaluate(car(a),env);
+      if iserror(tmpexp) return tmpexp;
+      cur=cur->next=make_node(tmpexp);
     }
   return ret;
 }
@@ -1590,6 +1613,7 @@ exp_t *letcmd(exp_t *e,env_t *env){
       
       if (issymbol(curvar->content)) {
         if ((retval=evaluate(curval->content,env))==NULL) retval=make_nil();
+        if iserror(retval) return retval;
         keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,retval);
       }
       else { 
@@ -1628,7 +1652,12 @@ exp_t *withcmd(exp_t *e,env_t *env){
         if (!(newenv->d)) newenv->d=create_dict();
         
         while (curvar && curval) {
-          if (issymbol(curvar->content)) keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,curval->content);
+          if (issymbol(curvar->content)) { 
+            ret=evaluate(curval->content,env);
+            if iserror(ret) return ret;
+            keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,ret); 
+          }
+          
           else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in with"); 
           curvar=curval->next;
           if (curvar) curval=curvar->next;
@@ -1661,7 +1690,9 @@ exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
   while (curvar){
     if ((curval)) {
       if (!(env->d)) env->d=create_dict();
-      if ((retvar = (evalexp?evaluate(curval->content,env->root):curval->content))) {}
+      if ((retvar = (evalexp?evaluate(curval->content,env->root):curval->content))) {
+        if (evalexp && iserror(retvar)) return retvar;
+      }
       else retvar= make_nil();
       if (issymbol(curvar->content)) keyv=set_get_keyval_dict(env->d,curvar->content->ptr,retvar);
       else return NULL;
@@ -1674,24 +1705,55 @@ exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
   return NULL;
 
 }
-
-exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
+exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) 
+{
   /* e->content = fn name,
      e->next->content-> 
      fn->content = var names list
      fn-> next-> content =body*/
-  static int ncall=0;
-  env_t *newenv=make_env(env);
+  //  int ncall=0;
+  env_t *newenv=env;
   exp_t *ret;
-  exp_t *body=fn->next->content;;
-  ncall++;
+  exp_t *body=fn->next->content;
+
+  if (!(e->content->flags&FLAG_TAILREC)) {
+    while ((newenv->root) && (newenv->callingfnc==NULL)) newenv=newenv->root;
+    if ((newenv->callingfnc) && (strcmp(e->content->ptr,env->callingfnc->ptr)==0))
+      {
+        exp_t *cur=ret=make_node(make_symbol(e->content->ptr,strlen(e->content->ptr)));
+        ret->content->flags=FLAG_TAILREC;
+        exp_t *curv=e;
+        while ((curv=curv->next))
+          {
+            cur=cur->next=make_node(evaluate(curv->content,env));
+          }
+        return ret;
+        
+    }
+  }
+  
+ tailrec:
+  printf("invoke:"); print_node(e); printf("\n");
+  
+  
+  newenv=make_env(env);
+  newenv->callingfnc=refexp(e);
   if ((ret=var2env(e,fn->content,e->next,newenv,true))) 
-    return ret;
+    {
+      return ret;
+    }
+  
   do
     ret=evaluate(body->content,newenv);
   while ((body=body->next));
   destroy_env(newenv);
-  ncall--;
+  /* if ret is lazy... loopback*/
+  if (issymbol(ret) && (ret->flags&FLAG_TAILREC)) 
+    {
+      e=ret;
+      printf("Tail recursive invoke\n");
+      goto tailrec;
+    }
   return ret;
 }
 
