@@ -44,6 +44,7 @@ int verbose=0;
 dict_t *reserved_symbol=NULL;
 lispProc lispProcList[]={
   /* name, arity, flags, level, cmd*/
+  {"verbose",2,0,0,verbosecmd},
   {"quote",2,0,0,quotecmd},
   {"if",2,0,0,ifcmd},
   {"=",2,0,0,equalcmd},
@@ -148,18 +149,21 @@ inline env_t * make_env(env_t *rootenv)
   env_t *newenv=memalloc(1,sizeof(env_t));
   newenv->root=rootenv; //env;
   newenv->callingfnc=NULL;
+  newenv->nref=1;
   return newenv;
 }
 
 
 inline void *destroy_env(env_t *env)
 {
+  if (__sync_sub_and_fetch(&(env->nref),1) <=0) {
+    if (env->d) 
+      destroy_dict(env->d);
+    if (env->callingfnc)
+      unrefexp(env->callingfnc);
+    free(env);
+  }
   
-  if (env->d) 
-    destroy_dict(env->d);
-  if (env->callingfnc)
-    unrefexp(env->callingfnc);
-  free(env);
   return NULL;
 }
 
@@ -984,7 +988,14 @@ exp_t *defmacro(exp_t *e, env_t *env)
     
 }
 
+
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+exp_t *verbosecmd(exp_t *e, env_t *env)
+{
+  if (verbose^=1) printf("verbose on\n");
+  else printf("verbose off\n");
+  return NULL;
+}
 exp_t *quotecmd(exp_t *e, env_t *env)
 {
   return cadr(e);
@@ -1733,7 +1744,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
   }
   
  tailrec:
-  printf("invoke:"); print_node(e); printf("\n");
+  if (verbose) { printf("invoke:"); print_node(e); printf("\n");}
   
   
   newenv=make_env(env);
@@ -1751,7 +1762,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
   if (issymbol(ret) && (ret->flags&FLAG_TAILREC)) 
     {
       e=ret;
-      printf("Tail recursive invoke\n");
+      if (verbose) printf("Tail recursive invoke\n");
       goto tailrec;
     }
   return ret;

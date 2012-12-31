@@ -87,7 +87,7 @@ typedef struct kvht_t {
 	unsigned long used;
 } kvht_t;
 
-#define DICT_KVHT_INITIAL_SIZE 8
+#define DICT_KVHT_INITIAL_SIZE 32
 
 typedef struct dict_t {
 	void *meta;
@@ -100,6 +100,7 @@ typedef struct env_t {
   struct env_t *root;
   exp_t *callingfnc;
   dict_t *d;
+  int nref; // Garbage collector number of reference counter
 } env_t;
 
 
@@ -172,6 +173,7 @@ exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env);
 exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env);
 
 /* lisp command */
+exp_t *verbosecmd(exp_t *e, env_t *env);
 exp_t *quotecmd(exp_t *e, env_t *env);
 exp_t *ifcmd(exp_t *e, env_t *env);
 exp_t *equalcmd(exp_t *e, env_t *env);
