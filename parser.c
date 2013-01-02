@@ -1759,7 +1759,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
   while ((body=body->next));
   destroy_env(newenv);
   /* if ret is lazy... loopback*/
-  if (issymbol(ret) && (ret->flags&FLAG_TAILREC)) 
+  if (ret && issymbol(ret) && (ret->flags&FLAG_TAILREC)) 
     {
       e=ret;
       if (verbose) printf("Tail recursive invoke\n");

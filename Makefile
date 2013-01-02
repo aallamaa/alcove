@@ -1,7 +1,7 @@
 parser: 
-	$(CC) -Wall -W  -lm -g3 -o parser  parser.c
+	$(CC) -Wall -W  -g3 -o parser  parser.c -lm 
 speed:
-	$(CC) -Wall -W  -lm -O3 -o parser  parser.c
+	$(CC) -Wall -W  -O3 -o parser  parser.c -lm
 # -Os removed
 clean:
 	rm -f parser
