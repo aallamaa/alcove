@@ -436,8 +436,8 @@ void print_node(exp_t *node)
       printf(")");} else printf("nil");
 	}
   else if (node->type==EXP_LAMBDA){
-    if (node->meta) printf("#<procedure:%s>",(char*)node->meta);
-    else printf("#<procedure>");
+    if (node->meta) printf("#<procedure:%s@%08lx>",(char*)node->meta,(long) node);
+    else printf("#<procedure@%08lx>",(long) node);
     if (verbose) { 
       printf("\theader:"); print_node(node->content);
       printf("\tbody:"); print_node(node->next);
@@ -446,8 +446,8 @@ void print_node(exp_t *node)
         printf(")");*/
   }
   else if (node->type==EXP_MACRO){
-    if (node->meta) printf("#<macro:%s>",(char *) node->meta);
-    else printf("#<macro>");
+    if (node->meta) printf("#<macro:%s@%08lx>",(char *) node->meta,(long) node);
+    else printf("#<macro@@%08lx>",(long) node);
     /*  if (node->content) print_node(node->content);
         printf(")");*/
   }
@@ -457,7 +457,7 @@ void print_node(exp_t *node)
 	else if (node->type==EXP_NUMBER) printf("%s%ld",verbose?"_num:":"",(long) node->s64);
 	else if (node->type==EXP_FLOAT) printf("%s%lf",verbose?"_flo:":"",node->f);
 	else {
-    printf("type: %d ptr: %lx\n",node->type,(unsigned long) node->ptr);
+    printf("type: %d ptr: %08lx\n",node->type,(unsigned long) node->ptr);
   }
 	
 }

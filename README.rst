@@ -13,7 +13,7 @@ More than 20 years ago from now, when I was still a teenage coding on 8 bits and
 
 Today, the world is being shaped by the Internet and this same principle applies. Each entity is becoming part of the Internet, and is exchanging with the rest of the Internet. Massive amounts of data are being processed, and the more we move forward, the more we need to be able to process quickly and efficiently those massive amounts.
 
-Code and data are converging in a highly concurrent world, both at the processor level (increasing number of threads) and at the network level (distributed over network nodes). 
+Code and data are converging in a highly concurrent world, both at the processor level (increasing number of cores) and at the network level (distributed over network nodes). 
 
 What will ALCOVE be ?
 =====================

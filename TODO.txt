@@ -7,3 +7,9 @@
 * add support for default parameters
 * add support for polymorphism in lambda
 * add support for continuation call/cc
+* add support for http://wiki.msgpack.org/display/MSGPACK/Format+specification
+* check added value of http://www.canonware.com/jemalloc/ instead of malloc
+* see https://www.hackerschool.com/blog/13-list-comprehensions-in-eight-lines-of-clojure
+* see concatenative stuff: http://blog.fogus.me/2013/01/06/pesto5-a-concatenative-programming-library-in-5-lines-of-clojure/
+* check qsort http://arclanguage.org/item?id=16705
+
