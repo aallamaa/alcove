@@ -9,11 +9,16 @@ enum {
   /* ALL EXP BEYOND THIS COMMENT ARE "CIRCULAR" MEANING THEY POINT TO A PREVIOUSLY MEM ALLOCATED EXP */
   EXP_TREE,
   EXP_PAIR_CIRCULAR,
+  
+  /* should always be the last */
+  EXP_MAXSIZE
 } exptype_t;
 
 enum {
   EXP_ERROR_PARSING_MACROCHAR=1,EXP_ERROR_PARSING_ILLEGAL_CHAR,EXP_ERROR_PARSING_EOF,
-  EXP_ERROR_INVALID_KEY_UPDATE=256,EXP_ERROR_BODY_NOT_LIST,EXP_ERROR_PARAM_NOT_LIST,EXP_ERROR_MISSING_NAME,ERROR_ILLEGAL_VALUE,ERROR_DIV_BY0, ERROR_MISSING_PARAMETER,ERROR_UNBOUND_VARIABLE,ERROR_NUMBER_EXPECTED,ERROR_INDEX_OUT_OF_RANGE,
+  EXP_ERROR_INVALID_KEY_UPDATE=256,EXP_ERROR_BODY_NOT_LIST,EXP_ERROR_PARAM_NOT_LIST,
+  EXP_ERROR_MISSING_NAME,ERROR_ILLEGAL_VALUE,ERROR_DIV_BY0, ERROR_MISSING_PARAMETER,
+  ERROR_UNBOUND_VARIABLE,ERROR_NUMBER_EXPECTED,ERROR_INDEX_OUT_OF_RANGE,
 } exp_error_t;
 
 #define isatom(e) (e->type<=EXP_VECTOR)
@@ -44,7 +49,7 @@ typedef struct exp_t *lispCmd(struct exp_t *e,struct env_t *env);
 #define FLAG_TAILREC 1
 
 typedef struct exp_t {
-  unsigned short int flags; /* bit 0 for disk persistance */
+  unsigned short int flags; /* bit 0 set to 1 for disk persistance */
   unsigned short int type; // exp type cf exptype_t enum list
   int nref; // Garbage collector number of reference counter
   union {
@@ -59,6 +64,19 @@ typedef struct exp_t {
   struct exp_t *next;
 } exp_t;
 
+
+typedef struct exp_tfunc {
+  unsigned short int flags; 
+  exp_t *(*clone)(exp_t *this); /* clone exp_t */
+  exp_t *(*clone_flag)(exp_t *this); /* clone exp_t and flag as persistent*/
+  exp_t *(*load)(exp_t *e,FILE *stream); /* load object as serialized data from stream */
+  exp_t *(*dump)(exp_t *this,FILE *stream); /* serialized object this to stream */	
+} exp_tfunc;
+
+#define __CLONE__(e) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->clone?exp_tfuncList[e->type]->clone(e):NULL)
+#define __CLONE_FLAG__(e) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->clone_flag?exp_tfuncList[e->type]->clone_flag(e):NULL)
+#define __LOAD__(e,s) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->load?exp_tfuncList[e->type]->load(e,s):NULL)
+#define __DUMP__(e,s) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->dump?exp_tfuncList[e->type]->dump(e,s):NULL)
 
 typedef struct token_t {
 	int size;
@@ -115,6 +133,8 @@ typedef struct lispProc {
 
 /* Functions declaration */
 
+int64_t gettimeusec();
+
 /* memory management */
 exp_t *refexp(exp_t *e);
 void *memalloc(size_t count, size_t size);
@@ -128,14 +148,16 @@ exp_t *set_return_point(env_t *env);
 
 
 /* dict management */
-void * del_keyval_dict(dict_t* d, char *key);
 dict_t * create_dict();
 int destroy_dict(dict_t *d);
+int dump_dict(dict_t *d,FILE *stream);
 static void init_kvht(kvht_t *kvht);
 unsigned int bernstein_hash(unsigned char *key, int len);
 unsigned int bernstein_uhash(unsigned char *key, int len);
 keyval_t * set_get_keyval_dict(dict_t* d, char *key, exp_t *val);
-
+exp_t * set_keyval_dict_timestamp(dict_t* d, char *key, int64_t timestamp);
+int64_t get_keyval_dict_timestamp(dict_t* d, char *key);
+void * del_keyval_dict(dict_t* d, char *key);
 
 /* lisp */
 exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...);
@@ -152,6 +174,18 @@ exp_t *make_integer(char *str);
 exp_t *make_integeri(int64_t i);
 exp_t *make_float(char *str);
 exp_t *make_floatf(expfloat f);
+size_t loadtype(FILE *stream,unsigned short int* type);
+size_t dumptype(FILE *stream,unsigned short int *type);
+size_t loadsize_t(FILE *stream,size_t* len);
+size_t dumpsize_t(FILE *stream,size_t *len);
+exp_t *load_exp_t(FILE *stream);
+exp_t *dump_exp_t(exp_t *e,FILE *stream);
+exp_t *load_char(exp_t *e,FILE *stream);
+exp_t *dump_char(exp_t *e,FILE *stream);
+char *load_str(char **pptr,FILE *stream);
+exp_t *load_string(exp_t *e,FILE *stream);
+char *dump_str(char *ptr,FILE *stream);
+exp_t *dump_string(exp_t *e,FILE *stream);
 exp_t *make_atom(char *str,int length);
 exp_t *callmacrochar(FILE *stream,unsigned char x);
 exp_t *lookup(exp_t *e,env_t *env);
@@ -177,6 +211,10 @@ exp_t *verbosecmd(exp_t *e, env_t *env);
 exp_t *quotecmd(exp_t *e, env_t *env);
 exp_t *ifcmd(exp_t *e, env_t *env);
 exp_t *equalcmd(exp_t *e, env_t *env);
+exp_t *persistcmd(exp_t *e, env_t *env);
+exp_t *ispersistentcmd(exp_t *e, env_t *env);
+exp_t *forgetcmd(exp_t *e, env_t *env);
+exp_t *savedbcmd(exp_t *e, env_t *env);
 exp_t *cmpcmd(exp_t *e, env_t *env);
 exp_t *pluscmd(exp_t *e, env_t *env);
 exp_t *multiplycmd(exp_t *e, env_t *env);

@@ -23,7 +23,7 @@
    other than "OpenSSL".  If you modify this file, you may extend this
    exception to your version of the file, but you are not obligated to do so.
    If you do not wish to do so, delete this exception statement from your
-   version.	
+   version. 
 */
 
 
@@ -42,6 +42,8 @@
 
 int verbose=0;
 dict_t *reserved_symbol=NULL;
+exp_tfunc* exp_tfuncList[EXP_MAXSIZE];
+
 lispProc lispProcList[]={
   /* name, arity, flags, level, cmd*/
   {"verbose",2,0,0,verbosecmd},
@@ -89,10 +91,23 @@ lispProc lispProcList[]={
   {"for",2,1,0,forcmd},
   {"each",2,1,0,eachcmd},
   {"time",2,1,0,timecmd},
-
-
+  {"persist",2,1,0,persistcmd},
+  {"forget",2,1,0,forgetcmd},
+  {"savedb",2,1,0,savedbcmd},
+  {"ispersistent",2,1,0,ispersistentcmd},
 };
 
+
+
+
+int64_t gettimeusec() 
+{   
+	struct timeval tv;
+	gettimeofday(&tv,NULL);
+	return (tv.tv_sec*1000000+tv.tv_usec);
+}
+	
+	
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
@@ -207,7 +222,7 @@ inline void tokenappend(token_t *token,char *src,int len){
     free(token->data);
   }
   strncpy(token->data+token->size,src,len);
-  token->size+=len;	
+  token->size+=len; 
 }
 
 // HASH FUNCTIONS
@@ -274,6 +289,34 @@ int destroy_dict(dict_t *d){
   return 1;
 }
 
+int dump_dict(dict_t *d,FILE *stream){
+  // check if in use
+  keyval_t *ckv;
+  keyval_t *pkv;
+  unsigned int i,j;
+  size_t length;
+  printf("Dumping dict %x\n",d);
+  for (i=0;i<2;i++){
+    for (j=0;j<d->ht[i].size;j++)
+      {
+        ckv=d->ht[i].table[j];
+        while(ckv){
+          pkv=ckv;
+          ckv=pkv->next;
+          if (pkv->timestamp) {
+            printf("saving %s : ",pkv->key);
+            print_node(pkv->val);
+            if (__DUMP__(pkv->val,stream)) {
+              dump_str(pkv->key,stream);
+            }
+          }
+        }
+      }
+  }
+  return 1;
+}
+
+
 keyval_t * set_get_keyval_dict(dict_t* d, char *key, exp_t *val){
   unsigned int h=bernstein_hash((unsigned char*)key,strlen(key));
   keyval_t *k=NULL;
@@ -298,7 +341,7 @@ keyval_t * set_get_keyval_dict(dict_t* d, char *key, exp_t *val){
     d->ht[0].used++;
     k->key=strdup(key);
   };
-		
+    
   if (val) {
     k->val=refexp(val);
   } else {
@@ -306,6 +349,24 @@ keyval_t * set_get_keyval_dict(dict_t* d, char *key, exp_t *val){
   }
   return k;
 }
+
+exp_t * set_keyval_dict_timestamp(dict_t* d, char *key, int64_t timestamp){
+  keyval_t *k=set_get_keyval_dict(d,key,NULL);
+  if (k) {
+    k->timestamp=timestamp;
+    return k->val;
+  }
+  return NULL;
+}
+
+int64_t get_keyval_dict_timestamp(dict_t* d, char *key){
+  keyval_t *k=set_get_keyval_dict(d,key,NULL);
+  if (k) {
+    return k->timestamp;
+  }
+  return 0;
+}
+
 
 void * del_keyval_dict(dict_t* d, char *key){
   unsigned int h=bernstein_hash((unsigned char*)key,strlen(key));
@@ -329,7 +390,6 @@ void * del_keyval_dict(dict_t* d, char *key){
   return NULL;
 }
 
-
 // see page 25 concept of "liaison immuable" et liaison "muable"
 
 inline exp_t *make_nil(){
@@ -342,6 +402,7 @@ inline exp_t *make_nil(){
   return nil_exp;
 }
 
+
 inline exp_t *make_char(unsigned char c){
   exp_t *exp_char=make_nil();
   exp_char->type=EXP_CHAR;
@@ -349,11 +410,12 @@ inline exp_t *make_char(unsigned char c){
   return exp_char;
 }
 
+
 inline exp_t *make_node(exp_t *node){
   exp_t *cur=make_nil();
   if (node) cur->content=refexp(node);
   return cur;
-	
+  
 }
 
 inline exp_t *make_internal(lispCmd *cmd){
@@ -379,33 +441,33 @@ void tree_add_node(exp_t *tree,exp_t *node){
 }
 
 void pair_add_node(exp_t *pair, exp_t *node){
-	exp_t *cur=pair;
-	if (cur->type==EXP_PAIR){
-		if (cur->next){
-			cur=cur->next;
-			if (cur->type==EXP_PAIR)
-				pair_add_node(cur,node);
-			else if (cur->type==EXP_PAIR)
-				tree_add_node(cur,node);
-			else printf("ERROR UNABLE TO ADD NODE TO EXP");
-		}
-		else{
-			cur=cur->next=refexp(make_node(node));
-			cur->content=refexp(node);
-		}
-	}
-	else printf("ERROR IMPOSSIBLE TO ADD NODE TO NON PAIR OBJECT\n");
+  exp_t *cur=pair;
+  if (cur->type==EXP_PAIR){
+    if (cur->next){
+      cur=cur->next;
+      if (cur->type==EXP_PAIR)
+        pair_add_node(cur,node);
+      else if (cur->type==EXP_PAIR)
+        tree_add_node(cur,node);
+      else printf("ERROR UNABLE TO ADD NODE TO EXP");
+    }
+    else{
+      cur=cur->next=refexp(make_node(node));
+      cur->content=refexp(node);
+    }
+  }
+  else printf("ERROR IMPOSSIBLE TO ADD NODE TO NON PAIR OBJECT\n");
 
 }
 
 exp_t *make_tree(exp_t *root,exp_t *node1){
-	exp_t *tree=make_nil();
-	tree->type=EXP_TREE;
-	tree->next=refexp(root);
-	if (node1)
-		tree->content=refexp(node1);
-	if (root) tree_add_node(root,tree);
-	return tree;
+  exp_t *tree=make_nil();
+  tree->type=EXP_TREE;
+  tree->next=refexp(root);
+  if (node1)
+    tree->content=refexp(node1);
+  if (root) tree_add_node(root,tree);
+  return tree;
 }
 
 void print_node(exp_t *node)
@@ -416,25 +478,25 @@ void print_node(exp_t *node)
     {
       printf("Error: %s\n",(char*) node->ptr);
     }
-	else if (node->type==EXP_TREE){
-		printf("[ ");
-		if (node->content)
-			print_node(node->content);
-		printf("] ");
-	}
+  else if (node->type==EXP_TREE){
+    printf("[ ");
+    if (node->content)
+      print_node(node->content);
+    printf("] ");
+  }
   else if (node->type==EXP_CHAR){
     if (node->s64>32) printf("#\\%c",(char)node->s64);
     else printf("#\\%lld",(long long int)node->s64);
   }
-	else if (node->type==EXP_PAIR){
-		if (istrue(node)) {printf("(");
+  else if (node->type==EXP_PAIR){
+    if (istrue(node)) {printf("(");
       if (node->content) print_node(node->content);
       while ((node=node->next)) {
         if ispair(node) { printf(" ");print_node(node->content);}
         else {printf(" . "); print_node(node); break; }
       }
       printf(")");} else printf("nil");
-	}
+  }
   else if (node->type==EXP_LAMBDA){
     if (node->meta) printf("#<procedure:%s@%08lx>",(char*)node->meta,(long) node);
     else printf("#<procedure@%08lx>",(long) node);
@@ -452,39 +514,39 @@ void print_node(exp_t *node)
         printf(")");*/
   }
 
-	else if (node->type==EXP_SYMBOL) printf("%s%s",verbose?"_sym:":"",(char *) node->ptr);
-	else if (node->type==EXP_STRING) printf("%s\"%s\"",verbose?"_str:":"",(char *) node->ptr);
-	else if (node->type==EXP_NUMBER) printf("%s%ld",verbose?"_num:":"",(long) node->s64);
-	else if (node->type==EXP_FLOAT) printf("%s%lf",verbose?"_flo:":"",node->f);
-	else {
+  else if (node->type==EXP_SYMBOL) printf("%s%s",verbose?"_sym:":"",(char *) node->ptr);
+  else if (node->type==EXP_STRING) printf("%s\"%s\"",verbose?"_str:":"",(char *) node->ptr);
+  else if (node->type==EXP_NUMBER) printf("%s%ld",verbose?"_num:":"",(long) node->s64);
+  else if (node->type==EXP_FLOAT) printf("%s%lf",verbose?"_flo:":"",node->f);
+  else {
     printf("type: %d ptr: %08lx\n",node->type,(unsigned long) node->ptr);
   }
-	
+  
 }
 
 inline exp_t *make_fromstr(char *str,int length)
 {
-	exp_t *cur=make_nil();
-	cur->ptr=memalloc(length+1,sizeof(char));
-	strncpy(cur->ptr,str,length);
-	*((char*)cur->ptr+length)='\0';
-	return cur;
+  exp_t *cur=make_nil();
+  cur->ptr=memalloc(length+1,sizeof(char));
+  strncpy(cur->ptr,str,length);
+  *((char*)cur->ptr+length)='\0';
+  return cur;
 }
 
 inline exp_t *make_string(char *str,int length)
 {
-	exp_t *cur=make_fromstr(str,length);
-	cur->type=EXP_STRING;
-  //	printf("STR %s\n",(char*)cur->ptr);
-	return cur;
+  exp_t *cur=make_fromstr(str,length);
+  cur->type=EXP_STRING;
+  //  printf("STR %s\n",(char*)cur->ptr);
+  return cur;
 }
 
 inline exp_t *make_symbol(char *str,int length)
 {
-	exp_t *cur=make_fromstr(str,length);
-	cur->type=EXP_SYMBOL;
-  //	printf("SYM %s\n",(char*)cur->ptr);
-	return cur;
+  exp_t *cur=make_fromstr(str,length);
+  cur->type=EXP_SYMBOL;
+  //  printf("SYM %s\n",(char*)cur->ptr);
+  return cur;
 }
 
 /* OLD
@@ -497,98 +559,181 @@ inline exp_t *make_symbol(char *str,int length)
 
 
 inline exp_t *make_quote(exp_t *node){
-	exp_t *cur=make_symbol("quote",strlen("quote"));
+  exp_t *cur=make_symbol("quote",strlen("quote"));
   cur=make_node(cur);
-	cur->next=refexp(make_node(node));
-	return cur;  
+  cur->next=refexp(make_node(node));
+  return cur;  
 }
 
 inline exp_t *make_integer(char *str)
 {
-	exp_t *cur=make_nil();
-	cur->type=EXP_NUMBER;
-	cur->s64=atoi(str);
-  //	printf("INT %ld\n",cur->d64);
-	return cur;
+  exp_t *cur=make_nil();
+  cur->type=EXP_NUMBER;
+  cur->s64=atoi(str);
+  //  printf("INT %ld\n",cur->d64);
+  return cur;
 }
 
 inline exp_t *make_integeri(int64_t i)
 {
-	exp_t *cur=make_nil();
-	cur->type=EXP_NUMBER;
-	cur->s64=i;
-  //	printf("INT %ld\n",cur->d64);
-	return cur;
+  exp_t *cur=make_nil();
+  cur->type=EXP_NUMBER;
+  cur->s64=i;
+  //  printf("INT %ld\n",cur->d64);
+  return cur;
 }
 
 
 inline exp_t *make_float(char *str)
 {
-	exp_t *cur=make_nil();
-	cur->type=EXP_FLOAT;
-	cur->f=strtod(str,NULL);
-  //	printf("INT %ld\n",cur->d64);
-	return cur;
+  exp_t *cur=make_nil();
+  cur->type=EXP_FLOAT;
+  cur->f=strtod(str,NULL);
+  //  printf("INT %ld\n",cur->d64);
+  return cur;
 }
 
 inline exp_t *make_floatf(expfloat f)
 {
-	exp_t *cur=make_nil();
-	cur->type=EXP_FLOAT;
-	cur->f=f;
-  //	printf("INT %ld\n",cur->d64);
-	return cur;
+  exp_t *cur=make_nil();
+  cur->type=EXP_FLOAT;
+  cur->f=f;
+  //  printf("INT %ld\n",cur->d64);
+  return cur;
+}
+
+// exp_t dump and load
+
+size_t loadtype(FILE *stream,unsigned short int* type) {
+  return fread(type,sizeof(unsigned short int),1,stream);
+}
+
+size_t dumptype(FILE *stream,unsigned short int *type) {
+  return fwrite(type,sizeof(unsigned short int),1,stream);
+}
+
+size_t loadsize_t(FILE *stream,size_t* len) {
+  return fread(len,sizeof(size_t),1,stream);
+}
+
+size_t dumpsize_t(FILE *stream,size_t *len) {
+  return fwrite(len,sizeof(size_t),1,stream);
+}
+
+exp_t *load_exp_t(FILE *stream) {
+  exp_t *resp=make_nil();
+  if (loadtype(stream,&(resp->type)) > 0 ) {
+    return __LOAD__(resp,stream);
+  }
+  else {
+    unrefexp(resp);
+    return NULL;
+  }
+}
+
+exp_t *dump_exp_t(exp_t *e,FILE *stream) {
+  return __DUMP__(e,stream);
+}
+
+
+
+exp_t *load_char(exp_t *e,FILE *stream){
+  if ((e->s64=getc(stream))!= EOF) return e;
+  else {
+    unrefexp(e);
+    return NULL;
+  }
+}
+
+exp_t *dump_char(exp_t *e,FILE *stream){
+  if (dumptype(stream,&e->type) <=0) return NULL;
+  if (fputc(e->s64,stream) <=0) return NULL;
+  return e;
+}
+
+char *load_str(char **pptr,FILE *stream) {
+  size_t length;
+  char *ptr;
+  if ((length = loadsize_t(stream,&length))<=0) return NULL;
+  ptr=*pptr=memalloc(length+1,sizeof(char));
+  if (fread(ptr,1,length,stream) != length) {
+    free(ptr);
+    return NULL;
+  }
+  *((char*)(ptr+length))='\0';
+  return ptr;
+}
+exp_t *load_string(exp_t *e,FILE *stream){
+  if (load_str((char**)&(e->ptr),stream)) 
+    return e;
+  else
+    return NULL;
+}
+
+char *dump_str(char *ptr,FILE *stream){
+  size_t length=strlen(ptr);
+  if (dumpsize_t(stream,&length)<=0) return NULL;
+  if (fwrite(ptr,1,length,stream) <=0) return NULL;
+  return ptr;
+
+}
+
+exp_t *dump_string(exp_t *e,FILE *stream){
+  if (dumptype(stream,&e->type) <=0) return NULL;
+  if (dump_str(e->ptr,stream)) return e;
+  else 
+    return NULL;
 }
 
 
 
 exp_t *make_atom(char *str,int length)
 {
-	//Generate an atom from a string during parsing
-	// TEST -> 0: + or - in front, 1: digit after first + or -, 2: E mantissa, 3:+ or - sign, 4: digit of mantissa
-	int test=0;
-	int dot=0;
-	int len=length;
-	char v;
-	char *stro=str;
-	if (str[0]=='\"')
-		return make_string(str+1,length-2);
-	while (length--){
-		v=(char)*(str++);
-		if ((v=='+')||(v=='-')){
-			if ((test==1) || (test==3)) {
-				break; // A sign after another sign => not an integer or following format +AB+
-			}
-			else if (test==7) {
-				// OK MANTISSA there 
-				test=15;
-			}
-			else if (test==0) test=1; 
-			else break;
-		}
-		else if (v=='.') {if ((test<=3)||!dot) dot+=1; else break;}
-		else if ((v=='E')||(v=='e')){
-			//set mentisa on if not seen mantisa yet
-			if (test==3) test=7;
-			else break;
-			
-		}
-		else if ((v<='9')&&(v>='0')){
-			if (test<=3){
-				test=3;
-			}
-			else if ((test==7)||(test==15)|(test==31)) test=31;
-			else break;
-		}
-		else break;
-	}
-	
-	if (length!=-1)
+  //Generate an atom from a string during parsing
+  // TEST -> 0: + or - in front, 1: digit after first + or -, 2: E mantissa, 3:+ or - sign, 4: digit of mantissa
+  int test=0;
+  int dot=0;
+  int len=length;
+  char v;
+  char *stro=str;
+  if (str[0]=='\"')
+    return make_string(str+1,length-2);
+  while (length--){
+    v=(char)*(str++);
+    if ((v=='+')||(v=='-')){
+      if ((test==1) || (test==3)) {
+        break; // A sign after another sign => not an integer or following format +AB+
+      }
+      else if (test==7) {
+        // OK MANTISSA there 
+        test=15;
+      }
+      else if (test==0) test=1; 
+      else break;
+    }
+    else if (v=='.') {if ((test<=3)||!dot) dot+=1; else break;}
+    else if ((v=='E')||(v=='e')){
+      //set mentisa on if not seen mantisa yet
+      if (test==3) test=7;
+      else break;
+      
+    }
+    else if ((v<='9')&&(v>='0')){
+      if (test<=3){
+        test=3;
+      }
+      else if ((test==7)||(test==15)|(test==31)) test=31;
+      else break;
+    }
+    else break;
+  }
+  
+  if (length!=-1)
     {
       //not an integer then must be a symbol
       return make_symbol(stro,len);
     }
-	else
+  else
     {
       if (test==1) return make_symbol(stro,len);
       else if ((test==3) &&!dot) return make_integer(stro);
@@ -705,7 +850,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
      
     }
     else if (ISMULTIPLEESCAPE & chrmap[x]) { token=tokenize(-1); escape=1;}//step 6
-    else if (ISCONSTITUENT&chrmap[x]) token=tokenize(x); 			//step 7
+    else if (ISCONSTITUENT&chrmap[x]) token=tokenize(x);      //step 7
     while (!pushtoken){
       if (!escape) {
         //step 8
@@ -798,7 +943,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
   
   if (x==EOF){
     return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
-    // END OF FILE PROCESSING TO BE DONE STEP 1		
+    // END OF FILE PROCESSING TO BE DONE STEP 1   
   }
   return NULL;
 }
@@ -829,8 +974,8 @@ inline exp_t *lookup(exp_t *e,env_t *env)
   if ((ret=set_get_keyval_dict(reserved_symbol,e->ptr,NULL))) return ret->val;
   else {
     if (curenv) do {
-      if ((curenv->d) &&(ret=set_get_keyval_dict(curenv->d,e->ptr,NULL))) return ret->val;
-    } while ((curenv=curenv->root));
+        if ((curenv->d) &&(ret=set_get_keyval_dict(curenv->d,e->ptr,NULL))) return ret->val;
+      } while ((curenv=curenv->root));
   }
   return NULL;
  
@@ -1027,10 +1172,59 @@ exp_t *ifcmd(exp_t *e, env_t *env)
 exp_t *equalcmd(exp_t *e, env_t *env)
 {
   exp_t *tmpexp=evaluate(caddr(e),env);
+  exp_t *tmpkey=cadr(e);
+  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  if iserror(tmpkey)
+              return tmpkey;
   if iserror(tmpexp)
               return tmpexp;
-  return updatebang(cadr(e),env,tmpexp);
+  return updatebang(tmpkey,env,tmpexp);
+  /* to be unrefed tmpkey in case of evaluate */ 
 }
+
+exp_t *persistcmd(exp_t *e, env_t *env)
+{
+  exp_t *tmpkey=cadr(e);
+  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  /* to be unrefed tmpkey in case of evaluate */ 
+  if iserror(tmpkey) return tmpkey;
+  return set_keyval_dict_timestamp(env->d,tmpkey->ptr,gettimeusec());
+}
+
+exp_t *ispersistentcmd(exp_t *e, env_t *env)
+{
+  exp_t *tmpkey=cadr(e);
+  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  /* to be unrefed tmpkey in case of evaluate */ 
+  if iserror(tmpkey) return tmpkey;
+  if (get_keyval_dict_timestamp(env->d,tmpkey->ptr)) {
+      return make_symbol("t",2);}
+  else 
+    return make_nil();
+}
+
+exp_t *forgetcmd(exp_t *e, env_t *env)
+{
+  exp_t *tmpkey=cadr(e);
+  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  /* to be unrefed tmpkey in case of evaluate */ 
+  if iserror(tmpkey) return tmpkey;
+  return set_keyval_dict_timestamp(env->d,tmpkey->ptr,0);
+}
+
+exp_t *savedbcmd(exp_t *e, env_t *env)
+{
+  env_t *cur=env;
+  FILE *stream=fopen("db.dump","w");
+  //if (!cur->root) dump_dict(cur->d,stream);
+  while (cur->root) {
+    //dump_dict(cur->d,stream);
+    cur=cur->root;}
+  dump_dict(cur->d,stream);
+  fclose(stream);
+  return e;
+}
+
 
 
 exp_t *cmpcmd(exp_t *e, env_t *env)
@@ -1307,8 +1501,8 @@ exp_t *repeatcmd(exp_t *e, env_t *env){
   int64_t counter;
   if iserror(val) return val;
   if (isnumber(val)) counter=val->s64;
-  else error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value for repeat counter"); 
-  while (counter-->0)
+  else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value for repeat counter"); 
+  while (counter-- >0)
     {
       cur=curi;
       do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
@@ -1442,7 +1636,7 @@ exp_t *casecmd(exp_t *e, env_t *env){
 
 exp_t *forcmd(exp_t *e,env_t *env){
   env_t *newenv=make_env(env);
-  exp_t *ret;
+  exp_t *ret=NULL;
   exp_t *curvar;
   exp_t *curval;
   exp_t *curin;
@@ -1457,6 +1651,7 @@ exp_t *forcmd(exp_t *e,env_t *env){
       if (issymbol(curvar->content)) {
         if ((retval=evaluate(curval->content,env))==NULL) retval=make_nil();
         if (isnumber(retval)) {
+          if (!curval->next) lastidx=make_nil();
           if (curval->next && (lastidx=evaluate(curval->next->content,env))==NULL) lastidx=make_nil();
           if (isnumber(lastidx)) {
             keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,retval);
@@ -1486,7 +1681,7 @@ exp_t *forcmd(exp_t *e,env_t *env){
         curin=make_nil();
         curvar=curin;
         while (curval) {
-          curvar->content=refexp(optimize(curval->content,env)); curvar=curvar->next=make_nil(); curval=curval->next;
+        curvar->content=refexp(optimize(curval->content,env)); curvar=curvar->next=make_nil(); curval=curval->next;
         }
         }*/
       while (retval->s64<idx)
@@ -1559,10 +1754,7 @@ exp_t *eachcmd(exp_t *e,env_t *env){
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *timecmd(exp_t *e,env_t *env){
-
-  struct timeval tv;
-  gettimeofday(&tv,NULL);
-  return make_integeri(tv.tv_sec*1000000+tv.tv_usec);
+  return make_integeri(gettimeusec());
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
@@ -1740,7 +1932,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
           }
         return ret;
         
-    }
+      }
   }
   
  tailrec:
@@ -1835,6 +2027,33 @@ exp_t *optimize(exp_t *e,env_t *env)
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
+exp_t *evaluate2(exp_t *e, env_t *env)
+{
+  exp_t *tmpexp;
+  if (e!=NULL) {
+    switch (e->type){
+    case EXP_SYMBOL:
+      if (((char*)e->ptr)[0] == ':') return e;
+      if ((tmpexp=lookup(e,env))) return tmpexp;
+      else return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
+    case EXP_NUMBER:
+    case EXP_FLOAT:
+    case EXP_STRING:
+    case EXP_CHAR:
+    case EXP_BOOLEAN:
+    case EXP_VECTOR:
+    case EXP_ERROR:
+      return e;
+    case EXP_PAIR:
+	
+    default:
+      return e;
+    }
+  }
+  else return NULL;
+  return NULL;
+}
+
 exp_t *evaluate(exp_t *e,env_t *env)
 {
   /* TO DO UN REF VARS*/
@@ -1847,7 +2066,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
           if (((char*)e->ptr)[0] == ':') return e; // e is a keyword
           if ((tmpexp=lookup(e,env))) return tmpexp;
           else 
-              return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
+            return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
         }
       else return e; // Number? String? Char? Boolean? Vector?
     }
@@ -1896,7 +2115,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
       else return e;
     } 
   else {
-      // is ???
+    // is ???
     return e;
   }
   return e;
@@ -1910,6 +2129,15 @@ int main(int argc, char *argv[])
   dict_t* dict=create_dict();
   env_t *global=make_env(NULL);
   FILE *stream;
+  int evaluatingfile=0;
+
+  exp_tfuncList[EXP_CHAR]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_CHAR]->load=load_char;
+  exp_tfuncList[EXP_CHAR]->dump=dump_char;
+  exp_tfuncList[EXP_STRING]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_STRING]->load=load_string;
+  exp_tfuncList[EXP_STRING]->dump=dump_string;
+
 
   reserved_symbol=create_dict();
   set_get_keyval_dict(reserved_symbol,"nil",make_nil());
@@ -1923,9 +2151,10 @@ int main(int argc, char *argv[])
 
   if (argc==2){
     if ((stream=fopen(argv[1],"r"))){
+      evaluatingfile=1;
     }
     else
-      { printf("Error opening %s\n",argv[1]);}
+      { printf("Error opening %s\n",argv[1]); exit(0);}
   }
   else stream=stdin;
   exp_t* stre=refexp(make_string(strdict,strlen(strdict)));
@@ -1945,8 +2174,9 @@ int main(int argc, char *argv[])
   unrefexp(strf);
   
   while (1){
-    printf("ALCOVE>");
+    if (!evaluatingfile) printf("ALCOVE>");
     stre=refexp(reader(stream,0,0));
+    if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF) && evaluatingfile) {exit(0);}
     if (verbose) {print_node(stre);printf("\n");}
     if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) break;
     strf=refexp(evaluate(stre,global));
