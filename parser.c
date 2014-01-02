@@ -115,7 +115,7 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
   exp_t *ret;
   va_list ap;
   va_start(ap,err_message);
-  ret=make_nil();
+  ret=NIL_EXP;
   ret->type=EXP_ERROR;
   ret->flags=errnum;
   vasprintf((char**)&ret->ptr, err_message, ap);
@@ -294,8 +294,7 @@ int dump_dict(dict_t *d,FILE *stream){
   keyval_t *ckv;
   keyval_t *pkv;
   unsigned int i,j;
-  size_t length;
-  printf("Dumping dict %x\n",d);
+  if (verbose) printf("Dumping dict %x\n",d);
   for (i=0;i<2;i++){
     for (j=0;j<d->ht[i].size;j++)
       {
@@ -304,8 +303,10 @@ int dump_dict(dict_t *d,FILE *stream){
           pkv=ckv;
           ckv=pkv->next;
           if (pkv->timestamp) {
-            printf("saving %s : ",pkv->key);
+            if (verbose) {
+				printf("saving %s : ",pkv->key);
             print_node(pkv->val);
+		}
             if (__DUMP__(pkv->val,stream)) {
               dump_str(pkv->key,stream);
             }
@@ -404,7 +405,7 @@ inline exp_t *make_nil(){
 
 
 inline exp_t *make_char(unsigned char c){
-  exp_t *exp_char=make_nil();
+  exp_t *exp_char=NIL_EXP;
   exp_char->type=EXP_CHAR;
   exp_char->s64=c;
   return exp_char;
@@ -412,14 +413,14 @@ inline exp_t *make_char(unsigned char c){
 
 
 inline exp_t *make_node(exp_t *node){
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   if (node) cur->content=refexp(node);
   return cur;
   
 }
 
 inline exp_t *make_internal(lispCmd *cmd){
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   cur->type=EXP_INTERNAL;
   cur->fnc=cmd;
   return cur;
@@ -461,7 +462,7 @@ void pair_add_node(exp_t *pair, exp_t *node){
 }
 
 exp_t *make_tree(exp_t *root,exp_t *node1){
-  exp_t *tree=make_nil();
+  exp_t *tree=NIL_EXP;
   tree->type=EXP_TREE;
   tree->next=refexp(root);
   if (node1)
@@ -526,7 +527,7 @@ void print_node(exp_t *node)
 
 inline exp_t *make_fromstr(char *str,int length)
 {
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   cur->ptr=memalloc(length+1,sizeof(char));
   strncpy(cur->ptr,str,length);
   *((char*)cur->ptr+length)='\0';
@@ -551,7 +552,7 @@ inline exp_t *make_symbol(char *str,int length)
 
 /* OLD
    exp_t *make_quote(exp_t *node){
-   exp_t *cur=make_nil();
+   exp_t *cur=NIL_EXP;
    cur->type=EXP_QUOTE;
    cur->content=refexp(node);
    return cur;  
@@ -567,7 +568,7 @@ inline exp_t *make_quote(exp_t *node){
 
 inline exp_t *make_integer(char *str)
 {
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   cur->type=EXP_NUMBER;
   cur->s64=atoi(str);
   //  printf("INT %ld\n",cur->d64);
@@ -576,7 +577,7 @@ inline exp_t *make_integer(char *str)
 
 inline exp_t *make_integeri(int64_t i)
 {
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   cur->type=EXP_NUMBER;
   cur->s64=i;
   //  printf("INT %ld\n",cur->d64);
@@ -586,7 +587,7 @@ inline exp_t *make_integeri(int64_t i)
 
 inline exp_t *make_float(char *str)
 {
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   cur->type=EXP_FLOAT;
   cur->f=strtod(str,NULL);
   //  printf("INT %ld\n",cur->d64);
@@ -595,7 +596,7 @@ inline exp_t *make_float(char *str)
 
 inline exp_t *make_floatf(expfloat f)
 {
-  exp_t *cur=make_nil();
+  exp_t *cur=NIL_EXP;
   cur->type=EXP_FLOAT;
   cur->f=f;
   //  printf("INT %ld\n",cur->d64);
@@ -621,7 +622,7 @@ size_t dumpsize_t(FILE *stream,size_t *len) {
 }
 
 exp_t *load_exp_t(FILE *stream) {
-  exp_t *resp=make_nil();
+  exp_t *resp=NIL_EXP;
   if (loadtype(stream,&(resp->type)) > 0 ) {
     return __LOAD__(resp,stream);
   }
@@ -663,6 +664,7 @@ char *load_str(char **pptr,FILE *stream) {
   *((char*)(ptr+length))='\0';
   return ptr;
 }
+
 exp_t *load_string(exp_t *e,FILE *stream){
   if (load_str((char**)&(e->ptr),stream)) 
     return e;
@@ -800,7 +802,7 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
   if (lnode)
     return lnode;
   else
-    return make_nil();
+    return NIL_EXP;
 }
 
 
@@ -985,7 +987,7 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
   exp_t *key;
   exp_t *key2;
   if (!(env->d)) env->d=create_dict();
-  if (val==NULL) val=make_nil();
+  if (val==NULL) val=NIL_EXP;
   if issymbol(keyv) { 
       if (islambda(val) && val->meta==NULL) val->meta=(keyval_t *)strdup(keyv->ptr);
       ret=set_get_keyval_dict(env->d,keyv->ptr,val); return val;}
@@ -1198,9 +1200,9 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env)
   /* to be unrefed tmpkey in case of evaluate */ 
   if iserror(tmpkey) return tmpkey;
   if (get_keyval_dict_timestamp(env->d,tmpkey->ptr)) {
-      return make_symbol("t",2);}
+      return TRUE_EXP;}
   else 
-    return make_nil();
+    return NIL_EXP;
 }
 
 exp_t *forgetcmd(exp_t *e, env_t *env)
@@ -1251,7 +1253,7 @@ exp_t *cmpcmd(exp_t *e, env_t *env)
   else if (strcmp(op->ptr,"<=")==0) ret=(d<=0);
   else if (strcmp(op->ptr,">=")==0) ret=(d>=0);
   else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal operand in compare operation");
-  return (ret?make_symbol("t",1):make_nil());
+  return (ret?TRUE_EXP:NIL_EXP);
 }
 
 
@@ -1450,7 +1452,7 @@ exp_t *prncmd(exp_t *e, env_t *env){
 }
 
 exp_t *oddcmd(exp_t *e, env_t *env){
-  if (e->next && isnumber(e->next->content)) return (e->next->content->s64&1?make_symbol("t",1):make_nil());
+  if (e->next && isnumber(e->next->content)) return (e->next->content->s64&1?TRUE_EXP:NIL_EXP);
   return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
 }
 
@@ -1463,7 +1465,7 @@ exp_t *docmd(exp_t *e, env_t *env){
     } while ((cur=cdr(cur)) && !(ret && iserror(ret)));
   if (ret && iserror(ret))
     return ret;
-  else return make_nil();
+  else return NIL_EXP;
 }
 
 exp_t *whencmd(exp_t *e, env_t *env){
@@ -1475,7 +1477,7 @@ exp_t *whencmd(exp_t *e, env_t *env){
     do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
   if (ret && iserror(ret))
     return ret;
-  else return make_nil();
+  else return NIL_EXP;
 }
 
 exp_t *whilecmd(exp_t *e, env_t *env){
@@ -1490,7 +1492,7 @@ exp_t *whilecmd(exp_t *e, env_t *env){
     }
   if (ret && iserror(ret))
     return ret;
-  else return make_nil();
+  else return NIL_EXP;
 }
 
 exp_t *repeatcmd(exp_t *e, env_t *env){
@@ -1509,7 +1511,7 @@ exp_t *repeatcmd(exp_t *e, env_t *env){
     }
   if (ret && iserror(ret))
     return ret;
-  else return make_nil();
+  else return NIL_EXP;
 }
 
 exp_t *andcmd(exp_t *e, env_t *env){
@@ -1538,8 +1540,8 @@ exp_t *nocmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *tmpexp=evaluate(car(cur),env);
   if iserror(tmpexp) return tmpexp;
-  if (istrue(tmpexp)) return make_nil();
-  else return make_symbol("t",1);
+  if (istrue(tmpexp)) return NIL_EXP;
+  else return TRUE_EXP;
 }
 
 
@@ -1590,7 +1592,7 @@ exp_t *iscmd(exp_t *e, env_t *env){
   if iserror(cur1) return cur1;
   exp_t *cur2=evaluate(caddr(e),env);
   if iserror(cur2) return cur2;
-  return (isequal(cur1,cur2)?make_symbol("t",1):make_nil());
+  return (isequal(cur1,cur2)?TRUE_EXP:NIL_EXP);
 }
 
 exp_t *isocmd(exp_t *e, env_t *env){
@@ -1598,7 +1600,7 @@ exp_t *isocmd(exp_t *e, env_t *env){
   if iserror(cur1) return cur1;
   exp_t *cur2=evaluate(caddr(e),env);
   if iserror(cur2) return cur2;
-  return (isoequal(cur1,cur2)?make_symbol("t",1):make_nil());
+  return (isoequal(cur1,cur2)?TRUE_EXP:NIL_EXP);
 }
 
 
@@ -1616,7 +1618,7 @@ exp_t *incmd(exp_t *e, env_t *env){
       if ((ret=isoequal(val,val2))) break;
     }
   
-  return (ret?make_symbol("t",1):make_nil());
+  return (ret?TRUE_EXP:NIL_EXP);
 }
 
 exp_t *casecmd(exp_t *e, env_t *env){
@@ -1649,10 +1651,10 @@ exp_t *forcmd(exp_t *e,env_t *env){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
-        if ((retval=evaluate(curval->content,env))==NULL) retval=make_nil();
+        if ((retval=evaluate(curval->content,env))==NULL) retval=NIL_EXP;
         if (isnumber(retval)) {
-          if (!curval->next) lastidx=make_nil();
-          if (curval->next && (lastidx=evaluate(curval->next->content,env))==NULL) lastidx=make_nil();
+          if (!curval->next) lastidx=NIL_EXP;
+          if (curval->next && (lastidx=evaluate(curval->next->content,env))==NULL) lastidx=NIL_EXP;
           if (isnumber(lastidx)) {
             keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,retval);
             curin=curval->next->next;
@@ -1678,10 +1680,10 @@ exp_t *forcmd(exp_t *e,env_t *env){
       int idx=lastidx->s64+1;
       /*if (idx>100){
         curval=curin;
-        curin=make_nil();
+        curin=NIL_EXP;
         curvar=curin;
         while (curval) {
-        curvar->content=refexp(optimize(curval->content,env)); curvar=curvar->next=make_nil(); curval=curval->next;
+        curvar->content=refexp(optimize(curval->content,env)); curvar=curvar->next=NIL_EXP; curval=curval->next;
         }
         }*/
       while (retval->s64<idx)
@@ -1721,7 +1723,7 @@ exp_t *eachcmd(exp_t *e,env_t *env){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
-        if ((retval=evaluate(curval->content,env))==NULL) retval=make_nil();
+        if ((retval=evaluate(curval->content,env))==NULL) retval=NIL_EXP;
         if (ispair(retval)) {
           curin=curval->next;
           while (retval) {
@@ -1799,7 +1801,7 @@ exp_t *listcmd(exp_t *e, env_t *env){
 }
 
 exp_t *evalcmd(exp_t *e, env_t *env){
-  return evaluate(cadr(e),env);
+  return evaluate(evaluate(cadr(e),env),env);
 }
 
 exp_t *letcmd(exp_t *e,env_t *env){
@@ -1815,7 +1817,7 @@ exp_t *letcmd(exp_t *e,env_t *env){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
-        if ((retval=evaluate(curval->content,env))==NULL) retval=make_nil();
+        if ((retval=evaluate(curval->content,env))==NULL) retval=NIL_EXP;
         if iserror(retval) return retval;
         keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,retval);
       }
@@ -1896,7 +1898,7 @@ exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
       if ((retvar = (evalexp?evaluate(curval->content,env->root):curval->content))) {
         if (evalexp && iserror(retvar)) return retvar;
       }
-      else retvar= make_nil();
+      else retvar= NIL_EXP;
       if (issymbol(curvar->content)) keyv=set_get_keyval_dict(env->d,curvar->content->ptr,retvar);
       else return NULL;
       
@@ -2140,8 +2142,8 @@ int main(int argc, char *argv[])
 
 
   reserved_symbol=create_dict();
-  set_get_keyval_dict(reserved_symbol,"nil",make_nil());
-  set_get_keyval_dict(reserved_symbol,"t",make_symbol("t",2));
+  set_get_keyval_dict(reserved_symbol,"nil",NIL_EXP);
+  set_get_keyval_dict(reserved_symbol,"t",TRUE_EXP);
   
   int N=sizeof(lispProcList)/sizeof(lispProc);
   int i;

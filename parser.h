@@ -73,10 +73,14 @@ typedef struct exp_tfunc {
   exp_t *(*dump)(exp_t *this,FILE *stream); /* serialized object this to stream */	
 } exp_tfunc;
 
+
+
 #define __CLONE__(e) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->clone?exp_tfuncList[e->type]->clone(e):NULL)
 #define __CLONE_FLAG__(e) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->clone_flag?exp_tfuncList[e->type]->clone_flag(e):NULL)
 #define __LOAD__(e,s) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->load?exp_tfuncList[e->type]->load(e,s):NULL)
 #define __DUMP__(e,s) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->dump?exp_tfuncList[e->type]->dump(e,s):NULL)
+#define __DUMPABLE__(e) (exp_tfuncList[e->type]&&exp_tfuncList[e->type]->dump?1:0)
+
 
 typedef struct token_t {
 	int size;
@@ -162,6 +166,7 @@ void * del_keyval_dict(dict_t* d, char *key);
 /* lisp */
 exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...);
 exp_t *make_nil();
+#define NIL_EXP (make_nil())
 exp_t *make_char(unsigned char c);
 exp_t *make_node(exp_t *node);
 exp_t *make_internal(lispCmd *cmd);
@@ -169,6 +174,7 @@ exp_t *make_tree(exp_t *root,exp_t *node1);
 exp_t *make_fromstr(char *str,int length);
 exp_t *make_string(char *str,int length);
 exp_t *make_symbol(char *str,int length);
+#define TRUE_EXP (make_symbol("t",1))
 exp_t *make_quote(exp_t *node);
 exp_t *make_integer(char *str);
 exp_t *make_integeri(int64_t i);
