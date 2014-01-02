@@ -1,4 +1,4 @@
-
+setup etag to index with emacs
 * fix macro / code expand-macro1 (fixed commit 90a7e69da94ebdd0e2781a22dd559484d216736b )
 * should we store 8 bytes values directly inside content pointer of pair instead of pointing to another object
 * fix error handling / freeing ressources with setjmp (gave up using setjmp too many side effects 1d339c702754297eb5b8c324f2713670da125dd2)
