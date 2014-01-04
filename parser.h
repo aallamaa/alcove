@@ -49,10 +49,10 @@ typedef struct exp_t *lispCmd(struct exp_t *e,struct env_t *env);
 #define FLAG_TAILREC 1
 
 typedef struct exp_t {
-  unsigned short int flags; /* bit 0 set to 1 for disk persistance */
-  unsigned short int type; // exp type cf exptype_t enum list
-  int nref; // Garbage collector number of reference counter
-  union {
+  unsigned short int flags; /* 2 bytes --- bit 0 set to 1 for disk persistance */
+  unsigned short int type; //  2 bytes --- exp type cf exptype_t enum list
+  int nref; // --------------- 4 bytes --- Garbage collector number of reference counter
+  union {   // --------------- 8 bytes
     struct exp_t *content;
     void *ptr;
     int64_t s64;
@@ -60,9 +60,9 @@ typedef struct exp_t {
     lispCmd *fnc;
   } ;
   struct keyval_t
-  /*char*/ *meta;
-  struct exp_t *next;
-} exp_t;
+  /*char*/ *meta;  // --------- 8 bytes
+  struct exp_t *next; // ------ 8 bytes
+} exp_t; // total              32 bytes
 
 
 typedef struct exp_tfunc {
@@ -145,6 +145,7 @@ void *memalloc(size_t count, size_t size);
 int unrefexp(exp_t *e);
 
 /* env management and exception handling inside env*/
+env_t * ref_env(env_t *env);
 env_t * make_env(env_t *rootenv);
 void *destroy_env(env_t *env);
 exp_t *set_return_point(env_t *env);

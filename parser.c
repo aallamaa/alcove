@@ -136,7 +136,7 @@ void *memalloc(size_t count, size_t size){
 
 exp_t *refexp(exp_t *e) {
   if (e) { __sync_add_and_fetch(&(e->nref),1); return e;}
-  else return 0;
+  else return NULL;
 }
 
 int unrefexp(exp_t *e){
@@ -159,10 +159,16 @@ int unrefexp(exp_t *e){
 
 /* env management*/
 
+inline env_t * ref_env(env_t *env){
+	if (env){__sync_add_and_fetch(&(env->nref),1); return env;}
+	else return env;
+}
+
+
 inline env_t * make_env(env_t *rootenv)
 {
   env_t *newenv=memalloc(1,sizeof(env_t));
-  newenv->root=rootenv; //env;
+  newenv->root=ref_env(rootenv); //env;
   newenv->callingfnc=NULL;
   newenv->nref=1;
   return newenv;
@@ -396,7 +402,7 @@ void * del_keyval_dict(dict_t* d, char *key){
 inline exp_t *make_nil(){
   exp_t *nil_exp=memalloc(1,sizeof(exp_t));
   nil_exp->type=EXP_PAIR;
-  nil_exp->nref=0;
+  nil_exp->nref=1;
   nil_exp->content=NULL;
   nil_exp->next=NULL;
   nil_exp->meta=NULL;
@@ -561,7 +567,7 @@ inline exp_t *make_symbol(char *str,int length)
 
 inline exp_t *make_quote(exp_t *node){
   exp_t *cur=make_symbol("quote",strlen("quote"));
-  cur=make_node(cur);
+  cur=refexp(make_node(cur));
   cur->next=refexp(make_node(node));
   return cur;  
 }
@@ -952,19 +958,21 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
 
 inline int istrue(exp_t *e){
+  int ret=0;
   if (e) {
     if isatom(e) {
-        if isstring(e) return ((e->ptr)?strlen(e->ptr):0);
-        else if isnumber(e) return (e->s64);
-        else if isfloat(e) return (e->f!=0);
-        else if issymbol(e) return (strcmp(e->ptr,"nil")!=0);
+        if isstring(e) ret = ((e->ptr)?strlen(e->ptr):0);
+        else if isnumber(e) ret =(e->s64);
+        else if isfloat(e) ret = (e->f!=0);
+        else if issymbol(e) ret = (strcmp(e->ptr,"nil")!=0);
       }
     else if ispair(e) {
         if (e->content||e->next)
-          return 1;
+          ret = 1;
       }
   }
-  return 0;
+  unrefexp(e);
+  return ret;
 }
 
 
@@ -984,46 +992,57 @@ inline exp_t *lookup(exp_t *e,env_t *env)
 }
 exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
   keyval_t *ret=NULL;
-  exp_t *key;
-  exp_t *key2;
+  exp_t *key=NULL;
+  exp_t *key2=NULL;
   if (!(env->d)) env->d=create_dict();
   if (val==NULL) val=NIL_EXP;
-  if issymbol(keyv) { 
-      if (islambda(val) && val->meta==NULL) val->meta=(keyval_t *)strdup(keyv->ptr);
+  if (issymbol(keyv) || isstring(keyv)) {  // form (= "qweqwe" 10) (= weq 10)
+      if (islambda(val) && val->meta==NULL) val->meta=(keyval_t *)strdup(keyv->ptr);   /// TO BE CHANGED IN keyval_t structure with name key being the original name
       ret=set_get_keyval_dict(env->d,keyv->ptr,val); return val;}
-  else if (ispair(keyv)) { /*evaluate(keyv,env)=val*/ 
-    key=car(keyv);
-    if (key && issymbol(key)){
-      if (strcmp(key->ptr,"car")==0)
-        {
-          key=evaluate(cadr(keyv),env);
-          unrefexp(key->content);
-          return (key->content=refexp(val));
-        }
-      else if (strcmp(key->ptr,"car")==0)
-        {
-          key=evaluate(cadr(keyv),env);
-          unrefexp(key->next);
-          return (key->next=refexp(val));
-        }
-      else {
-        key=evaluate(key,env);
-        if (isstring(key)){
-          key2=cadr(keyv);
-          if (key2 && isnumber(key2) && ischar(val))
-            if ((key2->s64>=0) && (key2->s64<(int64_t)strlen(key->ptr)))
-              {
-                *((char*) key->ptr +key2->s64)=(unsigned char) val->s64;
-                return val;
+  else if (ispair(keyv)) 
+    { /*evaluate(keyv,env)=val*/ 
+      key=car(keyv);
+      if (key && issymbol(key)){
+        if (strcmp(key->ptr,"car")==0) // form (= (car x) 'z)
+          {
+            key=evaluate(cadr(keyv),env);
+            if iserror(key) {
+                unrefexp(keyv);
+                unrefexp(val);
+                return key;
               }
-            else return error(ERROR_INDEX_OUT_OF_RANGE,keyv,env,"Error index out of range");
-          else return error(ERROR_NUMBER_EXPECTED,keyv,env,"Error number and char expected");
+            unrefexp(key->content);
+            return (key->content=refexp(val));
+          }
+        else if (strcmp(key->ptr,"cdr")==0)
+          {
+            key=evaluate(cadr(keyv),env);
+            if iserror(key) {
+                unrefexp(keyv);
+                unrefexp(val);
+                return key;
+              }
+            unrefexp(key->next);
+            return (key->next=refexp(val));
+          }
+        else {
+          key=evaluate(key,env);
+          if (isstring(key)){
+            key2=cadr(keyv);
+            if (key2 && isnumber(key2) && ischar(val))
+              if ((key2->s64>=0) && (key2->s64<(int64_t)strlen(key->ptr)))
+                {
+                  *((char*) key->ptr +key2->s64)=(unsigned char) val->s64;
+                  return val;
+                }
+              else return error(ERROR_INDEX_OUT_OF_RANGE,keyv,env,"Error index out of range");
+            else return error(ERROR_NUMBER_EXPECTED,keyv,env,"Error number and char expected");
+          }
+          else return NULL ; // SHOULD BE ERROR 
         }
-      }
-    }      
-    else return NULL;
- 
-  }
+      }      
+      
+    }
   else return error(EXP_ERROR_INVALID_KEY_UPDATE,keyv,env,"Error invalid key in =");
   if (ret) return ret->val;
   else return NULL; /* ERROR? */
@@ -1175,9 +1194,9 @@ exp_t *equalcmd(exp_t *e, env_t *env)
 {
   exp_t *tmpexp=evaluate(caddr(e),env);
   exp_t *tmpkey=cadr(e);
-  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
-  if iserror(tmpkey)
-              return tmpkey;
+  //if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  //if iserror(tmpkey)
+  //            return tmpkey;
   if iserror(tmpexp)
               return tmpexp;
   return updatebang(tmpkey,env,tmpexp);
