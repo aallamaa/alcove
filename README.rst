@@ -9,11 +9,11 @@ History
 =======
 
 
-More than 20 years ago from now, when I was still a teenage coding on 8 bits and 16 bits processors using assembly languages, I came up with the idea of designing a new breed of processor. And this idea primarely came while working with the blitter and copper co-processors of the Amiga. The idea was the following, building processors that would be made of stacked alveolus, each hexagonal prism constituting this alveolus structure being able to exchange streams of data and code with its neighboring cells. I called this technology, X.One Technologies (from Hexagon and Axone, X.One => Multiple One). 
+More than 20 years ago from now, when I was still a teenage coding on 8 bits and 16 bits processors using assembly languages, I came up with the idea of designing a new breed of processor. And this idea primarely came while working with the blitter and copper co-processors of the Amiga. The idea was the following, building processors that would be made of stacked alveolus, each hexagonal prism constituting this alveolus structure being able to exchange streams of data and code with its neighboring cells. I called this technology, X.One Technologies (from Hexagon and Axone, X.One => Multiple One).
 
 Today, the world is being shaped by the Internet and this same principle applies. Each entity is becoming part of the Internet, and is exchanging with the rest of the Internet. Massive amounts of data are being processed, and the more we move forward, the more we need to be able to process quickly and efficiently those massive amounts.
 
-Code and data are converging in a highly concurrent world, both at the processor level (increasing number of cores) and at the network level (distributed over network nodes). 
+Code and data are converging in a highly concurrent world, both at the processor level (increasing number of cores) and at the network level (distributed over network nodes).
 
 What will ALCOVE be ?
 =====================
@@ -37,4 +37,3 @@ make
 I would advice to use rlwrap
 
 rlwrap ./parser
-
