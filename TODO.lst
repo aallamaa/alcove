@@ -1,0 +1,28 @@
+[TODO] setup etag to index with emacs
+[DONE] fix macro / code expand-macro1 (fixed commit 90a7e69da94ebdd0e2781a22dd559484d216736b )
+[TODO] should we store 8 bytes values directly inside content pointer of pair instead of pointing to another object
+[TODO] fix error handling / freeing ressources with setjmp (gave up using setjmp too many side effects 1d339c702754297eb5b8c324f2713670da125dd2)
+[TODO] add support for utf-8 in string indexing and char
+[TODO] add support for documentation in function header
+[TODO] add support for default parameters
+[TODO] add support for polymorphism in lambda
+[TODO] add support for continuation call/cc
+[TODO] add support for http://wiki.msgpack.org/display/MSGPACK/Format+specification
+[TODO] check added value of http://www.canonware.com/jemalloc/ instead of malloc
+[TODO] see https://www.hackerschool.com/blog/13-list-comprehensions-in-eight-lines-of-clojure
+[TODO] see concatenative stuff: http://blog.fogus.me/2013/01/06/pesto5-a-concatenative-programming-library-in-5-lines-of-clojure/
+[TODO] check qsort http://arclanguage.org/item?id=16705
+[TODO] implement http://en.wikipedia.org/wiki/Hash_array_mapped_trie
+[TODO] check https://github.com/clojure/clojure/blob/master/src/jvm/clojure/lang/PersistentHashMap.java
+[TODO] check https://github.com/chaelim/HAMT lock free: https://github.com/axel22/Ctries 
+[TODO] implement http://gcc.gnu.org/onlinedocs/gcc-4.4.5/gcc/Atomic-Builtins.html for every potentially concurrent objects
+[TODO] implement JIT with DynASM http://blog.reverberate.org/2012_12_01_archive.html
+[TODO] check http://nanocubes.net/
+[TODO] check http://en.wikipedia.org/wiki/Splay_tree
+[TODO] check http://en.wikipedia.org/wiki/Suffix_trie
+[TODO] check http://en.wikipedia.org/wiki/Rope_%28data_structure%29 
+[TODO] check http://cr.yp.to/critbit.html 
+[TODO] check http://en.wikipedia.org/wiki/Dancing_Links 
+[TODO] check http://en.wikipedia.org/wiki/Skip_list
+[TODO] check http://okasaki.blogspot.co.uk/2008/02/ten-years-of-purely-functional-data.html
+[TODO] check http://en.wikipedia.org/wiki/Binary_space_partitioning 
