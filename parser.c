@@ -134,12 +134,12 @@ void *memalloc(size_t count, size_t size){
 
 
 
-exp_t *refexp(exp_t *e) {
+inline exp_t *refexp(exp_t *e) {
   if (e) { __sync_add_and_fetch(&(e->nref),1); return e;}
   else return NULL;
 }
 
-int unrefexp(exp_t *e){
+inline int unrefexp(exp_t *e){
   if (!e) return 0;
   int ret;
   if ((ret=__sync_sub_and_fetch(&(e->nref),1)) <=0) {
