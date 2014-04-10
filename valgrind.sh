@@ -1,1 +1,1 @@
-make clean; make ; valgrind --leak-check=full --track-origins=yes ./parser
+make clean; make ; valgrind --leak-check=full --track-origins=yes ./alcove

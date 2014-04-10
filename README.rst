@@ -32,8 +32,8 @@ Install and Run
 ===============
 
 make
-./parser
+./alcove
 
 I would advice to use rlwrap
 
-rlwrap ./parser
+rlwrap ./alcove
