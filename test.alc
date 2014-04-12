@@ -1,0 +1,3 @@
+(def assert (txt a b) (pr txt) (is a b) (prn "\t: Passed"))
+(assert "addition" 3 (+ 1 2))
+(assert " (+) is 0" 0 (+ ))
