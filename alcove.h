@@ -1,3 +1,5 @@
+#ifndef ALCOVE_H
+#define ALCOVE_H
 
 #include "char.h"
 /* Structure definition */
@@ -270,3 +272,11 @@ void tokenappend(token_t *token,char *src,int len);
 #define true 1
 #define false 0
 
+/* Parser */
+
+#define PARSER_KEEPWHITESPACE 1
+#define PARSER_PIPEMODE 2
+#define PARSER_TERMMACROMODE 4
+
+
+#endif /* ALCOVE_H */

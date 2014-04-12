@@ -300,7 +300,7 @@ int dump_dict(dict_t *d,FILE *stream){
   keyval_t *ckv;
   keyval_t *pkv;
   unsigned int i,j;
-  if (verbose) printf("Dumping dict %x\n",d);
+  if (verbose) printf("Dumping dict %x\n",(unsigned int)d);
   for (i=0;i<2;i++){
     for (j=0;j<d->ht[i].size;j++)
       {
@@ -788,13 +788,13 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
     return make_quote(vnode);
   }
   else if (x=='|') {
-    vnode=reader(stream,')',2);
+    vnode=reader(stream,')',PARSER_PIPEMODE);
     lnode=make_node(vnode);
       
     if (vnode){
       if (iserror(vnode)) return vnode;
       cnode=lnode;
-      while ((vnode=reader(stream,')',4))) { 
+      while ((vnode=reader(stream,')',PARSER_TERMMACROMODE))) { 
         if (iserror(vnode)) return vnode;
         cnode=cnode->next=refexp(make_node(vnode));
       }
@@ -811,10 +811,26 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
     return NIL_EXP;
 }
 
+exp_t *escapereader(FILE *stream,token_t ** ptoken,int lastchar) 
+{
+  /* Parse \n \b ... */
+  /* Parse \xAB as char 0xAB */
+  /* Parse \u001000 as unicode char 001000 in hex mode */
+  if (schrmap[lastchar]) {
+    if (*ptoken) {
+      tokenadd(*ptoken,schrmap[lastchar]);
+    }
+    else {
+      *ptoken=tokenize(schrmap[lastchar]); 
+    }
+  }
+  return NULL;
+}
+
 
 exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
   int x,y,z;
-  token_t *token;
+  token_t *token=NULL;
   exp_t *ret=NULL;
   int pushtoken=0;
   int escape=0;
@@ -836,7 +852,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
 
     else if (ISWHITESPACE & chrmap[x]) continue; 
     else if ((ISTERMMACRO|ISNTERMMACRO) & chrmap[x]) { 
-      if (clmacro==x) { if (keepwspace&4) ungetc(x,stream); return NULL; /* OK */}
+      if (clmacro==x) { if (keepwspace&PARSER_TERMMACROMODE) ungetc(x,stream); return NULL; /* OK */}
       if (x=='#') {
         // Dispatch macro
         if ((y=getc(stream))!=EOF) { 
@@ -853,7 +869,13 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
       if ((ret=callmacrochar(stream,x))) return ret; else continue;
     }
     else if (ISSINGLEESCAPE & chrmap[x]) {  //step 5
-      if ((y=getc(stream))!=EOF) { if (keepwspace&2) {token=tokenize(x);tokenadd(token,y);} else token=tokenize(y);}
+      if ((y=getc(stream))!=EOF) { 
+        if (keepwspace&PARSER_PIPEMODE) {token=tokenize(x);tokenadd(token,y);
+        } 
+        else {
+          if (ret = escapereader(stream,&token,y)) return ret;
+        }
+      }
       else return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
      
     }
@@ -879,7 +901,10 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
           }
           else if ((ISCONSTITUENT|ISNTERMMACRO) & chrmap[y]) { tokenadd(token,y); continue;}
           else if (ISSINGLEESCAPE & chrmap[y]){
-            if ((z=getc(stream))!=EOF) { if (keepwspace&2) tokenadd(token,y); tokenadd(token,z); }
+            if ((z=getc(stream))!=EOF) { 
+              if (keepwspace&PARSER_PIPEMODE) { tokenadd(token,y); tokenadd(token,z);}
+              else if (ret = escapereader(stream,&token,z)) return ret;
+              }
             else {
               freetoken(token);
               return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
@@ -918,7 +943,10 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
             }
             else if ((ISWHITESPACE|ISCONSTITUENT|ISTERMMACRO|ISNTERMMACRO) & chrmap[y]) tokenadd(token,y);
             else if (ISSINGLEESCAPE & chrmap[y]){
-              if ((z=getc(stream))!=EOF) { tokenadd(token,z); continue;}
+              if ((z=getc(stream))!=EOF) {
+                if (ret = escapereader(stream,&token,z)) return ret;
+              }
+                //{ tokenadd(token,z); continue;} // should we use escapereader here ?? to be checked
               else { 
                 freetoken(token);
                 return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
@@ -943,6 +971,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
       // TOKEN AND STUFF TO BE FREED
       ret=make_atom(token->data,token->size);
       freetoken(token);
+      token=NULL;
       return ret;
     }
     else return NULL;
@@ -1456,7 +1485,7 @@ exp_t *prcmd(exp_t *e, env_t *env){
   while ((v=v->next)){
     val=evaluate(v->content,env);
     if iserror(val) return val;
-    if (val && isstring(val)) printf((char*)val->ptr);
+    if (val && isstring(val)) printf("%s",(char*)val->ptr);
     else print_node(val);
   }
   return NULL;

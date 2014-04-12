@@ -1,4 +1,6 @@
-
+print """#ifndef CHAR_H
+#define CHAR_H
+"""
 
 v=['NUL', 'SOH', 'STX', 'ETX', 'EOT', 'ENQ', 'ACK', 'BEL', 'BS', 'HT', 'LF', 'VT', 'FF', 'CR', 'SO', 'SI', 'DLE', 'DC1', 'DC2', 'DC3', 'DC4', 'NAK', 'SYN', 'ETB', 'CAN', 'EM', 'SUB', 'ESC', 'FS', 'GS', 'RS', 'US', 'SPACE']
 w=['Null character', 'Start of Header', 'Start of Text', 'End of Text', 'End of Transmission', 'Enquiry', 'Acknowledgment', 'Bell', 'Backspace[d][e]', 'Horizontal Tab[f]', 'Line feed', 'Vertical Tab', 'Form feed', 'Carriage return[g]', 'Shift Out', 'Shift In', 'Data Link Escape', 'Device Control 1 (oft. XON)', 'Device Control 2', 'Device Control 3 (oft. XOFF)', 'Device Control 4', 'Negative Acknowledgement', 'Synchronous idle', 'End of Transmission Block', 'Cancel', 'End of Medium', 'Substitute', 'Escape[i]', 'File Separator', 'Group Separator', 'Record Separator', 'Unit Separator','Space']
@@ -55,3 +57,13 @@ print ",\t".join(chrl[j:256])
 
 		
 print "};"
+
+schrmap=dict(b="\b",f="\f",n="\n",r="\r",t="\t",v="\v")
+schrmapi=[0]*256
+for v in schrmap:
+  schrmapi[ord(v)]=ord(schrmap[v])
+print "unsigned char schrmap[]={"
+print ",\t".join(str(i) for i in schrmapi)
+print "};"
+
+print "#endif /* CHAR_H */"
