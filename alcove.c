@@ -816,15 +816,33 @@ exp_t *escapereader(FILE *stream,token_t ** ptoken,int lastchar)
   /* Parse \n \b ... */
   /* Parse \xAB as char 0xAB */
   /* Parse \u001000 as unicode char 001000 in hex mode */
+  int zchar=lastchar;
+  int nchar=0;
   if (schrmap[lastchar]) {
-    if (*ptoken) {
-      tokenadd(*ptoken,schrmap[lastchar]);
-    }
-    else {
-      *ptoken=tokenize(schrmap[lastchar]); 
-    }
+    zchar = schrmap[lastchar];
   }
+  else if (lastchar == 'x') 
+    {
+      if ((nchar=getc(stream))==EOF) 
+        return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
+      if (chr2hex[nchar] <0) goto error;
+      zchar = chr2hex[nchar]*16;
+      if ((nchar=getc(stream))==EOF) 
+        return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
+      if (chr2hex[nchar] <0) goto error;
+      zchar += chr2hex[nchar];
+      
+    }
+  if (*ptoken) {
+    tokenadd(*ptoken,zchar);
+  }
+  else {
+    *ptoken=tokenize(zchar); 
+  }
+
   return NULL;
+error:
+  return error(EXP_ERROR_PARSING_ESCAPE,NULL,NULL,"invalid escape %c unkown!",nchar); 
 }
 
 
@@ -873,7 +891,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
         if (keepwspace&PARSER_PIPEMODE) {token=tokenize(x);tokenadd(token,y);
         } 
         else {
-          if (ret = escapereader(stream,&token,y)) return ret;
+          if ((ret = escapereader(stream,&token,y))) return ret;
         }
       }
       else return error(EXP_ERROR_PARSING_EOF,NULL,NULL,"End of file reached while parsing");
@@ -903,7 +921,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
           else if (ISSINGLEESCAPE & chrmap[y]){
             if ((z=getc(stream))!=EOF) { 
               if (keepwspace&PARSER_PIPEMODE) { tokenadd(token,y); tokenadd(token,z);}
-              else if (ret = escapereader(stream,&token,z)) return ret;
+              else if ((ret = escapereader(stream,&token,z))) return ret;
               }
             else {
               freetoken(token);
@@ -944,7 +962,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
             else if ((ISWHITESPACE|ISCONSTITUENT|ISTERMMACRO|ISNTERMMACRO) & chrmap[y]) tokenadd(token,y);
             else if (ISSINGLEESCAPE & chrmap[y]){
               if ((z=getc(stream))!=EOF) {
-                if (ret = escapereader(stream,&token,z)) return ret;
+                if ((ret = escapereader(stream,&token,z))) return ret;
               }
                 //{ tokenadd(token,z); continue;} // should we use escapereader here ?? to be checked
               else { 
@@ -2157,7 +2175,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
         else if (islambda(tmpexp)) return invoke(e,tmpexp,env);
         else if (ismacro(tmpexp)) return invokemacro(e,tmpexp,env);  
       }
-      else if (tmpexp==NULL) return NULL;
+      else if (tmpexp==NULL) return e;
       
       /*else if (islambda(tmpexp)) {
         return invoke(e,tmpexp,env);
@@ -2235,7 +2253,10 @@ int main(int argc, char *argv[])
       printf("\n");
     };
     unrefexp(stre);
-    if (strf) unrefexp(strf);
+    if (strf) { 
+      unrefexp(strf);
+      strf=NULL;
+    }
   }
   unrefexp(stre);
   destroy_dict(dict);

@@ -66,4 +66,17 @@ print "unsigned char schrmap[]={"
 print ",\t".join(str(i) for i in schrmapi)
 print "};"
 
+chr2hex=[-1]*256
+
+for tm in [zip(range(ord('a'),ord('f')),range(10,16)),
+           zip(range(ord('A'),ord('F')),range(10,16)),
+           zip(range(ord('0'),ord('9')),range(0,10))]:
+  for a,i in tm:
+    chr2hex[a]=i
+
+print "short int chr2hex[]={"
+print ",\t".join(str(i) for i in chr2hex)
+print "};"
+           
+
 print "#endif /* CHAR_H */"
