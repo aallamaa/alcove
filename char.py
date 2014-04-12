@@ -10,7 +10,7 @@ termmacro=[ord(i) for i in "'(),;`|{}[]"]
 ntermmacro=[ord(i) for i in "#"]
 digit=[ord(i) for i in "0123456789"]
 constituent=[ord(i) for i in ":!$%&*+-./<=>?@^_0123456789~"]+range(ord("a"),ord("z")+1)+range(ord("A"),ord("Z")+1)
-
+hexa=[ord(i) for i in "0123456789abcdefABCDEF"]
 iswhitespace=1
 print "#define ISWHITESPACE %d" % (iswhitespace)
 issingleescape=2
@@ -25,21 +25,22 @@ isconstituent=32
 print "#define ISCONSTITUENT %d" % (isconstituent)
 isdigit=64
 print "#define ISDIGIT %d" % (isdigit)
-
+ishexa=128
+print "#define ISHEXA %d" % (isdigit)
 
 
 
 print "unsigned char chrmap[]={ "
 chrl=[]
 for i in range(256):
-	flags=iswhitespace*(i in whitespace)+issingleescape*(i in singleescape)+ismultipleescape*(i in multipleescape)+istermmacro*(i in termmacro)+isntermmacro*(i in ntermmacro)+isconstituent*(i in constituent)+isdigit*(i in digit)
+	flags=iswhitespace*(i in whitespace)+issingleescape*(i in singleescape)+ismultipleescape*(i in multipleescape)+istermmacro*(i in termmacro)+isntermmacro*(i in ntermmacro)+isconstituent*(i in constituent)+isdigit*(i in digit)+ishexa*(i in hexa)
 	if (i<33):
-		chrl.append( "%2d /* %s %s */" % (flags,v[i],w[i]))
+		chrl.append( "%3d /* %s %s */" % (flags,v[i],w[i]))
 	else:
 		if (i<128):
-			chrl.append( "%2d /* %s */" % (flags,chr(i)))
+			chrl.append( "%3d /* %s */" % (flags,chr(i)))
 		else:
-			chrl.append( "%2d /* %d */" % (flags,i))
+			chrl.append( "%3d /* %d */" % (flags,i))
 
 for i in range(33):
 	print "%s," % (chrl[i])

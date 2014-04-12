@@ -1456,7 +1456,7 @@ exp_t *prcmd(exp_t *e, env_t *env){
   while ((v=v->next)){
     val=evaluate(v->content,env);
     if iserror(val) return val;
-    if (val && isstring(val)) printf("%s",(char*)val->ptr);
+    if (val && isstring(val)) printf((char*)val->ptr);
     else print_node(val);
   }
   return NULL;
@@ -2201,10 +2201,12 @@ int main(int argc, char *argv[])
     if (verbose) {print_node(stre);printf("\n");}
     if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) break;
     strf=refexp(evaluate(stre,global));
-    if (strf) {print_node(strf);} else printf("nil");
+    if (!evaluatingfile) {
+      if (strf) {print_node(strf);} else printf("nil");
+      printf("\n");
+    };
     unrefexp(stre);
     if (strf) unrefexp(strf);
-    printf("\n");
   }
   unrefexp(stre);
   destroy_dict(dict);
