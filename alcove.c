@@ -145,6 +145,11 @@ inline int unrefexp(exp_t *e){
   if (!e) return 0;
   int ret;
   if ((ret=__sync_sub_and_fetch(&(e->nref),1)) <=0) {
+    if (verbose) {
+      printf("Freeing: ");
+      print_node(e);
+      printf("\n");
+    };
     // FREE META??
     if (e->meta) { free(e->meta); /* only lambda uses it so far */}
     if (e->next) unrefexp(e->next);
@@ -156,6 +161,11 @@ inline int unrefexp(exp_t *e){
     free(e);
     return 0;
   };
+    if (verbose) {
+      printf("Unref (%d): ",e->nref);
+      print_node(e);
+      printf("\n");
+    };
   return ret;
 }
 
@@ -2263,6 +2273,7 @@ int main(int argc, char *argv[])
     }
     if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) break;
     strf=refexp(evaluate(stre,global));
+    unrefexp(stre);
     if (!evaluatingfile) {
       if (strf) {
         if (verbose) {
@@ -2273,7 +2284,6 @@ int main(int argc, char *argv[])
       } else printf("nil");
       printf("\n");
     };
-    unrefexp(stre);
     if (strf) { 
       unrefexp(strf);
       strf=NULL;
