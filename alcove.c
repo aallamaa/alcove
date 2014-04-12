@@ -482,7 +482,7 @@ exp_t *make_tree(exp_t *root,exp_t *node1){
 void print_node(exp_t *node)
 {
   if (node==NULL)
-    printf("nil");
+    {printf("nil");}
   else if (node->type==EXP_ERROR)
     {
       printf("Error: %s\n",(char*) node->ptr);
@@ -504,7 +504,8 @@ void print_node(exp_t *node)
         if ispair(node) { printf(" ");print_node(node->content);}
         else {printf(" . "); print_node(node); break; }
       }
-      printf(")");} else printf("nil");
+      printf(")");
+    } else printf("nil");
   }
   else if (node->type==EXP_LAMBDA){
     if (node->meta) printf("#<procedure:%s@%08lx>",(char*)node->meta,(long) node);
@@ -530,7 +531,7 @@ void print_node(exp_t *node)
   else {
     printf("type: %d ptr: %08lx\n",node->type,(unsigned long) node->ptr);
   }
-  
+  return;
 }
 
 inline exp_t *make_fromstr(char *str,int length)
@@ -1020,7 +1021,7 @@ inline int istrue(exp_t *e){
           ret = 1;
       }
   }
-  unrefexp(e);
+  // ?? why is it here : unrefexp(e);
   return ret;
 }
 
@@ -2256,11 +2257,20 @@ int main(int argc, char *argv[])
     if (!evaluatingfile) printf("ALCOVE>");
     stre=refexp(reader(stream,0,0));
     if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF) && evaluatingfile) {exit(0);}
-    if (verbose) {print_node(stre);printf("\n");}
+    if (verbose) {
+      if (stre) printf("stre:#\\%lld",(long long int)stre);
+      print_node(stre);printf("\n");
+    }
     if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) break;
     strf=refexp(evaluate(stre,global));
     if (!evaluatingfile) {
-      if (strf) {print_node(strf);} else printf("nil");
+      if (strf) {
+        if (verbose) {
+          printf("strf:#\\%lld\n",(long long int)strf);
+          inspectcmd(strf,global);
+        }
+        print_node(strf);
+      } else printf("nil");
       printf("\n");
     };
     unrefexp(stre);
