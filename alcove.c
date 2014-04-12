@@ -404,7 +404,7 @@ void * del_keyval_dict(dict_t* d, char *key){
 inline exp_t *make_nil(){
   exp_t *nil_exp=memalloc(1,sizeof(exp_t));
   nil_exp->type=EXP_PAIR;
-  nil_exp->nref=1;
+  nil_exp->nref=0;
   nil_exp->content=NULL;
   nil_exp->next=NULL;
   nil_exp->meta=NULL;
