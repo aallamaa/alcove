@@ -200,6 +200,7 @@ exp_t *make_atom(char *str,int length);
 exp_t *callmacrochar(FILE *stream,unsigned char x);
 exp_t *lookup(exp_t *e,env_t *env);
 exp_t *updatebang(exp_t *key,env_t *env,exp_t *val);
+exp_t *escapereader(FILE *stream,token_t ** ptoken,int lastchar);
 exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace);
 exp_t *optimize(exp_t *e,env_t *env);
 exp_t *evaluate(exp_t *e,env_t *env);
@@ -250,7 +251,7 @@ exp_t *casecmd(exp_t *e, env_t *env);
 exp_t *forcmd(exp_t *e, env_t *env);
 exp_t *eachcmd(exp_t *e,env_t *env);
 exp_t *timecmd(exp_t *e,env_t *env);
-
+exp_t *inspectcmd(exp_t *e,env_t *env);
 /* lisp macro */
 exp_t *defcmd(exp_t *e, env_t *env);
 exp_t *expandmacrocmd(exp_t *e,env_t *env);

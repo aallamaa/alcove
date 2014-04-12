@@ -95,6 +95,8 @@ lispProc lispProcList[]={
   {"forget",2,1,0,forgetcmd},
   {"savedb",2,1,0,savedbcmd},
   {"ispersistent",2,1,0,ispersistentcmd},
+  {"inspect",2,1,0,inspectcmd},
+
 };
 
 
@@ -1825,6 +1827,15 @@ exp_t *timecmd(exp_t *e,env_t *env){
   return make_integeri(gettimeusec());
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
+
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+exp_t *inspectcmd(exp_t *e,env_t *env){
+  if (e)
+    printf("type:\t%d\nflag:\t%d\nref:\t%d\n",e->flags,e->type,e->nref);
+  return NULL;
+}
+#pragma GCC diagnostic warning "-Wunused-parameter"
+
 
 
 exp_t *conscmd(exp_t *e, env_t *env){
