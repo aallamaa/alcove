@@ -128,12 +128,26 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
 /* MEMORY MANAGEMENT FUNCTIONS */
+/*
+There are two function, refexp and unrefexp which handle , which handle the incrementing and decrementing of the reference count of exp_t objects.
+
+Functions that return a reference to an object pass on ownership with the reference.
+
+Macros such car,cdr,cadr,cddr,cddr,isatom... of course borrow reference and are not supposed to decrement the reference count of the object.
+
+print_node only borrow ownership.
+
+When the reference count of an object reaches zero when decremented by unrefexp, unrefexp frees the object. At some point a the struct exp_tfunc will point to the function to be called to free the object depending on its type. It is not yet implemented.
+
+There are 2 ways to handle an object at the end of the function, transfer the ownership or call unrefexp.
+
+*/
+
 
 void *memalloc(size_t count, size_t size){
   return calloc(count,size);
   // ERROR MANAGEMENT TO BE ADDDED
 }
-
 
 
 inline exp_t *refexp(exp_t *e) {
@@ -146,7 +160,7 @@ inline int unrefexp(exp_t *e){
   int ret;
   if ((ret=__sync_sub_and_fetch(&(e->nref),1)) <=0) {
     if (verbose) {
-      printf("Freeing: ");
+      printf("\x1B[91mFreeing:\x1B[39m ");
       print_node(e);
       printf("\n");
     };
@@ -162,9 +176,9 @@ inline int unrefexp(exp_t *e){
     return 0;
   };
     if (verbose) {
-      printf("Unref (%d): ",e->nref);
+      printf("\x1B[91mUnref (%d): ",e->nref);
       print_node(e);
-      printf("\n");
+      printf("\x1B[39m\n");
     };
   return ret;
 }
@@ -373,7 +387,7 @@ exp_t * set_keyval_dict_timestamp(dict_t* d, char *key, int64_t timestamp){
   keyval_t *k=set_get_keyval_dict(d,key,NULL);
   if (k) {
     k->timestamp=timestamp;
-    return k->val;
+    return refexp(k->val);
   }
   return NULL;
 }
@@ -414,7 +428,7 @@ void * del_keyval_dict(dict_t* d, char *key){
 inline exp_t *make_nil(){
   exp_t *nil_exp=memalloc(1,sizeof(exp_t));
   nil_exp->type=EXP_PAIR;
-  nil_exp->nref=0;
+  nil_exp->nref=1;
   nil_exp->content=NULL;
   nil_exp->next=NULL;
   nil_exp->meta=NULL;
@@ -432,7 +446,7 @@ inline exp_t *make_char(unsigned char c){
 
 inline exp_t *make_node(exp_t *node){
   exp_t *cur=NIL_EXP;
-  if (node) cur->content=refexp(node);
+  if (node) cur->content=node;
   return cur;
   
 }
@@ -456,7 +470,7 @@ void tree_add_node(exp_t *tree,exp_t *node){
       tree_add_node(cur,node);
     else printf("ERROR IMPOSSIBLE TO ADD ");
   }
-  else tree->content=refexp(make_node(node));
+  else tree->content=make_node(node);
 }
 
 void pair_add_node(exp_t *pair, exp_t *node){
@@ -471,8 +485,8 @@ void pair_add_node(exp_t *pair, exp_t *node){
       else printf("ERROR UNABLE TO ADD NODE TO EXP");
     }
     else{
-      cur=cur->next=refexp(make_node(node));
-      cur->content=refexp(node);
+      cur=cur->next=make_node(node);
+      cur->content=node; /* ??? **/
     }
   }
   else printf("ERROR IMPOSSIBLE TO ADD NODE TO NON PAIR OBJECT\n");
@@ -495,7 +509,7 @@ void print_node(exp_t *node)
     {printf("nil");}
   else if (node->type==EXP_ERROR)
     {
-      printf("Error: %s\n",(char*) node->ptr);
+      printf("\x1B[91mError: \x1B[39m%s\n",(char*) node->ptr);
     }
   else if (node->type==EXP_TREE){
     printf("[ ");
@@ -518,8 +532,8 @@ void print_node(exp_t *node)
     } else printf("nil");
   }
   else if (node->type==EXP_LAMBDA){
-    if (node->meta) printf("#<procedure:%s@%08lx>",(char*)node->meta,(long) node);
-    else printf("#<procedure@%08lx>",(long) node);
+    if (node->meta) printf("\x1B[92m#<procedure:%s@%08lx>\x1B[39m",(char*)node->meta,(long) node);
+    else printf("\x1B[92m#<procedure@%08lx>\x1B[39m",(long) node);
     if (verbose) { 
       printf("\theader:"); print_node(node->content);
       printf("\tbody:"); print_node(node->next);
@@ -528,18 +542,18 @@ void print_node(exp_t *node)
         printf(")");*/
   }
   else if (node->type==EXP_MACRO){
-    if (node->meta) printf("#<macro:%s@%08lx>",(char *) node->meta,(long) node);
-    else printf("#<macro@@%08lx>",(long) node);
+    if (node->meta) printf("\x1B[92m#<macro:%s@%08lx>\x1B[39m",(char *) node->meta,(long) node);
+    else printf("\x1B[92m#<macro@@%08lx>\x1B[39m",(long) node);
     /*  if (node->content) print_node(node->content);
         printf(")");*/
   }
 
-  else if (node->type==EXP_SYMBOL) printf("%s%s",verbose?"_sym:":"",(char *) node->ptr);
-  else if (node->type==EXP_STRING) printf("%s\"%s\"",verbose?"_str:":"",(char *) node->ptr);
-  else if (node->type==EXP_NUMBER) printf("%s%ld",verbose?"_num:":"",(long) node->s64);
-  else if (node->type==EXP_FLOAT) printf("%s%lf",verbose?"_flo:":"",node->f);
+  else if (node->type==EXP_SYMBOL) printf("\x1B[92m%s%s\x1B[39m",verbose?"_sym:":"",(char *) node->ptr);
+  else if (node->type==EXP_STRING) printf("\x1B[92m%s\"%s\"\x1B[39m",verbose?"_str:":"",(char *) node->ptr);
+  else if (node->type==EXP_NUMBER) printf("\x1B[92m%s%ld\x1B[39m",verbose?"_num:":"",(long) node->s64);
+  else if (node->type==EXP_FLOAT) printf("\x1B[92m%s%lf\x1B[39m",verbose?"_flo:":"",node->f);
   else {
-    printf("type: %d ptr: %08lx\n",node->type,(unsigned long) node->ptr);
+    printf("\x1B[92mtype: %d ptr: %08lx\x1B[39m",node->type,(unsigned long) node->ptr);
   }
   return;
 }
@@ -580,8 +594,8 @@ inline exp_t *make_symbol(char *str,int length)
 
 inline exp_t *make_quote(exp_t *node){
   exp_t *cur=make_symbol("quote",strlen("quote"));
-  cur=refexp(make_node(cur));
-  cur->next=refexp(make_node(node));
+  cur=make_node(cur);
+  cur->next=make_node(node);
   return cur;  
 }
 
@@ -777,7 +791,7 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
       cnode=lnode;
       while ((vnode=reader(stream,')',0))) { 
         if (iserror(vnode)) { unrefexp(lnode); return vnode;}
-        cnode=cnode->next=refexp(make_node(vnode));
+        cnode=cnode->next=make_node(vnode);
       }
     }
   }
@@ -788,11 +802,11 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
       if (iserror(vnode)) return vnode;
       cnode=make_node(vnode); //body
       lnode=make_node(make_node(make_symbol("_",1))); //header
-      lnode->next=refexp(make_node(make_node(cnode)));
+      lnode->next=make_node(make_node(cnode));
       lnode->type=EXP_LAMBDA;
       while ((vnode=reader(stream,']',0))) { 
         if (iserror(vnode)) { unrefexp(lnode); return vnode;} // cleaning to be done gc
-        cnode=cnode->next=refexp(make_node(vnode));
+        cnode=cnode->next=make_node(vnode);
       }
     }
   }
@@ -809,7 +823,7 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
       cnode=lnode;
       while ((vnode=reader(stream,')',PARSER_TERMMACROMODE))) { 
         if (iserror(vnode)) return vnode;
-        cnode=cnode->next=refexp(make_node(vnode));
+        cnode=cnode->next=make_node(vnode);
       }
     }
   } 
@@ -1016,7 +1030,7 @@ exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace){
   return NULL;
 }
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
-
+// istrue borrow object reference
 inline int istrue(exp_t *e){
   int ret=0;
   if (e) {
@@ -1041,10 +1055,10 @@ inline exp_t *lookup(exp_t *e,env_t *env)
   keyval_t *ret;
   env_t *curenv=env;
 
-  if ((ret=set_get_keyval_dict(reserved_symbol,e->ptr,NULL))) return ret->val;
+  if ((ret=set_get_keyval_dict(reserved_symbol,e->ptr,NULL))) return refexp(ret->val);
   else {
     if (curenv) do {
-        if ((curenv->d) &&(ret=set_get_keyval_dict(curenv->d,e->ptr,NULL))) return ret->val;
+        if ((curenv->d) &&(ret=set_get_keyval_dict(curenv->d,e->ptr,NULL))) return refexp(ret->val);
       } while ((curenv=curenv->root));
   }
   return NULL;
@@ -1052,27 +1066,31 @@ inline exp_t *lookup(exp_t *e,env_t *env)
 }
 exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
   keyval_t *ret=NULL;
+  exp_t *fret=NULL;
   exp_t *key=NULL;
   exp_t *key2=NULL;
   if (!(env->d)) env->d=create_dict();
   if (val==NULL) val=NIL_EXP;
   if (issymbol(keyv) || isstring(keyv)) {  // form (= "qweqwe" 10) (= weq 10)
       if (islambda(val) && val->meta==NULL) val->meta=(keyval_t *)strdup(keyv->ptr);   /// TO BE CHANGED IN keyval_t structure with name key being the original name
-      ret=set_get_keyval_dict(env->d,keyv->ptr,val); return val;}
+      ret=set_get_keyval_dict(env->d,keyv->ptr,val); unrefexp(keyv); return refexp(val);}
   else if (ispair(keyv)) 
     { /*evaluate(keyv,env)=val*/ 
       key=car(keyv);
       if (key && issymbol(key)){
         if (strcmp(key->ptr,"car")==0) // form (= (car x) 'z)
           {
-            key=evaluate(cadr(keyv),env);
+            key=evaluate(refexp(cadr(keyv)),env);
             if iserror(key) {
                 unrefexp(keyv);
                 unrefexp(val);
                 return key;
               }
             unrefexp(key->content);
-            return (key->content=refexp(val));
+            key->content=refexp(val);
+            unrefexp(key);
+            goto finish;
+            
           }
         else if (strcmp(key->ptr,"cdr")==0)
           {
@@ -1083,29 +1101,46 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
                 return key;
               }
             unrefexp(key->next);
-            return (key->next=refexp(val));
+            key->next=refexp(val);
+            unrefexp(key);
+            goto finish;
           }
         else {
-          key=evaluate(key,env);
+          key=evaluate(refexp(key),env);
           if (isstring(key)){
             key2=cadr(keyv);
             if (key2 && isnumber(key2) && ischar(val))
               if ((key2->s64>=0) && (key2->s64<(int64_t)strlen(key->ptr)))
                 {
                   *((char*) key->ptr +key2->s64)=(unsigned char) val->s64;
-                  return val;
+                  goto finish;
                 }
-              else return error(ERROR_INDEX_OUT_OF_RANGE,keyv,env,"Error index out of range");
-            else return error(ERROR_NUMBER_EXPECTED,keyv,env,"Error number and char expected");
+              else fret = error(ERROR_INDEX_OUT_OF_RANGE,keyv,env,"Error index out of range");
+            else fret = error(ERROR_NUMBER_EXPECTED,keyv,env,"Error number and char expected");
+            unrefexp(keyv);
+            unrefexp(val);
+            return fret;
           }
-          else return NULL ; // SHOULD BE ERROR 
+          else {
+            unrefexp(key);
+            unrefexp(val);
+            return NULL ; // SHOULD BE ERROR
+          }
         }
       }      
       
     }
-  else return error(EXP_ERROR_INVALID_KEY_UPDATE,keyv,env,"Error invalid key in =");
+  else {
+    fret =  error(EXP_ERROR_INVALID_KEY_UPDATE,keyv,env,"Error invalid key in =");
+    unrefexp(val);
+    unrefexp(keyv);
+    return fret;
+  }
   if (ret) return ret->val;
   else return NULL; /* ERROR? */
+ finish:
+  unrefexp(keyv);
+  return val;
 }
 
 exp_t *fncmd(exp_t *e, env_t *env)
@@ -1119,16 +1154,16 @@ exp_t *fncmd(exp_t *e, env_t *env)
     header=car(cur); cur=cdr(cur);
     if (cur && ispair(cur->content)) {
       body=cur;
-      vali=make_node(body);
-      val=make_node(header);
-      val->next=refexp(vali);
+      vali=make_node(refexp(body));
+      val=make_node(refexp(header));
+      val->next=vali;
       val->type=EXP_LAMBDA;
-      return val;
     }
-    else return error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
+    else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
   }
-  else return error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list");
-  
+  else val = error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list");
+  unrefexp(e);
+  return val;
 }
 
 exp_t *defcmd(exp_t *e, env_t *env)
@@ -1147,21 +1182,22 @@ exp_t *defcmd(exp_t *e, env_t *env)
       if (cur && ispair(cur->content)) 
         {
           body=cur;
-          vali=make_node(body);
-          val=make_node(header);
-          val->next=refexp(vali);
+          vali=make_node(refexp(body));
+          val=make_node(refexp(header));
+          val->next=vali;
           val->type=EXP_LAMBDA;
           val->meta=(keyval_t *)strdup(name->ptr);
           if (!(env->d)) env->d=create_dict();
           ret=set_get_keyval_dict(env->d,name->ptr,val);
-          return val;
         }
-      else return error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
+      else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
     }
-    else return error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list");
+    else val = error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list");
   }
   else
-    return error(EXP_ERROR_MISSING_NAME,e,env,"Error missing name or name not a lambda");
+    val = error(EXP_ERROR_MISSING_NAME,e,env,"Error missing name or name not a lambda");
+  unrefexp(e);
+  return val;
   
 }
 
@@ -1173,10 +1209,16 @@ exp_t *expandmacrocmd(exp_t *e,env_t *env){
   //if (tmpexp && ispair(tmpexp)) tmpexp=evaluate(tmpexp,env);
   if (tmpexp)
     if (issymbol(tmpexp))
-      if ((tmpexp2=lookup(tmpexp,env)))
-        if ismacro(tmpexp2) return expandmacro(cadr(cadr(e)),tmpexp2,env);
+      if ((tmpexp2=lookup(refexp(tmpexp),env)))
+        if ismacro(tmpexp2) {
+            tmpexp = expandmacro(refexp(cadr(cadr(e))),tmpexp2,env);
+            goto finish;
+          }
   
-  return error(ERROR_ILLEGAL_VALUE,e,env,"Error parameter not a macro");
+  tmpexp = error(ERROR_ILLEGAL_VALUE,e,env,"Error parameter not a macro");
+ finish:
+  unrefexp(e);
+  return tmpexp;
   
 }
 
@@ -1195,23 +1237,23 @@ exp_t *defmacro(exp_t *e, env_t *env)
       header=car(cur); cur=cdr(cur);
       if (cur && ispair(cur->content)) {
         body=car(cur);
-        vali=make_node(body);
-        val=make_node(header);
-        val->next=refexp(vali);
+        vali=make_node(refexp(body));
+        val=make_node(refexp(header));
+        val->next=vali;
         val->type=EXP_MACRO;
         val->meta=(keyval_t *) strdup(name->ptr);
         if (!(env->d)) env->d=create_dict();
         ret=set_get_keyval_dict(env->d,name->ptr,val);
-        return val;
       }
       
-      else return error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
+      else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
     }
-    else return error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list"); 
+    else val = error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list"); 
   }
   else
-    return error(EXP_ERROR_MISSING_NAME,e,env,"Error missing name or name not a lambda");
-    
+    val = error(EXP_ERROR_MISSING_NAME,e,env,"Error missing name or name not a lambda");
+  unrefexp(e);
+  return val;
 }
 
 
@@ -1220,77 +1262,122 @@ exp_t *verbosecmd(exp_t *e, env_t *env)
 {
   if (verbose^=1) printf("verbose on\n");
   else printf("verbose off\n");
+  unrefexp(e);
   return NULL;
 }
 exp_t *quotecmd(exp_t *e, env_t *env)
 {
-  return cadr(e);
+  exp_t *ret = refexp(cadr(e));
+  unrefexp(e);
+  return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
 exp_t *ifcmd(exp_t *e, env_t *env)
 {
-  exp_t *tmpexp=evaluate(cadr(e),env);
+  exp_t *tmpexp=evaluate(refexp(cadr(e)),env);
   exp_t *tmpexp2;
-  if iserror(tmpexp)
-              return tmpexp;
-  if (istrue(tmpexp)) { return evaluate(caddr(e),env); }
+  if iserror(tmpexp) {
+      unrefexp(e);
+      return tmpexp;
+    }
+  if (istrue(tmpexp)) { 
+    unrefexp(tmpexp);
+    tmpexp=refexp(caddr(e));
+    unrefexp(e);
+    return evaluate(tmpexp,env); 
+  }
   else {
+    unrefexp(tmpexp);
     if ((tmpexp=cdddr(e)))
       do {
-        tmpexp2=evaluate(tmpexp->content,env);
+        tmpexp2=evaluate(refexp(tmpexp->content),env);
         if ((!iserror(tmpexp2)) && (tmpexp->next)) {
-          if (istrue(tmpexp2)) return evaluate(cadr(tmpexp),env);
-          if (!(tmpexp=cddr(tmpexp))) return NULL;
+          if (istrue(tmpexp2)) {
+            unrefexp(tmpexp2);
+            tmpexp2=refexp(cadr(tmpexp));
+            unrefexp(e);
+            return evaluate(tmpexp2,env);
+          }
+          if (!(tmpexp=cddr(tmpexp))) {
+            unrefexp(tmpexp2);
+            unrefexp(e);
+            return NULL;
+          }
         }
-        else return tmpexp2;
+        else {
+          unrefexp(e);
+          return tmpexp2;
+        }
       }
       while (1);
-    else return NULL;
+    else {
+      unrefexp(e);
+      return NULL;
+    }
   }
 }
 
 exp_t *equalcmd(exp_t *e, env_t *env)
 {
-  exp_t *tmpexp=evaluate(caddr(e),env);
-  exp_t *tmpkey=cadr(e);
-  //if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
-  //if iserror(tmpkey)
-  //            return tmpkey;
-  if iserror(tmpexp)
-              return tmpexp;
+  exp_t *tmpexp=evaluate(refexp(caddr(e)),env);
+  exp_t *tmpkey=refexp(cadr(e));
+  unrefexp(e);
+  if iserror(tmpexp) {
+      unrefexp(tmpkey);
+      return tmpexp;
+    }
   return updatebang(tmpkey,env,tmpexp);
   /* to be unrefed tmpkey in case of evaluate */ 
 }
 
 exp_t *persistcmd(exp_t *e, env_t *env)
 {
-  exp_t *tmpkey=cadr(e);
-  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  exp_t *tmpkey=refexp(cadr(e));
+  exp_t *ret=NULL;
+  if (!issymbol(tmpkey)) {
+    tmpkey = evaluate(tmpkey,env); 
+  }
+  unrefexp(e);
   /* to be unrefed tmpkey in case of evaluate */ 
-  if iserror(tmpkey) return tmpkey;
-  return set_keyval_dict_timestamp(env->d,tmpkey->ptr,gettimeusec());
+  if iserror(tmpkey) { return tmpkey; }
+  ret = set_keyval_dict_timestamp(env->d,tmpkey->ptr,gettimeusec());
+  unrefexp(tmpkey);
+  return ret;
 }
 
 exp_t *ispersistentcmd(exp_t *e, env_t *env)
 {
-  exp_t *tmpkey=cadr(e);
-  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
-  /* to be unrefed tmpkey in case of evaluate */ 
+  exp_t *tmpkey=refexp(cadr(e));
+  int64_t ret=0;
+  if (!issymbol(tmpkey)) {
+    tmpkey = evaluate(tmpkey,env); 
+  }
+  unrefexp(e);
   if iserror(tmpkey) return tmpkey;
-  if (get_keyval_dict_timestamp(env->d,tmpkey->ptr)) {
-      return TRUE_EXP;}
-  else 
+  ret = get_keyval_dict_timestamp(env->d,tmpkey->ptr);
+  unrefexp(e);
+  if (ret) {
+    return TRUE_EXP;
+  }
+  else {
     return NIL_EXP;
+  }
 }
 
 exp_t *forgetcmd(exp_t *e, env_t *env)
 {
-  exp_t *tmpkey=cadr(e);
-  if (!issymbol(tmpkey)) {tmpkey = evaluate(cadr(e),env); }
+  exp_t *tmpkey=refexp(cadr(e));
+  exp_t *ret=NULL;
+  if (!issymbol(tmpkey)) {
+    tmpkey = evaluate(tmpkey,env); 
+  }
+  unrefexp(e);
   /* to be unrefed tmpkey in case of evaluate */ 
   if iserror(tmpkey) return tmpkey;
-  return set_keyval_dict_timestamp(env->d,tmpkey->ptr,0);
+  ret = set_keyval_dict_timestamp(env->d,tmpkey->ptr,0);
+  unrefexp(tmpkey);
+  return ret;
 }
 
 exp_t *savedbcmd(exp_t *e, env_t *env)
@@ -1310,13 +1397,21 @@ exp_t *savedbcmd(exp_t *e, env_t *env)
 
 exp_t *cmpcmd(exp_t *e, env_t *env)
 {
-  exp_t *op=car(e);
-  exp_t *v1=evaluate(cadr(e),env);
-  exp_t *v2=evaluate(caddr(e),env);
+  exp_t *op=NULL;
+  exp_t *v1=evaluate(refexp(cadr(e)),env);
+  if iserror(v1) {
+      unrefexp(e);
+      return v1;  
+    }
+  exp_t *v2=evaluate(refexp(caddr(e)),env);
   double d;
   int ret;
-  if iserror(v1) return v1;
-  if iserror(v2) return v2;
+
+  if iserror(v2) { 
+      unrefexp(e);
+      unrefexp(v1);
+      return v2;
+    }
   if ((isnumber(v1)||isfloat(v1))&&(isnumber(v2)||isfloat(v2))){
     d=(isnumber(v1)?v1->s64:v1->f)-(isnumber(v2)?v2->s64:v2->f);
   } 
@@ -1326,13 +1421,24 @@ exp_t *cmpcmd(exp_t *e, env_t *env)
   else if (ischar(v1)&&ischar(v2)) {
     d=v1->s64-v2->s64;
   }
-  else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in compare operation");
+  else { 
+    op = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in compare operation");
+    goto finish;
+  }
   if (strcmp(op->ptr,"<")==0) ret=(d<0);
   else if (strcmp(op->ptr,">")==0) ret=(d>0);
   else if (strcmp(op->ptr,"<=")==0) ret=(d<=0);
   else if (strcmp(op->ptr,">=")==0) ret=(d>=0);
-  else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal operand in compare operation");
-  return (ret?TRUE_EXP:NIL_EXP);
+  else {
+      op = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal operand in compare operation");
+      goto finish;
+    }
+  op = (ret?TRUE_EXP:NIL_EXP);
+ finish:
+  unrefexp(v1);
+  unrefexp(v2);
+  unrefexp(e);
+  return op;
 }
 
 
@@ -1344,28 +1450,36 @@ exp_t *pluscmd(exp_t *e, env_t *env)
   exp_t *c=cdr(e);
   exp_t *v;
   exp_t *v1=NULL;
-   
+  exp_t *ret=NULL;
   do {
     if (c &&(v1=c->content))
       {
-        if ispair(v1) v=evaluate(v1,env);
-        else if issymbol(v1) v=evaluate(v1,env);
+        if ispair(v1) v=evaluate(refexp(v1),env);
+        else if issymbol(v1) v=evaluate(refexp(v1),env);
         else v=v1; 
-        if iserror(v) return v;
+        if iserror(v) { ret = v; goto finish;}
         if (sum_f){
           if isnumber(v) sum_f+=v->s64;
           else if isfloat(v) sum_f+=v->f;
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+            goto finish;
+          }
         }
         else {
           if isnumber(v) sum_i+=v->s64;
           else if isfloat(v) { sum_f = v->f + sum_i; sum_i=0;}
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+            goto finish;
+          }
         }
       }
   } while (c &&(c=c->next));
-  return (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+  ret = (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+ finish:
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *multiplycmd(exp_t *e, env_t *env)
@@ -1375,29 +1489,40 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
   exp_t *c=cdr(e);
   exp_t *v;
   exp_t *v1=NULL;
+  exp_t *ret=NULL;
    
   do {
     if (c &&(v1=c->content))
       {
-        if ispair(v1) v=evaluate(v1,env);
-        else if issymbol(v1) v=evaluate(v1,env);
+        if ispair(v1) v=evaluate(refexp(v1),env);
+        else if issymbol(v1) v=evaluate(refexp(v1),env);
         else v=v1;
-        if iserror(v) return v;
+        if iserror(v) { ret = v; goto finish;}
         if (sum_f!=1){
           if isnumber(v) sum_f*=v->s64;
           else if isfloat(v) sum_f*=v->f;
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+          else {
+            ret =error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+            goto finish;
+          }
 
         }
         else {
           if isnumber(v) sum_i=((sum_i!=1)?sum_i*=v->s64:v->s64);
           else if isfloat(v) { sum_f = v->f; if (sum_i!=1) {sum_f=sum_f*sum_i; sum_i=1;}}
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
+            goto finish;
+          }
 
         }
       }
   } while (c &&(c=c->next));
-  return ((sum_f!=1)?make_floatf(sum_f):make_integeri(sum_i));
+  ret= ((sum_f!=1)?make_floatf(sum_f):make_integeri(sum_i));
+ finish:
+  unrefexp(e);
+  return ret;
+
 }
 
 exp_t *minuscmd(exp_t *e, env_t *env)
@@ -1408,29 +1533,40 @@ exp_t *minuscmd(exp_t *e, env_t *env)
   exp_t *v;
   exp_t *v1=NULL;
   int i=0;
+  exp_t *ret=NULL;
    
   do {
     if (c &&(v1=c->content))
       {
         i++;
-        if ispair(v1) v=evaluate(v1,env);
-        else if issymbol(v1) v=evaluate(v1,env);
+        if ispair(v1) v=evaluate(refexp(v1),env);
+        else if issymbol(v1) v=evaluate(refexp(v1),env);
         else v=v1; 
         if iserror(v) return v;
         if (sum_f){
           if isnumber(v) sum_f-=v->s64;
           else if isfloat(v) sum_f-=v->f;
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
+            goto finish;
+          }
         }
         else {
           if isnumber(v) {if (sum_i) sum_i-=v->s64; else sum_i=v->s64;}
           else if isfloat(v) {if (sum_i) { sum_f = sum_i - (v->f);} else sum_f=v->f; sum_i=0;}
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
+            goto finish;
+          }
         }
       }
   } while (c &&(c=c->next));
   if (i==1) { if (sum_f) sum_f=-sum_f; else sum_i=-sum_i; }
-  return (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+  ret = (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+ finish:
+  unrefexp(e);
+  return ret;
+
 }
 
 exp_t *dividecmd(exp_t *e, env_t *env)
@@ -1441,45 +1577,74 @@ exp_t *dividecmd(exp_t *e, env_t *env)
   exp_t *v;
   exp_t *v1=NULL;
   int i=0;
+  exp_t *ret=NULL;
    
   do {
     if (c &&(v1=c->content))
       {
         i++;
-        if ispair(v1) v=evaluate(v1,env);
-        else if issymbol(v1) v=evaluate(v1,env);
+        if ispair(v1) v=evaluate(refexp(v1),env);
+        else if issymbol(v1) v=evaluate(refexp(v1),env);
         else v=v1; 
         if iserror(v) return v;
         if (i>1) { 
-          if (isnumber(v) && (v->s64==0)) return error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
-          else if (isfloat(v) && (v->f==0)) return error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
+          if (isnumber(v) && (v->s64==0)) {
+            ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
+            goto finish;
+          }
+          else if (isfloat(v) && (v->f==0)) {
+            ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
+            goto finish;
+          }
         }
         if (sum_f){
           if isnumber(v) sum_f/=v->s64;
           else if isfloat(v) sum_f/=v->f;
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+            goto finish;
+          }
         }
         else {
           if isnumber(v) {if (sum_i) sum_i/=v->s64; else sum_i=v->s64;}
           else if isfloat(v) {if (sum_i) { sum_f = sum_i /(v->f);} else sum_f=(v->f); sum_i=0;}
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+          else {
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+            goto finish;
+          }
         }
       }
   } while (c &&(c=c->next));
-  if (i==1) { if (sum_f) sum_f=1/sum_f; else if (sum_i) sum_i=1/sum_i; else return error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");}
-  return (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+  if (i==1) { if (sum_f) sum_f=1/sum_f; else if (sum_i) sum_i=1/sum_i; else {
+      ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
+      goto finish;
+    }
+  }
+  ret = (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+ finish:
+  unrefexp(e);
+  return ret;
+
 }
 
 exp_t *sqrtcmd(exp_t *e, env_t *env){
   exp_t *v;
+  exp_t *ret;
   if ((v=e->next))
-    v=evaluate(v->content,env);
-  if iserror(v) return v;
+    v=evaluate(refexp(v->content),env);
+  if iserror(v) {
+      unrefexp(e);
+      return v;
+    }
   if (isfloat(v)) 
-    return make_floatf(sqrt(v->f));
+    ret = make_floatf(sqrt(v->f));
   else if (isnumber(v))
-    return make_floatf(sqrt(v->s64));
-  return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+    ret = make_floatf(sqrt(v->s64));
+  else
+    ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+  unrefexp(v);
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *expcmd(exp_t *e, env_t *env){
@@ -1842,7 +2007,7 @@ exp_t *timecmd(exp_t *e,env_t *env){
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *inspectcmd(exp_t *e,env_t *env){
   if (e)
-    printf("type:\t%d\nflag:\t%d\nref:\t%d\n",e->flags,e->type,e->nref);
+    printf("\x1B[96mtype:\t%d\nflag:\t%d\nref:\t%d\x1B[39m\n",e->flags,e->type,e->nref);
   return NULL;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
@@ -2018,7 +2183,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
         exp_t *curv=e;
         while ((curv=curv->next))
           {
-            cur=cur->next=make_node(evaluate(curv->content,env));
+            cur=cur->next=make_node(evaluate(refexp(curv->content),env));
           }
         return ret;
         
@@ -2037,7 +2202,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
     }
   
   do
-    ret=evaluate(body->content,newenv);
+    ret=evaluate(refexp(body->content),newenv);
   while ((body=body->next));
   destroy_env(newenv);
   /* if ret is lazy... loopback*/
@@ -2147,10 +2312,12 @@ exp_t *evaluate2(exp_t *e, env_t *env)
 exp_t *evaluate(exp_t *e,env_t *env)
 {
   /* TO DO UN REF VARS*/
-  exp_t *tmpexp;
-  exp_t *tmpexp2;
+  exp_t *tmpexp=NULL;
+  exp_t *tmpexp2=NULL;
+  exp_t *tmpevexp=NULL; /* Evaluated structure to be freed*/
+  exp_t *ret=NULL;
 
-  if (e==NULL) return NULL;
+   if (e==NULL) return NULL;
   if isatom(e)  {
       if issymbol(e) {
           if (((char*)e->ptr)[0] == ':') return e; // e is a keyword
@@ -2162,40 +2329,46 @@ exp_t *evaluate(exp_t *e,env_t *env)
     }
   else if ispair(e) {
       tmpexp=car(e);
-      if (tmpexp && ispair(tmpexp)) tmpexp=evaluate(tmpexp,env);
+      if (tmpexp && ispair(tmpexp)) tmpexp=tmpevexp=evaluate(tmpexp,env);
       if (tmpexp) {
         if isinternal(tmpexp)  {
-            return tmpexp->fnc(e,env);
+            ret = tmpexp->fnc(e,env);
+            goto finisht;
           }
         if (issymbol(tmpexp)) {
-          if (((char*)tmpexp->ptr)[0] == ':') return error(ERROR_ILLEGAL_VALUE,e,env,"Error keyword %s can not be used as function",tmpexp->ptr); // e is a keyword
+          if (((char*)tmpexp->ptr)[0] == ':') { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Error keyword %s can not be used as function",tmpexp->ptr); goto finish;}// e is a keyword
           if ((tmpexp2=lookup(tmpexp,env))) { 
             if isinternal(tmpexp2) {
-                return tmpexp2->fnc(e,env);
+                ret= tmpexp2->fnc(e,env);
+                goto finisht;
               }
             else if islambda(tmpexp2) {
-                return invoke(e,tmpexp2,env);
+                ret = invoke(e,tmpexp2,env);
+                goto finisht;
               }
-            else if ismacro(tmpexp2) return invokemacro(e,tmpexp2,env);
-            else if ispair(tmpexp2) { return tmpexp2 ; }
-            else return tmpexp2;
+            else if ismacro(tmpexp2) { ret = invokemacro(e,tmpexp2,env); goto finisht;}
+            else if ispair(tmpexp2) { ret = tmpexp2 ; goto finisht;}
+            else { ret =  tmpexp2; goto finisht;}
           }
           else 
-            return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",tmpexp->ptr);
-          return e; // what is happening here?
+            { ret = error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",tmpexp->ptr); goto finish; }
+          ret = e; // what is happening here?
+          goto finisht;
         }
         else if (isstring(tmpexp)) {
-          tmpexp2=evaluate(cadr(e),env);
+          tmpexp2=evaluate(refexp(cadr(e)),env);
           if (isnumber(tmpexp2)){
             if ((tmpexp2->s64>=0)&&(tmpexp2->s64<(int64_t)strlen(tmpexp->ptr))){
-              return make_char(*((char *) tmpexp->ptr+tmpexp2->s64));
+              ret =  make_char(*((char *) tmpexp->ptr+tmpexp2->s64));
             }
-            else return error(ERROR_INDEX_OUT_OF_RANGE,e,env,"Error index out of range");
+            else ret = error(ERROR_INDEX_OUT_OF_RANGE,e,env,"Error index out of range");
           }
-          else return error(ERROR_NUMBER_EXPECTED,e,env,"Error number expected");
+          else ret = error(ERROR_NUMBER_EXPECTED,e,env,"Error number expected");
+          unrefexp(tmpexp2);
+          goto finish;
         }
-        else if (islambda(tmpexp)) return invoke(e,tmpexp,env);
-        else if (ismacro(tmpexp)) return invokemacro(e,tmpexp,env);  
+        else if (islambda(tmpexp)) { ret = invoke(e,tmpexp,env); goto finisht; }
+        else if (ismacro(tmpexp)) { ret = invokemacro(e,tmpexp,env); goto finisht;}  
       }
       else if (tmpexp==NULL) return e;
       
@@ -2209,6 +2382,11 @@ exp_t *evaluate(exp_t *e,env_t *env)
     return e;
   }
   return e;
+ finish:
+  unrefexp(e);
+ finisht:
+  unrefexp(tmpevexp);
+  return ret;
 } 
 
 int main(int argc, char *argv[])
@@ -2220,7 +2398,7 @@ int main(int argc, char *argv[])
   env_t *global=make_env(NULL);
   FILE *stream;
   int evaluatingfile=0;
-
+  int idx=0;
   exp_tfuncList[EXP_CHAR]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
   exp_tfuncList[EXP_CHAR]->load=load_char;
   exp_tfuncList[EXP_CHAR]->dump=dump_char;
@@ -2264,25 +2442,26 @@ int main(int argc, char *argv[])
   unrefexp(strf);
   
   while (1){
-    if (!evaluatingfile) printf("ALCOVE>");
-    stre=refexp(reader(stream,0,0));
+    idx++;
+    if (!evaluatingfile) printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m",idx);
+    stre=reader(stream,0,0);
     if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF) && evaluatingfile) {exit(0);}
     if (verbose) {
-      if (stre) printf("stre:#\\%lld",(long long int)stre);
+      if (stre) printf("\x1B[35mstre:#\\%lld\x1B[39m\n",(long long int)stre);
       print_node(stre);printf("\n");
     }
     if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) break;
-    strf=refexp(evaluate(stre,global));
-    unrefexp(stre);
+    strf=evaluate(stre,global);
     if (!evaluatingfile) {
       if (strf) {
         if (verbose) {
-          printf("strf:#\\%lld\n",(long long int)strf);
+          printf("\x1B[35mstrf:#\\%lld\x1B[39m\n",(long long int)strf);
           inspectcmd(strf,global);
         }
+        printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m",idx);
         print_node(strf);
       } else printf("nil");
-      printf("\n");
+      printf("\n\n");
     };
     if (strf) { 
       unrefexp(strf);
