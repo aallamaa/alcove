@@ -65,7 +65,7 @@ lispProc lispProcList[]={
   {"list",2,1,0,listcmd},
   {"def",2,1,0,defcmd},
   {"macroexpand-1",2,1,0,expandmacrocmd},
-  {"defmacro",2,1,0,defmacro},
+  {"defmacro",2,1,0,defmacrocmd},
   {"fn",2,1,0,fncmd},
   {"let",2,1,0,letcmd},
   {"with",2,1,0,withcmd},
@@ -1222,7 +1222,7 @@ exp_t *expandmacrocmd(exp_t *e,env_t *env){
   
 }
 
-exp_t *defmacro(exp_t *e, env_t *env)
+exp_t *defmacrocmd(exp_t *e, env_t *env)
 {
   keyval_t *ret;
   exp_t *val;
@@ -1649,41 +1649,54 @@ exp_t *sqrtcmd(exp_t *e, env_t *env){
 
 exp_t *expcmd(exp_t *e, env_t *env){
   exp_t *v;
+  exp_t *ret;
   if ((v=e->next))
-    v=evaluate(v->content,env);
-  if iserror(v) return v;
+    v=evaluate(refexp(v->content),env);
+  if iserror(v) { unrefexp(e); return v; }
   if (isfloat(v)) 
-    return make_floatf(exp(v->f));
+    ret = make_floatf(exp(v->f));
   else if (isnumber(v))
-    return make_floatf(exp(v->s64));
-  return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+    ret = make_floatf(exp(v->s64));
+  else 
+    ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
+  unrefexp(v);
+  unrefexp(e);
+  return v;
 }
 
 exp_t *exptcmd(exp_t *e, env_t *env){
-  exp_t *v;
-  exp_t *v2;
+  exp_t *v=NULL;
+  exp_t *v2=NULL;
+  exp_t *ret=NULL;
   if ((v=e->next))
     if ((v2=v->next))
       {
-        v=evaluate(v->content,env);
-        if iserror(v) return v;
-        v2=evaluate(v2->content,env);
-        if iserror(v2) return v2;
+        v=evaluate(refexp(v->content),env);
+        if iserror(v) { unrefexp(e) ; return v;}
+        v2=evaluate(refexp(v2->content),env);
+        if iserror(v2) { unrefexp(e); unrefexp(v) ; return v2;}
       }
   if ( (isfloat(v)||isnumber(v)) && (isfloat(v2)||isnumber(v2)))
-    return make_floatf(pow(isfloat(v)?v->f:v->s64,isfloat(v2)?v2->f:v2->s64));
-  return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
+    ret = make_floatf(pow(isfloat(v)?v->f:v->s64,isfloat(v2)?v2->f:v2->s64));
+  else
+    ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
+  unrefexp(v);
+  unrefexp(v2);
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *prcmd(exp_t *e, env_t *env){
   exp_t *v=e;
   exp_t *val;
   while ((v=v->next)){
-    val=evaluate(v->content,env);
-    if iserror(val) return val;
+    val=evaluate(refexp(v->content),env);
+    if iserror(val) { unrefexp(e); return val;}
     if (val && isstring(val)) printf("%s",(char*)val->ptr);
     else print_node(val);
+    unrefexp(val);
   }
+  unrefexp(e);
   return NULL;
     
 }
@@ -1696,32 +1709,36 @@ exp_t *prncmd(exp_t *e, env_t *env){
 }
 
 exp_t *oddcmd(exp_t *e, env_t *env){
-  if (e->next && isnumber(e->next->content)) return (e->next->content->s64&1?TRUE_EXP:NIL_EXP);
-  return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
+  exp_t *ret;
+  if (e->next && isnumber(e->next->content)) ret = (e->next->content->s64&1?TRUE_EXP:NIL_EXP);
+  else ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *docmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
-  exp_t *ret;
+  exp_t *ret=NULL;
   do
     {
-      ret=evaluate(car(cur),env);
+      if (ret) unrefexp(ret);
+      ret=evaluate(refexp(car(cur)),env);
     } while ((cur=cdr(cur)) && !(ret && iserror(ret)));
   if (ret && iserror(ret))
     return ret;
-  else return NIL_EXP;
+  else { unrefexp(e); return NIL_EXP;}
 }
 
 exp_t *whencmd(exp_t *e, env_t *env){
   exp_t *val=cadr(e);
   exp_t *cur=cddr(e);
-  exp_t *ret=evaluate(val,env);
-  if iserror(ret) return ret;
+  exp_t *ret=evaluate(refexp(val),env);
+  if iserror(ret) { unrefexp(e); return ret; }
   if (istrue(ret))
-    do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
+    do { unrefexp(ret); ret=evaluate(car(cur),env);} while ((cur=cdr(cur)) && !(ret && iserror(ret)));
   if (ret && iserror(ret))
     return ret;
-  else return NIL_EXP;
+  else { unrefexp(e); return NIL_EXP;}
 }
 
 exp_t *whilecmd(exp_t *e, env_t *env){
@@ -1729,33 +1746,37 @@ exp_t *whilecmd(exp_t *e, env_t *env){
   exp_t *cur=cddr(e);
   exp_t *curi=cur;
   exp_t *ret=NULL;
-  while (istrue(ret=evaluate(val,env))&&(!iserror(ret)))
+  while (istrue(ret=evaluate(refexp(val),env))&&(!iserror(ret)))
     {
       cur=curi;
-      do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
+      do { unrefexp(ret); ret=evaluate(car(cur),env);} while ((cur=cdr(cur)) && !(ret && iserror(ret)));
     }
   if (ret && iserror(ret))
     return ret;
-  else return NIL_EXP;
+  else { unrefexp(e); return NIL_EXP;}
 }
 
 exp_t *repeatcmd(exp_t *e, env_t *env){
-  exp_t *val=evaluate(cadr(e),env);
+  exp_t *val=evaluate(refexp(cadr(e)),env);
   exp_t *cur=cddr(e);
   exp_t *curi=cur;
   exp_t *ret=NULL;
-  int64_t counter;
-  if iserror(val) return val;
+  int64_t counter=0;
+  if iserror(val) { unrefexp(e) ; return val;}
   if (isnumber(val)) counter=val->s64;
-  else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value for repeat counter"); 
+  else {
+    ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value for repeat counter"); 
+    unrefexp(val);
+    unrefexp(e);
+  }
   while (counter-- >0)
     {
       cur=curi;
-      do ret=evaluate(car(cur),env); while ((cur=cdr(cur)) && !(ret && iserror(ret)));
+      do { unrefexp(ret); ret=evaluate(car(cur),env);} while ((cur=cdr(cur)) && !(ret && iserror(ret)));
     }
   if (ret && iserror(ret))
     return ret;
-  else return NIL_EXP;
+  else { unrefexp(e); return NIL_EXP;}
 }
 
 exp_t *andcmd(exp_t *e, env_t *env){
@@ -1763,9 +1784,11 @@ exp_t *andcmd(exp_t *e, env_t *env){
   exp_t *ret;
   do
     {
-      ret=evaluate(car(cur),env);
-      if iserror(ret) return ret;
+      ret=evaluate(refexp(car(cur)),env);
+      if iserror(ret) goto finish;
     } while (istrue(ret) && (cur=cdr(cur)));
+ finish:
+  unrefexp(e);
   return ret;
 }
 
@@ -1773,24 +1796,31 @@ exp_t *orcmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
   exp_t *ret;
   do {
-    ret=evaluate(car(cur),env);
-    if iserror(ret) return ret;
-    if (istrue(ret)) break;
+    ret=evaluate(refexp(car(cur)),env);
+    if iserror(ret) goto finish;
+    if (istrue(ret)) goto finish;
   } while ((cur=cdr(cur)));
+ finish:
+  unrefexp(e);
   return ret;
 }
 
 exp_t *nocmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
-  exp_t *tmpexp=evaluate(car(cur),env);
-  if iserror(tmpexp) return tmpexp;
-  if (istrue(tmpexp)) return NIL_EXP;
-  else return TRUE_EXP;
+  exp_t *tmpexp=evaluate(refexp(car(cur)),env);
+  if iserror(tmpexp) goto finish;
+  if (istrue(cur=tmpexp)) tmpexp = NIL_EXP;
+  else tmpexp = TRUE_EXP;
+  unrefexp(cur);
+ finish:
+  unrefexp(e);
+  return tmpexp;
 }
 
 
 int isequal(exp_t *cur1, exp_t *cur2)
 {
+  /* borrow ref to cur1 and cur2 */
   int ret=0;
   if (cur1 && cur2) {
     if (cur1->type == cur2->type){
@@ -1807,6 +1837,7 @@ int isequal(exp_t *cur1, exp_t *cur2)
 }
 
 int isoequal(exp_t *cur1,exp_t *cur2){
+  /* borrow ref to cur1 and cur2 */
   int ret=0;
   exp_t *cur1n;
   exp_t *cur2n;
@@ -1832,50 +1863,67 @@ int isoequal(exp_t *cur1,exp_t *cur2){
 }
 
 exp_t *iscmd(exp_t *e, env_t *env){
-  exp_t *cur1=evaluate(cadr(e),env);
-  if iserror(cur1) return cur1;
+  exp_t *ret=NULL;
+  exp_t *cur1=evaluate(refexp(cadr(e)),env);
+  if iserror(cur1) {unrefexp(e);return cur1;}
   exp_t *cur2=evaluate(caddr(e),env);
-  if iserror(cur2) return cur2;
-  return (isequal(cur1,cur2)?TRUE_EXP:NIL_EXP);
+  if iserror(cur2) {unrefexp(cur1);unrefexp(e);return cur2;}
+  unrefexp(e);
+  ret = (isequal(cur1,cur2)?TRUE_EXP:NIL_EXP);
+  unrefexp(cur1);
+  unrefexp(cur2);
+  return ret;
 }
 
 exp_t *isocmd(exp_t *e, env_t *env){
-  exp_t *cur1=evaluate(cadr(e),env);
-  if iserror(cur1) return cur1;
+  exp_t *ret=NULL;
+  exp_t *cur1=evaluate(refexp(cadr(e)),env);
+  if iserror(cur1) {unrefexp(e);return cur1;}
   exp_t *cur2=evaluate(caddr(e),env);
-  if iserror(cur2) return cur2;
-  return (isoequal(cur1,cur2)?TRUE_EXP:NIL_EXP);
+  if iserror(cur2) {unrefexp(cur1);unrefexp(e);return cur2;}
+  unrefexp(e);
+  ret = (isoequal(cur1,cur2)?TRUE_EXP:NIL_EXP);
+  unrefexp(cur1);
+  unrefexp(cur2);
+  return ret;
 }
 
 
 exp_t *incmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
-  exp_t *val=evaluate(cadr(e),env);
-  exp_t *val2;
+  exp_t *val=evaluate(refexp(cadr(e)),env);
+  exp_t *val2=NULL;;
   
-  if iserror(val) return val;
+  if iserror(val) { unrefexp(e); return val;}
   int ret=0;
   while ((cur=cdr(cur)))
     {
+      unrefexp(val2);
       val2=evaluate(car(cur),env);  
-      if iserror(val2) return val2;
-      if ((ret=isoequal(val,val2))) break;
+      if iserror(val2) {unrefexp(e); unrefexp(val); return val2;}
+      if ((ret=isoequal(refexp(val),refexp(val2)))) break;
     }
   
-  return (ret?TRUE_EXP:NIL_EXP);
+  cur = (ret?TRUE_EXP:NIL_EXP);
+  unrefexp(val);
+  unrefexp(val2);
+  unrefexp(e);
+  return cur;
 }
 
 exp_t *casecmd(exp_t *e, env_t *env){
   exp_t *cur=cdr(e);
-  exp_t *val=evaluate(cadr(e),env);
-  if iserror(val) return val;
+  exp_t *val=evaluate(refexp(cadr(e)),env);
+  if iserror(val) { unrefexp(e); return val;}
   exp_t *ret=NULL;
   while ((cur=cdr(cur)))
     if (cur->next) 
       if (isequal(val,car(cur))) { ret=cadr(cur); break;}
       else cur=cdr(cur);
     else ret= car(cur);
-  return evaluate(ret,env);
+  cur = evaluate(ret,env);
+  unrefexp(e);
+  return cur;
 }
 
 
@@ -1886,8 +1934,8 @@ exp_t *forcmd(exp_t *e,env_t *env){
   exp_t *curvar;
   exp_t *curval;
   exp_t *curin;
-  exp_t *lastidx;
-  exp_t *retval;
+  exp_t *lastidx=NULL;
+  exp_t *retval=NULL;
   keyval_t *keyv;
 
   if ((curvar=e->next)) {
@@ -1895,23 +1943,23 @@ exp_t *forcmd(exp_t *e,env_t *env){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
-        if ((retval=evaluate(curval->content,env))==NULL) retval=NIL_EXP;
+        if ((retval=evaluate(refexp(curval->content),env))==NULL) retval=NIL_EXP;
         if (isnumber(retval)) {
           if (!curval->next) lastidx=NIL_EXP;
-          if (curval->next && (lastidx=evaluate(curval->next->content,env))==NULL) lastidx=NIL_EXP;
+          if (curval->next && (lastidx=evaluate(refexp(curval->next->content),env))==NULL) lastidx=NIL_EXP;
           if (isnumber(lastidx)) {
             keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,retval);
             curin=curval->next->next;
           } 
           else 
             { 
-              if iserror(lastidx) ret=lastidx;
+              if iserror(lastidx) ret=refexp(lastidx);
               else ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter");
               goto error;
             }
         }
         else { 
-          if iserror(retval) ret=retval;
+          if iserror(retval) ret=refexp(retval);
           else ret=error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not integer) in for counter"); 
           goto error;
         }
@@ -1922,34 +1970,27 @@ exp_t *forcmd(exp_t *e,env_t *env){
         goto error;
       }
       int idx=lastidx->s64+1;
-      /*if (idx>100){
-        curval=curin;
-        curin=NIL_EXP;
-        curvar=curin;
-        while (curval) {
-        curvar->content=refexp(optimize(curval->content,env)); curvar=curvar->next=NIL_EXP; curval=curval->next;
-        }
-        }*/
+
       while (retval->s64<idx)
         {
           curval=curin;
           while (curval) { 
-            ret=evaluate(curval->content,newenv);
-            if iserror(ret) return ret;
-            unrefexp(ret); curval=curval->next;}
+            unrefexp(ret);
+            ret=evaluate(refexp(curval->content),newenv);
+            if iserror(ret) goto error;
+            curval=curval->next;}
           retval->s64++;
         }
-      destroy_env(newenv);
-      return ret;
-      
-      
     }
   }
  error:
   //cleaning to be made unref exp ..
   destroy_env(newenv);
-  if (ret) return ret;
-  else return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in for");
+  if (!ret) ret = error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in for");
+  unrefexp(lastidx);
+  unrefexp(retval);
+  unrefexp(e);
+  return ret; 
 }
 
 
@@ -1958,8 +1999,9 @@ exp_t *eachcmd(exp_t *e,env_t *env){
   exp_t *curvar;
   exp_t *curval;
   exp_t *curin;
-  exp_t *retval;
-  exp_t *tmpexp;
+  exp_t *retval=NULL;
+  exp_t *tmpexp=NULL;
+  exp_t *ret=NULL;
   keyval_t *keyv;
 
   if ((curvar=e->next)) {
@@ -1967,39 +2009,48 @@ exp_t *eachcmd(exp_t *e,env_t *env){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
-        if ((retval=evaluate(curval->content,env))==NULL) retval=NIL_EXP;
+        if ((retval=evaluate(refexp(curval->content),env))==NULL) retval=NIL_EXP;
         if (ispair(retval)) {
           curin=curval->next;
+          tmpexp=retval;
           while (retval) {
             keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,car(retval));
             curval=curin;
-            while (curval) { tmpexp=evaluate(curval->content,newenv);
-              if iserror(tmpexp) return tmpexp;
-              unrefexp(tmpexp); curval=curval->next;}
+            while (curval) {
+              ret=evaluate(refexp(curval->content),newenv);
+              if iserror(ret) goto finish;
+              unrefexp(ret); curval=curval->next;}
             retval=retval->next;
           }
-          destroy_env(newenv);
-          return NULL;
+          ret = NULL;
+          goto finish;
         } 
         else {
-          destroy_env(newenv);
-          if iserror(retval) return retval;
-          return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not list) in each"); 
+          if iserror(retval) ret = refexp(retval);
+          else ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value (not list) in each"); 
+          goto finish;
         }
         
       }
       else { 
-        destroy_env(newenv);
-        return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in each"); 
+        ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in each"); 
+        goto finish;
       }
     }
   }
+
+  ret = error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in each");
+ finish:
   destroy_env(newenv);
-  return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in each");
+  unrefexp(tmpexp);
+  unrefexp(retval);
+  unrefexp(e);
+  return ret;
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *timecmd(exp_t *e,env_t *env){
+  unrefexp(e);
   return make_integeri(gettimeusec());
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
@@ -2008,6 +2059,7 @@ exp_t *timecmd(exp_t *e,env_t *env){
 exp_t *inspectcmd(exp_t *e,env_t *env){
   if (e)
     printf("\x1B[96mtype:\t%d\nflag:\t%d\nref:\t%d\x1B[39m\n",e->flags,e->type,e->nref);
+  unrefexp(e);
   return NULL;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
@@ -2015,46 +2067,61 @@ exp_t *inspectcmd(exp_t *e,env_t *env){
 
 
 exp_t *conscmd(exp_t *e, env_t *env){
-  exp_t *a=evaluate(cadr(e),env);
-  exp_t *b=evaluate(caddr(e),env);
-  if iserror(a) return a;
-  if iserror(b) return b;
+  exp_t *a=evaluate(refexp(cadr(e)),env);
+  if iserror(a) { unrefexp(e); return a;}
+  exp_t *b=evaluate(refexp(caddr(e)),env);
+  if iserror(b) { unrefexp(a); unrefexp(e); return b;}
   exp_t *ret=make_node(a);
-  if (istrue(b)) ret->next=refexp(b);
-  else ret->next=NULL;
+  if (istrue(b)) ret->next=b;
+  else { unrefexp(b); ret->next=NULL;}
+  unrefexp(e);
   return ret;
-
 }
 
 exp_t *cdrcmd(exp_t *e, env_t *env){
-  exp_t *tmpexp=evaluate(cadr(e),env);
-  if iserror(tmpexp) return tmpexp;
-  return cdr(tmpexp);
+  exp_t *tmpexp=evaluate(refexp(cadr(e)),env);
+  exp_t *tmpexp2=tmpexp;
+  unrefexp(e);
+  if (!iserror(tmpexp)) {
+    tmpexp=refexp(cdr(tmpexp2));
+    unrefexp(tmpexp2);
+  }
+  return tmpexp;
 }
 
 exp_t *carcmd(exp_t *e, env_t *env){
-  exp_t *tmpexp=evaluate(cadr(e),env);
-  if iserror(tmpexp) return tmpexp;
-  return car(tmpexp);
+  exp_t *tmpexp=evaluate(refexp(cadr(e)),env);
+  exp_t *tmpexp2=tmpexp;
+  if (!iserror(tmpexp)) {
+    tmpexp = refexp(car(tmpexp2));
+    unrefexp(tmpexp2);
+  }
+  return tmpexp;
 }
 
 exp_t *listcmd(exp_t *e, env_t *env){
   exp_t *a=cdr(e);
-  exp_t *tmpexp=evaluate(car(a),env);
-  if iserror(tmpexp) return tmpexp;
+  exp_t *tmpexp=evaluate(refexp(car(a)),env);
+  if iserror(tmpexp) goto error;
   exp_t *ret=make_node(tmpexp);
+  tmpexp=NULL;
   exp_t *cur=ret;
   while ((a=a->next))
     {
-      tmpexp=evaluate(car(a),env);
-      if iserror(tmpexp) return tmpexp;
+      tmpexp=evaluate(refexp(car(a)),env);
+      if iserror(tmpexp) goto error;
       cur=cur->next=make_node(tmpexp);
     }
   return ret;
+ error:
+  unrefexp(e);
+  return tmpexp;
 }
 
 exp_t *evalcmd(exp_t *e, env_t *env){
-  return evaluate(evaluate(cadr(e),env),env);
+  exp_t *ret=evaluate(evaluate(cadr(e),env),env);
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *letcmd(exp_t *e,env_t *env){
@@ -2062,7 +2129,6 @@ exp_t *letcmd(exp_t *e,env_t *env){
   exp_t *ret;
   exp_t *curvar;
   exp_t *curval;
-  exp_t *retval;
   keyval_t *keyv;
 
   if ((curvar=e->next)) {
@@ -2070,25 +2136,29 @@ exp_t *letcmd(exp_t *e,env_t *env){
       if (!(newenv->d)) newenv->d=create_dict();
       
       if (issymbol(curvar->content)) {
-        if ((retval=evaluate(curval->content,env))==NULL) retval=NIL_EXP;
-        if iserror(retval) return retval;
-        keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,retval);
+        if ((ret=evaluate(refexp(curval->content),env))==NULL) ret=NIL_EXP;
+        if iserror(ret) goto finish;
+        keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,ret);
+        unrefexp(ret);
+        ret=NULL;
       }
       else { 
-        destroy_env(newenv);
-        return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in let"); 
+        ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in let"); 
+        goto finish;
       }
       if (curval->next)
         {
-          ret=evaluate(curval->next->content,newenv);
-          destroy_env(newenv);
-          return ret;
+          ret=evaluate(refexp(curval->next->content),newenv);
+          goto finish;
         }
       
     }
   }
+  ret = error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in let"); /* MISSING PARAMETER*/
+ finish:
   destroy_env(newenv);
-  return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in let"); /* MISSING PARAMETER*/
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *withcmd(exp_t *e,env_t *env){
@@ -2101,8 +2171,8 @@ exp_t *withcmd(exp_t *e,env_t *env){
   
   if ((curvar=e->next)) {
     if (!ispair(curvar->content)) {
-      destroy_env(newenv);
-      return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in with"); 
+      ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in with"); 
+      goto finish;
     }
     if ((curex=curvar->next)){
       curvar=curvar->content;
@@ -2111,35 +2181,43 @@ exp_t *withcmd(exp_t *e,env_t *env){
         
         while (curvar && curval) {
           if (issymbol(curvar->content)) { 
-            ret=evaluate(curval->content,env);
-            if iserror(ret) return ret;
-            keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,ret); 
+            ret=evaluate(refexp(curval->content),env);
+            if iserror(ret) goto finish;
+            keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,ret);
+            unrefexp(ret);
+            ret = NULL;
           }
           
-          else return error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in with"); 
+          else { 
+            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in with"); 
+            goto finish;
+          }
           curvar=curval->next;
           if (curvar) curval=curvar->next;
           if (!curval) {
-            destroy_env(newenv);
-            return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in with");
-  
+            ret = error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in with");
+            goto finish;
           }
         }
 
-        ret=evaluate(curex->content,newenv);
-        destroy_env(newenv);
-        return ret;
+        ret=evaluate(refexp(curex->content),newenv);
+        goto finish;
       }
     }
   }
+
+  ret = error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in with");
+ finish:
   destroy_env(newenv);
-  return error(ERROR_MISSING_PARAMETER,e,env,"Missing parameter in with");
+  unrefexp(e);
+  return ret;
 }
 
 
 
 exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
 {
+  /* borrow references */
   exp_t *curvar=var;
   exp_t *retvar;
   exp_t *curval=val;
@@ -2148,7 +2226,7 @@ exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
   while (curvar){
     if ((curval)) {
       if (!(env->d)) env->d=create_dict();
-      if ((retvar = (evalexp?evaluate(curval->content,env->root):curval->content))) {
+      if ((retvar = (evalexp?evaluate(refexp(curval->content),env->root):curval->content))) {
         if (evalexp && iserror(retvar)) return retvar;
       }
       else retvar= NIL_EXP;
@@ -2250,6 +2328,7 @@ exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *optimize(exp_t *e,env_t *env)
 {
+  /* NOT YET USED */
   /* TO DO UN REF VARS*/
   exp_t *tmpexp;
   exp_t *tmpexp2;
@@ -2284,6 +2363,7 @@ exp_t *optimize(exp_t *e,env_t *env)
 
 exp_t *evaluate2(exp_t *e, env_t *env)
 {
+  /* NOT YET USED !! */
   exp_t *tmpexp;
   if (e!=NULL) {
     switch (e->type){
@@ -2323,7 +2403,10 @@ exp_t *evaluate(exp_t *e,env_t *env)
           if (((char*)e->ptr)[0] == ':') return e; // e is a keyword
           if ((tmpexp=lookup(e,env))) return tmpexp;
           else 
-            return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
+            { ret = error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
+              unrefexp(e);
+              return ret;
+            }
         }
       else return e; // Number? String? Char? Boolean? Vector?
     }
@@ -2417,9 +2500,11 @@ int main(int argc, char *argv[])
     set_get_keyval_dict(reserved_symbol,lispProcList[i].name,make_internal(lispProcList[i].cmd));
   }
 
-  if (argc==2){
-    if ((stream=fopen(argv[1],"r"))){
+  if (argc>=2){
+    if ((stream=fopen(argv[argc-1],"r"))){
       evaluatingfile=1;
+      if (strcmp(argv[argc-2],"-i") == 0) 
+        evaluatingfile|=2;
     }
     else
       { printf("Error opening %s\n",argv[1]); exit(0);}
@@ -2445,7 +2530,9 @@ int main(int argc, char *argv[])
     idx++;
     if (!evaluatingfile) printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m",idx);
     stre=reader(stream,0,0);
-    if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF) && evaluatingfile) {exit(0);}
+    if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF) && evaluatingfile) {
+      if (evaluatingfile&2) { stream=stdin; evaluatingfile=0; unrefexp(stre); continue; }
+      else exit(0);}
     if (verbose) {
       if (stre) printf("\x1B[35mstre:#\\%lld\x1B[39m\n",(long long int)stre);
       print_node(stre);printf("\n");
@@ -2456,7 +2543,7 @@ int main(int argc, char *argv[])
       if (strf) {
         if (verbose) {
           printf("\x1B[35mstrf:#\\%lld\x1B[39m\n",(long long int)strf);
-          inspectcmd(strf,global);
+          inspectcmd(refexp(strf),global);
         }
         printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m",idx);
         print_node(strf);
@@ -2468,7 +2555,6 @@ int main(int argc, char *argv[])
       strf=NULL;
     }
   }
-  unrefexp(stre);
   destroy_dict(dict);
   
 }

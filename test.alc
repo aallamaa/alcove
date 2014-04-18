@@ -1,21 +1,44 @@
-(def assert (txt a b) (pr txt) (if (iso a b) (prn "\t: \x1B[92mPassed\x1B[39m") (prn "\t: \x1B[91mFailed\x1B[39m")))
+(def assert (txt a b) 
+  (pr txt) 
+  (if (iso a b) 
+      (prn "\t: \x1B[92mPassed\x1B[39m") 
+      (prn "\t: \x1B[91mFailed\x1B[39m")))
+
 (assert "This will Pass" 1 1)
 (assert "This will Fail" 1 0)
 (assert "addition" 3 (+ 1 2))
 (assert " (+) is 0" 0 (+ ))
-(assert "cons test " (cons 'f '(a b)) '(f a b))
+(assert "cons test " 
+        (cons 'f '(a b)) 
+        '(f a b))
 (= x '(a b))
-(assert "(cons 'f x) -> (f a b)" '(f a b) (cons 'f x))
-(assert "(cons 'a nil) -> (a)" (cons 'a nil) '(a))
-(assert "(car '(a b c)) -> a" (car '(a b c)) 'a)
-(assert "(cdr '(a b c)) -> (b c)" (cdr '(a b c)) '(b c))
-(assert "(list 'a 1 "foo" '(b))  -> (a 1 "foo" (b))" (list 'a 1 "foo" '(b)) '(a 1 "foo" (b)))
-(assert "(cons 'a (cons 1 (cons "foo" (cons '(b) nil)))) -> (a 1 "foo" (b))" (cons 'a (cons 1 (cons "foo" (cons '(b) nil)))) '(a 1 "foo" (b)))
+(assert "(cons 'f x) -> (f a b)" 
+        '(f a b) 
+        (cons 'f x))
+(assert "(cons 'a nil) -> (a)" 
+        (cons 'a nil) 
+        '(a))
+(assert "(car '(a b c)) -> a" 
+        (car '(a b c)) 
+        'a)
+(assert "(cdr '(a b c)) -> (b c)" 
+        (cdr '(a b c)) 
+        '(b c))
+(assert "(list 'a 1 "foo" '(b))  -> (a 1 "foo" (b))" 
+        (list 'a 1 "foo" '(b)) 
+        '(a 1 "foo" (b)))
+(assert "(cons 'a (cons 1 (cons "foo" (cons '(b) nil)))) -> (a 1 "foo" (b))" 
+        (cons 'a 
+              (cons 1 
+                    (cons "foo" 
+                          (cons 
+                            '(b) nil)))) 
+        '(a 1 "foo" (b)))
 (= x '(a b))
 (assert "(= (car x) 'z) -> z" (= (car x) 'z) 'z)
 (assert "and x -> (z b)" x '(z b))
 (def average (x y) 
-       (/ (+ x y) 2)))
+  (/ (+ x y) 2)))
 (assert "(average 2 4) -> 3" (average 2 4) 3)
 (assert "((fn (x y) (/ (+ x y) 2)) 2 4) -> 3" ((fn (x y) (/ (+ x y) 2)) 2 4) 3)
 (assert "(\"foo\" 0) -> #\\f" ("foo" 0) #\f)
@@ -26,14 +49,14 @@
 (assert "(with (x 3 y 4)
        (sqrt (+ (expt x 2) (expt y 2)))) 
        -> 5" (with (x 3 y 4)
-       (sqrt (+ (expt x 2) (expt y 2)))) 5.0)  
+               (sqrt (+ (expt x 2) (expt y 2)))) 5.0)  
 
 (assert "(if (odd 1) 'a 'b) -> a" (if (odd 1) 'a 'b) 'a)
 (assert "(if (odd 2) 'a 'b) -> b" (if (odd 2) 'a 'b) 'b)
 (def mylen (xs)
-       (if (no xs)
-           0
-           (+ 1 (mylen (cdr xs)))))
+  (if (no xs)
+      0
+      (+ 1 (mylen (cdr xs)))))
 (assert "mylen nil -> 0"  (mylen nil) 0 )
 (assert "(mylen '(a b)) -> 2 "  (mylen '(a b)) 2)
 

@@ -255,7 +255,7 @@ exp_t *inspectcmd(exp_t *e,env_t *env);
 /* lisp macro */
 exp_t *defcmd(exp_t *e, env_t *env);
 exp_t *expandmacrocmd(exp_t *e,env_t *env);
-exp_t *defmacro(exp_t *e, env_t *env);
+exp_t *defmacrocmd(exp_t *e, env_t *env);
 exp_t *fncmd(exp_t *e, env_t *env);
 exp_t *conscmd(exp_t *e, env_t *env);
 exp_t *evalcmd(exp_t *e, env_t *env);
