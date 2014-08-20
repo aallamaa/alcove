@@ -1,29 +1,19 @@
 /* 
    Copyright (c) 2012 Abdelkader ALLAM abdelkader.allam@gmail.com
 
-   This program is free software; you can redistribute it and/or modify it
-   under the terms of the GNU General Public License as published by the Free
-   Software Foundation; either version 2 of the License, or (at your option)
-   any later version.
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as
+    published by the Free Software Foundation, either version 3 of the
+    License, or (at your option) any later version.
 
-   This program is distributed in the hope that it will be useful, but
-   WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-   or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-   for more details.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
 
-   You should have received a copy of the GNU General Public License along
-   with this program; if not, write to the Free Software Foundation, Inc.,
-   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-   In addition, as a special exception, is given the permission to link
-   the code of this release  with the OpenSSL project's "OpenSSL"
-   library (or with modified versions of it that use the same license as the
-   "OpenSSL" library), and distribute the linked executables.  You must obey
-   the GNU General Public License in all respects for all of the code used
-   other than "OpenSSL".  If you modify this file, you may extend this
-   exception to your version of the file, but you are not obligated to do so.
-   If you do not wish to do so, delete this exception statement from your
-   version. 
 */
 
 
@@ -131,11 +121,15 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...)
 /*
 There are two function, refexp and unrefexp which handle , which handle the incrementing and decrementing of the reference count of exp_t objects.
 
-Functions that return a reference to an object pass on ownership with the reference.
+By default, functions that return a reference to an object pass on ownership with the reference.
 
 Macros such car,cdr,cadr,cddr,cddr,isatom... of course borrow reference and are not supposed to decrement the reference count of the object.
 
-print_node only borrow ownership.
+print_node only borrow ownership and does not modify objects.
+
+When objects are passed as parameter of a *cmd function, ownership is also transfered otherwise, ownership is borrowed.
+
+Concurrency issues are not yet taken care of.
 
 When the reference count of an object reaches zero when decremented by unrefexp, unrefexp frees the object. At some point a the struct exp_tfunc will point to the function to be called to free the object depending on its type. It is not yet implemented.
 
