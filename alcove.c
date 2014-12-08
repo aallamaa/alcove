@@ -25,6 +25,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <jemalloc/jemalloc.h>
 #include "alcove.h"
 
 
