@@ -783,25 +783,29 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
       
     if (vnode){
       if (iserror(vnode)) return vnode;
+      unrefexp(vnode);
       cnode=lnode;
       while ((vnode=reader(stream,')',0))) { 
         if (iserror(vnode)) { unrefexp(lnode); return vnode;}
         cnode=cnode->next=make_node(vnode);
+        unrefexp(vnode);
       }
     }
   }
   else if (x=='[') {
     vnode=reader(stream,']',0);
-    lnode=vnode;
+    // ?? why ?? lnode=vnode;
     if (vnode){
       if (iserror(vnode)) return vnode;
       cnode=make_node(vnode); //body
+      unrefexp(vnode);
       lnode=make_node(make_node(make_symbol("_",1))); //header
       lnode->next=make_node(make_node(cnode));
       lnode->type=EXP_LAMBDA;
       while ((vnode=reader(stream,']',0))) { 
         if (iserror(vnode)) { unrefexp(lnode); return vnode;} // cleaning to be done gc
         cnode=cnode->next=make_node(vnode);
+        unrefexp(vnode);
       }
     }
   }
@@ -1502,6 +1506,7 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
             ret =error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
             goto finish;
           }
+          unrefexp(v);
 
         }
         else {
@@ -1511,6 +1516,7 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); 
             goto finish;
           }
+          unrefexp(v);
 
         }
       }
@@ -1547,7 +1553,8 @@ exp_t *minuscmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
             goto finish;
           }
-        }
+           unrefexp(v);
+       }
         else {
           if isnumber(v) {if (sum_i) sum_i-=v->s64; else sum_i=v->s64;}
           else if isfloat(v) {if (sum_i) { sum_f = sum_i - (v->f);} else sum_f=v->f; sum_i=0;}
@@ -1555,6 +1562,8 @@ exp_t *minuscmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
             goto finish;
           }
+          unrefexp(v);
+
         }
       }
   } while (c &&(c=c->next));
@@ -1601,6 +1610,8 @@ exp_t *dividecmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
             goto finish;
           }
+          unrefexp(v);
+
         }
         else {
           if isnumber(v) {if (sum_i) sum_i/=v->s64; else sum_i=v->s64;}
@@ -1609,6 +1620,8 @@ exp_t *dividecmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
             goto finish;
           }
+          unrefexp(v);
+
         }
       }
   } while (c &&(c=c->next));
