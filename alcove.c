@@ -779,16 +779,15 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
 
   if (x=='(') {
     vnode=reader(stream,')',0);
-    lnode=make_node(vnode);
       
     if (vnode){
       if (iserror(vnode)) return vnode;
-      unrefexp(vnode);
+      lnode=make_node(vnode);
+      vnode=NULL;
       cnode=lnode;
       while ((vnode=reader(stream,')',0))) { 
         if (iserror(vnode)) { unrefexp(lnode); return vnode;}
         cnode=cnode->next=make_node(vnode);
-        unrefexp(vnode);
       }
     }
   }
@@ -798,14 +797,14 @@ exp_t *callmacrochar(FILE *stream,unsigned char x){
     if (vnode){
       if (iserror(vnode)) return vnode;
       cnode=make_node(vnode); //body
-      unrefexp(vnode);
+      vnode=NULL;
       lnode=make_node(make_node(make_symbol("_",1))); //header
       lnode->next=make_node(make_node(cnode));
       lnode->type=EXP_LAMBDA;
       while ((vnode=reader(stream,']',0))) { 
         if (iserror(vnode)) { unrefexp(lnode); return vnode;} // cleaning to be done gc
         cnode=cnode->next=make_node(vnode);
-        unrefexp(vnode);
+        vnode=NULL;
       }
     }
   }
