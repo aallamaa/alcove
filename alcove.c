@@ -1460,6 +1460,7 @@ exp_t *pluscmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
             goto finish;
           }
+          unrefexp(v);
         }
         else {
           if isnumber(v) sum_i+=v->s64;
@@ -1468,6 +1469,7 @@ exp_t *pluscmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
             goto finish;
           }
+          unrefexp(v);
         }
       }
   } while (c &&(c=c->next));
