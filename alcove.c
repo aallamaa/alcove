@@ -1538,11 +1538,11 @@ exp_t *minuscmd(exp_t *e, env_t *env)
   exp_t *ret=NULL;
    
   do {
-    if (c &&(v1=c->content))
+    if (c &&(v1=refexp(c->content)))
       {
         i++;
-        if ispair(v1) v=evaluate(refexp(v1),env);
-        else if issymbol(v1) v=evaluate(refexp(v1),env);
+        if ispair(v1) v=evaluate(v1,env);
+        else if issymbol(v1) v=evaluate(v1,env);
         else v=v1; 
         if iserror(v) return v;
         if (sum_f){
@@ -1552,7 +1552,7 @@ exp_t *minuscmd(exp_t *e, env_t *env)
             ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); /*ERROR*/
             goto finish;
           }
-           unrefexp(v);
+          unrefexp(v);
        }
         else {
           if isnumber(v) {if (sum_i) sum_i-=v->s64; else sum_i=v->s64;}
