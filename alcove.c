@@ -2549,6 +2549,10 @@ int main(int argc, char *argv[])
       unrefexp(strf);
       strf=NULL;
     }
+    if (stre) {
+      unrefexp(stre);
+      stre=NULL;
+    }
   }
   destroy_dict(dict);
   
