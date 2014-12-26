@@ -1450,10 +1450,10 @@ exp_t *pluscmd(exp_t *e, env_t *env)
   exp_t *v1=NULL;
   exp_t *ret=NULL;
   do {
-    if (c &&(v1=c->content))
+    if (c &&(v1=refexp(c->content)))
       {
-        if ispair(v1) v=evaluate(refexp(v1),env);
-        else if issymbol(v1) v=evaluate(refexp(v1),env);
+        if ispair(v1) v=evaluate(v1,env);
+        else if issymbol(v1) v=evaluate(v1,env);
         else v=v1; 
         if iserror(v) { ret = v; goto finish;}
         if (sum_f){
@@ -1492,10 +1492,10 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
   exp_t *ret=NULL;
    
   do {
-    if (c &&(v1=c->content))
+    if (c &&(v1=refexp(c->content)))
       {
-        if ispair(v1) v=evaluate(refexp(v1),env);
-        else if issymbol(v1) v=evaluate(refexp(v1),env);
+        if ispair(v1) v=evaluate(v1,env);
+        else if issymbol(v1) v=evaluate(v1,env);
         else v=v1;
         if iserror(v) { ret = v; goto finish;}
         if (sum_f!=1){
@@ -1506,7 +1506,7 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
             goto finish;
           }
           unrefexp(v);
-
+          
         }
         else {
           if isnumber(v) sum_i=((sum_i!=1)?sum_i*=v->s64:v->s64);
@@ -1585,11 +1585,11 @@ exp_t *dividecmd(exp_t *e, env_t *env)
   exp_t *ret=NULL;
    
   do {
-    if (c &&(v1=c->content))
+    if (c &&(v1=refexp(c->content)))
       {
         i++;
-        if ispair(v1) v=evaluate(refexp(v1),env);
-        else if issymbol(v1) v=evaluate(refexp(v1),env);
+        if ispair(v1) v=evaluate(v1,env);
+        else if issymbol(v1) v=evaluate(v1,env);
         else v=v1; 
         if iserror(v) return v;
         if (i>1) { 
@@ -2287,9 +2287,12 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
     {
       return ret;
     }
-  
-  do
+
+  ret=NULL;
+  do {
+    if (ret) unrefexp(ret);
     ret=evaluate(refexp(body->content),newenv);
+  }
   while ((body=body->next));
   destroy_env(newenv);
   /* if ret is lazy... loopback*/
