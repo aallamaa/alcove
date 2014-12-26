@@ -2235,11 +2235,17 @@ exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
   while (curvar){
     if ((curval)) {
       if (!(env->d)) env->d=create_dict();
-      if ((retvar = (evalexp?evaluate(refexp(curval->content),env->root):curval->content))) {
-        if (evalexp && iserror(retvar)) return retvar;
+      if ((retvar = (evalexp?evaluate(refexp(curval->content),env->root):refexp(curval->content)))) {
+        if (evalexp && iserror(retvar)) {
+          /// cleaning to be done e?
+          return retvar;
+        }
       }
       else retvar= NIL_EXP;
-      if (issymbol(curvar->content)) keyv=set_get_keyval_dict(env->d,curvar->content->ptr,retvar);
+      if (issymbol(curvar->content)) {
+        keyv=set_get_keyval_dict(env->d,curvar->content->ptr,retvar);
+        unrefexp(retvar);
+      }
       else return NULL;
       
     }
