@@ -2503,6 +2503,8 @@ int main(int argc, char *argv[])
   FILE *stream;
   int evaluatingfile=0;
   int idx=0;
+  exp_t *t;
+  exp_t *nil;
   exp_tfuncList[EXP_CHAR]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
   exp_tfuncList[EXP_CHAR]->load=load_char;
   exp_tfuncList[EXP_CHAR]->dump=dump_char;
@@ -2512,8 +2514,8 @@ int main(int argc, char *argv[])
 
 
   reserved_symbol=create_dict();
-  set_get_keyval_dict(reserved_symbol,"nil",NIL_EXP);
-  set_get_keyval_dict(reserved_symbol,"t",TRUE_EXP);
+  set_get_keyval_dict(reserved_symbol,"nil",nil=NIL_EXP);
+  set_get_keyval_dict(reserved_symbol,"t",t=TRUE_EXP);
   
   int N=sizeof(lispProcList)/sizeof(lispProc);
   int i;
@@ -2583,5 +2585,7 @@ int main(int argc, char *argv[])
   destroy_dict(reserved_symbol);
   free(exp_tfuncList[EXP_CHAR]);
   free(exp_tfuncList[EXP_STRING]);
- 
+  unrefexp(t);
+  unrefexp(nil);
+
 }
