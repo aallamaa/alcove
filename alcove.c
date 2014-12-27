@@ -2505,6 +2505,7 @@ int main(int argc, char *argv[])
   int idx=0;
   exp_t *t;
   exp_t *nil;
+  exp_t *val;
   exp_tfuncList[EXP_CHAR]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
   exp_tfuncList[EXP_CHAR]->load=load_char;
   exp_tfuncList[EXP_CHAR]->dump=dump_char;
@@ -2520,7 +2521,8 @@ int main(int argc, char *argv[])
   int N=sizeof(lispProcList)/sizeof(lispProc);
   int i;
   for (i = 0; i < N; ++i) {
-    set_get_keyval_dict(reserved_symbol,lispProcList[i].name,make_internal(lispProcList[i].cmd));
+    set_get_keyval_dict(reserved_symbol,lispProcList[i].name,val=make_internal(lispProcList[i].cmd));
+    unrefexp(val);
   }
 
   if (argc>=2){
