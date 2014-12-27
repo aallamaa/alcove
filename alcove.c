@@ -2419,7 +2419,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
   if isatom(e)  {
       if issymbol(e) {
           if (((char*)e->ptr)[0] == ':') return e; // e is a keyword
-          if ((tmpexp=lookup(e,env))) { unrefexp(e): return tmpexp;}
+          if ((tmpexp=lookup(e,env))) { unrefexp(e); return tmpexp;}
           else 
             { ret = error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
               unrefexp(e);
