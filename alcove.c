@@ -2531,8 +2531,10 @@ int main(int argc, char *argv[])
       { printf("Error opening %s\n",argv[1]); exit(0);}
   }
   else stream=stdin;
-  exp_t* stre=make_string(strdict,strlen(strdict));
-  exp_t* strf=make_string(strdict,strlen(strdict));
+  exp_t* stre=NULL;
+  //make_string(strdict,strlen(strdict));
+  exp_t* strf=NULL;
+  //make_string(strdict,strlen(strdict));
   /*  set_get_keyval_dict(dict,"TOTO",stre);
       kv=set_get_keyval_dict(dict,"TATA",NULL);
       if (kv) printf("TATA TEST NOT OK\n");
@@ -2544,8 +2546,8 @@ int main(int argc, char *argv[])
       if (kv->val == strf) printf("STRF TEST OK\n");
       else printf("STRF TEST NOTOK\n");
       del_keyval_dict(dict,"TOTO");*/
-  unrefexp(stre);
-  unrefexp(strf);
+  //unrefexp(stre);
+  //unrefexp(strf);
   
   while (1){
     idx++;
@@ -2577,5 +2579,9 @@ int main(int argc, char *argv[])
     }
   }
   destroy_dict(dict);
-  
+  destroy_env(global);
+  destroy_dict(reserved_symbol);
+  free(exp_tfuncList[EXP_CHAR]);
+  free(exp_tfuncList[EXP_STRING]);
+ 
 }
