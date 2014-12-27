@@ -2528,8 +2528,8 @@ int main(int argc, char *argv[])
       { printf("Error opening %s\n",argv[1]); exit(0);}
   }
   else stream=stdin;
-  exp_t* stre=refexp(make_string(strdict,strlen(strdict)));
-  exp_t* strf=refexp(make_string(strdict,strlen(strdict)));
+  exp_t* stre=make_string(strdict,strlen(strdict));
+  exp_t* strf=make_string(strdict,strlen(strdict));
   /*  set_get_keyval_dict(dict,"TOTO",stre);
       kv=set_get_keyval_dict(dict,"TATA",NULL);
       if (kv) printf("TATA TEST NOT OK\n");
@@ -2555,7 +2555,7 @@ int main(int argc, char *argv[])
       if (stre) printf("\x1B[35mstre:#\\%lld\x1B[39m\n",(long long int)stre);
       print_node(stre);printf("\n");
     }
-    if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) break;
+    if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) { unrefexp(stre); break;}
     strf=evaluate(stre,global);
     if (!evaluatingfile) {
       if (strf) {
