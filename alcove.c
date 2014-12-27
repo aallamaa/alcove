@@ -2419,7 +2419,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
   if isatom(e)  {
       if issymbol(e) {
           if (((char*)e->ptr)[0] == ':') return e; // e is a keyword
-          if ((tmpexp=lookup(e,env))) return tmpexp;
+          if ((tmpexp=lookup(e,env))) { unrefexp(e): return tmpexp;}
           else 
             { ret = error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
               unrefexp(e);
@@ -2430,7 +2430,10 @@ exp_t *evaluate(exp_t *e,env_t *env)
     }
   else if ispair(e) {
       tmpexp=car(e);
-      if (tmpexp && ispair(tmpexp)) tmpexp=tmpevexp=evaluate(tmpexp,env);
+      if (tmpexp && ispair(tmpexp)) {
+        tmpevexp=evaluate(refexp(tmpexp),env);
+        tmpexp=tmpevexp;
+      }
       if (tmpexp) {
         if isinternal(tmpexp)  {
             ret = tmpexp->fnc(e,env);
