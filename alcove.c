@@ -773,9 +773,9 @@ exp_t *make_atom(char *str,int length)
 }
 
 exp_t *callmacrochar(FILE *stream,unsigned char x){
-  exp_t* lnode; // Initial List Node
-  exp_t* vnode; // Val Node 
-  exp_t* cnode; // Current Node
+  exp_t* lnode=NULL; // Initial List Node
+  exp_t* vnode=NULL; // Val Node 
+  exp_t* cnode=NULL; // Current Node
 
   if (x=='(') {
     vnode=reader(stream,')',0);
