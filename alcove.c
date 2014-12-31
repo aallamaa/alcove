@@ -25,13 +25,13 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
-#include <jemalloc/jemalloc.h>
+//#include <jemalloc/jemalloc.h>
 #include "alcove.h"
 
 
 
-
-int verbose=0;
+int toeval=1;
+int verbose=00;
 dict_t *reserved_symbol=NULL;
 exp_tfunc* exp_tfuncList[EXP_MAXSIZE];
 
@@ -164,10 +164,14 @@ inline int unrefexp(exp_t *e){
     if (e->next) unrefexp(e->next);
     if ((e->type==EXP_SYMBOL)||(e->type==EXP_STRING)||(e->type==EXP_ERROR))
       free(e->ptr);
-    else if ((e->type>=EXP_NUMBER)||(e->type<=EXP_BOOLEAN)||(e->type==EXP_INTERNAL)) {}
+    else if (((e->type>=EXP_NUMBER)&&(e->type<=EXP_BOOLEAN))||(e->type==EXP_INTERNAL)) {
+    }
     else 
-      unrefexp(e->content); //check if content type is exp
-    free(e);
+        unrefexp(e->content); //check if content type is exp
+
+    free(e); 
+    if (verbose) printf("\x1B[91mFree e:\x1B[39m %lld\n",e);
+
     return 0;
   };
     if (verbose) {
@@ -2551,21 +2555,26 @@ int main(int argc, char *argv[])
       else printf("STRF TEST NOTOK\n");
       del_keyval_dict(dict,"TOTO");*/
   //unrefexp(stre);
-  //unrefexp(strf);
   
   while (1){
     idx++;
+    strf=NULL;
     if (!evaluatingfile) printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m",idx);
     stre=reader(stream,0,0);
     if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF) && evaluatingfile) {
       if (evaluatingfile&2) { stream=stdin; evaluatingfile=0; unrefexp(stre); continue; }
-      else exit(0);}
+      else goto endcleanly;}
     if (verbose) {
       if (stre) printf("\x1B[35mstre:#\\%lld\x1B[39m\n",(long long int)stre);
       print_node(stre);printf("\n");
     }
     if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"quit")==0)) { unrefexp(stre); break;}
-    strf=evaluate(stre,global);
+    if (stre && (stre->type==EXP_SYMBOL) && (strcmp(stre->ptr,"toeval")==0)) { toeval=1-toeval;printf("%d\n",toeval);}
+    //
+    if (toeval)
+      strf=evaluate(stre,global);
+    else
+      unrefexp(stre);
     if (!evaluatingfile) {
       if (strf) {
         if (verbose) {
@@ -2577,11 +2586,13 @@ int main(int argc, char *argv[])
       } else printf("nil");
       printf("\n\n");
     };
+    
     if (strf) { 
       unrefexp(strf);
       strf=NULL;
     }
   }
+ endcleanly:
   destroy_dict(dict);
   destroy_env(global);
   destroy_dict(reserved_symbol);
