@@ -2782,6 +2782,39 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     if (!strcmp(s, "with"))  { compile_with(c, e, tail); return; }
     if (!strcmp(s, "for"))   { compile_for(c, e, tail); return; }
     if (!strcmp(s, "="))     { compile_assign(c, e, tail); return; }
+    if (!strcmp(s, "cons")) {
+      exp_t *a = cadr(e), *b = caddr(e);
+      if (!a || !b) { c->failed = 1; return; }
+      compile_expr(c, a, 0); if (c->failed) return;
+      compile_expr(c, b, 0); if (c->failed) return;
+      emit_u8(c, OP_CONS);
+      return;
+    }
+    if (!strcmp(s, "car")) {
+      exp_t *a = cadr(e);
+      if (!a) { c->failed = 1; return; }
+      compile_expr(c, a, 0); if (c->failed) return;
+      emit_u8(c, OP_CAR);
+      return;
+    }
+    if (!strcmp(s, "cdr")) {
+      exp_t *a = cadr(e);
+      if (!a) { c->failed = 1; return; }
+      compile_expr(c, a, 0); if (c->failed) return;
+      emit_u8(c, OP_CDR);
+      return;
+    }
+    if (!strcmp(s, "list")) {
+      int n = 0;
+      exp_t *a;
+      for (a = e->next; a; a = a->next) {
+        compile_expr(c, a->content, 0); if (c->failed) return;
+        n++;
+        if (n > 255) { c->failed = 1; return; }
+      }
+      emit_u8(c, OP_LIST); emit_u8(c, (uint8_t)n);
+      return;
+    }
     if (!strcmp(s, "quote")) {
       exp_t *q = cadr(e);
       int k = add_const(c, q ? q : nil_singleton);
@@ -2930,6 +2963,10 @@ tail_reentry:
     [OP_CALL]         = &&l_call,
     [OP_TAIL_SELF]    = &&l_tail_self,
     [OP_TAIL_CALL]    = &&l_tail_call,
+    [OP_CONS]         = &&l_cons,
+    [OP_CAR]          = &&l_car,
+    [OP_CDR]          = &&l_cdr,
+    [OP_LIST]         = &&l_list,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -3222,6 +3259,47 @@ l_tail_call: {
     fn = new_fn;
     fn_owned = 1;
     goto tail_reentry;
+  }
+
+l_cons: {
+    /* (cons a b): make_node(a) takes ownership of a; b becomes ->next.
+       For (cons a nil) we drop the explicit nil tail to match conscmd. */
+    exp_t *b = POP(), *a = POP();
+    exp_t *pair = make_node(a);  /* transfers a's ref into pair->content */
+    if (istrue(b)) pair->next = b;            /* transfers b's ref */
+    else           { unrefexp(b); pair->next = NULL; }
+    PUSH(pair);
+    NEXT;
+  }
+l_car: {
+    exp_t *p = POP();
+    exp_t *v = car(p);                  /* borrowed (via macro guard) */
+    PUSH(refexp(v));
+    unrefexp(p);
+    NEXT;
+  }
+l_cdr: {
+    exp_t *p = POP();
+    exp_t *v = cdr(p);                  /* borrowed */
+    PUSH(refexp(v));
+    unrefexp(p);
+    NEXT;
+  }
+l_list: {
+    /* (list a0 ... aN-1) → fresh list. Args own their refs; we transfer
+       into the new pair chain. */
+    uint8_t n = READ_U8;
+    if (n == 0) { PUSH(NIL_EXP); NEXT; }
+    int base = sp - n;
+    exp_t *head = make_node(stack[base]);
+    exp_t *cur  = head;
+    int i;
+    for (i = 1; i < n; i++) {
+      cur = cur->next = make_node(stack[base + i]);
+    }
+    sp = base;
+    PUSH(head);
+    NEXT;
   }
 
 #undef BIN_ARITH
