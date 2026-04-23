@@ -1241,6 +1241,11 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
   return val;
 }
 
+/* Lambdas here are NOT closures: the returned EXP_LAMBDA stores only
+   params + body, with no reference to the defining env. Free variables
+   are resolved dynamically against the CALLER's env chain at invoke
+   time. If closure semantics are ever added, the env arena and the
+   bytecode VM's lifetime assumptions both need revisiting. */
 exp_t *fncmd(exp_t *e, env_t *env)
 {
   exp_t *val;
@@ -2434,6 +2439,10 @@ static int add_const(compiler_t *c, exp_t *v) {
   /* de-dupe by pointer equality — rare wins but costs nothing */
   int i;
   for (i = 0; i < c->nconsts; i++) if (c->consts[i] == v) return i;
+  /* OP_LOAD_CONST encodes the index as u8, so at most 256 distinct
+     constants per lambda. Above that we bail rather than silently
+     wrap — the tree-walker will still handle the body. */
+  if (c->nconsts >= 256) { c->failed = 1; return -1; }
   if (c->nconsts + 1 > c->consts_cap) {
     c->consts_cap = c->consts_cap ? c->consts_cap * 2 : 8;
     c->consts = realloc(c->consts, c->consts_cap * sizeof(exp_t*));
@@ -2686,221 +2695,209 @@ exp_t *vm_run(exp_t *fn, env_t *env)
 #define READ_U8   (code[pc++])
 #define READ_I16  (pc+=2, (int16_t)(code[pc-2] | (code[pc-1] << 8)))
 
-  for (;;) {
-    uint8_t op = code[pc++];
-    switch (op) {
+  /* Threaded dispatch via GCC/Clang computed goto: each op ends with a
+     direct indirect branch to the next op's label. Lets the CPU's
+     branch predictor learn per-op successor patterns — measurably
+     faster than a single switch-based jump-table on hot loops. */
+  static const void *const dispatch[OP_MAX] = {
+    [OP_HALT]         = &&l_halt,
+    [OP_RET]          = &&l_ret,
+    [OP_POP]          = &&l_pop,
+    [OP_LOAD_FIX]     = &&l_load_fix,
+    [OP_LOAD_CONST]   = &&l_load_const,
+    [OP_LOAD_SLOT]    = &&l_load_slot,
+    [OP_LOAD_GLOBAL]  = &&l_load_global,
+    [OP_ADD]          = &&l_add,
+    [OP_SUB]          = &&l_sub,
+    [OP_MUL]          = &&l_mul,
+    [OP_DIV]          = &&l_div,
+    [OP_LT]           = &&l_lt,
+    [OP_GT]           = &&l_gt,
+    [OP_LE]           = &&l_le,
+    [OP_GE]           = &&l_ge,
+    [OP_IS]           = &&l_is,
+    [OP_ISO]          = &&l_iso,
+    [OP_NOT]          = &&l_not,
+    [OP_JUMP]         = &&l_jump,
+    [OP_BR_IF_FALSE]  = &&l_br_if_false,
+    [OP_BR_IF_TRUE]   = &&l_br_if_true,
+    [OP_CALL]         = &&l_call,
+    [OP_TAIL_SELF]    = &&l_tail_self,
+  };
+#define NEXT goto *dispatch[code[pc++]]
 
-    case OP_RET: {
-      exp_t *r = POP();
-      /* Any extra stack residue shouldn't exist if the compiler is
-         balanced — but guard anyway. */
-      while (sp > 0) unrefexp(POP());
-      return r;
-    }
+  NEXT;
 
-    case OP_POP: unrefexp(POP()); break;
+l_halt:
+  RUNTIME_ERR("Bytecode: bad opcode");
 
-    case OP_LOAD_FIX: {
-      int16_t v = READ_I16;
-      PUSH(MAKE_FIX((int64_t)v));
-      break;
-    }
-    case OP_LOAD_CONST: {
-      uint8_t idx = READ_U8;
-      PUSH(refexp(consts[idx]));
-      break;
-    }
-    case OP_LOAD_SLOT: {
-      uint8_t idx = READ_U8;
-      PUSH(refexp(env->inline_vals[idx]));
-      break;
-    }
-    case OP_LOAD_GLOBAL: {
-      uint8_t idx = READ_U8;
-      exp_t *sym = consts[idx];
-      exp_t *v = lookup(sym, env);
-      if (!v) RUNTIME_ERR("Unbound variable");
-      PUSH(v);
-      break;
-    }
-    case OP_STORE_SLOT: {
-      uint8_t idx = READ_U8;
-      exp_t *v = POP();
-      unrefexp(env->inline_vals[idx]);
-      env->inline_vals[idx] = v;
-      break;
-    }
-
-    case OP_ADD: {
-      exp_t *b = POP(), *a = POP();
-      if (isnumber(a) && isnumber(b)) {
-        PUSH(MAKE_FIX(FIX_VAL(a) + FIX_VAL(b)));
-      } else {
-        double da, db;
-        if      (isnumber(a)) da = (double)FIX_VAL(a);
-        else if (isfloat(a))  { da = a->f; unrefexp(a); }
-        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in +"); }
-        if      (isnumber(b)) db = (double)FIX_VAL(b);
-        else if (isfloat(b))  { db = b->f; unrefexp(b); }
-        else { unrefexp(b); RUNTIME_ERR("Illegal value in +"); }
-        PUSH(make_floatf(da + db));
-      }
-      break;
-    }
-    case OP_SUB: {
-      exp_t *b = POP(), *a = POP();
-      if (isnumber(a) && isnumber(b)) {
-        PUSH(MAKE_FIX(FIX_VAL(a) - FIX_VAL(b)));
-      } else {
-        double da, db;
-        if      (isnumber(a)) da = (double)FIX_VAL(a);
-        else if (isfloat(a))  { da = a->f; unrefexp(a); }
-        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in -"); }
-        if      (isnumber(b)) db = (double)FIX_VAL(b);
-        else if (isfloat(b))  { db = b->f; unrefexp(b); }
-        else { unrefexp(b); RUNTIME_ERR("Illegal value in -"); }
-        PUSH(make_floatf(da - db));
-      }
-      break;
-    }
-    case OP_MUL: {
-      exp_t *b = POP(), *a = POP();
-      if (isnumber(a) && isnumber(b)) {
-        PUSH(MAKE_FIX(FIX_VAL(a) * FIX_VAL(b)));
-      } else {
-        double da, db;
-        if      (isnumber(a)) da = (double)FIX_VAL(a);
-        else if (isfloat(a))  { da = a->f; unrefexp(a); }
-        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in *"); }
-        if      (isnumber(b)) db = (double)FIX_VAL(b);
-        else if (isfloat(b))  { db = b->f; unrefexp(b); }
-        else { unrefexp(b); RUNTIME_ERR("Illegal value in *"); }
-        PUSH(make_floatf(da * db));
-      }
-      break;
-    }
-    case OP_DIV: {
-      exp_t *b = POP(), *a = POP();
-      if (isnumber(a) && isnumber(b)) {
-        int64_t bb = FIX_VAL(b);
-        if (bb == 0) { RUNTIME_ERR("Illegal division by 0"); }
-        PUSH(MAKE_FIX(FIX_VAL(a) / bb));
-      } else {
-        double da, db;
-        if      (isnumber(a)) da = (double)FIX_VAL(a);
-        else if (isfloat(a))  { da = a->f; unrefexp(a); }
-        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in /"); }
-        if      (isnumber(b)) db = (double)FIX_VAL(b);
-        else if (isfloat(b))  { db = b->f; unrefexp(b); }
-        else { unrefexp(b); RUNTIME_ERR("Illegal value in /"); }
-        if (db == 0) RUNTIME_ERR("Illegal division by 0");
-        PUSH(make_floatf(da / db));
-      }
-      break;
-    }
-
-    case OP_LT: case OP_GT: case OP_LE: case OP_GE: {
-      exp_t *b = POP(), *a = POP();
-      int r;
-      if (isnumber(a) && isnumber(b)) {
-        /* Integer compare directly — avoids the (int64 − int64) cast to
-           double, which would overflow at the 61-bit fixnum limits. */
-        int64_t ai = FIX_VAL(a), bi = FIX_VAL(b);
-        r = (op == OP_LT) ? ai <  bi :
-            (op == OP_GT) ? ai >  bi :
-            (op == OP_LE) ? ai <= bi : ai >= bi;
-      } else {
-        double da, db;
-        if      (isnumber(a)) da = (double)FIX_VAL(a);
-        else if (isfloat(a))  da = a->f;
-        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in compare"); }
-        if      (isnumber(b)) db = (double)FIX_VAL(b);
-        else if (isfloat(b))  db = b->f;
-        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in compare"); }
-        r = (op == OP_LT) ? da <  db :
-            (op == OP_GT) ? da >  db :
-            (op == OP_LE) ? da <= db : da >= db;
-      }
-      unrefexp(a); unrefexp(b);
-      PUSH(r ? TRUE_EXP : NIL_EXP);
-      break;
-    }
-
-    case OP_IS: {
-      exp_t *b = POP(), *a = POP();
-      int r = isequal(a, b);
-      unrefexp(a); unrefexp(b);
-      PUSH(r ? TRUE_EXP : NIL_EXP);
-      break;
-    }
-    case OP_ISO: {
-      exp_t *b = POP(), *a = POP();
-      int r = isoequal(a, b);
-      unrefexp(a); unrefexp(b);
-      PUSH(r ? TRUE_EXP : NIL_EXP);
-      break;
-    }
-    case OP_NOT: {
-      exp_t *a = POP();
-      int r = !istrue(a);
-      unrefexp(a);
-      PUSH(r ? TRUE_EXP : NIL_EXP);
-      break;
-    }
-
-    case OP_JUMP: {
-      int16_t off = READ_I16;
-      pc += off;
-      break;
-    }
-    case OP_BR_IF_FALSE: {
-      int16_t off = READ_I16;
-      exp_t *a = POP();
-      if (!istrue(a)) pc += off;
-      unrefexp(a);
-      break;
-    }
-    case OP_BR_IF_TRUE: {
-      int16_t off = READ_I16;
-      exp_t *a = POP();
-      if (istrue(a)) pc += off;
-      unrefexp(a);
-      break;
-    }
-
-    case OP_TAIL_SELF: {
-      /* Self-tail: rebind inline slots from the top of the operand
-         stack, keep keys as-is (same fn → same params), jump to PC 0. */
-      uint8_t n = READ_U8;
-      int base = sp - n;
-      int i;
-      for (i = 0; i < env->n_inline; i++) unrefexp(env->inline_vals[i]);
-      env->n_inline = n <= ENV_INLINE_SLOTS ? n : ENV_INLINE_SLOTS;
-      for (i = 0; i < env->n_inline; i++) env->inline_vals[i] = stack[base + i];
-      for (; i < n; i++) unrefexp(stack[base + i]);
-      sp = base;
-      pc = 0;
-      break;
-    }
-
-    case OP_CALL: {
-      uint8_t n = READ_U8;
-      int base = sp - n;
-      exp_t *callee = stack[base - 1];
-      exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
-      sp = base - 1;
-      unrefexp(callee);
-      if (ret && iserror(ret)) { while (sp > 0) unrefexp(POP()); return ret; }
-      if (!ret) ret = NIL_EXP;
-      PUSH(ret);
-      break;
-    }
-
-    case OP_HALT:
-    default:
-      RUNTIME_ERR("Bytecode: bad opcode");
-    }
+l_ret: {
+    exp_t *r = POP();
+    while (sp > 0) unrefexp(POP());
+    return r;
   }
+
+l_pop:
+  unrefexp(POP());
+  NEXT;
+
+l_load_fix: {
+    int16_t v = READ_I16;
+    PUSH(MAKE_FIX((int64_t)v));
+    NEXT;
+  }
+l_load_const: {
+    uint8_t idx = READ_U8;
+    PUSH(refexp(consts[idx]));
+    NEXT;
+  }
+l_load_slot: {
+    uint8_t idx = READ_U8;
+    PUSH(refexp(env->inline_vals[idx]));
+    NEXT;
+  }
+l_load_global: {
+    uint8_t idx = READ_U8;
+    exp_t *v = lookup(consts[idx], env);
+    if (!v) RUNTIME_ERR("Unbound variable");
+    PUSH(v);
+    NEXT;
+  }
+
+  /* Numeric binary op helpers: two macros fold the float/coerce boilerplate. */
+#define COERCE_TO_DOUBLE(v, out, opname) do {                       \
+    if      (isnumber(v)) (out) = (double)FIX_VAL(v);               \
+    else if (isfloat(v))  { (out) = (v)->f; unrefexp(v); }          \
+    else { unrefexp(a); unrefexp(b); RUNTIME_ERR(opname); }         \
+  } while (0)
+#define BIN_ARITH(intop, flop, opname) do {                         \
+    exp_t *b = POP(), *a = POP();                                   \
+    if (isnumber(a) && isnumber(b)) {                               \
+      PUSH(MAKE_FIX(FIX_VAL(a) intop FIX_VAL(b)));                  \
+    } else {                                                        \
+      double da, db;                                                \
+      COERCE_TO_DOUBLE(a, da, "Illegal value in " opname);          \
+      COERCE_TO_DOUBLE(b, db, "Illegal value in " opname);          \
+      PUSH(make_floatf(da flop db));                                \
+    }                                                               \
+  } while (0)
+
+l_add: BIN_ARITH(+, +, "+"); NEXT;
+l_sub: BIN_ARITH(-, -, "-"); NEXT;
+l_mul: BIN_ARITH(*, *, "*"); NEXT;
+l_div: {
+    exp_t *b = POP(), *a = POP();
+    if (isnumber(a) && isnumber(b)) {
+      int64_t bb = FIX_VAL(b);
+      if (bb == 0) RUNTIME_ERR("Illegal division by 0");
+      PUSH(MAKE_FIX(FIX_VAL(a) / bb));
+    } else {
+      double da, db;
+      COERCE_TO_DOUBLE(a, da, "Illegal value in /");
+      COERCE_TO_DOUBLE(b, db, "Illegal value in /");
+      if (db == 0) RUNTIME_ERR("Illegal division by 0");
+      PUSH(make_floatf(da / db));
+    }
+    NEXT;
+  }
+
+  /* Integer compares on two fixnums skip the cast-to-double step
+     (which would overflow at 61-bit boundaries). Mixed-type paths
+     have a/b already unref'd by COERCE_TO_DOUBLE — fixnums are
+     immediates and never need unref either, so no trailing cleanup. */
+#define CMP_OP(intcmp, flcmp) do {                                  \
+    exp_t *b = POP(), *a = POP();                                   \
+    int r;                                                          \
+    if (isnumber(a) && isnumber(b)) {                               \
+      r = FIX_VAL(a) intcmp FIX_VAL(b);                             \
+    } else {                                                        \
+      double da, db;                                                \
+      COERCE_TO_DOUBLE(a, da, "Illegal value in compare");          \
+      COERCE_TO_DOUBLE(b, db, "Illegal value in compare");          \
+      r = da flcmp db;                                              \
+    }                                                               \
+    PUSH(r ? TRUE_EXP : NIL_EXP);                                   \
+  } while (0)
+
+l_lt: CMP_OP(<,  <);  NEXT;
+l_gt: CMP_OP(>,  >);  NEXT;
+l_le: CMP_OP(<=, <=); NEXT;
+l_ge: CMP_OP(>=, >=); NEXT;
+
+l_is: {
+    exp_t *b = POP(), *a = POP();
+    int r = isequal(a, b);
+    unrefexp(a); unrefexp(b);
+    PUSH(r ? TRUE_EXP : NIL_EXP);
+    NEXT;
+  }
+l_iso: {
+    exp_t *b = POP(), *a = POP();
+    int r = isoequal(a, b);
+    unrefexp(a); unrefexp(b);
+    PUSH(r ? TRUE_EXP : NIL_EXP);
+    NEXT;
+  }
+l_not: {
+    exp_t *a = POP();
+    int r = !istrue(a);
+    unrefexp(a);
+    PUSH(r ? TRUE_EXP : NIL_EXP);
+    NEXT;
+  }
+
+l_jump: {
+    int16_t off = READ_I16;
+    pc += off;
+    NEXT;
+  }
+l_br_if_false: {
+    int16_t off = READ_I16;
+    exp_t *a = POP();
+    if (!istrue(a)) pc += off;
+    unrefexp(a);
+    NEXT;
+  }
+l_br_if_true: {
+    int16_t off = READ_I16;
+    exp_t *a = POP();
+    if (istrue(a)) pc += off;
+    unrefexp(a);
+    NEXT;
+  }
+
+l_tail_self: {
+    /* Self-tail: rebind inline slots from the top of the operand
+       stack, keep keys as-is (same fn → same params), jump to PC 0. */
+    uint8_t n = READ_U8;
+    int base = sp - n;
+    int i;
+    for (i = 0; i < env->n_inline; i++) unrefexp(env->inline_vals[i]);
+    env->n_inline = n <= ENV_INLINE_SLOTS ? n : ENV_INLINE_SLOTS;
+    for (i = 0; i < env->n_inline; i++) env->inline_vals[i] = stack[base + i];
+    for (; i < n; i++) unrefexp(stack[base + i]);
+    sp = base;
+    pc = 0;
+    NEXT;
+  }
+
+l_call: {
+    uint8_t n = READ_U8;
+    int base = sp - n;
+    exp_t *callee = stack[base - 1];
+    exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
+    sp = base - 1;
+    unrefexp(callee);
+    if (ret && iserror(ret)) { while (sp > 0) unrefexp(POP()); return ret; }
+    if (!ret) ret = NIL_EXP;
+    PUSH(ret);
+    NEXT;
+  }
+
+#undef BIN_ARITH
+#undef CMP_OP
+#undef COERCE_TO_DOUBLE
+#undef NEXT
 #undef PUSH
 #undef POP
 #undef READ_U8

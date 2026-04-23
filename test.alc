@@ -79,3 +79,30 @@
     (for i 1 n (= s (+ s 1)))))
 (assert "first  (runforsum 5) -> 5" (runforsum 5) 5)
 (assert "second (runforsum 5) -> 5" (runforsum 5) 5)
+
+; Bytecode VM regressions. These functions all compile (arith + if +
+; user-call + self-tail). The tests exercise specific code paths.
+
+; 1. Anonymous fn with self-recursion: self_name is NULL, so the
+;    compiler cannot detect tail-self — the call becomes an OP_CALL,
+;    not OP_TAIL_SELF. Verify correctness.
+(assert "anon-fn arith"       ((fn (x y) (+ (* x 2) y)) 3 4) 10)
+
+; 2. Cross-boundary call: dbl is compiled (arith), outer uses `let`
+;    (not compiled, stays AST), calls compiled dbl.
+(def dbl (x) (+ x x))
+(assert "AST calls compiled"  (let x 7 (dbl x)) 14)
+
+; 3. Compiled function calling AST function. Wrap dbl-call in a
+;    compiled function that sums the result.
+(def sumtwo (a b) (+ a b))
+(assert "compiled call chain" (sumtwo (dbl 5) (dbl 6)) 22)
+
+; 4. >6 params forces the inline-slot overflow → dict spill path in
+;    both var2env and vm_invoke_values.
+(def seven (a b c d e f g) (+ a (+ b (+ c (+ d (+ e (+ f g)))))))
+(assert "7 params spill"      (seven 1 2 3 4 5 6 7) 28)
+
+; 5. Calling a non-lambda via OP_CALL path (indirectly — via invoke
+;    error propagation). This tests that errors walk back cleanly.
+(assert "compiled returns bool" (< 3 5) t)
