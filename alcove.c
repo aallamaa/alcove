@@ -25,6 +25,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <assert.h>
 //#include <jemalloc/jemalloc.h>
 #include "alcove.h"
 
@@ -233,12 +234,15 @@ inline env_t * ref_env(env_t *env){
 
 inline env_t * make_env(env_t *rootenv)
 {
+  /* No memset here: destroy_env leaves reused arena slots with the
+     fields that could carry stale state (callingfnc, d, n_inline)
+     already cleared. Fresh arena slots (first use) are BSS-zeroed.
+     Heap-fallback slots come from memalloc which calloc's. Saves a
+     ~128-byte store per call — the biggest per-call cost on fib. */
   env_t *newenv;
   if (env_arena_sp < env_arena_end) {
     newenv = env_arena_sp++;
-    memset(newenv, 0, sizeof(env_t));
   } else {
-    /* Arena exhausted (extremely deep recursion). Fall back to heap. */
     newenv = memalloc(1, sizeof(env_t));
   }
   newenv->root = ref_env(rootenv);
@@ -250,25 +254,22 @@ inline env_t * make_env(env_t *rootenv)
 inline void *destroy_env(env_t *env)
 {
   /* Iterative release — each env holds a ref to its parent via make_env/ref_env.
-     Recursing would blow the C stack on deep call chains. */
+     Recursing would blow the C stack on deep call chains.
+     Also scrubs the fields that would carry stale state into a reused
+     arena slot, so make_env can skip the wholesale memset. */
   while (env) {
     env_t *parent = env->root;
     if (REFCOUNT_DEC(&env->nref) > 0) break;
-    /* Release inline-slot values. Keys are borrowed; never free them. */
     {
       int i;
       for (i=0; i<env->n_inline; i++) unrefexp(env->inline_vals[i]);
     }
-    if (env->d)
-      destroy_dict(env->d);
-    if (env->callingfnc)
-      unrefexp(env->callingfnc);
-    /* Arena envs: roll the bump pointer back (LIFO). Non-arena envs
-       came from the heap fallback — return them normally. */
+    env->n_inline = 0;
+    if (env->d) { destroy_dict(env->d); env->d = NULL; }
+    if (env->callingfnc) { unrefexp(env->callingfnc); env->callingfnc = NULL; }
+    /* Arena envs: roll the bump pointer back (LIFO). Heap-fallback
+       envs return to free(). */
     if (IS_ARENA_ENV(env)) {
-      /* Defensive: only roll back if env sits at the current top. If
-         something has upset LIFO order (shouldn't happen — we have no
-         closures), leave the slot as dead space. */
       if (env + 1 == env_arena_sp) env_arena_sp = env;
     } else {
       free(env);
@@ -2724,12 +2725,18 @@ exp_t *vm_run(exp_t *fn, env_t *env)
     [OP_CALL]         = &&l_call,
     [OP_TAIL_SELF]    = &&l_tail_self,
   };
+#ifndef NDEBUG
+  /* Catches "added an opcode but forgot to initialize dispatch[]" —
+     a designated-init gap silently leaves a slot NULL and would jump
+     to 0 on that op. One-time cost at vm_run entry; NDEBUG strips it. */
+  { int _i; for (_i = 0; _i < OP_MAX; _i++) assert(dispatch[_i] != NULL); }
+#endif
 #define NEXT goto *dispatch[code[pc++]]
 
   NEXT;
 
 l_halt:
-  RUNTIME_ERR("Bytecode: bad opcode");
+  RUNTIME_ERR("Bytecode: OP_HALT reached (compiler bug)");
 
 l_ret: {
     exp_t *r = POP();
@@ -2764,27 +2771,30 @@ l_load_global: {
     NEXT;
   }
 
-  /* Numeric binary op helpers: two macros fold the float/coerce boilerplate. */
+  /* Numeric binary op helpers. COERCE_TO_DOUBLE implicitly references
+     `a` and `b` in its error path so both operands get unref'd before
+     we jump to the error return — not reusable outside BIN_ARITH /
+     CMP_OP sites that name their operands `a` and `b`. */
 #define COERCE_TO_DOUBLE(v, out, opname) do {                       \
     if      (isnumber(v)) (out) = (double)FIX_VAL(v);               \
     else if (isfloat(v))  { (out) = (v)->f; unrefexp(v); }          \
     else { unrefexp(a); unrefexp(b); RUNTIME_ERR(opname); }         \
   } while (0)
-#define BIN_ARITH(intop, flop, opname) do {                         \
+#define BIN_ARITH(op, opname) do {                                  \
     exp_t *b = POP(), *a = POP();                                   \
     if (isnumber(a) && isnumber(b)) {                               \
-      PUSH(MAKE_FIX(FIX_VAL(a) intop FIX_VAL(b)));                  \
+      PUSH(MAKE_FIX(FIX_VAL(a) op FIX_VAL(b)));                     \
     } else {                                                        \
       double da, db;                                                \
       COERCE_TO_DOUBLE(a, da, "Illegal value in " opname);          \
       COERCE_TO_DOUBLE(b, db, "Illegal value in " opname);          \
-      PUSH(make_floatf(da flop db));                                \
+      PUSH(make_floatf(da op db));                                  \
     }                                                               \
   } while (0)
 
-l_add: BIN_ARITH(+, +, "+"); NEXT;
-l_sub: BIN_ARITH(-, -, "-"); NEXT;
-l_mul: BIN_ARITH(*, *, "*"); NEXT;
+l_add: BIN_ARITH(+, "+"); NEXT;
+l_sub: BIN_ARITH(-, "-"); NEXT;
+l_mul: BIN_ARITH(*, "*"); NEXT;
 l_div: {
     exp_t *b = POP(), *a = POP();
     if (isnumber(a) && isnumber(b)) {
