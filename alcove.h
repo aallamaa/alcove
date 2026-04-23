@@ -169,8 +169,10 @@ typedef enum {
      shapes on fib/fact/countdown. */
   OP_SLOT_ADD_FIX,   /* u8 slot, i16 imm → push inline_vals[slot] + imm */
   OP_SLOT_SUB_FIX,   /* u8 slot, i16 imm → push inline_vals[slot] - imm */
-  OP_SLOT_LT_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] < imm) */
+  OP_SLOT_LT_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] <  imm) */
   OP_SLOT_LE_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */
+  OP_SLOT_GT_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */
+  OP_SLOT_GE_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */
 
   OP_MAX
 } alc_op;

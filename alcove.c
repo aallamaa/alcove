@@ -2562,6 +2562,8 @@ static int fuse_slot_fix(int op) {
     case OP_SUB: return OP_SLOT_SUB_FIX;
     case OP_LT:  return OP_SLOT_LT_FIX;
     case OP_LE:  return OP_SLOT_LE_FIX;
+    case OP_GT:  return OP_SLOT_GT_FIX;
+    case OP_GE:  return OP_SLOT_GE_FIX;
     default:     return 0;
   }
 }
@@ -3002,6 +3004,8 @@ tail_reentry:
     [OP_SLOT_SUB_FIX] = &&l_slot_sub_fix,
     [OP_SLOT_LT_FIX]  = &&l_slot_lt_fix,
     [OP_SLOT_LE_FIX]  = &&l_slot_le_fix,
+    [OP_SLOT_GT_FIX]  = &&l_slot_gt_fix,
+    [OP_SLOT_GE_FIX]  = &&l_slot_ge_fix,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -3374,6 +3378,18 @@ l_slot_le_fix:
     PUSH(FIX_VAL(a) <= imm ? TRUE_EXP : NIL_EXP),
     PUSH(da <= (double)imm ? TRUE_EXP : NIL_EXP),
     "<=");
+  NEXT;
+l_slot_gt_fix:
+  SLOT_FIX_NUMERIC(
+    PUSH(FIX_VAL(a) >  imm ? TRUE_EXP : NIL_EXP),
+    PUSH(da >  (double)imm ? TRUE_EXP : NIL_EXP),
+    ">");
+  NEXT;
+l_slot_ge_fix:
+  SLOT_FIX_NUMERIC(
+    PUSH(FIX_VAL(a) >= imm ? TRUE_EXP : NIL_EXP),
+    PUSH(da >= (double)imm ? TRUE_EXP : NIL_EXP),
+    ">=");
   NEXT;
 
 #undef SLOT_FIX_NUMERIC
