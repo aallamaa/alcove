@@ -2423,8 +2423,12 @@ void bytecode_free(bytecode_t *bc) {
 typedef struct compiler_t {
   uint8_t *code;  int ncode;  int code_cap;
   exp_t  **consts; int nconsts; int consts_cap;
-  char    *param_names[ENV_INLINE_SLOTS];
+  /* slot_names[0..nparams) = lambda params; slot_names[nparams..nslots)
+     = let/with-bound names. Scope-managed as a stack. */
+  char    *slot_names[ENV_INLINE_SLOTS];
   int      nparams;
+  int      nslots;      /* current total: nparams + active let/with bindings */
+  int      nlet_depth;  /* >0 disables OP_TAIL_SELF (keys/slots mismatch) */
   const char *self_name; /* for self-tail-call detection; NULL in anon fn */
   int      failed;
 } compiler_t;
@@ -2457,9 +2461,10 @@ static int add_const(compiler_t *c, exp_t *v) {
   return c->nconsts++;
 }
 static int find_slot(compiler_t *c, const char *name) {
+  /* Innermost (highest idx) binding wins so inner let shadows outer. */
   int i;
-  for (i = 0; i < c->nparams; i++)
-    if (strcmp(c->param_names[i], name) == 0) return i;
+  for (i = c->nslots - 1; i >= 0; i--)
+    if (strcmp(c->slot_names[i], name) == 0) return i;
   return -1;
 }
 
@@ -2513,13 +2518,14 @@ static void compile_if(compiler_t *c, exp_t *form, int tail) {
 }
 
 static void compile_call(compiler_t *c, exp_t *form, int tail) {
-  /* Push head, then all args; emit OP_CALL (or OP_TAIL_SELF). */
+  /* Push head, then all args; emit OP_CALL (or OP_TAIL_SELF).
+     Tail-self is suppressed inside let/with bodies because OP_TAIL_SELF
+     rebinds inline_vals[0..n_inline] and assumes n_inline == n_params —
+     let/with-allocated slots violate that invariant. */
   exp_t *head = car(form);
   int nargs = 0;
   exp_t *a;
-  /* Self-tail-call detection: head is a symbol matching self_name, and
-     we're in tail position. */
-  int is_self_tail = tail && c->self_name &&
+  int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
                      is_ptr(head) && issymbol(head) &&
                      strcmp(head->ptr, c->self_name) == 0;
   if (!is_self_tail) {
@@ -2547,6 +2553,84 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
     compile_expr(c, a->content, 0);     if (c->failed) return;
     emit_u8(c, (uint8_t)op);
   }
+}
+
+/* (= sym val) — only when sym resolves to a local slot. Global / car /
+   cdr / string-index assignment stays in the tree-walker. */
+static void compile_assign(compiler_t *c, exp_t *form, int tail) {
+  (void)tail;
+  exp_t *key = cadr(form);
+  exp_t *val = caddr(form);
+  if (!is_ptr(key) || !issymbol(key)) { c->failed = 1; return; }
+  int slot = find_slot(c, key->ptr);
+  if (slot < 0) { c->failed = 1; return; }
+  compile_expr(c, val, 0); if (c->failed) return;
+  emit_u8(c, OP_STORE_SLOT); emit_u8(c, (uint8_t)slot);
+  /* STORE_SLOT re-pushes the stored value so (= x v) returns v. */
+}
+
+/* (let var val body) — single binding, evaluates body in extended scope.
+   Falls back to AST if slot count would exceed ENV_INLINE_SLOTS. */
+static void compile_let(compiler_t *c, exp_t *form, int tail) {
+  exp_t *var  = cadr(form);
+  exp_t *val  = caddr(form);
+  exp_t *body = cadddr(form);
+  if (!is_ptr(var) || !issymbol(var) || !body) { c->failed = 1; return; }
+  if (c->nslots >= ENV_INLINE_SLOTS) { c->failed = 1; return; }
+  int slot = c->nslots;
+  compile_expr(c, val, 0); if (c->failed) return;
+  emit_u8(c, OP_BIND_SLOT); emit_u8(c, (uint8_t)slot);
+  c->slot_names[slot] = (char*)var->ptr;
+  c->nslots++;
+  c->nlet_depth++;
+  compile_expr(c, body, tail); if (c->failed) return;
+  c->nlet_depth--;
+  c->nslots--;
+  /* Body's value is on the stack. Peek-unbind: swap top of stack with
+     the slot, but we only have POP/PUSH — cheapest is stash via a temp
+     dedicated op. Simpler: store body result into slot (STORE discards
+     old binding), emit LOAD_SLOT, emit UNBIND_SLOT — round-trip but
+     clean. Actually simpler yet: the binding's owning ref is still in
+     the slot; we can just emit UNBIND_SLOT which unrefs and NULLs it,
+     leaving the body result untouched on the stack. */
+  emit_u8(c, OP_UNBIND_SLOT); emit_u8(c, (uint8_t)slot);
+}
+
+/* (with (v1 e1 v2 e2 ...) body) — N parallel-like bindings then body.
+   In alcove's semantics, bindings evaluate left-to-right against the
+   enclosing env (each val doesn't see earlier v's in the same with,
+   matching the tree-walker's withcmd). */
+static void compile_with(compiler_t *c, exp_t *form, int tail) {
+  exp_t *pairs = cadr(form);
+  exp_t *body  = caddr(form);
+  if (!is_ptr(pairs) || !ispair(pairs) || !body) { c->failed = 1; return; }
+  /* Collect (var, val) pairs. */
+  int start_slot = c->nslots;
+  int nbindings = 0;
+  exp_t *p = pairs;
+  while (p) {
+    exp_t *var = p->content;
+    exp_t *nxt = p->next;
+    if (!nxt) { c->failed = 1; return; }
+    exp_t *val = nxt->content;
+    if (!is_ptr(var) || !issymbol(var)) { c->failed = 1; return; }
+    if (c->nslots >= ENV_INLINE_SLOTS) { c->failed = 1; return; }
+    compile_expr(c, val, 0); if (c->failed) return;
+    emit_u8(c, OP_BIND_SLOT); emit_u8(c, (uint8_t)c->nslots);
+    c->slot_names[c->nslots] = (char*)var->ptr;
+    c->nslots++;
+    nbindings++;
+    p = nxt->next;
+  }
+  c->nlet_depth++;
+  compile_expr(c, body, tail); if (c->failed) return;
+  c->nlet_depth--;
+  /* Unbind in reverse order. */
+  int i;
+  for (i = nbindings - 1; i >= 0; i--) {
+    emit_u8(c, OP_UNBIND_SLOT); emit_u8(c, (uint8_t)(start_slot + i));
+  }
+  c->nslots -= nbindings;
 }
 
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
@@ -2598,6 +2682,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (is_ptr(head) && issymbol(head)) {
     const char *s = (const char*)head->ptr;
     if (!strcmp(s, "if"))    { compile_if(c, e, tail); return; }
+    if (!strcmp(s, "let"))   { compile_let(c, e, tail); return; }
+    if (!strcmp(s, "with"))  { compile_with(c, e, tail); return; }
+    if (!strcmp(s, "="))     { compile_assign(c, e, tail); return; }
     if (!strcmp(s, "quote")) {
       exp_t *q = cadr(e);
       int k = add_const(c, q ? q : nil_singleton);
@@ -2644,8 +2731,9 @@ int compile_lambda(exp_t *fn) {
   for (p = params; p; p = p->next) {
     if (c.nparams >= ENV_INLINE_SLOTS) { c.failed = 1; break; }
     if (!is_ptr(p->content) || !issymbol(p->content)) { c.failed = 1; break; }
-    c.param_names[c.nparams++] = (char*)p->content->ptr;
+    c.slot_names[c.nparams++] = (char*)p->content->ptr;
   }
+  c.nslots = c.nparams;
 
   /* Walk body list: each expression, pop between, except the last. */
   exp_t *b;
@@ -2713,6 +2801,9 @@ exp_t *vm_run(exp_t *fn, env_t *env)
     [OP_LOAD_CONST]   = &&l_load_const,
     [OP_LOAD_SLOT]    = &&l_load_slot,
     [OP_LOAD_GLOBAL]  = &&l_load_global,
+    [OP_STORE_SLOT]   = &&l_store_slot,
+    [OP_BIND_SLOT]    = &&l_bind_slot,
+    [OP_UNBIND_SLOT]  = &&l_unbind_slot,
     [OP_ADD]          = &&l_add,
     [OP_SUB]          = &&l_sub,
     [OP_MUL]          = &&l_mul,
@@ -2773,6 +2864,41 @@ l_load_global: {
     exp_t *v = lookup(consts[idx], env);
     if (!v) RUNTIME_ERR("Unbound variable");
     PUSH(v);
+    NEXT;
+  }
+
+l_store_slot: {
+    /* (= local val): replace an existing slot's value. */
+    uint8_t idx = READ_U8;
+    exp_t *v = POP();
+    unrefexp(env->inline_vals[idx]);
+    env->inline_vals[idx] = v;
+    /* Leave the updated value on the stack as the expression's result.
+       (= ...) returns the assigned value. */
+    PUSH(refexp(v));
+    NEXT;
+  }
+l_bind_slot: {
+    /* let/with entry: allocate a new inline slot and bump n_inline if
+       this is a fresh position. Key already set by the compiler via
+       inline_keys at an earlier BIND (not needed here — lookups go
+       through compile-time slot resolution, not inline_keys scan). */
+    uint8_t idx = READ_U8;
+    exp_t *v = POP();
+    /* Slot is fresh (compiler guarantees no prior BIND at same idx
+       without intervening UNBIND). No old value to unref. */
+    env->inline_vals[idx] = v;
+    if (idx >= env->n_inline) env->n_inline = idx + 1;
+    NEXT;
+  }
+l_unbind_slot: {
+    /* let/with exit: release the binding. destroy_env would catch any
+       leftover refs via n_inline, but we explicitly clear here so the
+       slot is reusable for subsequent lets. */
+    uint8_t idx = READ_U8;
+    unrefexp(env->inline_vals[idx]);
+    env->inline_vals[idx] = NULL;
+    if (idx + 1 == env->n_inline) env->n_inline = idx;
     NEXT;
   }
 

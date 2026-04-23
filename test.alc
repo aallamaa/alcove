@@ -113,3 +113,20 @@
 (def vmerr (x) (/ x 0))
 (vmerr 5)
 (assert "recovery after VM error" 42 42)
+
+; 7. Phase-2 compiler — (= local val) on a param. Body should compile
+;    (OP_STORE_SLOT). Verify (= ...) returns the new value AND mutates.
+(def inc (n) (= n (+ n 1)))
+(assert "(= param val) returns val"  (inc 5) 6)
+
+; 8. Phase-2 compiler — `let`. Inner let should shadow outer binding.
+(assert "let basic"                  (let x 3 (+ x 4))            7)
+(assert "let uses caller scope"      ((fn (y) (let x 10 (+ x y))) 5) 15)
+(assert "nested let shadows"         (let x 1 (let x 2 x))        2)
+
+; 9. Phase-2 compiler — `with` (multi-binding).
+(assert "with 2 bindings"            (with (a 3 b 4) (+ a b))     7)
+(assert "with shadows"               (let a 1 (with (a 9) a))     9)
+
+; 10. let + mutation: assign into let-bound slot, then read.
+(assert "= into let slot"            (let c 10 (= c 20) c)        20)

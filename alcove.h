@@ -142,6 +142,9 @@ typedef enum {
   OP_LOAD_CONST,     /* u8 idx          → push refexp(consts[idx]) */
   OP_LOAD_SLOT,      /* u8 idx          → push refexp(inline_vals[idx]) */
   OP_LOAD_GLOBAL,    /* u8 idx (symbol) → lookup consts[idx] in env, push */
+  OP_STORE_SLOT,     /* u8 idx          → pop → inline_vals[idx] (unref old) */
+  OP_BIND_SLOT,      /* u8 idx          → pop → inline_vals[idx], bump n_inline */
+  OP_UNBIND_SLOT,    /* u8 idx          → unref + NULL inline_vals[idx] */
 
   OP_ADD, OP_SUB, OP_MUL, OP_DIV,
   OP_LT,  OP_GT,  OP_LE,  OP_GE,
