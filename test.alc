@@ -140,3 +140,11 @@
 (def fsum (n) (let s 0 (for i 1 n (= s (+ s i)))))
 (assert "compiled fsum 10 -> 55"     (fsum 10)                    55)
 (assert "compiled fsum 100 -> 5050"  (fsum 100)                   5050)
+
+; 12. Phase-3: cross-function tail calls trampoline in the VM.
+;     Mutual recursion between compiled functions runs in O(1) C stack.
+(def even? (n) (if (< n 1) t    (odd? (- n 1))))
+(def odd?  (n) (if (< n 1) nil  (even? (- n 1))))
+(assert "mutual even? 1000"          (even? 1000)                 t)
+(assert "mutual odd? 1001"           (odd? 1001)                  t)
+(assert "mutual deep 100k"           (even? 100000)               t)

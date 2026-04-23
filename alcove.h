@@ -156,6 +156,7 @@ typedef enum {
 
   OP_CALL,           /* u8 nargs        → [fn, a0..aN-1] → result */
   OP_TAIL_SELF,      /* u8 nargs        → rebind inline slots, PC=0 */
+  OP_TAIL_CALL,      /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to new fn */
 
   OP_MAX
 } alc_op;

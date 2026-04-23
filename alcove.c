@@ -2521,16 +2521,24 @@ static void compile_if(compiler_t *c, exp_t *form, int tail) {
 }
 
 static void compile_call(compiler_t *c, exp_t *form, int tail) {
-  /* Push head, then all args; emit OP_CALL (or OP_TAIL_SELF).
-     Tail-self is suppressed inside let/with bodies because OP_TAIL_SELF
-     rebinds inline_vals[0..n_inline] and assumes n_inline == n_params —
-     let/with-allocated slots violate that invariant. */
+  /* Emits one of three ops depending on context:
+       - OP_TAIL_SELF: same-fn tail call, rebinds inline slots in place.
+         Requires tail && self_name matches head && nlet_depth == 0
+         (the inline-slot invariant).
+       - OP_TAIL_CALL: other-fn tail call. VM tears down current env
+         and jumps to the target lambda with O(1) C stack growth.
+         Target must be resolvable at runtime as a lambda.
+       - OP_CALL: regular non-tail call (and the fallback when the
+         target might be an internal cmd — vm_invoke_values handles). */
   exp_t *head = car(form);
   int nargs = 0;
   exp_t *a;
   int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
                      is_ptr(head) && issymbol(head) &&
                      strcmp(head->ptr, c->self_name) == 0;
+  /* Cross-function tail call is safe regardless of nlet_depth:
+     OP_TAIL_CALL wholesale releases current env's inline slots. */
+  int is_cross_tail = tail && !is_self_tail;
   if (!is_self_tail) {
     compile_expr(c, head, 0);
     if (c->failed) return;
@@ -2541,8 +2549,9 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
     nargs++;
   }
   if (nargs > 255) { c->failed = 1; return; }
-  if (is_self_tail) { emit_u8(c, OP_TAIL_SELF); emit_u8(c, (uint8_t)nargs); }
-  else              { emit_u8(c, OP_CALL);      emit_u8(c, (uint8_t)nargs); }
+  if      (is_self_tail)  { emit_u8(c, OP_TAIL_SELF); emit_u8(c, (uint8_t)nargs); }
+  else if (is_cross_tail) { emit_u8(c, OP_TAIL_CALL); emit_u8(c, (uint8_t)nargs); }
+  else                    { emit_u8(c, OP_CALL);      emit_u8(c, (uint8_t)nargs); }
 }
 
 static void compile_arith(compiler_t *c, exp_t *form, int op) {
@@ -2852,22 +2861,34 @@ int compile_lambda(exp_t *fn) {
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
 
 /* Bytecode dispatch loop. Entered with `env` already populated (params
-   in inline slots). Returns an owned exp_t* (or NULL). */
+   in inline slots). Returns an owned exp_t* (or NULL).
+   OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
+   `fn_owned` tracks whether we took ownership of the post-tail fn (so
+   we can unref it on final return or error). */
 exp_t *vm_run(exp_t *fn, env_t *env)
 {
-  bytecode_t *bc = fn->bc;
-  uint8_t *code = bc->code;
-  exp_t **consts = bc->consts;
-
 #define VM_STACK_MAX 256
   exp_t *stack[VM_STACK_MAX];
-  int sp = 0;
-  int pc = 0;
+  bytecode_t *bc;
+  uint8_t *code;
+  exp_t **consts;
+  int sp;
+  int pc;
+  int fn_owned = 0;
+
+tail_reentry:
+  bc = fn->bc;
+  code = bc->code;
+  consts = bc->consts;
+  sp = 0;
+  pc = 0;
 
 #define RUNTIME_ERR(msg) do {                                        \
+    exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, msg);          \
     int _i;                                                          \
     for (_i = 0; _i < sp; _i++) unrefexp(stack[_i]);                 \
-    return error(ERROR_ILLEGAL_VALUE, fn, env, msg);                 \
+    if (fn_owned) unrefexp(fn);                                      \
+    return _err;                                                     \
   } while (0)
 #define PUSH(v)   do {                                               \
     if (sp >= VM_STACK_MAX) RUNTIME_ERR("VM stack overflow");        \
@@ -2908,6 +2929,7 @@ exp_t *vm_run(exp_t *fn, env_t *env)
     [OP_BR_IF_TRUE]   = &&l_br_if_true,
     [OP_CALL]         = &&l_call,
     [OP_TAIL_SELF]    = &&l_tail_self,
+    [OP_TAIL_CALL]    = &&l_tail_call,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -2925,6 +2947,7 @@ l_halt:
 l_ret: {
     exp_t *r = POP();
     while (sp > 0) unrefexp(POP());
+    if (fn_owned) unrefexp(fn);
     return r;
   }
 
@@ -3117,10 +3140,88 @@ l_call: {
     exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
     sp = base - 1;
     unrefexp(callee);
-    if (ret && iserror(ret)) { while (sp > 0) unrefexp(POP()); return ret; }
+    if (ret && iserror(ret)) {
+      while (sp > 0) unrefexp(POP());
+      if (fn_owned) unrefexp(fn);
+      return ret;
+    }
     if (!ret) ret = NIL_EXP;
     PUSH(ret);
     NEXT;
+  }
+
+l_tail_call: {
+    /* Cross-function tail call: release the current env's bindings,
+       rebind with new fn's params, and `goto tail_reentry` so the
+       same vm_run invocation runs the new bytecode. O(1) C stack
+       growth across tail hops.
+       If the target isn't compiled, fall back to vm_invoke_values —
+       we lose TCO for that hop but stay correct. */
+    uint8_t n = READ_U8;
+    int base = sp - n;
+    exp_t *new_fn = stack[base - 1];
+
+    if (!is_ptr(new_fn) || !islambda(new_fn)) {
+      sp = base - 1;
+      unrefexp(new_fn);
+      RUNTIME_ERR("OP_TAIL_CALL: not a lambda");
+    }
+
+    if (!(new_fn->flags & FLAG_COMPILED)) {
+      /* Non-compiled target — one C-stack frame, then return. */
+      exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
+      sp = base - 1;
+      unrefexp(new_fn);
+      while (sp > 0) unrefexp(POP());
+      if (fn_owned) unrefexp(fn);
+      return ret;
+    }
+
+    /* Compiled target: stash args, unwind, rebind, jump. */
+    if (n > ENV_INLINE_SLOTS) {
+      int i; for (i = 0; i < n; i++) unrefexp(stack[base + i]);
+      sp = base - 1;
+      unrefexp(new_fn);
+      RUNTIME_ERR("OP_TAIL_CALL: too many args");
+    }
+    exp_t *args_buf[ENV_INLINE_SLOTS];
+    { int i; for (i = 0; i < n; i++) args_buf[i] = stack[base + i]; }
+    sp = base - 1;   /* drop args */
+    /* stack[base-1] (new_fn slot) is above sp; we've taken ownership */
+
+    /* Release current env's inline slots + any dict. */
+    { int i; for (i = 0; i < env->n_inline; i++) unrefexp(env->inline_vals[i]); }
+    env->n_inline = 0;
+    if (env->d) { destroy_dict(env->d); env->d = NULL; }
+
+    /* Bind new args to new_fn's params. */
+    exp_t *p = new_fn->content;
+    int i = 0;
+    while (p && i < n) {
+      if (!is_ptr(p->content) || !issymbol(p->content)) {
+        int j; for (j = i; j < n; j++) unrefexp(args_buf[j]);
+        unrefexp(new_fn);
+        if (fn_owned) unrefexp(fn);
+        return error(ERROR_ILLEGAL_VALUE, fn, env, "OP_TAIL_CALL: bad param");
+      }
+      if (env->n_inline < ENV_INLINE_SLOTS) {
+        env->inline_keys[env->n_inline] = (char*)p->content->ptr;
+        env->inline_vals[env->n_inline] = args_buf[i];
+        env->n_inline++;
+      } else {
+        if (!env->d) env->d = create_dict();
+        set_get_keyval_dict(env->d, p->content->ptr, args_buf[i]);
+        unrefexp(args_buf[i]);
+      }
+      p = p->next; i++;
+    }
+    while (i < n) unrefexp(args_buf[i++]);
+
+    /* Swap in new_fn and re-enter. */
+    if (fn_owned) unrefexp(fn);
+    fn = new_fn;
+    fn_owned = 1;
+    goto tail_reentry;
   }
 
 #undef BIN_ARITH
