@@ -6,6 +6,11 @@ speed:
 # Correctness is identical as long as nothing threads the interpreter.
 mono:
 	$(CC) -Wall -W  -O3 -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c -lm
+# arm64-only JIT (proof-of-concept). Compiles a narrow set of lambda
+# shapes (constant return, (+ n K), (- n K) for fixnum K in u12 range)
+# directly to native code. Falls back to bytecode for everything else.
+jit:
+	$(CC) -Wall -W  -O3 -DALCOVE_JIT=1 -o alcove alcove.c -lm
 # -Os removed
 test: parser
 	./alcove test.alc
@@ -20,4 +25,4 @@ benchmark-compare:
 clean:
 	rm -f alcove
 
-.PHONY: parser speed mono test benchmark benchmark-mono benchmark-compare clean
+.PHONY: parser speed mono jit test benchmark benchmark-mono benchmark-compare clean

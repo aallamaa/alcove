@@ -182,11 +182,21 @@ typedef struct bytecode_t {
   int       ncode;
   exp_t   **consts;   /* owned refs — unref on free */
   int       nconsts;
+  /* Optional native-code fast path. When set, vm_invoke_values calls
+     this directly instead of running the dispatch loop. Returns the
+     result exp_t* in x0. Populated by jit_compile() when ALCOVE_JIT is
+     enabled and the bytecode matches a recognized shape. */
+  exp_t  *(*jit)(struct env_t *env);
+  void     *jit_mem;     /* mmap'd page; freed via munmap on bytecode_free */
+  size_t    jit_size;
 } bytecode_t;
 
 void     bytecode_free(bytecode_t *bc);
 int      compile_lambda(exp_t *fn);                      /* 1 on success, 0 on fallback */
 exp_t   *vm_run(exp_t *fn, struct env_t *env);           /* runs bytecode; returns owned */
+#ifdef ALCOVE_JIT
+int      jit_compile(bytecode_t *bc);                    /* 1 if JIT'd, 0 otherwise */
+#endif
 
 
 typedef struct exp_tfunc {

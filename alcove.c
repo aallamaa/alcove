@@ -26,6 +26,13 @@
 #include <ctype.h>
 #include <math.h>
 #include <assert.h>
+#ifdef ALCOVE_JIT
+#include <sys/mman.h>
+#include <stddef.h>
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
+#endif
 //#include <jemalloc/jemalloc.h>
 #include "alcove.h"
 
@@ -2417,8 +2424,165 @@ void bytecode_free(bytecode_t *bc) {
   for (i = 0; i < bc->nconsts; i++) unrefexp(bc->consts[i]);
   free(bc->consts);
   free(bc->code);
+#ifdef ALCOVE_JIT
+  if (bc->jit_mem) munmap(bc->jit_mem, bc->jit_size);
+#endif
   free(bc);
 }
+
+#ifdef ALCOVE_JIT
+/* ---------------- JIT (arm64-only proof of concept) ----------------
+   Recognizes a narrow set of lambda body shapes and emits arm64
+   machine code that bypasses the bytecode dispatch loop entirely.
+   Currently handled (one-param lambdas only):
+     - LOAD_SLOT 0; RET                     →  identity      (n)
+     - LOAD_FIX K; RET                      →  constant      K
+     - LOAD_SLOT 0; LOAD_FIX K; ADD; RET    →  (+ n K) for K in int16
+     - LOAD_SLOT 0; LOAD_FIX K; SUB; RET    →  (- n K) for K in int16
+   Anything else: jit_compile returns 0; the bytecode interpreter
+   handles the call.
+   This is foundation work — copy-and-patch templates, broader op
+   coverage, and call-out support to alcove's runtime are next-session
+   work. The win here is the wiring: mmap, write-protect toggle on
+   Apple Silicon, instruction emission, and the dispatch hook in
+   vm_invoke_values. */
+
+#if !defined(__aarch64__)
+#error "ALCOVE_JIT currently requires arm64. Disable with -UALCOVE_JIT."
+#endif
+
+/* arm64 instruction encoders. All return uint32_t little-endian; arm64
+   is fixed-width 4-byte instructions. */
+
+/* LDR Xt, [Xn, #imm]   — imm is 8-byte aligned offset, 0..32760. */
+static uint32_t arm64_ldr_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 8) & 0xfff;
+  return 0xF9400000u | (imm12 << 10) | ((uint32_t)rn << 5) | (uint32_t)rt;
+}
+/* ADD Xd, Xn, #imm12 (no shift). */
+static uint32_t arm64_add_imm(int rd, int rn, int imm) {
+  return 0x91000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) | (uint32_t)rd;
+}
+/* SUB Xd, Xn, #imm12 (no shift). */
+static uint32_t arm64_sub_imm(int rd, int rn, int imm) {
+  return 0xD1000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) | (uint32_t)rd;
+}
+/* MOVZ Xd, #imm16, LSL #(hw*16) */
+static uint32_t arm64_movz(int rd, uint16_t imm, int hw) {
+  return 0xD2800000u | ((uint32_t)hw << 21) | ((uint32_t)imm << 5) | (uint32_t)rd;
+}
+/* MOVK Xd, #imm16, LSL #(hw*16) — keep other bits */
+static uint32_t arm64_movk(int rd, uint16_t imm, int hw) {
+  return 0xF2800000u | ((uint32_t)hw << 21) | ((uint32_t)imm << 5) | (uint32_t)rd;
+}
+/* RET (uses x30 by default). */
+static uint32_t arm64_ret(void) { return 0xD65F03C0u; }
+
+/* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs. */
+static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
+  int n = 0;
+  out[n++] = arm64_movz(rd, (uint16_t)(v & 0xffff), 0);
+  if ((v >> 16) & 0xffff) out[n++] = arm64_movk(rd, (uint16_t)((v >> 16) & 0xffff), 1);
+  if ((v >> 32) & 0xffff) out[n++] = arm64_movk(rd, (uint16_t)((v >> 32) & 0xffff), 2);
+  if ((v >> 48) & 0xffff) out[n++] = arm64_movk(rd, (uint16_t)((v >> 48) & 0xffff), 3);
+  return n;
+}
+
+static void *jit_alloc(size_t sz) {
+  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef __APPLE__
+  flags |= MAP_JIT;
+#endif
+  void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
+  return (p == MAP_FAILED) ? NULL : p;
+}
+static void jit_write_begin(void) {
+#ifdef __APPLE__
+  pthread_jit_write_protect_np(0);
+#endif
+}
+static void jit_write_end(void *p, size_t sz) {
+#ifdef __APPLE__
+  pthread_jit_write_protect_np(1);
+#endif
+  __builtin___clear_cache((char*)p, (char*)p + sz);
+}
+
+int jit_compile(bytecode_t *bc) {
+  if (!bc || bc->jit) return bc && bc->jit ? 1 : 0;
+  uint8_t *c = bc->code;
+
+  /* Identify the body shape. */
+  uint32_t insns[16];
+  int n = 0;
+
+  if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
+    /* (fn () K) — return MAKE_FIX(K). */
+    int16_t k = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
+    uint64_t tagged = ((uint64_t)(int64_t)k << 3) | 1;
+    n += emit_mov64(insns + n, 0, tagged);
+    insns[n++] = arm64_ret();
+  }
+  else if (bc->ncode == 3 && c[0] == OP_LOAD_SLOT && c[1] == 0 && c[2] == OP_RET) {
+    /* (fn (n) n) — return env->inline_vals[0]. */
+    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+    insns[n++] = arm64_ret();
+  }
+  else if (bc->ncode == 7 && c[0] == OP_LOAD_SLOT && c[1] == 0 &&
+           c[2] == OP_LOAD_FIX &&
+           (c[5] == OP_ADD || c[5] == OP_SUB) && c[6] == OP_RET) {
+    /* (fn (n) (op n K)) where K fits int16. ADD/SUB on a tagged
+       fixnum is just ±(K<<3): the low tag bit is preserved. */
+    int16_t k = (int16_t)((uint16_t)c[3] | ((uint16_t)c[4] << 8));
+    int delta = ((int)k) << 3;        /* fits because |K| <= 32767 */
+    if (delta < 0 || delta > 4095) return 0;  /* out of immediate range */
+    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+    insns[n++] = (c[5] == OP_ADD) ? arm64_add_imm(0, 0, delta)
+                                  : arm64_sub_imm(0, 0, delta);
+    insns[n++] = arm64_ret();
+  }
+  /* Also handle the slot-fix superinstructions that the compiler emits
+     today instead of the 3-op sequence. */
+  else if (bc->ncode == 5 &&
+           c[0] == OP_LOAD_SLOT && c[1] == 0 &&
+           (c[2] == OP_SLOT_ADD_FIX || c[2] == OP_SLOT_SUB_FIX) &&
+           0 /* would need to re-read slot/imm; defer */ ) {
+    return 0;
+  }
+  else if (bc->ncode == 5 && c[0] == OP_SLOT_ADD_FIX && c[1] == 0 && c[4] == OP_RET) {
+    int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+    int delta = ((int)k) << 3;
+    if (delta < 0 || delta > 4095) return 0;
+    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+    insns[n++] = arm64_add_imm(0, 0, delta);
+    insns[n++] = arm64_ret();
+  }
+  else if (bc->ncode == 5 && c[0] == OP_SLOT_SUB_FIX && c[1] == 0 && c[4] == OP_RET) {
+    int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+    int delta = ((int)k) << 3;
+    if (delta < 0 || delta > 4095) return 0;
+    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+    insns[n++] = arm64_sub_imm(0, 0, delta);
+    insns[n++] = arm64_ret();
+  }
+  else {
+    return 0;  /* shape not recognized */
+  }
+
+  size_t sz = (size_t)n * 4;
+  size_t pagesz = 4096;
+  size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
+  void *page = jit_alloc(mapsz);
+  if (!page) return 0;
+  jit_write_begin();
+  memcpy(page, insns, sz);
+  jit_write_end(page, sz);
+  bc->jit = (exp_t *(*)(env_t *))page;
+  bc->jit_mem = page;
+  bc->jit_size = mapsz;
+  return 1;
+}
+#endif /* ALCOVE_JIT */
 
 typedef struct compiler_t {
   uint8_t *code;  int ncode;  int code_cap;
@@ -2921,6 +3085,9 @@ int compile_lambda(exp_t *fn) {
   bc->consts = c.consts; bc->nconsts = c.nconsts;
   fn->bc = bc;
   fn->flags |= FLAG_COMPILED;
+#ifdef ALCOVE_JIT
+  jit_compile(bc);  /* opportunistic; no-op for shapes we don't recognize */
+#endif
   return 1;
 }
 
@@ -3442,6 +3609,10 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
 
   exp_t *ret;
   if (fn->flags & FLAG_COMPILED) {
+#ifdef ALCOVE_JIT
+    if (fn->bc->jit) ret = fn->bc->jit(newenv);
+    else
+#endif
     ret = vm_run(fn, newenv);
   } else {
     exp_t *body = fn->next->content;
@@ -3494,6 +3665,10 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
     /* Compiled body: cross-function tail calls lose TCO here (internal
        OP_TAIL_SELF still applies). */
     if (fn->flags & FLAG_COMPILED) {
+#ifdef ALCOVE_JIT
+      if (fn->bc->jit) ret = fn->bc->jit(newenv);
+      else
+#endif
       ret = vm_run(fn, newenv);
       destroy_env(newenv);
       unrefexp(fn);
