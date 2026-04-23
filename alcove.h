@@ -163,6 +163,15 @@ typedef enum {
   OP_CDR,            /* pop pair        → push cdr */
   OP_LIST,           /* u8 n            → pop n values → push list */
 
+  /* Fused "local ± small constant" / "local < constant" superinstructions.
+     Collapse LOAD_SLOT + LOAD_FIX + OP into one dispatch. Emitted by
+     the compiler's peephole for (- n 1), (< n 2), etc. — the hot-path
+     shapes on fib/fact/countdown. */
+  OP_SLOT_ADD_FIX,   /* u8 slot, i16 imm → push inline_vals[slot] + imm */
+  OP_SLOT_SUB_FIX,   /* u8 slot, i16 imm → push inline_vals[slot] - imm */
+  OP_SLOT_LT_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] < imm) */
+  OP_SLOT_LE_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */
+
   OP_MAX
 } alc_op;
 

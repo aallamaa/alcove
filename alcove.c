@@ -2554,15 +2554,46 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
   else                    { emit_u8(c, OP_CALL);      emit_u8(c, (uint8_t)nargs); }
 }
 
+/* Superinstruction fuse table — maps a plain binary op to its fused
+   slot-op-fix variant. Returns 0 when no fuse exists for this op. */
+static int fuse_slot_fix(int op) {
+  switch (op) {
+    case OP_ADD: return OP_SLOT_ADD_FIX;
+    case OP_SUB: return OP_SLOT_SUB_FIX;
+    case OP_LT:  return OP_SLOT_LT_FIX;
+    case OP_LE:  return OP_SLOT_LE_FIX;
+    default:     return 0;
+  }
+}
+
 static void compile_arith(compiler_t *c, exp_t *form, int op) {
   /* Binary left-fold: (+ a b c d) → a b + c + d + */
   exp_t *a = form->next;
   if (!a || !a->next) { c->failed = 1; return; }
-  compile_expr(c, a->content, 0);       if (c->failed) return;
-  compile_expr(c, a->next->content, 0); if (c->failed) return;
+  exp_t *arg1 = a->content;
+  exp_t *arg2 = a->next->content;
+
+  /* Peephole: exactly 2 args, arg1 is a local slot symbol, arg2 is a
+     fixnum fitting in int16. Emit one fused op instead of three. */
+  if (!a->next->next) {
+    int fused = fuse_slot_fix(op);
+    if (fused && is_ptr(arg1) && issymbol(arg1) && isnumber(arg2)) {
+      int slot = find_slot(c, arg1->ptr);
+      int64_t v = FIX_VAL(arg2);
+      if (slot >= 0 && v >= INT16_MIN && v <= INT16_MAX) {
+        emit_u8(c, (uint8_t)fused);
+        emit_u8(c, (uint8_t)slot);
+        emit_i16(c, (int16_t)v);
+        return;
+      }
+    }
+  }
+
+  compile_expr(c, arg1, 0); if (c->failed) return;
+  compile_expr(c, arg2, 0); if (c->failed) return;
   emit_u8(c, (uint8_t)op);
   for (a = a->next->next; a; a = a->next) {
-    compile_expr(c, a->content, 0);     if (c->failed) return;
+    compile_expr(c, a->content, 0); if (c->failed) return;
     emit_u8(c, (uint8_t)op);
   }
 }
@@ -2967,6 +2998,10 @@ tail_reentry:
     [OP_CAR]          = &&l_car,
     [OP_CDR]          = &&l_cdr,
     [OP_LIST]         = &&l_list,
+    [OP_SLOT_ADD_FIX] = &&l_slot_add_fix,
+    [OP_SLOT_SUB_FIX] = &&l_slot_sub_fix,
+    [OP_SLOT_LT_FIX]  = &&l_slot_lt_fix,
+    [OP_SLOT_LE_FIX]  = &&l_slot_le_fix,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -3301,6 +3336,47 @@ l_list: {
     PUSH(head);
     NEXT;
   }
+
+  /* Fused LOAD_SLOT + LOAD_FIX + op. Saves two dispatches and two
+     stack round-trips per fired op — the hot arithmetic shapes on
+     fib / countdown / etc. are all of this form. Fixnum slot is the
+     fast path; float falls back to the same semantics as the 3-op
+     sequence via COERCE_TO_DOUBLE. */
+#define SLOT_FIX_NUMERIC(body_int, body_flt, opname) do {           \
+    uint8_t idx = READ_U8;                                          \
+    int16_t imm = READ_I16;                                         \
+    exp_t *a = env->inline_vals[idx];                               \
+    if (isnumber(a)) { body_int; }                                  \
+    else if (isfloat(a)) { double da = a->f; (void)da; body_flt; }  \
+    else RUNTIME_ERR("Illegal value in " opname);                   \
+  } while (0)
+
+l_slot_add_fix:
+  SLOT_FIX_NUMERIC(
+    PUSH(MAKE_FIX(FIX_VAL(a) + imm)),
+    PUSH(make_floatf(da + (double)imm)),
+    "+");
+  NEXT;
+l_slot_sub_fix:
+  SLOT_FIX_NUMERIC(
+    PUSH(MAKE_FIX(FIX_VAL(a) - imm)),
+    PUSH(make_floatf(da - (double)imm)),
+    "-");
+  NEXT;
+l_slot_lt_fix:
+  SLOT_FIX_NUMERIC(
+    PUSH(FIX_VAL(a) <  imm ? TRUE_EXP : NIL_EXP),
+    PUSH(da <  (double)imm ? TRUE_EXP : NIL_EXP),
+    "<");
+  NEXT;
+l_slot_le_fix:
+  SLOT_FIX_NUMERIC(
+    PUSH(FIX_VAL(a) <= imm ? TRUE_EXP : NIL_EXP),
+    PUSH(da <= (double)imm ? TRUE_EXP : NIL_EXP),
+    "<=");
+  NEXT;
+
+#undef SLOT_FIX_NUMERIC
 
 #undef BIN_ARITH
 #undef CMP_OP
