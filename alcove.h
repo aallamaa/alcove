@@ -102,11 +102,10 @@ struct exp_t;
 struct env_t;
 typedef struct exp_t *lispCmd(struct exp_t *e,struct env_t *env);
 
-#define FLAG_TAILREC  1
-/* Symbol AST node carries a cached lookup result in its ->meta field.
-   Only set for resolutions into reserved_symbol (builtins) — those are
-   immutable at runtime so the cache never needs invalidation. */
-#define FLAG_RESOLVED 2
+#define FLAG_TAILREC    1
+/* Internal cmd is tail-aware: evaluate will expose in_tail_position to
+   it. Set on the EXP_INTERNAL via the lispProc flags column. */
+#define FLAG_TAIL_AWARE 2
 
 typedef struct exp_t {
   unsigned short int flags; /* 2 bytes --- bit 0 set to 1 for disk persistance */
@@ -247,18 +246,14 @@ exp_t *error(int errnum,exp_t *id,env_t *env,char *err_message, ...);
 exp_t *make_nil();   /* fresh heap pair (content=next=NULL) — for builders */
 exp_t *make_char(unsigned char c);
 exp_t *make_node(exp_t *node);
-exp_t *make_internal(lispCmd *cmd);
+exp_t *make_internal(lispCmd *cmd, int flags);
 exp_t *make_tree(exp_t *root,exp_t *node1);
 exp_t *make_fromstr(char *str,int length);
 exp_t *make_string(char *str,int length);
 exp_t *make_symbol(char *str,int length);
 
-/* ---------------- Canonical singletons ----------------
-   nil_singleton and true_singleton are allocated once at main startup
-   and treated as immortal — refexp/unrefexp short-circuit on them, so
-   no atomic traffic, no ever-freeing. Every (if …), (iso a b), etc.
-   that used to allocate a fresh NIL/TRUE now just returns the pointer.
-   Huge alloc reduction on control-flow-heavy code. */
+/* Canonical singletons — allocated once at main() startup; refexp /
+   unrefexp short-circuit on them so they never reach 0. */
 extern exp_t *nil_singleton;
 extern exp_t *true_singleton;
 #define NIL_EXP   (nil_singleton)
@@ -286,7 +281,6 @@ exp_t *lookup(exp_t *e,env_t *env);
 exp_t *updatebang(exp_t *key,env_t *env,exp_t *val);
 exp_t *escapereader(FILE *stream,token_t ** ptoken,int lastchar);
 exp_t *reader(FILE *stream,unsigned char clmacro,int keepwspace);
-exp_t *optimize(exp_t *e,env_t *env);
 exp_t *evaluate(exp_t *e,env_t *env);
 /* EVAL() — canonical borrowed→owned wrapper. evaluate() consumes its input ref,
    so calling it on a borrowed car/cadr/caddr pointer causes a premature free.

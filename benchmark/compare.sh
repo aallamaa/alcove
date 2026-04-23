@@ -15,17 +15,7 @@ echo "Building ST  (ALCOVE_SINGLE_THREADED=1) -> benchmark/bin/alcove-st ..."
 $CC -Wall -W -O3 -DALCOVE_SINGLE_THREADED=1 -o benchmark/bin/alcove-st alcove.c -lm
 
 cd benchmark
-
-now_ms() { "$PYTHON" -c 'import time; print(int(time.time()*1000))'; }
-best_of() {
-  local n="$1"; shift
-  local best=999999999 s e t
-  for _ in $(seq 1 "$n"); do
-    s=$(now_ms); "$@" >/dev/null 2>&1; e=$(now_ms)
-    t=$((e-s)); [ "$t" -lt "$best" ] && best=$t
-  done
-  echo "$best"
-}
+. ./lib.sh
 
 printf "%-22s %10s %10s %10s %10s\n" benchmark "mt(ms)" "st(ms)" "st/mt" "Δ"
 printf -- '-%.0s' {1..68}; echo

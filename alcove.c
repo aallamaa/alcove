@@ -39,23 +39,16 @@ exp_tfunc* exp_tfuncList[EXP_MAXSIZE];
 exp_t *nil_singleton = NULL;
 exp_t *true_singleton = NULL;
 
-/* ---------------- Tail-call position ----------------
-   Set to 1 whenever the evaluator is entering a subexpression that
-   appears in tail position of its enclosing function: the last body
-   expression of a lambda, the selected branch of `if`, etc. When a
-   lambda call is dispatched while this flag is set, we don't recurse
-   into a fresh invoke frame — we build a trampoline marker instead
-   and return it. The enclosing invoke detects the marker, tears down
-   its own frame, and re-enters with the new fn/args. Result: O(1) C
-   stack for tail-recursive code and a real speed win on call-heavy
-   workloads. */
+/* Set by invoke's body loop / ifcmd's selected-branch eval. When true,
+   evaluate returns a trampoline marker instead of recursing into
+   invoke, giving us O(1) C stack for tail-recursive code. */
 static int in_tail_position = 0;
 
 lispProc lispProcList[]={
   /* name, arity, flags, level, cmd*/
   {"verbose",2,0,0,verbosecmd},
   {"quote",2,0,0,quotecmd},
-  {"if",2,0,0,ifcmd},
+  {"if",2,FLAG_TAIL_AWARE,0,ifcmd},
   {"=",2,0,0,equalcmd},
   {"<",2,0,0,cmpcmd},
   {">",2,0,0,cmpcmd},
@@ -516,9 +509,10 @@ inline exp_t *make_node(exp_t *node){
   return cur;
 }
 
-inline exp_t *make_internal(lispCmd *cmd){
+inline exp_t *make_internal(lispCmd *cmd, int flags){
   exp_t *cur=make_nil();
   cur->type=EXP_INTERNAL;
+  cur->flags=flags;
   cur->fnc=cmd;
   return cur;
 }
@@ -1125,17 +1119,15 @@ inline exp_t *lookup(exp_t *e,env_t *env)
   char *key=e->ptr;
 
   /* Cache fast path: symbols previously resolved into reserved_symbol
-     (builtins like +, -, if, <, etc.) skip the hash lookup entirely.
-     The cached target lives forever in reserved_symbol, so borrowing
-     is safe. */
-  if (e->flags & FLAG_RESOLVED) {
+     (builtins like +, -, if, <, etc.) skip the hash lookup. On a
+     symbol, meta != NULL uniquely means "cached resolution" — the
+     lambda/macro meta strings only exist on their own exp_t types. */
+  if (e->meta) {
     return refexp((exp_t*)e->meta);
   }
 
   if ((ret=set_get_keyval_dict(reserved_symbol,key,NULL))) {
-    /* First resolution into a builtin — cache on the AST symbol node. */
-    e->meta  = (struct keyval_t*)ret->val;
-    e->flags |= FLAG_RESOLVED;
+    e->meta = (struct keyval_t*)ret->val;
     return refexp(ret->val);
   }
   else {
@@ -1378,9 +1370,7 @@ exp_t *quotecmd(exp_t *e, env_t *env)
 
 exp_t *ifcmd(exp_t *e, env_t *env)
 {
-  /* ifcmd is tail-aware: if we were called in tail position, the
-     selected branch is itself in tail position. Conditions are never
-     tail. */
+  /* Tail-aware: propagates in_tail_position to the selected branch. */
   int outer_tail = in_tail_position;
   exp_t *tmpexp, *tmpexp2;
   in_tail_position = 0;
@@ -1394,21 +1384,21 @@ exp_t *ifcmd(exp_t *e, env_t *env)
     unrefexp(tmpexp);
     tmpexp=refexp(caddr(e));
     unrefexp(e);
-    in_tail_position = outer_tail;  /* restore for branch */
+    in_tail_position = outer_tail;
     return evaluate(tmpexp,env);
   }
   else {
     unrefexp(tmpexp);
     if ((tmpexp=cdddr(e)))
       do {
-        in_tail_position = 0;  /* elif condition is not tail */
+        in_tail_position = 0;
         tmpexp2=EVAL(tmpexp->content, env);
         if ((!iserror(tmpexp2)) && (tmpexp->next)) {
           if (istrue(tmpexp2)) {
             unrefexp(tmpexp2);
             tmpexp2=refexp(cadr(tmpexp));
             unrefexp(e);
-            in_tail_position = outer_tail;  /* tail branch */
+            in_tail_position = outer_tail;
             return evaluate(tmpexp2,env);
           }
           if (!(tmpexp=cddr(tmpexp))) {
@@ -1569,6 +1559,7 @@ exp_t *pluscmd(exp_t *e, env_t *env)
 {
   int64_t sum_i=0;
   expfloat sum_f=0;
+  int saw_float=0;
   exp_t *c=cdr(e);
   exp_t *v;
   exp_t *v1=NULL;
@@ -1580,27 +1571,20 @@ exp_t *pluscmd(exp_t *e, env_t *env)
         else if issymbol(v1) v=evaluate(v1,env);
         else v=v1;
         if iserror(v) { ret = v; goto finish;}
-        if (sum_f){
+        if (saw_float){
           if (isnumber(v)) sum_f+=FIX_VAL(v);
           else if (isfloat(v)) sum_f+=v->f;
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
         else {
           if (isnumber(v)) sum_i+=FIX_VAL(v);
-          else if (isfloat(v)) { sum_f = v->f + sum_i; sum_i=0;}
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          else if (isfloat(v)) { sum_f = v->f + sum_i; sum_i=0; saw_float=1; }
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
+        unrefexp(v);
       }
   } while (c &&(c=c->next));
-  ret = (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+  ret = saw_float?make_floatf(sum_f):make_integeri(sum_i);
  finish:
   unrefexp(e);
   return ret;
@@ -1610,6 +1594,8 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
 {
   int64_t sum_i=1;
   expfloat sum_f=1;
+  int saw_float=0;
+  int saw_int=0;
   exp_t *c=cdr(e);
   exp_t *v;
   exp_t *v1=NULL;
@@ -1622,27 +1608,20 @@ exp_t *multiplycmd(exp_t *e, env_t *env)
         else if issymbol(v1) v=evaluate(v1,env);
         else v=v1;
         if iserror(v) { ret = v; goto finish;}
-        if (sum_f!=1){
+        if (saw_float){
           if (isnumber(v)) sum_f*=FIX_VAL(v);
           else if (isfloat(v)) sum_f*=v->f;
-          else {
-            ret =error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
         else {
-          if (isnumber(v)) { if (sum_i!=1) sum_i*=FIX_VAL(v); else sum_i=FIX_VAL(v); }
-          else if (isfloat(v)) { sum_f = v->f; if (sum_i!=1) {sum_f=sum_f*sum_i; sum_i=1;}}
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          if (isnumber(v)) { sum_i = saw_int ? sum_i*FIX_VAL(v) : FIX_VAL(v); saw_int=1; }
+          else if (isfloat(v)) { sum_f = saw_int ? v->f*sum_i : v->f; sum_i=1; saw_float=1; }
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
+        unrefexp(v);
       }
   } while (c &&(c=c->next));
-  ret= ((sum_f!=1)?make_floatf(sum_f):make_integeri(sum_i));
+  ret = saw_float?make_floatf(sum_f):make_integeri(sum_i);
  finish:
   unrefexp(e);
   return ret;
@@ -1652,6 +1631,7 @@ exp_t *minuscmd(exp_t *e, env_t *env)
 {
   int64_t sum_i=0;
   expfloat sum_f=0;
+  int saw_float=0;
   exp_t *c=cdr(e);
   exp_t *v;
   exp_t *v1=NULL;
@@ -1666,28 +1646,21 @@ exp_t *minuscmd(exp_t *e, env_t *env)
         else if issymbol(v1) v=evaluate(v1,env);
         else v=v1;
         if iserror(v) { unrefexp(e); return v; }
-        if (sum_f){
+        if (saw_float){
           if (isnumber(v)) sum_f-=FIX_VAL(v);
           else if (isfloat(v)) sum_f-=v->f;
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
         else {
-          if (isnumber(v)) { if (sum_i) sum_i-=FIX_VAL(v); else sum_i=FIX_VAL(v); }
-          else if (isfloat(v)) { if (sum_i) { sum_f = sum_i - (v->f);} else sum_f=v->f; sum_i=0; }
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          if (isnumber(v)) { if (i>1) sum_i-=FIX_VAL(v); else sum_i=FIX_VAL(v); }
+          else if (isfloat(v)) { sum_f = (i>1) ? sum_i - v->f : v->f; sum_i=0; saw_float=1; }
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
+        unrefexp(v);
       }
   } while (c &&(c=c->next));
-  if (i==1) { if (sum_f) sum_f=-sum_f; else sum_i=-sum_i; }
-  ret = (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+  if (i==1) { if (saw_float) sum_f=-sum_f; else sum_i=-sum_i; }
+  ret = saw_float?make_floatf(sum_f):make_integeri(sum_i);
  finish:
   unrefexp(e);
   return ret;
@@ -1697,6 +1670,7 @@ exp_t *dividecmd(exp_t *e, env_t *env)
 {
   int64_t sum_i=0;
   expfloat sum_f=0;
+  int saw_float=0;
   exp_t *c=cdr(e);
   exp_t *v;
   exp_t *v1=NULL;
@@ -1712,41 +1686,29 @@ exp_t *dividecmd(exp_t *e, env_t *env)
         else v=v1;
         if iserror(v) { unrefexp(e); return v; }
         if (i>1) {
-          if (isnumber(v) && (FIX_VAL(v)==0)) {
-            ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
-            goto finish;
-          }
-          else if (isfloat(v) && (v->f==0)) {
+          if ((isnumber(v) && FIX_VAL(v)==0) || (isfloat(v) && v->f==0)) {
             ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
             goto finish;
           }
         }
-        if (sum_f){
+        if (saw_float){
           if (isnumber(v)) sum_f/=FIX_VAL(v);
           else if (isfloat(v)) sum_f/=v->f;
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
         else {
-          if (isnumber(v)) { if (sum_i) sum_i/=FIX_VAL(v); else sum_i=FIX_VAL(v); }
-          else if (isfloat(v)) { if (sum_i) { sum_f = sum_i /(v->f);} else sum_f=(v->f); sum_i=0; }
-          else {
-            ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation");
-            goto finish;
-          }
-          unrefexp(v);
+          if (isnumber(v)) { if (i>1) sum_i/=FIX_VAL(v); else sum_i=FIX_VAL(v); }
+          else if (isfloat(v)) { sum_f = (i>1) ? sum_i/v->f : v->f; sum_i=0; saw_float=1; }
+          else { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Illegal value in operation"); goto finish; }
         }
+        unrefexp(v);
       }
   } while (c &&(c=c->next));
-  if (i==1) { if (sum_f) sum_f=1/sum_f; else if (sum_i) sum_i=1/sum_i; else {
-      ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0");
-      goto finish;
-    }
+  if (i==1) {
+    if (saw_float) { if (sum_f==0) { ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0"); goto finish; } sum_f=1/sum_f; }
+    else { if (sum_i==0) { ret = error(ERROR_DIV_BY0,e,env,"Illegal Division by 0"); goto finish; } sum_i=1/sum_i; }
   }
-  ret = (sum_f?make_floatf(sum_f):make_integeri(sum_i));
+  ret = saw_float?make_floatf(sum_f):make_integeri(sum_i);
  finish:
   unrefexp(e);
   return ret;
@@ -2463,24 +2425,19 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
     while (cur) {
       if (ret) { unrefexp(ret); ret = NULL; }
       int is_last = (cur->next == NULL);
-      /* Signal tail position to the evaluator for the final body expr. */
       in_tail_position = is_last;
       ret = EVAL(cur->content, newenv);
-      in_tail_position = 0;
 
-      /* Did the evaluator hand us a trampoline marker? */
       if (is_last && ret && is_ptr(ret) && ispair(ret) &&
           (ret->flags & FLAG_TAILREC) && is_ptr(ret->content) && islambda(ret->content))
       {
         exp_t *marker = ret;
         ret = NULL;
-        exp_t *resolved_fn = marker->content;   /* borrowed — marker still owns */
+        exp_t *resolved_fn = marker->content;
 
         if (resolved_fn == fn) {
-          /* Self-recursion fast path: the new call targets THIS lambda,
-             so we can rebind params in place without tearing down and
-             rebuilding the env. Args in the marker are already
-             evaluated in the caller's frame, so no re-evaluation. */
+          /* Self-recursion fast path: rebind params in place, skip the
+             env teardown/rebuild. Marker args are already evaluated. */
           int i;
           for (i = 0; i < newenv->n_inline; i++) unrefexp(newenv->inline_vals[i]);
           newenv->n_inline = 0;
@@ -2579,69 +2536,6 @@ exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
   return ret;
 }
 
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-exp_t *optimize(exp_t *e,env_t *env)
-{
-  /* NOT YET USED */
-  /* TO DO UN REF VARS*/
-  exp_t *tmpexp;
-  exp_t *tmpexp2;
-
-  if (e==NULL) return NULL;
-  if isatom(e)  {
-      return e;
-    }
-  else if ispair(e) {
-      tmpexp=car(e);
-      if (tmpexp) {
-        if (issymbol(tmpexp)) {
-          if ((tmpexp2=lookup(tmpexp,NULL))) { 
-            if isinternal(tmpexp2) {
-                tmpexp2->next=refexp(e->next);
-                return tmpexp2;
-              }
-            else if islambda(tmpexp2) {
-                return e;
-              }
-            else if ismacro(tmpexp2) return e;
-            else return e;
-          }
-          return e; // what is happening here?
-        }
-      }
-    }
-  return e;
-
-}
-#pragma GCC diagnostic warning "-Wunused-parameter"
-
-exp_t *evaluate2(exp_t *e, env_t *env)
-{
-  /* NOT YET USED !! */
-  exp_t *tmpexp;
-  if (e!=NULL) {
-    switch (e->type){
-    case EXP_SYMBOL:
-      if (((char*)e->ptr)[0] == ':') return e;
-      if ((tmpexp=lookup(e,env))) return tmpexp;
-      else return error(ERROR_UNBOUND_VARIABLE,e,env,"Error unbound variable %s",e->ptr);
-    case EXP_NUMBER:
-    case EXP_FLOAT:
-    case EXP_STRING:
-    case EXP_CHAR:
-    case EXP_BOOLEAN:
-    case EXP_VECTOR:
-    case EXP_ERROR:
-      return e;
-    case EXP_PAIR:
-	
-    default:
-      return e;
-    }
-  }
-  else return NULL;
-  return NULL;
-}
 
 exp_t *evaluate(exp_t *e,env_t *env)
 {
@@ -2673,7 +2567,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
       if (tmpexp) {
         if isinternal(tmpexp)  {
             int was_tail = in_tail_position;
-            if (tmpexp->fnc != ifcmd) in_tail_position = 0;
+            if (!(tmpexp->flags & FLAG_TAIL_AWARE)) in_tail_position = 0;
             ret = tmpexp->fnc(e,env);
             in_tail_position = was_tail;
             goto finisht;
@@ -2682,20 +2576,16 @@ exp_t *evaluate(exp_t *e,env_t *env)
           if (((char*)tmpexp->ptr)[0] == ':') { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Error keyword %s can not be used as function",tmpexp->ptr); goto finish;}// e is a keyword
           if ((tmpexp2=lookup(tmpexp,env))) {
             if isinternal(tmpexp2) {
-                /* Tail flag propagates only into cmds that know how to
-                   handle it (ifcmd). For everyone else, we zero it so
-                   their own sub-evaluations don't misfire. */
+                /* Tail flag propagates only into tail-aware cmds (ifcmd).
+                   Others get it cleared so their sub-evaluations don't
+                   misfire and build spurious trampoline markers. */
                 int was_tail = in_tail_position;
-                if (tmpexp2->fnc != ifcmd) in_tail_position = 0;
+                if (!(tmpexp2->flags & FLAG_TAIL_AWARE)) in_tail_position = 0;
                 ret= tmpexp2->fnc(e,env);
-                in_tail_position = was_tail;  /* caller's context preserved */
+                in_tail_position = was_tail;
                 goto finisht;
               }
             else if islambda(tmpexp2) {
-                /* Tail-call optimization: if the surrounding context
-                   has marked us as tail position, don't recurse into
-                   invoke — return a trampoline marker so the enclosing
-                   invoke can reuse its frame. */
                 if (in_tail_position) {
                   ret = make_tail_marker(tmpexp2, e, env);
                   unrefexp(tmpexp2);
@@ -2785,7 +2675,7 @@ int main(int argc, char *argv[])
   int N=sizeof(lispProcList)/sizeof(lispProc);
   int i;
   for (i = 0; i < N; ++i) {
-    set_get_keyval_dict(reserved_symbol,lispProcList[i].name,val=make_internal(lispProcList[i].cmd));
+    set_get_keyval_dict(reserved_symbol,lispProcList[i].name,val=make_internal(lispProcList[i].cmd,lispProcList[i].flags & FLAG_TAIL_AWARE));
     unrefexp(val);
   }
 

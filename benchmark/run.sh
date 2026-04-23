@@ -20,36 +20,7 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   exit 1
 fi
 
-# milliseconds-since-epoch (portable enough for macOS /opt/homebrew python3)
-now_ms() { "$PYTHON" -c 'import time; print(int(time.time()*1000))'; }
-
-# best-of-N wall-clock in ms
-best_of() {
-  local n="$1"; shift
-  local best=999999999 t s e
-  for _ in $(seq 1 "$n"); do
-    s=$(now_ms)
-    "$@" >/dev/null 2>&1
-    e=$(now_ms)
-    t=$(( e - s ))
-    if [ "$t" -lt "$best" ]; then best=$t; fi
-  done
-  echo "$best"
-}
-
-# median-of-N wall-clock in ms
-median_of() {
-  local n="$1"; shift
-  local s e
-  {
-    for _ in $(seq 1 "$n"); do
-      s=$(now_ms)
-      "$@" >/dev/null 2>&1
-      e=$(now_ms)
-      echo $(( e - s ))
-    done
-  } | sort -n | awk -v n="$n" 'NR==int((n+1)/2)'
-}
+. ./lib.sh
 
 printf "alcove  : %s\n" "$("$ALCOVE" <<<'(prn "ok")' 2>/dev/null | head -1 || echo ok)"
 printf "python3 : %s\n\n" "$("$PYTHON" --version 2>&1)"
