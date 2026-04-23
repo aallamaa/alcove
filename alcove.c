@@ -2461,10 +2461,13 @@ static int add_const(compiler_t *c, exp_t *v) {
   return c->nconsts++;
 }
 static int find_slot(compiler_t *c, const char *name) {
-  /* Innermost (highest idx) binding wins so inner let shadows outer. */
+  /* Innermost (highest idx) binding wins so inner let shadows outer.
+     NULL slot_names are "hidden" (e.g. for's end-value slot) — skipped. */
   int i;
-  for (i = c->nslots - 1; i >= 0; i--)
+  for (i = c->nslots - 1; i >= 0; i--) {
+    if (!c->slot_names[i]) continue;
     if (strcmp(c->slot_names[i], name) == 0) return i;
+  }
   return -1;
 }
 
@@ -2633,6 +2636,90 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
   c->nslots -= nbindings;
 }
 
+/* (for counter start end body...) — counter iterates start..end inclusive.
+   Matches AST forcmd semantics: the body's final expression of the
+   final iteration becomes the for's return value; nil if the loop
+   never runs or the body is empty.
+
+   Stack discipline: a "current result" sits on the stack across
+   iterations (initially nil). Each iter POPs it before running the
+   body, and the body's last expression leaves the new result. Exit
+   branch takes the BR_IF_FALSE path with the result on top. */
+static void compile_for(compiler_t *c, exp_t *form, int tail) {
+  (void)tail;
+  exp_t *var_node   = form->next;       if (!var_node)   { c->failed=1; return; }
+  exp_t *var        = var_node->content;
+  exp_t *start_node = var_node->next;   if (!start_node) { c->failed=1; return; }
+  exp_t *end_node   = start_node->next; if (!end_node)   { c->failed=1; return; }
+  exp_t *body_node  = end_node->next;
+
+  if (!is_ptr(var) || !issymbol(var)) { c->failed=1; return; }
+  if (c->nslots + 2 > ENV_INLINE_SLOTS) { c->failed=1; return; }
+
+  int counter_slot = c->nslots;
+  int end_slot     = c->nslots + 1;
+
+  compile_expr(c, start_node->content, 0); if (c->failed) return;
+  emit_u8(c, OP_BIND_SLOT); emit_u8(c, (uint8_t)counter_slot);
+  c->slot_names[counter_slot] = (char*)var->ptr;
+  c->nslots++;
+
+  compile_expr(c, end_node->content, 0); if (c->failed) return;
+  emit_u8(c, OP_BIND_SLOT); emit_u8(c, (uint8_t)end_slot);
+  c->slot_names[end_slot] = NULL;
+  c->nslots++;
+
+  /* Seed the loop's "current result" with nil so an un-entered or
+     empty-body for still returns something at exit. */
+  int k_nil = add_const(c, nil_singleton);
+  emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k_nil);
+
+  c->nlet_depth++;
+  int loop_top = c->ncode;
+
+  emit_u8(c, OP_LOAD_SLOT); emit_u8(c, (uint8_t)counter_slot);
+  emit_u8(c, OP_LOAD_SLOT); emit_u8(c, (uint8_t)end_slot);
+  emit_u8(c, OP_LE);
+  emit_u8(c, OP_BR_IF_FALSE);
+  int patch_exit = c->ncode; emit_i16(c, 0);
+
+  if (body_node) {
+    /* Replace previous iteration's result with this one's. */
+    emit_u8(c, OP_POP);
+    exp_t *b;
+    for (b = body_node; b; b = b->next) {
+      compile_expr(c, b->content, 0); if (c->failed) return;
+      if (b->next) emit_u8(c, OP_POP);  /* discard non-last body exprs */
+    }
+    /* Last body expr's value remains on stack as the new "current result". */
+  }
+
+  emit_u8(c, OP_LOAD_SLOT); emit_u8(c, (uint8_t)counter_slot);
+  emit_u8(c, OP_LOAD_FIX);  emit_i16(c, 1);
+  emit_u8(c, OP_ADD);
+  emit_u8(c, OP_STORE_SLOT); emit_u8(c, (uint8_t)counter_slot);
+  emit_u8(c, OP_POP);
+
+  emit_u8(c, OP_JUMP);
+  int patch_jump = c->ncode; emit_i16(c, 0);
+
+  int loop_end = c->ncode;
+
+  int16_t off_exit = (int16_t)(loop_end - (patch_exit + 2));
+  c->code[patch_exit]   = off_exit & 0xff;
+  c->code[patch_exit+1] = (off_exit >> 8) & 0xff;
+  int16_t off_jump = (int16_t)(loop_top - (patch_jump + 2));
+  c->code[patch_jump]   = off_jump & 0xff;
+  c->code[patch_jump+1] = (off_jump >> 8) & 0xff;
+
+  c->nlet_depth--;
+
+  emit_u8(c, OP_UNBIND_SLOT); emit_u8(c, (uint8_t)end_slot);
+  emit_u8(c, OP_UNBIND_SLOT); emit_u8(c, (uint8_t)counter_slot);
+  c->nslots -= 2;
+  /* Result left on top of stack by the last iteration (or the seed nil). */
+}
+
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (c->failed) return;
   /* Tagged fixnum literal: if it fits in int16, inline; else const pool. */
@@ -2684,6 +2771,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     if (!strcmp(s, "if"))    { compile_if(c, e, tail); return; }
     if (!strcmp(s, "let"))   { compile_let(c, e, tail); return; }
     if (!strcmp(s, "with"))  { compile_with(c, e, tail); return; }
+    if (!strcmp(s, "for"))   { compile_for(c, e, tail); return; }
     if (!strcmp(s, "="))     { compile_assign(c, e, tail); return; }
     if (!strcmp(s, "quote")) {
       exp_t *q = cadr(e);
