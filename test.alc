@@ -70,3 +70,12 @@
 (assert "(iso (list 'a) (list 'a)) ->t" (iso (list 'a) (list 'a)) t)
 
 (assert "(let x 'a (in x 'a 'b 'c)) -> t" (let x 'a (in x 'a 'b 'c)) t)
+
+; for-loop must not mutate source AST literals (regression pin)
+; before the forcmd fix, the second call would see mutated start/end
+; literals and return 0 instead of 5.
+(def runforsum (n)
+  (let s 0
+    (for i 1 n (= s (+ s 1)))))
+(assert "first  (runforsum 5) -> 5" (runforsum 5) 5)
+(assert "second (runforsum 5) -> 5" (runforsum 5) 5)

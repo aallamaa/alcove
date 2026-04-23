@@ -1,0 +1,9 @@
+; Note: 20! overflows the 61-bit fixnum range (values stored inline in a
+; tagged pointer lose 3 bits to the tag). 19! = 121645100408832000 fits.
+(def fact (n)
+  (if (< n 2)
+      1
+      (* n (fact (- n 1)))))
+; call fact 19 many times to amortize startup
+(def loop (k) (if (> k 0) (do (fact 19) (loop (- k 1))) k))
+(prn (loop 10000))

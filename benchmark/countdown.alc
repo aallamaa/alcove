@@ -1,0 +1,5 @@
+(def countdown (n)
+  (if (> n 0) (countdown (- n 1)) n))
+; loop many iterations of countdown 1000 to amortize startup and stay under stack limit
+(def loop (k) (if (> k 0) (do (countdown 1000) (loop (- k 1))) k))
+(prn (loop 1000))
