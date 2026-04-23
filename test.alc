@@ -103,6 +103,13 @@
 (def seven (a b c d e f g) (+ a (+ b (+ c (+ d (+ e (+ f g)))))))
 (assert "7 params spill"      (seven 1 2 3 4 5 6 7) 28)
 
-; 5. Calling a non-lambda via OP_CALL path (indirectly — via invoke
-;    error propagation). This tests that errors walk back cleanly.
-(assert "compiled returns bool" (< 3 5) t)
+; 5. VM < returns t/nil singletons (not a freshly-allocated boolean).
+(assert "vm < returns t"      (< 3 5) t)
+(assert "vm < returns nil"    (< 5 3) nil)
+
+; 6. VM error propagation: div-by-zero in a compiled body must return
+;    an error (printed by the driver) and leave state clean so the
+;    interpreter keeps going. The subsequent assert verifies that.
+(def vmerr (x) (/ x 0))
+(vmerr 5)
+(assert "recovery after VM error" 42 42)

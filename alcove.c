@@ -264,12 +264,16 @@ inline void *destroy_env(env_t *env)
       int i;
       for (i=0; i<env->n_inline; i++) unrefexp(env->inline_vals[i]);
     }
-    env->n_inline = 0;
-    if (env->d) { destroy_dict(env->d); env->d = NULL; }
-    if (env->callingfnc) { unrefexp(env->callingfnc); env->callingfnc = NULL; }
-    /* Arena envs: roll the bump pointer back (LIFO). Heap-fallback
-       envs return to free(). */
+    if (env->d) destroy_dict(env->d);
+    if (env->callingfnc) unrefexp(env->callingfnc);
+    /* Arena envs: roll the bump pointer back (LIFO) and scrub the
+       fields that would carry stale state into the slot's next tenant,
+       so make_env can skip the wholesale memset.
+       Heap-fallback envs return to free() — no scrub needed. */
     if (IS_ARENA_ENV(env)) {
+      env->n_inline = 0;
+      env->d = NULL;
+      env->callingfnc = NULL;
       if (env + 1 == env_arena_sp) env_arena_sp = env;
     } else {
       free(env);
@@ -2426,6 +2430,7 @@ typedef struct compiler_t {
 } compiler_t;
 
 static void emit_u8(compiler_t *c, uint8_t b) {
+  if (c->failed) return;
   if (c->ncode + 1 > c->code_cap) {
     c->code_cap = c->code_cap ? c->code_cap * 2 : 64;
     c->code = realloc(c->code, c->code_cap);
