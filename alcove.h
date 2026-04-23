@@ -106,22 +106,66 @@ typedef struct exp_t *lispCmd(struct exp_t *e,struct env_t *env);
 /* Internal cmd is tail-aware: evaluate will expose in_tail_position to
    it. Set on the EXP_INTERNAL via the lispProc flags column. */
 #define FLAG_TAIL_AWARE 2
+/* Lambda body has been compiled to bytecode. invoke() runs the VM
+   dispatch loop instead of the AST walker. e->bc points to a bytecode_t. */
+#define FLAG_COMPILED   4
 
 typedef struct exp_t {
-  unsigned short int flags; /* 2 bytes --- bit 0 set to 1 for disk persistance */
-  unsigned short int type; //  2 bytes --- exp type cf exptype_t enum list
-  int nref; // --------------- 4 bytes --- Garbage collector number of reference counter
-  union {   // --------------- 8 bytes
+  unsigned short int flags; /* 2 bytes */
+  unsigned short int type;  /* 2 bytes */
+  int nref;                 /* 4 bytes */
+  union {                   /* 8 bytes */
     struct exp_t *content;
     void *ptr;
     int64_t s64;
     expfloat f;
     lispCmd *fnc;
-  } ;
-  struct keyval_t
-  /*char*/ *meta;  // --------- 8 bytes
-  struct exp_t *next; // ------ 8 bytes
-} exp_t; // total              32 bytes
+  };
+  struct keyval_t *meta;    /* 8 bytes — lambda/macro name, symbol-cache ptr */
+  struct exp_t *next;       /* 8 bytes */
+  void *bc;                 /* 8 bytes — bytecode_t* for compiled lambdas, else NULL */
+} exp_t; /* 40 bytes */
+
+/* ---------------- Bytecode VM ----------------
+   Lambda bodies that use only supported forms (fixnum arithmetic,
+   comparisons, if, user calls, param/global refs) get compiled at
+   def/fn time. invoke() runs the dispatch loop over the opcode array
+   instead of walking the AST. Unsupported bodies stay as AST. */
+typedef enum {
+  OP_HALT = 0,
+  OP_RET,
+  OP_POP,
+
+  OP_LOAD_FIX,       /* int16 imm       → push MAKE_FIX(imm) */
+  OP_LOAD_CONST,     /* u8 idx          → push refexp(consts[idx]) */
+  OP_LOAD_SLOT,      /* u8 idx          → push refexp(inline_vals[idx]) */
+  OP_LOAD_GLOBAL,    /* u8 idx (symbol) → lookup consts[idx] in env, push */
+  OP_STORE_SLOT,     /* u8 idx          → pop → inline_vals[idx] (unref old) */
+
+  OP_ADD, OP_SUB, OP_MUL, OP_DIV,
+  OP_LT,  OP_GT,  OP_LE,  OP_GE,
+  OP_IS,  OP_ISO, OP_NOT,
+
+  OP_JUMP,           /* int16 off relative to end of operand */
+  OP_BR_IF_FALSE,
+  OP_BR_IF_TRUE,
+
+  OP_CALL,           /* u8 nargs        → [fn, a0..aN-1] → result */
+  OP_TAIL_SELF,      /* u8 nargs        → rebind inline slots, PC=0 */
+
+  OP_MAX
+} alc_op;
+
+typedef struct bytecode_t {
+  uint8_t  *code;
+  int       ncode;
+  exp_t   **consts;   /* owned refs — unref on free */
+  int       nconsts;
+} bytecode_t;
+
+void     bytecode_free(bytecode_t *bc);
+int      compile_lambda(exp_t *fn);                      /* 1 on success, 0 on fallback */
+exp_t   *vm_run(exp_t *fn, struct env_t *env);           /* runs bytecode; returns owned */
 
 
 typedef struct exp_tfunc {

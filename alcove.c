@@ -176,10 +176,13 @@ inline int unrefexp(exp_t *e){
       printf("\n");
     };
     /* meta holds a strdup'd name for LAMBDA/MACRO, or a borrowed
-       resolved-exp_t* pointer for SYMBOLs with FLAG_RESOLVED. Only
-       free() in the former case — the cached pointer is borrowed. */
+       resolved-exp_t* pointer for cached SYMBOL lookups. Only free()
+       in the former case — the cached pointer is borrowed. */
     if (e->meta && (e->type == EXP_LAMBDA || e->type == EXP_MACRO)) {
       free(e->meta);
+    }
+    if (e->bc && e->type == EXP_LAMBDA) {
+      bytecode_free((bytecode_t*)e->bc);
     }
     if (e->next) unrefexp(e->next);
     if ((e->type==EXP_SYMBOL)||(e->type==EXP_STRING)||(e->type==EXP_ERROR))
@@ -1253,6 +1256,7 @@ exp_t *fncmd(exp_t *e, env_t *env)
       val=make_node(refexp(header));
       val->next=vali;
       val->type=EXP_LAMBDA;
+      compile_lambda(val);  /* attempts bytecode; silent fallback */
     }
     else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
   }
@@ -1282,6 +1286,7 @@ exp_t *defcmd(exp_t *e, env_t *env)
           val->next=vali;
           val->type=EXP_LAMBDA;
           val->meta=(keyval_t *)strdup(name->ptr);
+          compile_lambda(val);  /* attempts bytecode; silent fallback */
           if (!(env->d)) env->d=create_dict();
           ret=set_get_keyval_dict(env->d,name->ptr,val);
         }
@@ -2388,6 +2393,602 @@ static exp_t *make_tail_marker(exp_t *fn, exp_t *call_form, env_t *env)
   return marker;
 }
 
+/* ---------------- Bytecode compiler + VM ---------------- */
+
+void bytecode_free(bytecode_t *bc) {
+  if (!bc) return;
+  int i;
+  for (i = 0; i < bc->nconsts; i++) unrefexp(bc->consts[i]);
+  free(bc->consts);
+  free(bc->code);
+  free(bc);
+}
+
+typedef struct compiler_t {
+  uint8_t *code;  int ncode;  int code_cap;
+  exp_t  **consts; int nconsts; int consts_cap;
+  char    *param_names[ENV_INLINE_SLOTS];
+  int      nparams;
+  const char *self_name; /* for self-tail-call detection; NULL in anon fn */
+  int      failed;
+} compiler_t;
+
+static void emit_u8(compiler_t *c, uint8_t b) {
+  if (c->ncode + 1 > c->code_cap) {
+    c->code_cap = c->code_cap ? c->code_cap * 2 : 64;
+    c->code = realloc(c->code, c->code_cap);
+  }
+  c->code[c->ncode++] = b;
+}
+static void emit_i16(compiler_t *c, int16_t v) {
+  emit_u8(c, (uint8_t)(v & 0xff));
+  emit_u8(c, (uint8_t)((v >> 8) & 0xff));
+}
+static int add_const(compiler_t *c, exp_t *v) {
+  /* de-dupe by pointer equality — rare wins but costs nothing */
+  int i;
+  for (i = 0; i < c->nconsts; i++) if (c->consts[i] == v) return i;
+  if (c->nconsts + 1 > c->consts_cap) {
+    c->consts_cap = c->consts_cap ? c->consts_cap * 2 : 8;
+    c->consts = realloc(c->consts, c->consts_cap * sizeof(exp_t*));
+  }
+  c->consts[c->nconsts] = refexp(v);
+  return c->nconsts++;
+}
+static int find_slot(compiler_t *c, const char *name) {
+  int i;
+  for (i = 0; i < c->nparams; i++)
+    if (strcmp(c->param_names[i], name) == 0) return i;
+  return -1;
+}
+
+static int  op_for_head(const char *s);   /* forward */
+static void compile_expr(compiler_t *c, exp_t *e, int tail);
+
+/* Returns OP_ADD..OP_NOT for pure-arithmetic/cmp symbols, -1 otherwise. */
+static int op_for_head(const char *s) {
+  if (!strcmp(s, "+"))   return OP_ADD;
+  if (!strcmp(s, "-"))   return OP_SUB;
+  if (!strcmp(s, "*"))   return OP_MUL;
+  if (!strcmp(s, "/"))   return OP_DIV;
+  if (!strcmp(s, "<"))   return OP_LT;
+  if (!strcmp(s, ">"))   return OP_GT;
+  if (!strcmp(s, "<="))  return OP_LE;
+  if (!strcmp(s, ">="))  return OP_GE;
+  if (!strcmp(s, "is"))  return OP_IS;
+  if (!strcmp(s, "iso")) return OP_ISO;
+  if (!strcmp(s, "no"))  return OP_NOT;
+  return -1;
+}
+
+static void compile_if(compiler_t *c, exp_t *form, int tail) {
+  /* (if cond then else)  — only 2-way for phase 1 */
+  exp_t *cond = cadr(form);
+  exp_t *thn  = caddr(form);
+  exp_t *els  = cadddr(form);
+  compile_expr(c, cond, 0);
+  if (c->failed) return;
+  emit_u8(c, OP_BR_IF_FALSE);
+  int patch_false = c->ncode; emit_i16(c, 0);
+  compile_expr(c, thn, tail);
+  if (c->failed) return;
+  emit_u8(c, OP_JUMP);
+  int patch_end = c->ncode; emit_i16(c, 0);
+  int false_target = c->ncode;
+  if (els) compile_expr(c, els, tail);
+  else {
+    /* (if cond then) with no else: result is nil. */
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+  }
+  if (c->failed) return;
+  int end_target = c->ncode;
+  int16_t off_false = (int16_t)(false_target - (patch_false + 2));
+  int16_t off_end   = (int16_t)(end_target   - (patch_end   + 2));
+  c->code[patch_false]   = off_false & 0xff;
+  c->code[patch_false+1] = (off_false >> 8) & 0xff;
+  c->code[patch_end]     = off_end   & 0xff;
+  c->code[patch_end+1]   = (off_end   >> 8) & 0xff;
+}
+
+static void compile_call(compiler_t *c, exp_t *form, int tail) {
+  /* Push head, then all args; emit OP_CALL (or OP_TAIL_SELF). */
+  exp_t *head = car(form);
+  int nargs = 0;
+  exp_t *a;
+  /* Self-tail-call detection: head is a symbol matching self_name, and
+     we're in tail position. */
+  int is_self_tail = tail && c->self_name &&
+                     is_ptr(head) && issymbol(head) &&
+                     strcmp(head->ptr, c->self_name) == 0;
+  if (!is_self_tail) {
+    compile_expr(c, head, 0);
+    if (c->failed) return;
+  }
+  for (a = form->next; a; a = a->next) {
+    compile_expr(c, a->content, 0);
+    if (c->failed) return;
+    nargs++;
+  }
+  if (nargs > 255) { c->failed = 1; return; }
+  if (is_self_tail) { emit_u8(c, OP_TAIL_SELF); emit_u8(c, (uint8_t)nargs); }
+  else              { emit_u8(c, OP_CALL);      emit_u8(c, (uint8_t)nargs); }
+}
+
+static void compile_arith(compiler_t *c, exp_t *form, int op) {
+  /* Binary left-fold: (+ a b c d) → a b + c + d + */
+  exp_t *a = form->next;
+  if (!a || !a->next) { c->failed = 1; return; }
+  compile_expr(c, a->content, 0);       if (c->failed) return;
+  compile_expr(c, a->next->content, 0); if (c->failed) return;
+  emit_u8(c, (uint8_t)op);
+  for (a = a->next->next; a; a = a->next) {
+    compile_expr(c, a->content, 0);     if (c->failed) return;
+    emit_u8(c, (uint8_t)op);
+  }
+}
+
+static void compile_expr(compiler_t *c, exp_t *e, int tail) {
+  if (c->failed) return;
+  /* Tagged fixnum literal: if it fits in int16, inline; else const pool. */
+  if (isnumber(e)) {
+    int64_t v = FIX_VAL(e);
+    if (v >= INT16_MIN && v <= INT16_MAX) {
+      emit_u8(c, OP_LOAD_FIX);
+      emit_i16(c, (int16_t)v);
+    } else {
+      int k = add_const(c, e);
+      emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+    }
+    return;
+  }
+  if (!is_ptr(e)) {
+    /* tagged char or other immediate */
+    int k = add_const(c, e);
+    emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+    return;
+  }
+  if (isstring(e) || isfloat(e)) {
+    int k = add_const(c, e);
+    emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+    return;
+  }
+  if (e == nil_singleton || e == true_singleton) {
+    int k = add_const(c, e);
+    emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+    return;
+  }
+  if (issymbol(e)) {
+    int slot = find_slot(c, e->ptr);
+    if (slot >= 0) {
+      emit_u8(c, OP_LOAD_SLOT); emit_u8(c, (uint8_t)slot);
+      return;
+    }
+    /* Global / builtin. Runtime lookup via the constant (the symbol
+       itself is the key — lookup will cache on it via meta). */
+    int k = add_const(c, e);
+    emit_u8(c, OP_LOAD_GLOBAL); emit_u8(c, (uint8_t)k);
+    return;
+  }
+  if (!ispair(e)) { c->failed = 1; return; }
+
+  /* Call form. Dispatch on head. */
+  exp_t *head = car(e);
+  if (is_ptr(head) && issymbol(head)) {
+    const char *s = (const char*)head->ptr;
+    if (!strcmp(s, "if"))    { compile_if(c, e, tail); return; }
+    if (!strcmp(s, "quote")) {
+      exp_t *q = cadr(e);
+      int k = add_const(c, q ? q : nil_singleton);
+      emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+      return;
+    }
+    int op = op_for_head(s);
+    if (op >= 0) {
+      if (op == OP_NOT) {
+        /* Unary: (no x) */
+        if (!e->next) { c->failed = 1; return; }
+        compile_expr(c, e->next->content, 0); if (c->failed) return;
+        emit_u8(c, OP_NOT);
+        return;
+      }
+      compile_arith(c, e, op);
+      return;
+    }
+    /* Unsupported special forms fall through to user-call, which will
+       at least work for globals/lambdas. For things we know need the
+       tree-walker (let, with, for, each, do, =, pr, etc.), bail now. */
+    if (!strcmp(s, "let") || !strcmp(s, "with") || !strcmp(s, "for")  ||
+        !strcmp(s, "each")|| !strcmp(s, "do")   || !strcmp(s, "while")||
+        !strcmp(s, "repeat")|| !strcmp(s, "=")  || !strcmp(s, "case") ||
+        !strcmp(s, "when")|| !strcmp(s, "and")  || !strcmp(s, "or")   ||
+        !strcmp(s, "in")  || !strcmp(s, "pr")   || !strcmp(s, "print")||
+        !strcmp(s, "prn") || !strcmp(s, "println") || !strcmp(s, "cons")||
+        !strcmp(s, "car") || !strcmp(s, "cdr")  || !strcmp(s, "list") ||
+        !strcmp(s, "def") || !strcmp(s, "fn")   || !strcmp(s, "defmacro")||
+        !strcmp(s, "eval")|| !strcmp(s, "odd")  || !strcmp(s, "sqrt") ||
+        !strcmp(s, "exp") || !strcmp(s, "expt") || !strcmp(s, "time") ||
+        !strcmp(s, "inspect")|| !strcmp(s, "persist")||!strcmp(s, "forget")||
+        !strcmp(s, "savedb")|| !strcmp(s, "ispersistent")||
+        !strcmp(s, "verbose")|| !strcmp(s, "macroexpand-1")) {
+      c->failed = 1; return;
+    }
+    /* User call: head is a symbol referring to a lambda. */
+    compile_call(c, e, tail);
+    return;
+  }
+  /* Complex head — fall back. */
+  c->failed = 1;
+}
+
+int compile_lambda(exp_t *fn) {
+  if (!fn || !islambda(fn)) return 0;
+  if (fn->flags & FLAG_COMPILED) return 1; /* idempotent */
+  exp_t *params = fn->content;
+  exp_t *body   = fn->next->content;
+  compiler_t c = {0};
+  c.self_name = (const char*)fn->meta;  /* may be NULL for anon fn */
+
+  /* Register params into slots 0..N-1 matching env->inline_slots. */
+  exp_t *p;
+  for (p = params; p; p = p->next) {
+    if (c.nparams >= ENV_INLINE_SLOTS) { c.failed = 1; break; }
+    if (!is_ptr(p->content) || !issymbol(p->content)) { c.failed = 1; break; }
+    c.param_names[c.nparams++] = (char*)p->content->ptr;
+  }
+
+  /* Walk body list: each expression, pop between, except the last. */
+  exp_t *b;
+  int saw_any = 0;
+  for (b = body; b && !c.failed; b = b->next) {
+    if (saw_any) emit_u8(&c, OP_POP);
+    int is_last = (b->next == NULL);
+    compile_expr(&c, b->content, is_last);
+    saw_any = 1;
+  }
+  if (!saw_any) { c.failed = 1; }
+  if (!c.failed) emit_u8(&c, OP_RET);
+
+  if (c.failed) {
+    int i;
+    for (i = 0; i < c.nconsts; i++) unrefexp(c.consts[i]);
+    free(c.consts); free(c.code);
+    return 0;
+  }
+  bytecode_t *bc = calloc(1, sizeof(bytecode_t));
+  bc->code = c.code; bc->ncode = c.ncode;
+  bc->consts = c.consts; bc->nconsts = c.nconsts;
+  fn->bc = bc;
+  fn->flags |= FLAG_COMPILED;
+  return 1;
+}
+
+/* Bytecode dispatch loop. Entered with `env` already populated (params
+   in inline slots). Returns an owned exp_t* (or NULL). */
+exp_t *vm_run(exp_t *fn, env_t *env)
+{
+  bytecode_t *bc = (bytecode_t*)fn->bc;
+  uint8_t *code = bc->code;
+  exp_t **consts = bc->consts;
+
+#define VM_STACK_MAX 256
+  exp_t *stack[VM_STACK_MAX];
+  int sp = 0;
+  int pc = 0;
+
+#define PUSH(v)   do { stack[sp++] = (v); } while (0)
+#define POP()     (stack[--sp])
+#define READ_U8   (code[pc++])
+#define READ_I16  (pc+=2, (int16_t)(code[pc-2] | (code[pc-1] << 8)))
+
+#define RUNTIME_ERR(msg) do {                                        \
+    int _i;                                                          \
+    for (_i = 0; _i < sp; _i++) unrefexp(stack[_i]);                 \
+    return error(ERROR_ILLEGAL_VALUE, fn, env, msg);                 \
+  } while (0)
+
+  for (;;) {
+    uint8_t op = code[pc++];
+    switch (op) {
+
+    case OP_RET: {
+      exp_t *r = POP();
+      /* Any extra stack residue shouldn't exist if the compiler is
+         balanced — but guard anyway. */
+      while (sp > 0) unrefexp(POP());
+      return r;
+    }
+
+    case OP_POP: unrefexp(POP()); break;
+
+    case OP_LOAD_FIX: {
+      int16_t v = READ_I16;
+      PUSH(MAKE_FIX((int64_t)v));
+      break;
+    }
+    case OP_LOAD_CONST: {
+      uint8_t idx = READ_U8;
+      PUSH(refexp(consts[idx]));
+      break;
+    }
+    case OP_LOAD_SLOT: {
+      uint8_t idx = READ_U8;
+      PUSH(refexp(env->inline_vals[idx]));
+      break;
+    }
+    case OP_LOAD_GLOBAL: {
+      uint8_t idx = READ_U8;
+      exp_t *sym = consts[idx];
+      exp_t *v = lookup(sym, env);
+      if (!v) RUNTIME_ERR("Unbound variable");
+      PUSH(v);
+      break;
+    }
+    case OP_STORE_SLOT: {
+      uint8_t idx = READ_U8;
+      exp_t *v = POP();
+      unrefexp(env->inline_vals[idx]);
+      env->inline_vals[idx] = v;
+      break;
+    }
+
+    case OP_ADD: {
+      exp_t *b = POP(), *a = POP();
+      if (isnumber(a) && isnumber(b)) {
+        PUSH(MAKE_FIX(FIX_VAL(a) + FIX_VAL(b)));
+      } else {
+        double da, db;
+        if      (isnumber(a)) da = (double)FIX_VAL(a);
+        else if (isfloat(a))  { da = a->f; unrefexp(a); }
+        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in +"); }
+        if      (isnumber(b)) db = (double)FIX_VAL(b);
+        else if (isfloat(b))  { db = b->f; unrefexp(b); }
+        else { unrefexp(b); RUNTIME_ERR("Illegal value in +"); }
+        PUSH(make_floatf(da + db));
+      }
+      break;
+    }
+    case OP_SUB: {
+      exp_t *b = POP(), *a = POP();
+      if (isnumber(a) && isnumber(b)) {
+        PUSH(MAKE_FIX(FIX_VAL(a) - FIX_VAL(b)));
+      } else {
+        double da, db;
+        if      (isnumber(a)) da = (double)FIX_VAL(a);
+        else if (isfloat(a))  { da = a->f; unrefexp(a); }
+        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in -"); }
+        if      (isnumber(b)) db = (double)FIX_VAL(b);
+        else if (isfloat(b))  { db = b->f; unrefexp(b); }
+        else { unrefexp(b); RUNTIME_ERR("Illegal value in -"); }
+        PUSH(make_floatf(da - db));
+      }
+      break;
+    }
+    case OP_MUL: {
+      exp_t *b = POP(), *a = POP();
+      if (isnumber(a) && isnumber(b)) {
+        PUSH(MAKE_FIX(FIX_VAL(a) * FIX_VAL(b)));
+      } else {
+        double da, db;
+        if      (isnumber(a)) da = (double)FIX_VAL(a);
+        else if (isfloat(a))  { da = a->f; unrefexp(a); }
+        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in *"); }
+        if      (isnumber(b)) db = (double)FIX_VAL(b);
+        else if (isfloat(b))  { db = b->f; unrefexp(b); }
+        else { unrefexp(b); RUNTIME_ERR("Illegal value in *"); }
+        PUSH(make_floatf(da * db));
+      }
+      break;
+    }
+    case OP_DIV: {
+      exp_t *b = POP(), *a = POP();
+      if (isnumber(a) && isnumber(b)) {
+        int64_t bb = FIX_VAL(b);
+        if (bb == 0) { RUNTIME_ERR("Illegal division by 0"); }
+        PUSH(MAKE_FIX(FIX_VAL(a) / bb));
+      } else {
+        double da, db;
+        if      (isnumber(a)) da = (double)FIX_VAL(a);
+        else if (isfloat(a))  { da = a->f; unrefexp(a); }
+        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in /"); }
+        if      (isnumber(b)) db = (double)FIX_VAL(b);
+        else if (isfloat(b))  { db = b->f; unrefexp(b); }
+        else { unrefexp(b); RUNTIME_ERR("Illegal value in /"); }
+        if (db == 0) RUNTIME_ERR("Illegal division by 0");
+        PUSH(make_floatf(da / db));
+      }
+      break;
+    }
+
+    case OP_LT: case OP_GT: case OP_LE: case OP_GE: {
+      exp_t *b = POP(), *a = POP();
+      double d;
+      if (isnumber(a) && isnumber(b)) d = (double)(FIX_VAL(a) - FIX_VAL(b));
+      else {
+        double da, db;
+        if      (isnumber(a)) da = (double)FIX_VAL(a);
+        else if (isfloat(a))  { da = a->f; }
+        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in compare"); }
+        if      (isnumber(b)) db = (double)FIX_VAL(b);
+        else if (isfloat(b))  { db = b->f; }
+        else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in compare"); }
+        d = da - db;
+      }
+      unrefexp(a); unrefexp(b);
+      int r = (op == OP_LT) ? d < 0 :
+              (op == OP_GT) ? d > 0 :
+              (op == OP_LE) ? d <= 0 : d >= 0;
+      PUSH(r ? TRUE_EXP : NIL_EXP);
+      break;
+    }
+
+    case OP_IS: {
+      exp_t *b = POP(), *a = POP();
+      int r = isequal(a, b);
+      unrefexp(a); unrefexp(b);
+      PUSH(r ? TRUE_EXP : NIL_EXP);
+      break;
+    }
+    case OP_ISO: {
+      exp_t *b = POP(), *a = POP();
+      int r = isoequal(a, b);
+      unrefexp(a); unrefexp(b);
+      PUSH(r ? TRUE_EXP : NIL_EXP);
+      break;
+    }
+    case OP_NOT: {
+      exp_t *a = POP();
+      int r = !istrue(a);
+      unrefexp(a);
+      PUSH(r ? TRUE_EXP : NIL_EXP);
+      break;
+    }
+
+    case OP_JUMP: {
+      int16_t off = READ_I16;
+      pc += off;
+      break;
+    }
+    case OP_BR_IF_FALSE: {
+      int16_t off = READ_I16;
+      exp_t *a = POP();
+      if (!istrue(a)) pc += off;
+      unrefexp(a);
+      break;
+    }
+    case OP_BR_IF_TRUE: {
+      int16_t off = READ_I16;
+      exp_t *a = POP();
+      if (istrue(a)) pc += off;
+      unrefexp(a);
+      break;
+    }
+
+    case OP_TAIL_SELF: {
+      uint8_t n = READ_U8;
+      /* Args are on top of stack. Rebind inline slots in place. */
+      int base = sp - n;
+      /* Release old slot values. */
+      int i;
+      for (i = 0; i < env->n_inline; i++) unrefexp(env->inline_vals[i]);
+      env->n_inline = 0;
+      for (i = 0; i < n; i++) {
+        if (env->n_inline < ENV_INLINE_SLOTS) {
+          /* keys already set (they're borrowed from fn->content symbols,
+             unchanged across self-recursion). Just re-use index i. */
+          env->inline_vals[i] = stack[base + i];
+          env->n_inline++;
+        } else {
+          unrefexp(stack[base + i]);
+        }
+      }
+      /* Rebind keys if params > slots in use (normally same — we only
+         reach TAIL_SELF for same-fn so keys match). */
+      {
+        exp_t *p = fn->content; int k = 0;
+        while (p && k < env->n_inline) {
+          env->inline_keys[k++] = (char*)p->content->ptr;
+          p = p->next;
+        }
+      }
+      sp = base;
+      pc = 0;
+      break;
+    }
+
+    case OP_CALL: {
+      uint8_t n = READ_U8;
+      int base = sp - n;
+      exp_t *callee = stack[base - 1];      /* fn */
+      /* Build a synthetic call form: (placeholder arg0 arg1 ...). We
+         need an exp_t tree for invoke's var2env to walk. For args,
+         the pair's `content` holds the pre-evaluated value directly;
+         we pass evalexp=false via a dedicated path... but invoke only
+         accepts evalexp=true internally. Simplest: build a list where
+         each node's content is the value, then invoke with a custom
+         path.
+         For phase 1: build a synthetic form, then route through a
+         helper that skips re-eval. */
+      /* We use invoke_values below. */
+      extern exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+      exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
+      /* Pop args + fn. Args already consumed by vm_invoke_values
+         (it took ownership); fn is the one we didn't transfer. */
+      sp = base - 1;
+      unrefexp(callee);
+      if (ret && iserror(ret)) { while (sp > 0) unrefexp(POP()); return ret; }
+      if (!ret) ret = NIL_EXP;
+      PUSH(ret);
+      break;
+    }
+
+    case OP_HALT:
+    default:
+      RUNTIME_ERR("Bytecode: bad opcode");
+    }
+  }
+#undef PUSH
+#undef POP
+#undef READ_U8
+#undef READ_I16
+#undef RUNTIME_ERR
+}
+
+/* Invoke a callee with already-evaluated args. Takes ownership of
+   argv[i] values. Used by OP_CALL. */
+exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
+{
+  if (!is_ptr(fn) || !islambda(fn)) {
+    int i; for (i = 0; i < nargs; i++) unrefexp(argv[i]);
+    return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: not a lambda");
+  }
+  env_t *newenv = make_env(env);
+  newenv->callingfnc = NULL;  /* no call-form e; self-tail in target uses fn compare */
+  refexp(fn);
+
+  /* Bind params from argv (take ownership). */
+  exp_t *p = fn->content;
+  int i = 0;
+  while (p && i < nargs) {
+    if (!is_ptr(p->content) || !issymbol(p->content)) {
+      int j; for (j = i; j < nargs; j++) unrefexp(argv[j]);
+      destroy_env(newenv); unrefexp(fn);
+      return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
+    }
+    if (newenv->n_inline < ENV_INLINE_SLOTS) {
+      newenv->inline_keys[newenv->n_inline] = (char*)p->content->ptr;
+      newenv->inline_vals[newenv->n_inline] = argv[i];
+      newenv->n_inline++;
+    } else {
+      if (!newenv->d) newenv->d = create_dict();
+      set_get_keyval_dict(newenv->d, p->content->ptr, argv[i]);
+      unrefexp(argv[i]);
+    }
+    p = p->next; i++;
+  }
+  /* Any leftover argv entries we didn't bind: unref. */
+  while (i < nargs) { unrefexp(argv[i++]); }
+
+  exp_t *ret;
+  if (fn->flags & FLAG_COMPILED) {
+    ret = vm_run(fn, newenv);
+  } else {
+    /* Fall back to AST walker for non-compiled callees. */
+    exp_t *body = fn->next->content;
+    ret = NULL;
+    while (body) {
+      if (ret) unrefexp(ret);
+      ret = evaluate(refexp(body->content), newenv);
+      if (ret && iserror(ret)) break;
+      body = body->next;
+    }
+  }
+  destroy_env(newenv);
+  unrefexp(fn);
+  return ret;
+}
+
+
 exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
 {
   /* e->content = fn name, e->next = args list,
@@ -2414,6 +3015,19 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
     newenv = make_env(env);
     newenv->callingfnc = refexp(e);
     if ((ret = var2env(e, fn->content, e->next, newenv, true))) {
+      destroy_env(newenv);
+      unrefexp(fn);
+      unrefexp(e);
+      in_tail_position = outer_tail;
+      return ret;
+    }
+
+    /* Compiled body: dispatch to the VM loop. Bypasses the tree-walker
+       entirely. TCO inside the body is handled by OP_TAIL_SELF; cross-
+       function tail calls lose their TCO here (fall back to a regular
+       C-stack call). */
+    if (fn->flags & FLAG_COMPILED) {
+      ret = vm_run(fn, newenv);
       destroy_env(newenv);
       unrefexp(fn);
       unrefexp(e);
