@@ -77,7 +77,7 @@ lispProc lispProcList[]={
   {"prn",2,1,0,prncmd},
   {"println",2,1,0,prncmd},
   {"odd",2,1,0,oddcmd},
-  {"do",2,1,0,docmd},
+  {"do",2,FLAG_TAIL_AWARE,0,docmd},
   {"when",2,1,0,whencmd},
   {"while",2,1,0,whilecmd},
   {"repeat",2,1,0,repeatcmd},
@@ -1809,16 +1809,22 @@ exp_t *oddcmd(exp_t *e, env_t *env){
 }
 
 exp_t *docmd(exp_t *e, env_t *env){
+  /* Tail-aware: propagates in_tail_position to the final expression so
+     a tail call inside (do ... (f x)) actually gets TCO. Returns the
+     last expression's value (not nil — that was a pre-existing bug). */
+  int outer_tail = in_tail_position;
   exp_t *cur=cdr(e);
   exp_t *ret=NULL;
-  do
-    {
-      if (ret) unrefexp(ret);
-      ret=EVAL(car(cur), env);
-    } while ((cur=cdr(cur)) && !(ret && iserror(ret)));
-  if (ret && iserror(ret))
-    return ret;
-  else { unrefexp(e); return NIL_EXP;}
+  while (cur) {
+    if (ret) unrefexp(ret);
+    in_tail_position = (cur->next == NULL) ? outer_tail : 0;
+    ret = EVAL(car(cur), env);
+    if (ret && iserror(ret)) { in_tail_position = outer_tail; unrefexp(e); return ret; }
+    cur = cdr(cur);
+  }
+  in_tail_position = outer_tail;
+  unrefexp(e);
+  return ret ? ret : NIL_EXP;
 }
 
 exp_t *whencmd(exp_t *e, env_t *env){
