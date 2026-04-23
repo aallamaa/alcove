@@ -182,7 +182,7 @@ inline int unrefexp(exp_t *e){
       free(e->meta);
     }
     if (e->bc && e->type == EXP_LAMBDA) {
-      bytecode_free((bytecode_t*)e->bc);
+      bytecode_free(e->bc);
     }
     if (e->next) unrefexp(e->next);
     if ((e->type==EXP_SYMBOL)||(e->type==EXP_STRING)||(e->type==EXP_ERROR))
@@ -1256,7 +1256,7 @@ exp_t *fncmd(exp_t *e, env_t *env)
       val=make_node(refexp(header));
       val->next=vali;
       val->type=EXP_LAMBDA;
-      compile_lambda(val);  /* attempts bytecode; silent fallback */
+      compile_lambda(val);
     }
     else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
   }
@@ -1286,7 +1286,7 @@ exp_t *defcmd(exp_t *e, env_t *env)
           val->next=vali;
           val->type=EXP_LAMBDA;
           val->meta=(keyval_t *)strdup(name->ptr);
-          compile_lambda(val);  /* attempts bytecode; silent fallback */
+          compile_lambda(val);  /* silent fallback to AST if body unsupported */
           if (!(env->d)) env->d=create_dict();
           ret=set_get_keyval_dict(env->d,name->ptr,val);
         }
@@ -2448,7 +2448,7 @@ static int find_slot(compiler_t *c, const char *name) {
   return -1;
 }
 
-static int  op_for_head(const char *s);   /* forward */
+static int  op_for_head(const char *s);
 static void compile_expr(compiler_t *c, exp_t *e, int tail);
 
 /* Returns OP_ADD..OP_NOT for pure-arithmetic/cmp symbols, -1 otherwise. */
@@ -2601,25 +2601,14 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       compile_arith(c, e, op);
       return;
     }
-    /* Unsupported special forms fall through to user-call, which will
-       at least work for globals/lambdas. For things we know need the
-       tree-walker (let, with, for, each, do, =, pr, etc.), bail now. */
-    if (!strcmp(s, "let") || !strcmp(s, "with") || !strcmp(s, "for")  ||
-        !strcmp(s, "each")|| !strcmp(s, "do")   || !strcmp(s, "while")||
-        !strcmp(s, "repeat")|| !strcmp(s, "=")  || !strcmp(s, "case") ||
-        !strcmp(s, "when")|| !strcmp(s, "and")  || !strcmp(s, "or")   ||
-        !strcmp(s, "in")  || !strcmp(s, "pr")   || !strcmp(s, "print")||
-        !strcmp(s, "prn") || !strcmp(s, "println") || !strcmp(s, "cons")||
-        !strcmp(s, "car") || !strcmp(s, "cdr")  || !strcmp(s, "list") ||
-        !strcmp(s, "def") || !strcmp(s, "fn")   || !strcmp(s, "defmacro")||
-        !strcmp(s, "eval")|| !strcmp(s, "odd")  || !strcmp(s, "sqrt") ||
-        !strcmp(s, "exp") || !strcmp(s, "expt") || !strcmp(s, "time") ||
-        !strcmp(s, "inspect")|| !strcmp(s, "persist")||!strcmp(s, "forget")||
-        !strcmp(s, "savedb")|| !strcmp(s, "ispersistent")||
-        !strcmp(s, "verbose")|| !strcmp(s, "macroexpand-1")) {
+    /* Fail-closed: any head that resolves to an EXP_INTERNAL we haven't
+       whitelisted above is by definition a builtin the compiler doesn't
+       know how to handle — let the tree-walker run it. User lambdas
+       (not in reserved_symbol) fall through to compile_call. */
+    keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char*)s, NULL);
+    if (kv && is_ptr(kv->val) && isinternal(kv->val)) {
       c->failed = 1; return;
     }
-    /* User call: head is a symbol referring to a lambda. */
     compile_call(c, e, tail);
     return;
   }
@@ -2669,11 +2658,13 @@ int compile_lambda(exp_t *fn) {
   return 1;
 }
 
+static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL). */
 exp_t *vm_run(exp_t *fn, env_t *env)
 {
-  bytecode_t *bc = (bytecode_t*)fn->bc;
+  bytecode_t *bc = fn->bc;
   uint8_t *code = bc->code;
   exp_t **consts = bc->consts;
 
@@ -2682,16 +2673,18 @@ exp_t *vm_run(exp_t *fn, env_t *env)
   int sp = 0;
   int pc = 0;
 
-#define PUSH(v)   do { stack[sp++] = (v); } while (0)
-#define POP()     (stack[--sp])
-#define READ_U8   (code[pc++])
-#define READ_I16  (pc+=2, (int16_t)(code[pc-2] | (code[pc-1] << 8)))
-
 #define RUNTIME_ERR(msg) do {                                        \
     int _i;                                                          \
     for (_i = 0; _i < sp; _i++) unrefexp(stack[_i]);                 \
     return error(ERROR_ILLEGAL_VALUE, fn, env, msg);                 \
   } while (0)
+#define PUSH(v)   do {                                               \
+    if (sp >= VM_STACK_MAX) RUNTIME_ERR("VM stack overflow");        \
+    stack[sp++] = (v);                                               \
+  } while (0)
+#define POP()     (stack[--sp])
+#define READ_U8   (code[pc++])
+#define READ_I16  (pc+=2, (int16_t)(code[pc-2] | (code[pc-1] << 8)))
 
   for (;;) {
     uint8_t op = code[pc++];
@@ -2808,22 +2801,27 @@ exp_t *vm_run(exp_t *fn, env_t *env)
 
     case OP_LT: case OP_GT: case OP_LE: case OP_GE: {
       exp_t *b = POP(), *a = POP();
-      double d;
-      if (isnumber(a) && isnumber(b)) d = (double)(FIX_VAL(a) - FIX_VAL(b));
-      else {
+      int r;
+      if (isnumber(a) && isnumber(b)) {
+        /* Integer compare directly — avoids the (int64 − int64) cast to
+           double, which would overflow at the 61-bit fixnum limits. */
+        int64_t ai = FIX_VAL(a), bi = FIX_VAL(b);
+        r = (op == OP_LT) ? ai <  bi :
+            (op == OP_GT) ? ai >  bi :
+            (op == OP_LE) ? ai <= bi : ai >= bi;
+      } else {
         double da, db;
         if      (isnumber(a)) da = (double)FIX_VAL(a);
-        else if (isfloat(a))  { da = a->f; }
+        else if (isfloat(a))  da = a->f;
         else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in compare"); }
         if      (isnumber(b)) db = (double)FIX_VAL(b);
-        else if (isfloat(b))  { db = b->f; }
+        else if (isfloat(b))  db = b->f;
         else { unrefexp(a); unrefexp(b); RUNTIME_ERR("Illegal value in compare"); }
-        d = da - db;
+        r = (op == OP_LT) ? da <  db :
+            (op == OP_GT) ? da >  db :
+            (op == OP_LE) ? da <= db : da >= db;
       }
       unrefexp(a); unrefexp(b);
-      int r = (op == OP_LT) ? d < 0 :
-              (op == OP_GT) ? d > 0 :
-              (op == OP_LE) ? d <= 0 : d >= 0;
       PUSH(r ? TRUE_EXP : NIL_EXP);
       break;
     }
@@ -2871,32 +2869,15 @@ exp_t *vm_run(exp_t *fn, env_t *env)
     }
 
     case OP_TAIL_SELF: {
+      /* Self-tail: rebind inline slots from the top of the operand
+         stack, keep keys as-is (same fn → same params), jump to PC 0. */
       uint8_t n = READ_U8;
-      /* Args are on top of stack. Rebind inline slots in place. */
       int base = sp - n;
-      /* Release old slot values. */
       int i;
       for (i = 0; i < env->n_inline; i++) unrefexp(env->inline_vals[i]);
-      env->n_inline = 0;
-      for (i = 0; i < n; i++) {
-        if (env->n_inline < ENV_INLINE_SLOTS) {
-          /* keys already set (they're borrowed from fn->content symbols,
-             unchanged across self-recursion). Just re-use index i. */
-          env->inline_vals[i] = stack[base + i];
-          env->n_inline++;
-        } else {
-          unrefexp(stack[base + i]);
-        }
-      }
-      /* Rebind keys if params > slots in use (normally same — we only
-         reach TAIL_SELF for same-fn so keys match). */
-      {
-        exp_t *p = fn->content; int k = 0;
-        while (p && k < env->n_inline) {
-          env->inline_keys[k++] = (char*)p->content->ptr;
-          p = p->next;
-        }
-      }
+      env->n_inline = n <= ENV_INLINE_SLOTS ? n : ENV_INLINE_SLOTS;
+      for (i = 0; i < env->n_inline; i++) env->inline_vals[i] = stack[base + i];
+      for (; i < n; i++) unrefexp(stack[base + i]);
       sp = base;
       pc = 0;
       break;
@@ -2905,21 +2886,8 @@ exp_t *vm_run(exp_t *fn, env_t *env)
     case OP_CALL: {
       uint8_t n = READ_U8;
       int base = sp - n;
-      exp_t *callee = stack[base - 1];      /* fn */
-      /* Build a synthetic call form: (placeholder arg0 arg1 ...). We
-         need an exp_t tree for invoke's var2env to walk. For args,
-         the pair's `content` holds the pre-evaluated value directly;
-         we pass evalexp=false via a dedicated path... but invoke only
-         accepts evalexp=true internally. Simplest: build a list where
-         each node's content is the value, then invoke with a custom
-         path.
-         For phase 1: build a synthetic form, then route through a
-         helper that skips re-eval. */
-      /* We use invoke_values below. */
-      extern exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+      exp_t *callee = stack[base - 1];
       exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
-      /* Pop args + fn. Args already consumed by vm_invoke_values
-         (it took ownership); fn is the one we didn't transfer. */
       sp = base - 1;
       unrefexp(callee);
       if (ret && iserror(ret)) { while (sp > 0) unrefexp(POP()); return ret; }
@@ -2941,24 +2909,25 @@ exp_t *vm_run(exp_t *fn, env_t *env)
 }
 
 /* Invoke a callee with already-evaluated args. Takes ownership of
-   argv[i] values. Used by OP_CALL. */
-exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
+   argv[i] values. Used by OP_CALL. No refexp on fn: the caller's
+   operand stack holds fn for the duration of this call, so its lifetime
+   is already guaranteed — skipping the atomic pair is measurable on
+   call-heavy benchmarks. */
+static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
 {
   if (!is_ptr(fn) || !islambda(fn)) {
     int i; for (i = 0; i < nargs; i++) unrefexp(argv[i]);
     return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: not a lambda");
   }
   env_t *newenv = make_env(env);
-  newenv->callingfnc = NULL;  /* no call-form e; self-tail in target uses fn compare */
-  refexp(fn);
+  /* callingfnc stays NULL — OP_CALL is always non-tail from our side. */
 
-  /* Bind params from argv (take ownership). */
   exp_t *p = fn->content;
   int i = 0;
   while (p && i < nargs) {
     if (!is_ptr(p->content) || !issymbol(p->content)) {
       int j; for (j = i; j < nargs; j++) unrefexp(argv[j]);
-      destroy_env(newenv); unrefexp(fn);
+      destroy_env(newenv);
       return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
     }
     if (newenv->n_inline < ENV_INLINE_SLOTS) {
@@ -2972,14 +2941,12 @@ exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
     }
     p = p->next; i++;
   }
-  /* Any leftover argv entries we didn't bind: unref. */
-  while (i < nargs) { unrefexp(argv[i++]); }
+  while (i < nargs) unrefexp(argv[i++]);
 
   exp_t *ret;
   if (fn->flags & FLAG_COMPILED) {
     ret = vm_run(fn, newenv);
   } else {
-    /* Fall back to AST walker for non-compiled callees. */
     exp_t *body = fn->next->content;
     ret = NULL;
     while (body) {
@@ -2990,7 +2957,6 @@ exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
     }
   }
   destroy_env(newenv);
-  unrefexp(fn);
   return ret;
 }
 
@@ -3028,10 +2994,8 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
       return ret;
     }
 
-    /* Compiled body: dispatch to the VM loop. Bypasses the tree-walker
-       entirely. TCO inside the body is handled by OP_TAIL_SELF; cross-
-       function tail calls lose their TCO here (fall back to a regular
-       C-stack call). */
+    /* Compiled body: cross-function tail calls lose TCO here (internal
+       OP_TAIL_SELF still applies). */
     if (fn->flags & FLAG_COMPILED) {
       ret = vm_run(fn, newenv);
       destroy_env(newenv);

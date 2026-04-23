@@ -110,6 +110,8 @@ typedef struct exp_t *lispCmd(struct exp_t *e,struct env_t *env);
    dispatch loop instead of the AST walker. e->bc points to a bytecode_t. */
 #define FLAG_COMPILED   4
 
+struct bytecode_t;
+
 typedef struct exp_t {
   unsigned short int flags; /* 2 bytes */
   unsigned short int type;  /* 2 bytes */
@@ -123,7 +125,7 @@ typedef struct exp_t {
   };
   struct keyval_t *meta;    /* 8 bytes — lambda/macro name, symbol-cache ptr */
   struct exp_t *next;       /* 8 bytes */
-  void *bc;                 /* 8 bytes — bytecode_t* for compiled lambdas, else NULL */
+  struct bytecode_t *bc;    /* 8 bytes — set on compiled lambdas, else NULL */
 } exp_t; /* 40 bytes */
 
 /* ---------------- Bytecode VM ----------------
