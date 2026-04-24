@@ -2126,7 +2126,10 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
    Each `(ffi-fn lib name rtype atype1 atype2 ...)` call returns an
    exp_t of type EXP_FFI carrying the resolved fn pointer + ffi_cif.
    Calling an EXP_FFI value marshals alcove args → C ABI, invokes via
-   ffi_call, and marshals the result back. */
+   ffi_call, and marshals the result back.
+
+   Conditional on -DALCOVE_FFI=1 (Makefile auto-detects via ffi.h). */
+#ifdef ALCOVE_FFI
 #include <dlfcn.h>
 #include <ffi.h>
 
@@ -2283,6 +2286,15 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
   for (int i = 0; i < nargs; i++) unrefexp(args[i]);
   return ret;
 }
+#else  /* !ALCOVE_FFI */
+exp_t *ffifncmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "ffi-fn: alcove built without libffi (install libffi-dev "
+               "and rebuild).");
+}
+void alc_ffi_free(void *ptr) { (void)ptr; }   /* called from unrefexp; no FFI exp can exist */
+#endif  /* ALCOVE_FFI */
 
 /* ---------------- Standard-library builtins (math/seq/predicates) ----------------
    Each follows the prn/expt pattern: walk e->next, EVAL each arg, type-check,
@@ -5999,6 +6011,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
         if (issymbol(tmpexp)) {
           if (((char*)tmpexp->ptr)[0] == ':') { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Error keyword %s can not be used as function",tmpexp->ptr); goto finish;}// e is a keyword
           if ((tmpexp2=lookup(tmpexp,env))) {
+#ifdef ALCOVE_FFI
             if isffi(tmpexp2) {
               /* Eval each arg and dispatch through libffi to the C
                  function held by tmpexp2. */
@@ -6022,6 +6035,7 @@ exp_t *evaluate(exp_t *e,env_t *env)
               unrefexp(tmpexp2);
               goto finisht;
             }
+#endif
             if isinternal(tmpexp2) {
                 /* Tail flag propagates only into tail-aware cmds (ifcmd).
                    Others get it cleared so their sub-evaluations don't
