@@ -1,0 +1,19 @@
+; FFI example: getting wall-clock time + sleeping via libc.
+;
+; (time NULL) returns seconds-since-epoch as int.
+; usleep takes microseconds.
+
+; Note: we use `ctime` not `time` because alcove already has a
+; built-in `time` for timing alcove expressions, and reserved names
+; can't be shadowed at top level.
+(= ctime  (ffi-fn "libc.so.6" "time"   "long" "ptr"))
+(= usleep (ffi-fn "libc.so.6" "usleep" "int"  "int"))
+
+(= t0 (ctime 0))
+(prn "epoch seconds:" t0)
+
+(prn "sleeping 100ms...")
+(usleep 100000)
+
+(= t1 (ctime 0))
+(prn "elapsed seconds:" (- t1 t0))

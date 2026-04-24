@@ -1,0 +1,22 @@
+; FFI example: libc string functions.
+;
+; Type names recognized by ffi-fn:
+;   "void"   — no return value (or no arg)
+;   "int"    — 32-bit int       (alcove fixnum)
+;   "long"   — 64-bit signed    (alcove fixnum, native size)
+;   "double" — IEEE 754 double  (alcove float)
+;   "string" — char* (NUL-terminated)
+;   "ptr"    — generic pointer  (alcove fixnum holding the address)
+
+(= strlen   (ffi-fn "libc.so.6" "strlen"  "long"   "string"))
+(= strcmp   (ffi-fn "libc.so.6" "strcmp"  "int"    "string" "string"))
+(= toupper  (ffi-fn "libc.so.6" "toupper" "int"    "int"))
+(= tolower  (ffi-fn "libc.so.6" "tolower" "int"    "int"))
+(= getpid   (ffi-fn "libc.so.6" "getpid"  "int"))
+
+(prn "strlen(\"hello\") =" (strlen "hello"))
+(prn "strcmp(\"a\",\"a\") =" (strcmp "a" "a"))
+(prn "strcmp(\"a\",\"b\") =" (strcmp "a" "b"))
+(prn "toupper(97) =" (toupper 97))    ; 'A' = 65
+(prn "tolower(65) =" (tolower 65))    ; 'a' = 97
+(prn "my pid =" (getpid))

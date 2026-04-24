@@ -10,6 +10,7 @@ enum {
   /* ALL ATOMS ARE ABOVE THIS COMMENT */
   /*EXP_QUOTE,*/
   EXP_PAIR, EXP_LAMBDA,EXP_INTERNAL,EXP_MACRO,EXO_MACROINTERNAL,
+  EXP_FFI,           /* libffi-backed C-function callable; ptr → alc_ffi_t */
   /* ALL EXP BEYOND THIS COMMENT ARE "CIRCULAR" MEANING THEY POINT TO A PREVIOUSLY MEM ALLOCATED EXP */
   EXP_TREE,
   EXP_PAIR_CIRCULAR,
@@ -87,6 +88,7 @@ enum {
 #define isinternal(e) (is_ptr(e) && (e)->type == EXP_INTERNAL)
 #define ismacro(e)    (is_ptr(e) && (e)->type == EXP_MACRO)
 #define iserror(e)    (is_ptr(e) && (e)->type == EXP_ERROR)
+#define isffi(e)      (is_ptr(e) && (e)->type == EXP_FFI)
 #define isatom(e)     (is_imm(e) || (is_ptr(e) && (e)->type <= EXP_VECTOR))
 
 #define car(e) ((is_ptr(e)&&(e)->type==EXP_PAIR)?(e)->content:NULL)
@@ -462,6 +464,7 @@ exp_t *applycmd(exp_t *e,env_t *env);
 exp_t *mapcmd(exp_t *e,env_t *env);
 exp_t *filtercmd(exp_t *e,env_t *env);
 exp_t *reducecmd(exp_t *e,env_t *env);
+exp_t *ffifncmd(exp_t *e,env_t *env);
 exp_t *loaddbcmd(exp_t *e,env_t *env);
 int    loaddb_from_file(env_t *env);  /* shared with main() for auto-load */
 /* lisp macro */

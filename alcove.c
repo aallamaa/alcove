@@ -133,6 +133,7 @@ lispProc lispProcList[]={
   {"map",2,1,0,mapcmd},
   {"filter",2,1,0,filtercmd},
   {"reduce",2,1,0,reducecmd},
+  {"ffi-fn",2,1,0,ffifncmd},
 
 };
 
@@ -232,9 +233,13 @@ inline int unrefexp(exp_t *e){
     if (e->next) unrefexp(e->next);
     if ((e->type==EXP_SYMBOL)||(e->type==EXP_STRING)||(e->type==EXP_ERROR))
       free(e->ptr);
+    else if (e->type==EXP_FFI) {
+      extern void alc_ffi_free(void *ptr);   /* defined alongside ffi_call */
+      alc_ffi_free(e->ptr);
+    }
     else if (((e->type>=EXP_NUMBER)&&(e->type<=EXP_BOOLEAN))||(e->type==EXP_INTERNAL)) {
     }
-    else 
+    else
         unrefexp(e->content); //check if content type is exp
 
     if (verbose) printf("\x1B[91mFree e:\x1B[39m %p\n",(void*)e);
@@ -2115,6 +2120,169 @@ exp_t *prncmd(exp_t *e, env_t *env){
 
 /* Forward decl needed by applycmd below; defined further down. */
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+
+/* ---------------- FFI (libffi-backed) ----------------
+   Lets alcove call into shared libraries (libc, libm, custom .so's).
+   Each `(ffi-fn lib name rtype atype1 atype2 ...)` call returns an
+   exp_t of type EXP_FFI carrying the resolved fn pointer + ffi_cif.
+   Calling an EXP_FFI value marshals alcove args → C ABI, invokes via
+   ffi_call, and marshals the result back. */
+#include <dlfcn.h>
+#include <ffi.h>
+
+#define ALC_FFI_MAX_ARGS 8
+typedef enum {
+  AFFI_VOID, AFFI_INT, AFFI_LONG, AFFI_DOUBLE, AFFI_STRING, AFFI_PTR
+} alc_ffi_tag_t;
+
+typedef struct alc_ffi_t {
+  void        *fn;          /* dlsym result */
+  ffi_cif      cif;
+  ffi_type    *rtype;
+  unsigned int nargs;
+  ffi_type    *atypes[ALC_FFI_MAX_ARGS];
+  uint8_t      ret_tag;
+  uint8_t      arg_tags[ALC_FFI_MAX_ARGS];
+  char        *display_name; /* "lib:fn" for error messages */
+} alc_ffi_t;
+
+/* Map a type-name string to (tag, ffi_type*). Returns 0 on success, -1
+   on unknown type. */
+static int alc_ffi_typeof(const char *name, alc_ffi_tag_t *tag, ffi_type **out) {
+  if (!strcmp(name,"void"))                              { *tag=AFFI_VOID;   *out=&ffi_type_void;    return 0; }
+  if (!strcmp(name,"int"))                               { *tag=AFFI_INT;    *out=&ffi_type_sint32;  return 0; }
+  if (!strcmp(name,"long")||!strcmp(name,"int64"))       { *tag=AFFI_LONG;   *out=&ffi_type_sint64;  return 0; }
+  if (!strcmp(name,"double"))                            { *tag=AFFI_DOUBLE; *out=&ffi_type_double;  return 0; }
+  if (!strcmp(name,"string")||!strcmp(name,"char*"))     { *tag=AFFI_STRING; *out=&ffi_type_pointer; return 0; }
+  if (!strcmp(name,"ptr")||!strcmp(name,"void*"))        { *tag=AFFI_PTR;    *out=&ffi_type_pointer; return 0; }
+  return -1;
+}
+
+/* Process-wide cache of dlopen handles keyed by lib name. dlopen with
+   the same name on Linux returns the same handle anyway, but caching
+   avoids re-resolving on each (ffi-fn) call. */
+static struct ffi_lib_cache { char *name; void *h; struct ffi_lib_cache *next; } *g_ffi_libs = NULL;
+static void *alc_ffi_dlopen(const char *name) {
+  struct ffi_lib_cache *c;
+  for (c = g_ffi_libs; c; c = c->next) if (!strcmp(c->name, name)) return c->h;
+  void *h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+  if (!h) return NULL;
+  c = (struct ffi_lib_cache*)memalloc(1, sizeof(*c));
+  c->name = strdup(name); c->h = h; c->next = g_ffi_libs; g_ffi_libs = c;
+  return h;
+}
+
+/* (ffi-fn lib-name fn-name return-type arg-type ...) */
+exp_t *ffifncmd(exp_t *e, env_t *env) {
+  exp_t *cur = e->next;
+  exp_t *libname=NULL, *fnname=NULL, *rtype=NULL;
+  exp_t *atypes[ALC_FFI_MAX_ARGS] = {0};
+  int n_a = 0;
+  exp_t *err = NULL;
+
+  if (!cur || !cur->next || !cur->next->next) {
+    err = error(ERROR_MISSING_PARAMETER, e, env,
+                "(ffi-fn lib name return-type arg-type ...)"); goto cleanup;
+  }
+  libname = EVAL(cur->content, env);              if (iserror(libname)) { err=libname; libname=NULL; goto cleanup; }
+  cur = cur->next;
+  fnname  = EVAL(cur->content, env);              if (iserror(fnname))  { err=fnname; fnname=NULL; goto cleanup; }
+  cur = cur->next;
+  rtype   = EVAL(cur->content, env);              if (iserror(rtype))   { err=rtype; rtype=NULL; goto cleanup; }
+  cur = cur->next;
+  while (cur && n_a < ALC_FFI_MAX_ARGS) {
+    atypes[n_a] = EVAL(cur->content, env);
+    if (iserror(atypes[n_a])) { err = atypes[n_a]; atypes[n_a]=NULL; goto cleanup; }
+    n_a++; cur = cur->next;
+  }
+
+  if (!isstring(libname) || !isstring(fnname) || !isstring(rtype)) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: lib/name/rtype must be strings");
+    goto cleanup;
+  }
+  void *h = alc_ffi_dlopen((char*)libname->ptr);
+  if (!h) { err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: dlopen failed (%s)", dlerror()); goto cleanup; }
+  void *sym = dlsym(h, (char*)fnname->ptr);
+  if (!sym) { err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: dlsym failed for %s", (char*)fnname->ptr); goto cleanup; }
+
+  alc_ffi_t *f = (alc_ffi_t*)memalloc(1, sizeof(alc_ffi_t));
+  f->fn = sym;
+  f->nargs = (unsigned int)n_a;
+  alc_ffi_tag_t rt; ffi_type *rt_ffi;
+  if (alc_ffi_typeof((char*)rtype->ptr, &rt, &rt_ffi) < 0) {
+    free(f); err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown return type %s", (char*)rtype->ptr); goto cleanup;
+  }
+  f->ret_tag = rt; f->rtype = rt_ffi;
+  for (int i = 0; i < n_a; i++) {
+    if (!isstring(atypes[i])) { free(f); err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: arg-type must be string"); goto cleanup; }
+    alc_ffi_tag_t at; ffi_type *at_ffi;
+    if (alc_ffi_typeof((char*)atypes[i]->ptr, &at, &at_ffi) < 0) {
+      free(f); err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown arg type %s", (char*)atypes[i]->ptr); goto cleanup;
+    }
+    f->arg_tags[i] = at; f->atypes[i] = at_ffi;
+  }
+  if (ffi_prep_cif(&f->cif, FFI_DEFAULT_ABI, f->nargs, f->rtype, f->atypes) != FFI_OK) {
+    free(f); err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: ffi_prep_cif failed"); goto cleanup;
+  }
+  size_t dnlen = strlen((char*)libname->ptr) + strlen((char*)fnname->ptr) + 2;
+  f->display_name = (char*)memalloc(dnlen, 1);
+  snprintf(f->display_name, dnlen, "%s:%s", (char*)libname->ptr, (char*)fnname->ptr);
+
+  exp_t *ret = make_nil();
+  ret->type = EXP_FFI;
+  ret->ptr  = f;
+
+cleanup:
+  unrefexp(libname); unrefexp(fnname); unrefexp(rtype);
+  for (int i = 0; i < n_a; i++) unrefexp(atypes[i]);
+  unrefexp(e);
+  if (err) return err;
+  return ret;
+}
+
+void alc_ffi_free(void *ptr) {
+  alc_ffi_t *f = (alc_ffi_t*)ptr;
+  if (!f) return;
+  if (f->display_name) free(f->display_name);
+  free(f);
+}
+
+/* Marshal alcove args → C, ffi_call, marshal return. */
+static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
+  if ((unsigned int)nargs != f->nargs) {
+    int i; for (i = 0; i < nargs; i++) unrefexp(args[i]);
+    return error(ERROR_MISSING_PARAMETER, NULL, NULL,
+                 "ffi: wrong arg count for %s (expected %u, got %d)",
+                 f->display_name ? f->display_name : "?", f->nargs, nargs);
+  }
+  /* Slot storage. Avoid stack discipline issues by using one union per arg. */
+  union { int32_t i; int64_t l; double d; const char *s; void *p; } slots[ALC_FFI_MAX_ARGS];
+  void *avalues[ALC_FFI_MAX_ARGS];
+  for (int i = 0; i < nargs; i++) {
+    exp_t *a = args[i];
+    switch (f->arg_tags[i]) {
+      case AFFI_INT:    slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a) : 0; avalues[i] = &slots[i].i; break;
+      case AFFI_LONG:   slots[i].l = isnumber(a) ? FIX_VAL(a) : 0;          avalues[i] = &slots[i].l; break;
+      case AFFI_DOUBLE: slots[i].d = isfloat(a) ? a->f : (isnumber(a) ? (double)FIX_VAL(a) : 0.0); avalues[i] = &slots[i].d; break;
+      case AFFI_STRING: slots[i].s = isstring(a) ? (const char*)a->ptr : NULL; avalues[i] = &slots[i].s; break;
+      case AFFI_PTR:    slots[i].p = isnumber(a) ? (void*)(uintptr_t)FIX_VAL(a) : NULL; avalues[i] = &slots[i].p; break;
+      default:          slots[i].l = 0; avalues[i] = &slots[i].l; break;
+    }
+  }
+  union { int32_t i; int64_t l; double d; void *p; } rval;
+  ffi_call(&f->cif, FFI_FN(f->fn), &rval, avalues);
+  exp_t *ret = NIL_EXP;
+  switch (f->ret_tag) {
+    case AFFI_VOID:   ret = NIL_EXP; break;
+    case AFFI_INT:    ret = MAKE_FIX((int64_t)rval.i); break;
+    case AFFI_LONG:   ret = MAKE_FIX(rval.l); break;
+    case AFFI_DOUBLE: ret = make_floatf(rval.d); break;
+    case AFFI_STRING: ret = rval.p ? make_string((char*)rval.p, strlen((char*)rval.p)) : NIL_EXP; break;
+    case AFFI_PTR:    ret = MAKE_FIX((int64_t)(uintptr_t)rval.p); break;
+  }
+  for (int i = 0; i < nargs; i++) unrefexp(args[i]);
+  return ret;
+}
 
 /* ---------------- Standard-library builtins (math/seq/predicates) ----------------
    Each follows the prn/expt pattern: walk e->next, EVAL each arg, type-check,
@@ -5831,6 +5999,29 @@ exp_t *evaluate(exp_t *e,env_t *env)
         if (issymbol(tmpexp)) {
           if (((char*)tmpexp->ptr)[0] == ':') { ret = error(ERROR_ILLEGAL_VALUE,e,env,"Error keyword %s can not be used as function",tmpexp->ptr); goto finish;}// e is a keyword
           if ((tmpexp2=lookup(tmpexp,env))) {
+            if isffi(tmpexp2) {
+              /* Eval each arg and dispatch through libffi to the C
+                 function held by tmpexp2. */
+              alc_ffi_t *f = (alc_ffi_t*)tmpexp2->ptr;
+              int n = 0;
+              exp_t *acur = e->next;
+              while (acur && n < ALC_FFI_MAX_ARGS) { n++; acur = acur->next; }
+              exp_t **argv = (n > 0) ? memalloc(n, sizeof(exp_t*)) : NULL;
+              acur = e->next; int i = 0;
+              for (; i < n; i++, acur = acur->next) {
+                argv[i] = EVAL(acur->content, env);
+                if (iserror(argv[i])) {
+                  exp_t *eret = argv[i];
+                  for (int j = 0; j < i; j++) unrefexp(argv[j]);
+                  free(argv); unrefexp(tmpexp2);
+                  ret = eret; goto finish;
+                }
+              }
+              ret = alc_ffi_call(f, n, argv);
+              free(argv);
+              unrefexp(tmpexp2);
+              goto finisht;
+            }
             if isinternal(tmpexp2) {
                 /* Tail flag propagates only into tail-aware cmds (ifcmd).
                    Others get it cleared so their sub-evaluations don't

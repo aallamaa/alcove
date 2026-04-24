@@ -13,3 +13,6 @@ alcove.*
 
 # Per-run persistence artifact (savedb writes ./db.dump in CWD).
 db.dump
+
+# FFI example .so (built from .c on demand).
+ffi-examples/libmylib.so

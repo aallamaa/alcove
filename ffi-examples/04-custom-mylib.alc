@@ -1,0 +1,28 @@
+; FFI example: calling our own C library.
+;
+; First build the .so:
+;   cc -shared -fPIC -O2 -o libmylib.so 04-custom-mylib.c
+;
+; Then run:
+;   alcove 04-custom-mylib.alc
+;
+; The path "./libmylib.so" works because dlopen searches CWD when the
+; name contains a slash. For installed libs you'd use just the basename
+; like "libmylib.so" and it'd be searched on LD_LIBRARY_PATH.
+
+(= add     (ffi-fn "./libmylib.so" "mylib_add"     "long"   "long" "long"))
+(= cfib    (ffi-fn "./libmylib.so" "mylib_fib"     "long"   "long"))
+(= cstrlen (ffi-fn "./libmylib.so" "mylib_strlen"  "long"   "string"))
+(= inc     (ffi-fn "./libmylib.so" "mylib_inc"     "long"))
+(= get     (ffi-fn "./libmylib.so" "mylib_get"     "long"))
+(= reset   (ffi-fn "./libmylib.so" "mylib_reset"   "void"))
+(= greet   (ffi-fn "./libmylib.so" "mylib_greet"   "string"))
+
+(prn "add(3,4) =" (add 3 4))
+(prn "cfib(20) =" (cfib 20))
+(prn "cstrlen(\"alcove\") =" (cstrlen "alcove"))
+(prn "greet() =" (greet))
+
+(reset)
+(inc) (inc) (inc) (inc) (inc)
+(prn "counter after 5 incs:" (get))
