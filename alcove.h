@@ -177,11 +177,21 @@ typedef enum {
   OP_MAX
 } alc_op;
 
+/* Global-resolution cache slot. One per consts[] entry; lazily allocated.
+   Stores the last lookup result for an OP_LOAD_GLOBAL symbol along with
+   the generation it was cached at. Mutations to global bindings bump
+   alcove_global_gen; stale entries are detected and re-looked-up. */
+typedef struct gcache_entry {
+  struct exp_t *val;   /* not refcounted by us — global env keeps it alive */
+  uint64_t      gen;
+} gcache_entry;
+
 typedef struct bytecode_t {
   uint8_t  *code;
   int       ncode;
   exp_t   **consts;   /* owned refs — unref on free */
   int       nconsts;
+  gcache_entry *gcache;  /* lazily allocated, sized = nconsts */
   /* Optional native-code fast path. When set, vm_invoke_values calls
      this directly instead of running the dispatch loop. Returns the
      result exp_t* in x0. Populated by jit_compile() when ALCOVE_JIT is
@@ -190,6 +200,8 @@ typedef struct bytecode_t {
   void     *jit_mem;     /* mmap'd page; freed via munmap on bytecode_free */
   size_t    jit_size;
 } bytecode_t;
+
+extern uint64_t alcove_global_gen;
 
 void     bytecode_free(bytecode_t *bc);
 int      compile_lambda(exp_t *fn);                      /* 1 on success, 0 on fallback */

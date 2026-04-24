@@ -231,6 +231,13 @@ static env_t env_arena[ENV_ARENA_SLOTS];
 static env_t *env_arena_sp = env_arena;
 static env_t * const env_arena_end = env_arena + ENV_ARENA_SLOTS;
 
+/* Bumped on every operation that mutates a global binding (def, defmacro,
+   persist, forget, savedb, top-level updatebang). The bytecode global-
+   resolution cache compares this against its own per-slot gen to detect
+   stale entries. Starts at 1 so a fresh gcache_entry{val=NULL,gen=0} is
+   trivially stale. */
+uint64_t alcove_global_gen = 1;
+
 #define IS_ARENA_ENV(e) ((e) >= env_arena && (e) < env_arena_end)
 
 inline env_t * ref_env(env_t *env){
@@ -1183,7 +1190,12 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
         }
       }
       if (!(env->d)) env->d=create_dict();
-      ret=set_get_keyval_dict(env->d,keyv->ptr,val); unrefexp(keyv); return refexp(val);}
+      ret=set_get_keyval_dict(env->d,keyv->ptr,val);
+      /* This binding may shadow a global; conservatively invalidate
+         bytecode global caches. Bumping is cheap (atomic counter); the
+         cache only re-walks env on the next use. */
+      alcove_global_gen++;
+      unrefexp(keyv); return refexp(val);}
   else if (ispair(keyv)) 
     { /*evaluate(keyv,env)=val*/ 
       key=car(keyv);
@@ -1306,6 +1318,7 @@ exp_t *defcmd(exp_t *e, env_t *env)
           compile_lambda(val);  /* silent fallback to AST if body unsupported */
           if (!(env->d)) env->d=create_dict();
           ret=set_get_keyval_dict(env->d,name->ptr,val);
+          alcove_global_gen++;  /* invalidate bytecode global-resolution caches */
         }
       else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
     }
@@ -1315,7 +1328,7 @@ exp_t *defcmd(exp_t *e, env_t *env)
     val = error(EXP_ERROR_MISSING_NAME,e,env,"Error missing name or name not a lambda");
   unrefexp(e);
   return val;
-  
+
 }
 
 exp_t *expandmacrocmd(exp_t *e,env_t *env){
@@ -1361,8 +1374,9 @@ exp_t *defmacrocmd(exp_t *e, env_t *env)
         val->meta=(keyval_t *) strdup(name->ptr);
         if (!(env->d)) env->d=create_dict();
         ret=set_get_keyval_dict(env->d,name->ptr,val);
+        alcove_global_gen++;
       }
-      
+
       else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
     }
     else val = error(EXP_ERROR_PARAM_NOT_LIST,e,env,"Error params is not a list"); 
@@ -2423,6 +2437,7 @@ void bytecode_free(bytecode_t *bc) {
   int i;
   for (i = 0; i < bc->nconsts; i++) unrefexp(bc->consts[i]);
   free(bc->consts);
+  free(bc->gcache);
   free(bc->code);
 #ifdef ALCOVE_JIT
   if (bc->jit_mem) munmap(bc->jit_mem, bc->jit_size);
@@ -3353,9 +3368,20 @@ l_load_slot: {
   }
 l_load_global: {
     uint8_t idx = READ_U8;
-    exp_t *v = lookup(consts[idx], env);
-    if (!v) RUNTIME_ERR("Unbound variable");
-    PUSH(v);
+    /* Per-bytecode global cache. The gcache slot stores the last lookup
+       result + the generation it was cached at. If alcove_global_gen
+       still matches, we skip the env walk + strcmp entirely. fib spends
+       ~78% of its time here without this cache. */
+    if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
+      PUSH(refexp(bc->gcache[idx].val));
+    } else {
+      exp_t *v = lookup(consts[idx], env);
+      if (!v) RUNTIME_ERR("Unbound variable");
+      if (!bc->gcache) bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[idx].val = v;     /* not refcounted by us; bound globally */
+      bc->gcache[idx].gen = alcove_global_gen;
+      PUSH(v);
+    }
     NEXT;
   }
 
