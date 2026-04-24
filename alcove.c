@@ -2477,6 +2477,24 @@ static uint32_t arm64_movk(int rd, uint16_t imm, int hw) {
 }
 /* RET (uses x30 by default). */
 static uint32_t arm64_ret(void) { return 0xD65F03C0u; }
+/* STR Xt, [Xn, #imm]   — imm is 8-byte aligned offset. */
+static uint32_t arm64_str_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 8) & 0xfff;
+  return 0xF9000000u | (imm12 << 10) | ((uint32_t)rn << 5) | (uint32_t)rt;
+}
+/* CMP Xn, #imm12 — alias for SUBS XZR, Xn, #imm12. */
+static uint32_t arm64_cmp_imm(int rn, int imm) {
+  return 0xF1000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) | 31u;
+}
+/* B (unconditional, PC-relative). off is in INSTRUCTIONS (×4 for bytes), signed. */
+static uint32_t arm64_b(int off_insns) {
+  return 0x14000000u | ((uint32_t)off_insns & 0x3FFFFFFu);
+}
+/* B.cond — off in instructions, signed 19-bit. cond is the 4-bit code:
+   GE=10, LT=11, GT=12, LE=13. */
+static uint32_t arm64_b_cond(int cond, int off_insns) {
+  return 0x54000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) | ((uint32_t)cond & 0xfu);
+}
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs. */
 static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
@@ -2508,13 +2526,109 @@ static void jit_write_end(void *p, size_t sz) {
   __builtin___clear_cache((char*)p, (char*)p + sz);
 }
 
+/* Try to JIT a self-tail-recursive counter loop body of the form:
+     (def f (n) (if (cmp n K1) (f (op n K2)) n))
+   where cmp ∈ {<, <=, >, >=}, op ∈ {+, -}, K1 fits the cmp's tagged
+   immediate range, K2 fits the arith immediate range, and the loop
+   variable is a single param.
+   Compiled bytecode (emit order from compile_if + compile_call's
+   self-tail path with fused superinstructions):
+     [SLOT_<cmp>_FIX slot K1]   4 bytes
+     [BR_IF_FALSE off_to_else]  3 bytes
+     [SLOT_<op>_FIX slot K2]    4 bytes
+     [TAIL_SELF 1]              2 bytes
+     [JUMP off]                 3 bytes  (unreachable, emitted by compile_if)
+     [LOAD_SLOT slot]           2 bytes
+     [RET]                      1 byte
+   = 19 bytes total. */
+static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 19) return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX) return 0;
+  uint8_t cmp_slot = c[1];
+  int16_t cmp_imm  = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  /* Don't validate the inner offsets — we know the layout from the
+     compiler. The pattern check on op kinds + RET at the tail is
+     sufficient. */
+
+  uint8_t arith_op = c[7];
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX) return 0;
+  uint8_t arith_slot = c[8];
+  int16_t arith_imm  = (int16_t)((uint16_t)c[9] | ((uint16_t)c[10] << 8));
+
+  if (c[11] != OP_TAIL_SELF || c[12] != 1) return 0;
+  if (c[13] != OP_JUMP) return 0;
+  if (c[16] != OP_LOAD_SLOT) return 0;
+  uint8_t load_slot = c[17];
+  if (c[18] != OP_RET) return 0;
+
+  if (cmp_slot != arith_slot || cmp_slot != load_slot) return 0;
+  if (cmp_slot >= ENV_INLINE_SLOTS) return 0;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+  if (slot_off < 0 || slot_off > 32760) return 0;
+
+  /* Tagged immediate for cmp: FIX(K1) = (K1<<3)|1. Must fit u12. */
+  int64_t cmp_tagged_64 = ((int64_t)cmp_imm << 3) | 1;
+  if (cmp_tagged_64 < 0 || cmp_tagged_64 > 4095) return 0;
+
+  /* Arithmetic delta is K2<<3 (preserves tag bit). Must fit u12 add/sub. */
+  int arith_delta = ((int)arith_imm) << 3;
+  if (arith_delta < 0 || arith_delta > 4095) return 0;
+
+  /* Branch condition for "BR_IF_FALSE on cmp's result" — invert cmp.
+     ARM64 cond codes: GE=10, LT=11, GT=12, LE=13. */
+  int cond;
+  switch (cmp_op) {
+    case OP_SLOT_GT_FIX: cond = 13; break;  /* !GT → LE */
+    case OP_SLOT_LT_FIX: cond = 10; break;  /* !LT → GE */
+    case OP_SLOT_GE_FIX: cond = 11; break;  /* !GE → LT */
+    case OP_SLOT_LE_FIX: cond = 12; break;  /* !LE → GT */
+    default: return 0;
+  }
+
+  int n = 0;
+  /* loop_top: */
+  out[n++] = arm64_ldr_imm(1, 0, slot_off);            /* ldr x1, [x0,#off] */
+  out[n++] = arm64_cmp_imm(1, (int)cmp_tagged_64);     /* cmp x1, #FIX(K1) */
+  int patch_bcond = n;
+  out[n++] = 0;                                         /* placeholder b.cond */
+  if (arith_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+  else
+    out[n++] = arm64_add_imm(1, 1, arith_delta);
+  out[n++] = arm64_str_imm(1, 0, slot_off);            /* str x1, [x0,#off] */
+  /* b loop_top — backward jump to instruction 0 from current pc. */
+  {
+    int b_off = -n;
+    out[n++] = arm64_b(b_off);
+  }
+  /* end: */
+  int end_pc = n;
+  out[patch_bcond] = arm64_b_cond(cond, end_pc - patch_bcond);
+  out[n++] = arm64_ldr_imm(0, 0, slot_off);            /* x0 = inline_vals[slot] */
+  out[n++] = arm64_ret();
+
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit) return bc && bc->jit ? 1 : 0;
   uint8_t *c = bc->code;
 
   /* Identify the body shape. */
-  uint32_t insns[16];
+  uint32_t insns[32];
   int n = 0;
+
+  if (try_jit_simple_tail_loop(bc, insns, &n)) {
+    /* matched — fall through to mmap+install */
+  } else
 
   if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
     /* (fn () K) — return MAKE_FIX(K). */
