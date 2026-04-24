@@ -165,3 +165,16 @@
   (if (no xs) acc (myrev (cdr xs) (cons (car xs) acc))))
 (assert "vm tail-recursive reverse"  (iso (myrev (list 1 2 3 4 5) (list))
                                           (list 5 4 3 2 1))       t)
+
+; 14. Phase-6: JIT tag-check + deopt. addone is JIT-eligible
+;     ((fn (n) (+ n K)) shape). Calling with a fixnum hits the native
+;     fast path; calling with a non-fixnum must NOT corrupt and must
+;     let the next fixnum call still work (proves deopt -> vm_run -> recovery).
+(def addone (n) (+ n 1))
+(assert "JIT addone fix"             (addone 41)                   42)
+(addone 'sym)                        ; deopt path; result discarded
+(assert "JIT addone after deopt"     (addone 100)                  101)
+(def cdn (n) (if (> n 0) (cdn (- n 1)) n))
+(assert "JIT loop fix to 0"          (cdn 1000)                    0)
+(cdn 'sym)                           ; deopt at loop entry
+(assert "JIT loop after deopt"       (cdn 500)                     0)

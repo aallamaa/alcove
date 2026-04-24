@@ -2495,6 +2495,17 @@ static uint32_t arm64_b(int off_insns) {
 static uint32_t arm64_b_cond(int cond, int off_insns) {
   return 0x54000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) | ((uint32_t)cond & 0xfu);
 }
+/* TBZ Xt, #bit, label — branch if bit is zero. off in instructions, signed 14-bit. */
+static uint32_t arm64_tbz(int rt, int bit, int off_insns) {
+  uint32_t b40 = (uint32_t)(bit & 0x1f);
+  uint32_t b5  = (bit & 0x20) ? 1u : 0u;
+  return 0x36000000u | (b5 << 31) | (b40 << 19)
+       | (((uint32_t)off_insns & 0x3FFFu) << 5) | (uint32_t)(rt & 0x1f);
+}
+/* MOV Xd, Xm  — alias for ORR Xd, XZR, Xm. */
+static uint32_t arm64_mov_reg(int rd, int rm) {
+  return 0xAA0003E0u | ((uint32_t)rm << 16) | (uint32_t)rd;
+}
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs. */
 static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
@@ -2593,25 +2604,31 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   }
 
   int n = 0;
-  /* loop_top: */
+  /* Load slot value once; verify it's a tagged fixnum (bit 0 set).
+     If not, branch to deopt → return NULL → caller falls back to vm_run. */
   out[n++] = arm64_ldr_imm(1, 0, slot_off);            /* ldr x1, [x0,#off] */
+  int patch_tbz = n;
+  out[n++] = 0;                                         /* placeholder tbz x1,#0,deopt */
+  int loop_top = n;
   out[n++] = arm64_cmp_imm(1, (int)cmp_tagged_64);     /* cmp x1, #FIX(K1) */
   int patch_bcond = n;
-  out[n++] = 0;                                         /* placeholder b.cond */
+  out[n++] = 0;                                         /* placeholder b.cond end */
   if (arith_op == OP_SLOT_SUB_FIX)
     out[n++] = arm64_sub_imm(1, 1, arith_delta);
   else
     out[n++] = arm64_add_imm(1, 1, arith_delta);
+  /* tag bit preserved across ±(K2<<3); subsequent loads stay tagged. */
   out[n++] = arm64_str_imm(1, 0, slot_off);            /* str x1, [x0,#off] */
-  /* b loop_top — backward jump to instruction 0 from current pc. */
-  {
-    int b_off = -n;
-    out[n++] = arm64_b(b_off);
-  }
+  out[n++] = arm64_b(loop_top - n);                    /* b loop_top */
   /* end: */
   int end_pc = n;
   out[patch_bcond] = arm64_b_cond(cond, end_pc - patch_bcond);
-  out[n++] = arm64_ldr_imm(0, 0, slot_off);            /* x0 = inline_vals[slot] */
+  out[n++] = arm64_mov_reg(0, 1);                      /* x0 = x1 (last value) */
+  out[n++] = arm64_ret();
+  /* deopt: */
+  int deopt_pc = n;
+  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  out[n++] = arm64_movz(0, 0, 0);                      /* mov x0, #0 (NULL) */
   out[n++] = arm64_ret();
 
   *outn = n;
@@ -2651,8 +2668,14 @@ int jit_compile(bytecode_t *bc) {
     int delta = ((int)k) << 3;        /* fits because |K| <= 32767 */
     if (delta < 0 || delta > 4095) return 0;  /* out of immediate range */
     insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+    int patch_tbz = n;
+    insns[n++] = 0;                            /* tbz x0,#0,deopt */
     insns[n++] = (c[5] == OP_ADD) ? arm64_add_imm(0, 0, delta)
                                   : arm64_sub_imm(0, 0, delta);
+    insns[n++] = arm64_ret();
+    int deopt_pc = n;
+    insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+    insns[n++] = arm64_movz(0, 0, 0);          /* mov x0, #0 (NULL) */
     insns[n++] = arm64_ret();
   }
   /* Also handle the slot-fix superinstructions that the compiler emits
@@ -2663,20 +2686,21 @@ int jit_compile(bytecode_t *bc) {
            0 /* would need to re-read slot/imm; defer */ ) {
     return 0;
   }
-  else if (bc->ncode == 5 && c[0] == OP_SLOT_ADD_FIX && c[1] == 0 && c[4] == OP_RET) {
+  else if (bc->ncode == 5 &&
+           (c[0] == OP_SLOT_ADD_FIX || c[0] == OP_SLOT_SUB_FIX) &&
+           c[1] == 0 && c[4] == OP_RET) {
     int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
     int delta = ((int)k) << 3;
     if (delta < 0 || delta > 4095) return 0;
     insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
-    insns[n++] = arm64_add_imm(0, 0, delta);
+    int patch_tbz = n;
+    insns[n++] = 0;                            /* tbz x0,#0,deopt */
+    insns[n++] = (c[0] == OP_SLOT_ADD_FIX) ? arm64_add_imm(0, 0, delta)
+                                           : arm64_sub_imm(0, 0, delta);
     insns[n++] = arm64_ret();
-  }
-  else if (bc->ncode == 5 && c[0] == OP_SLOT_SUB_FIX && c[1] == 0 && c[4] == OP_RET) {
-    int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
-    int delta = ((int)k) << 3;
-    if (delta < 0 || delta > 4095) return 0;
-    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
-    insns[n++] = arm64_sub_imm(0, 0, delta);
+    int deopt_pc = n;
+    insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+    insns[n++] = arm64_movz(0, 0, 0);
     insns[n++] = arm64_ret();
   }
   else {
@@ -3724,8 +3748,10 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
   exp_t *ret;
   if (fn->flags & FLAG_COMPILED) {
 #ifdef ALCOVE_JIT
-    if (fn->bc->jit) ret = fn->bc->jit(newenv);
-    else
+    if (fn->bc->jit) {
+      ret = fn->bc->jit(newenv);
+      if (!ret) ret = vm_run(fn, newenv);  /* JIT deopt → bytecode */
+    } else
 #endif
     ret = vm_run(fn, newenv);
   } else {
@@ -3780,8 +3806,10 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
        OP_TAIL_SELF still applies). */
     if (fn->flags & FLAG_COMPILED) {
 #ifdef ALCOVE_JIT
-      if (fn->bc->jit) ret = fn->bc->jit(newenv);
-      else
+      if (fn->bc->jit) {
+        ret = fn->bc->jit(newenv);
+        if (!ret) ret = vm_run(fn, newenv);  /* JIT deopt → bytecode */
+      } else
 #endif
       ret = vm_run(fn, newenv);
       destroy_env(newenv);
