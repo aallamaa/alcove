@@ -10,3 +10,6 @@ alcove.*
 *.o
 *.swp
 .DS_Store
+
+# Per-run persistence artifact (savedb writes ./db.dump in CWD).
+db.dump

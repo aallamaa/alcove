@@ -365,6 +365,16 @@ char *load_str(char **pptr,FILE *stream);
 exp_t *load_string(exp_t *e,FILE *stream);
 char *dump_str(char *ptr,FILE *stream);
 exp_t *dump_string(exp_t *e,FILE *stream);
+exp_t *load_number(exp_t *e,FILE *stream);
+exp_t *dump_number(exp_t *e,FILE *stream);
+exp_t *load_float(exp_t *e,FILE *stream);
+exp_t *dump_float(exp_t *e,FILE *stream);
+exp_t *load_symbol(exp_t *e,FILE *stream);
+exp_t *dump_symbol(exp_t *e,FILE *stream);
+exp_t *load_pair(exp_t *e,FILE *stream);
+exp_t *dump_pair(exp_t *e,FILE *stream);
+exp_t *load_lambda(exp_t *e,FILE *stream);
+exp_t *dump_lambda(exp_t *e,FILE *stream);
 exp_t *make_atom(char *str,int length);
 exp_t *callmacrochar(FILE *stream,unsigned char x);
 exp_t *lookup(exp_t *e,env_t *env);
@@ -425,6 +435,9 @@ exp_t *eachcmd(exp_t *e,env_t *env);
 exp_t *timecmd(exp_t *e,env_t *env);
 exp_t *inspectcmd(exp_t *e,env_t *env);
 exp_t *disasmcmd(exp_t *e,env_t *env);
+exp_t *dircmd(exp_t *e,env_t *env);
+exp_t *loaddbcmd(exp_t *e,env_t *env);
+int    loaddb_from_file(env_t *env);  /* shared with main() for auto-load */
 /* lisp macro */
 exp_t *defcmd(exp_t *e, env_t *env);
 exp_t *expandmacrocmd(exp_t *e,env_t *env);

@@ -1,4 +1,13 @@
 [TODO] setup etag to index with emacs
+[DONE] (loaddb) command + auto-load at startup (skip with --noload / -n)
+[DONE] persistence: phase 1 — EXP_NUMBER, EXP_FLOAT, EXP_SYMBOL added
+       to exp_tfuncList alongside the pre-existing EXP_CHAR/STRING
+[DONE] persistence: phase 2 — EXP_PAIR (recursive, 1-byte presence flag
+       per child for nil + improper pairs) + EXP_LAMBDA via source-form
+       (name + params + body trees, re-compile on load); lambdas survive
+       across runs and re-install JIT on the new arch
+[DONE] savedb warns on stderr when an entry's type isn't __DUMPABLE__
+       (was silently dropping; now surfaces at save time)
 [TODO] BUG: (do (id-fn arg) other) returns nil when id-fn is the literal
        identity (def f (x) x). Reproduces under bytecode-only build (no
        JIT involvement). Repro: (def f (x) x); (prn (do (f 1) 42))

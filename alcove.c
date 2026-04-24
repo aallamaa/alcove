@@ -102,9 +102,11 @@ lispProc lispProcList[]={
   {"persist",2,1,0,persistcmd},
   {"forget",2,1,0,forgetcmd},
   {"savedb",2,1,0,savedbcmd},
+  {"loaddb",2,1,0,loaddbcmd},
   {"ispersistent",2,1,0,ispersistentcmd},
   {"inspect",2,1,0,inspectcmd},
   {"disasm",2,1,0,disasmcmd},
+  {"dir",2,1,0,dircmd},
 
 };
 
@@ -420,9 +422,15 @@ int dump_dict(dict_t *d,FILE *stream){
           ckv=pkv->next;
           if (pkv->timestamp) {
             if (verbose) {
-				printf("saving %s : ",pkv->key);
+				printf("saving %s : ",(char*)pkv->key);
             print_node(pkv->val);
 		}
+            if (!__DUMPABLE__(pkv->val)) {
+              fprintf(stderr,
+                "savedb: skipping %s — type %d has no dump fn registered\n",
+                (char*)pkv->key, TYPEOF_E(pkv->val));
+              continue;
+            }
             if (__DUMP__(pkv->val,stream)) {
               dump_str(pkv->key,stream);
             }
@@ -798,8 +806,120 @@ char *dump_str(char *ptr,FILE *stream){
 exp_t *dump_string(exp_t *e,FILE *stream){
   if (dumptype(stream,&e->type) <=0) return NULL;
   if (dump_str(e->ptr,stream)) return e;
-  else 
+  else
     return NULL;
+}
+
+/* EXP_NUMBER (tagged fixnum) — write 8 raw bytes (int64 untagged value).
+   Like load_char, the placeholder allocated by load_exp_t is discarded
+   because tagged immediates aren't heap exp_t*. */
+exp_t *dump_number(exp_t *e, FILE *stream) {
+  unsigned short int t = EXP_NUMBER;
+  int64_t v = FIX_VAL(e);
+  if (dumptype(stream, &t) <= 0) return NULL;
+  if (fwrite(&v, sizeof(v), 1, stream) != 1) return NULL;
+  return e;
+}
+exp_t *load_number(exp_t *e, FILE *stream) {
+  int64_t v;
+  if (e) unrefexp(e);
+  if (fread(&v, sizeof(v), 1, stream) != 1) return NULL;
+  return MAKE_FIX(v);
+}
+
+/* EXP_FLOAT — heap exp_t with `f` field (double). 8 raw bytes. */
+exp_t *dump_float(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0) return NULL;
+  if (fwrite(&e->f, sizeof(e->f), 1, stream) != 1) return NULL;
+  return e;
+}
+exp_t *load_float(exp_t *e, FILE *stream) {
+  if (fread(&e->f, sizeof(e->f), 1, stream) != 1) return NULL;
+  return e;
+}
+
+/* EXP_SYMBOL — same length-prefixed bytes as a string; on load we just
+   stash the name into e->ptr. Symbol identity (eq?) isn't preserved
+   across runs but iso-equality / lookup-by-name works fine. */
+exp_t *dump_symbol(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0) return NULL;
+  if (dump_str(e->ptr, stream)) return e;
+  return NULL;
+}
+exp_t *load_symbol(exp_t *e, FILE *stream) {
+  if (load_str((char**)&(e->ptr), stream)) return e;
+  return NULL;
+}
+
+/* EXP_PAIR — a cons cell. content=car, next=cdr (alcove uses `next`
+   as the cdr field for its linked-list representation). Both children
+   may be NULL (e.g., nil = (PAIR, NULL, NULL)). We use a 1-byte flag
+   to record which children are present so improper pairs (a . b) and
+   the empty list both round-trip. Recurses via __DUMP__ so any element
+   whose type has a registered dump fn is preserved; mixed-type lists
+   work transparently. */
+exp_t *dump_pair(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0) return NULL;
+  uint8_t flags = (e->content ? 1 : 0) | (e->next ? 2 : 0);
+  if (fwrite(&flags, 1, 1, stream) != 1) return NULL;
+  if ((flags & 1) && !__DUMP__(e->content, stream)) return NULL;
+  if ((flags & 2) && !__DUMP__(e->next,    stream)) return NULL;
+  return e;
+}
+exp_t *load_pair(exp_t *e, FILE *stream) {
+  uint8_t flags;
+  if (fread(&flags, 1, 1, stream) != 1) return NULL;
+  e->content = (flags & 1) ? load_exp_t(stream) : NULL;
+  e->next    = (flags & 2) ? load_exp_t(stream) : NULL;
+  return e;
+}
+
+/* EXP_LAMBDA — persisted as source: name + params tree + body tree.
+   On load we reconstruct the lambda exp_t with the same shape defcmd
+   builds, then call compile_lambda so the bytecode VM (and JIT, where
+   the shape matches) sees the function. JIT pages don't survive a
+   restart but get re-installed at compile time on the new arch.
+
+   Limitations: closures over locals don't survive (alcove doesn't seem
+   to support lexical closures over let/with bindings beyond the
+   enclosing global env). Recursive references resolve fine because the
+   loader installs the lambda into the global env under its persisted
+   name before the body is ever called. */
+exp_t *dump_lambda(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0) return NULL;
+  /* Name (empty string for anonymous fns; preserves shape on the wire). */
+  const char *name = e->meta ? (const char*)e->meta : "";
+  if (!dump_str((char*)name, stream)) return NULL;
+  /* Flags: bit0 = has params; bit1 = has body. */
+  uint8_t flags = 0;
+  if (e->content) flags |= 1;
+  if (e->next && e->next->content) flags |= 2;
+  if (fwrite(&flags, 1, 1, stream) != 1) return NULL;
+  if ((flags & 1) && !__DUMP__(e->content, stream)) return NULL;
+  if ((flags & 2) && !__DUMP__(e->next->content, stream)) return NULL;
+  return e;
+}
+exp_t *load_lambda(exp_t *e, FILE *stream) {
+  char *name = NULL;
+  if (!load_str(&name, stream)) return NULL;
+  uint8_t flags;
+  if (fread(&flags, 1, 1, stream) != 1) { free(name); return NULL; }
+  exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
+  exp_t *body   = (flags & 2) ? load_exp_t(stream) : NULL;
+  /* Mirror defcmd's lambda shape: e->content = params, e->next is a
+     wrapping node whose content is the body list. */
+  e->content = params;
+  e->next = make_node(body);
+  if (name && name[0]) {
+    e->meta = (keyval_t*)name;            /* take ownership */
+  } else {
+    free(name);
+    e->meta = NULL;
+  }
+  /* Silent fallback to AST eval if compile_lambda can't compile (e.g.,
+     body uses an unsupported form). The lambda still works either way. */
+  compile_lambda(e);
+  return e;
 }
 
 
@@ -1537,6 +1657,51 @@ exp_t *savedbcmd(exp_t *e, env_t *env)
   return e;
 }
 
+/* Inverse of savedb: walk the on-disk dump (which is a series of
+   `__DUMP__(val)` followed by `dump_str(key)` records — see dump_dict)
+   and re-install every (key, val) pair into the global env. Each
+   reloaded entry is marked persistent (timestamp != 0) so that a later
+   (savedb) writes it back out. Returns the number of entries loaded,
+   or -1 if the file can't be opened. Note: only EXP_CHAR and EXP_STRING
+   currently have load/dump fns registered (alcove.c:5260-5265), so any
+   other types weren't actually written by savedb in the first place —
+   loaddb here is symmetric with what savedb actually persists. */
+int loaddb_from_file(env_t *env)
+{
+  FILE *stream = fopen("db.dump", "r");
+  if (!stream) return -1;
+  env_t *cur = env;
+  while (cur->root) cur = cur->root;
+  if (!cur->d) cur->d = create_dict();
+  int n = 0;
+  for (;;) {
+    exp_t *val = load_exp_t(stream);
+    if (!val) break;
+    char *key = NULL;
+    if (!load_str(&key, stream)) { unrefexp(val); break; }
+    keyval_t *kv = set_get_keyval_dict(cur->d, key, val);
+    if (kv) kv->timestamp = gettimeusec();   /* re-persistent */
+    free(key);                                /* set_get_keyval_dict strdup'd it */
+    unrefexp(val);                            /* dict took its own ref */
+    n++;
+  }
+  fclose(stream);
+  alcove_global_gen++;                        /* invalidate gcache */
+  return n;
+}
+
+exp_t *loaddbcmd(exp_t *e, env_t *env)
+{
+  int n = loaddb_from_file(env);
+  if (n < 0) {
+    return error(ERROR_ILLEGAL_VALUE, e, env,
+                 "Unable to open db.dump for reading");
+  }
+  printf("loaded %d entries from db.dump\n", n);
+  unrefexp(e);
+  return MAKE_FIX(n);
+}
+
 
 
 exp_t *cmpcmd(exp_t *e, env_t *env)
@@ -2193,13 +2358,212 @@ exp_t *timecmd(exp_t *e,env_t *env){
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-exp_t *inspectcmd(exp_t *e,env_t *env){
-  if (is_ptr(e))
-    printf("\x1B[96mtype:\t%d\nflag:\t%d\nref:\t%d\x1B[39m\n",e->type,e->flags,e->nref);
-  else if (isnumber(e))
-    printf("\x1B[96m<imm fixnum %lld>\x1B[39m\n",(long long)FIX_VAL(e));
-  else if (ischar(e))
-    printf("\x1B[96m<imm char %u>\x1B[39m\n",CHAR_VAL(e));
+/* Map common type tags to their string names for inspect output. */
+static const char *inspect_type_name(int t) {
+  switch (t) {
+    case EXP_SYMBOL:   return "symbol";
+    case EXP_NUMBER:   return "number";
+    case EXP_FLOAT:    return "float";
+    case EXP_STRING:   return "string";
+    case EXP_CHAR:     return "char";
+    case EXP_BOOLEAN:  return "boolean";
+    case EXP_VECTOR:   return "vector";
+    case EXP_ERROR:    return "error";
+    case EXP_PAIR:     return "pair";
+    case EXP_LAMBDA:   return "lambda";
+    case EXP_INTERNAL: return "builtin";
+    case EXP_MACRO:    return "macro";
+    default:           return "?";
+  }
+}
+
+/* Display the contents of an exp_t — basic type/flag/ref info, plus
+   type-specific details (lambda gets arity + params + compile/JIT status,
+   string gets the value + length, etc). Caller retains the ref. */
+static void inspect_value(exp_t *v) {
+  if (!v) { printf("\x1B[96m<NULL>\x1B[39m\n"); return; }
+  if (!is_ptr(v)) {
+    if (isnumber(v))    printf("\x1B[96m<imm fixnum %lld>\x1B[39m\n", (long long)FIX_VAL(v));
+    else if (ischar(v)) printf("\x1B[96m<imm char %u>\x1B[39m\n", CHAR_VAL(v));
+    else                printf("\x1B[96m<imm 0x%lx>\x1B[39m\n", (long)(intptr_t)v);
+    return;
+  }
+  printf("\x1B[96mtype:\t%d (%s)\nflag:\t%d%s%s\nref:\t%d\x1B[39m\n",
+         v->type, inspect_type_name(v->type),
+         v->flags,
+         (v->flags & FLAG_COMPILED)   ? " COMPILED"   : "",
+         (v->flags & FLAG_TAIL_AWARE) ? " TAIL_AWARE" : "",
+         v->nref);
+  if (v->type == EXP_LAMBDA) {
+    if (v->meta) printf("\x1B[96mname:\t%s\x1B[39m\n", (char*)v->meta);
+    int arity = 0;
+    exp_t *p;
+    for (p = v->content; p; p = p->next) arity++;
+    printf("\x1B[96marity:\t%d\nparams:\t(", arity);
+    int first = 1;
+    for (p = v->content; p; p = p->next) {
+      if (!first) printf(" ");
+      first = 0;
+      if (is_ptr(p->content) && issymbol(p->content))
+        printf("%s", (char*)p->content->ptr);
+    }
+    printf(")\x1B[39m\n");
+    if (v->flags & FLAG_COMPILED) {
+      if (v->bc) {
+        printf("\x1B[96mbytecode: %d bytes, %d consts", v->bc->ncode, v->bc->nconsts);
+#ifdef ALCOVE_JIT
+        if (v->bc->jit) printf(", jit installed");
+        else            printf(", jit not installed");
+#endif
+        printf(" (use (disasm fn) to see ops)\x1B[39m\n");
+      }
+    } else {
+      printf("\x1B[96mbody:\truns as AST (compile_lambda failed or not yet attempted)\x1B[39m\n");
+    }
+  } else if (v->type == EXP_MACRO && v->meta) {
+    printf("\x1B[96mname:\t%s\x1B[39m\n", (char*)v->meta);
+  } else if (v->type == EXP_STRING && v->ptr) {
+    printf("\x1B[96mvalue:\t\"%s\"\nlen:\t%zu\x1B[39m\n",
+           (char*)v->ptr, strlen((char*)v->ptr));
+  } else if (v->type == EXP_FLOAT) {
+    printf("\x1B[96mvalue:\t%g\x1B[39m\n", v->f);
+  } else if (v->type == EXP_SYMBOL && v->ptr) {
+    printf("\x1B[96msym:\t%s\x1B[39m\n", (char*)v->ptr);
+  }
+}
+
+/* (inspect val) — evaluates val, prints type info + type-specific details.
+   Also called directly from the REPL's verbose mode at the bottom of the
+   file (passing the already-evaluated result), which is why the display
+   logic lives in inspect_value above rather than inline here. */
+exp_t *inspectcmd(exp_t *e, env_t *env) {
+  exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
+  if (arg && iserror(arg)) { unrefexp(e); return arg; }
+  inspect_value(arg);
+  unrefexp(arg);
+  unrefexp(e);
+  return NULL;
+}
+
+/* (dir)              — list user/local bindings, alphabetically.
+   (dir "sub")        — apropos-style substring filter (CL/Clojure-style).
+   (dir nil t)        — also include builtins from reserved_symbol.
+   (dir "sub" t)      — substring filter + builtins.
+   Walks env chain inner→outer, dedupes by name (inner wins, matching
+   shadowing semantics), then sorts. Prints name + kind + (for lambdas)
+   the parameter list. */
+typedef struct dir_entry_t { const char *name; exp_t *val; } dir_entry_t;
+
+static int dir_entry_cmp(const void *a, const void *b) {
+  return strcmp(((const dir_entry_t*)a)->name, ((const dir_entry_t*)b)->name);
+}
+static int dir_match(const char *name, const char *needle) {
+  return (!needle || !*needle) ? 1 : (strstr(name, needle) != NULL);
+}
+static int dir_seen(dir_entry_t *arr, int n, const char *name) {
+  int i; for (i = 0; i < n; i++) if (strcmp(arr[i].name, name) == 0) return 1;
+  return 0;
+}
+static void dir_grow(dir_entry_t **arr, int *n, int *cap, const char *name, exp_t *val) {
+  if (dir_seen(*arr, *n, name)) return;
+  if (*n >= *cap) {
+    *cap = *cap ? *cap * 2 : 32;
+    *arr = realloc(*arr, sizeof(dir_entry_t) * (*cap));
+  }
+  (*arr)[(*n)++] = (dir_entry_t){ name, val };
+}
+static void dir_collect_dict(dict_t *d, const char *needle,
+                              dir_entry_t **arr, int *n, int *cap) {
+  if (!d) return;
+  int h; size_t i; keyval_t *k;
+  for (h = 0; h < 2; h++) {
+    if (!d->ht[h].size) continue;
+    for (i = 0; i < d->ht[h].size; i++) {
+      for (k = d->ht[h].table[i]; k; k = k->next) {
+        if (!k->key) continue;
+        if (!dir_match((const char*)k->key, needle)) continue;
+        dir_grow(arr, n, cap, (const char*)k->key, k->val);
+      }
+    }
+  }
+}
+
+exp_t *dircmd(exp_t *e, env_t *env) {
+  const char *needle = NULL;
+  int show_builtins = 0;
+  exp_t *needle_arg = NULL, *flag_arg = NULL;
+
+  if (e->next) {
+    needle_arg = EVAL(e->next->content, env);
+    if (needle_arg && iserror(needle_arg)) { unrefexp(e); return needle_arg; }
+    if (e->next->next) {
+      flag_arg = EVAL(e->next->next->content, env);
+      if (flag_arg && iserror(flag_arg)) {
+        unrefexp(needle_arg); unrefexp(e); return flag_arg;
+      }
+      if (istrue(flag_arg)) show_builtins = 1;
+    }
+    /* needle: accept symbol or string; nil / other → no filter */
+    if (is_ptr(needle_arg) && (issymbol(needle_arg) || isstring(needle_arg)))
+      needle = (const char*)needle_arg->ptr;
+  }
+
+  dir_entry_t *arr = NULL;
+  int n = 0, cap = 0;
+
+  /* Walk env chain inner→outer so inner shadows in dir_grow's dedup. */
+  env_t *cur;
+  for (cur = env; cur; cur = cur->root) {
+    int i;
+    for (i = 0; i < cur->n_inline; i++) {
+      const char *k = cur->inline_keys[i];
+      if (!k || !dir_match(k, needle)) continue;
+      dir_grow(&arr, &n, &cap, k, cur->inline_vals[i]);
+    }
+    dir_collect_dict(cur->d, needle, &arr, &n, &cap);
+  }
+  if (show_builtins) dir_collect_dict(reserved_symbol, needle, &arr, &n, &cap);
+
+  if (n > 1) qsort(arr, n, sizeof(dir_entry_t), dir_entry_cmp);
+
+  int i;
+  for (i = 0; i < n; i++) {
+    exp_t *v = arr[i].val;
+    const char *kind;
+    if (!is_ptr(v))                   kind = "imm";
+    else if (v->type == EXP_LAMBDA)   kind = "lambda";
+    else if (v->type == EXP_MACRO)    kind = "macro";
+    else if (v->type == EXP_INTERNAL) kind = "builtin";
+    else if (v->type == EXP_SYMBOL)   kind = "symbol";
+    else if (v->type == EXP_NUMBER)   kind = "fixnum";
+    else if (v->type == EXP_FLOAT)    kind = "float";
+    else if (v->type == EXP_STRING)   kind = "string";
+    else if (v->type == EXP_PAIR)     kind = "pair";
+    else                              kind = "?";
+    printf("  %-20s  %-8s", arr[i].name, kind);
+    if (is_ptr(v) && v->type == EXP_LAMBDA && v->content) {
+      /* Lambda: print parameter list. */
+      printf("  (");
+      int first = 1;
+      exp_t *p;
+      for (p = v->content; p; p = p->next) {
+        if (!first) printf(" ");
+        first = 0;
+        if (is_ptr(p->content) && issymbol(p->content))
+          printf("%s", (char*)p->content->ptr);
+      }
+      printf(")");
+    } else if (isnumber(v) || ischar(v) || isfloat(v) || isstring(v)) {
+      /* Atomic value: show it. */
+      printf("  ");
+      print_node(v);
+    }
+    printf("\n");
+  }
+
+  free(arr);
+  unrefexp(needle_arg);
+  unrefexp(flag_arg);
   unrefexp(e);
   return NULL;
 }
@@ -5063,6 +5427,23 @@ int main(int argc, char *argv[])
   exp_tfuncList[EXP_STRING]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
   exp_tfuncList[EXP_STRING]->load=load_string;
   exp_tfuncList[EXP_STRING]->dump=dump_string;
+  /* Phase 1 persistence: scalars + symbols. */
+  exp_tfuncList[EXP_NUMBER]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_NUMBER]->load=load_number;
+  exp_tfuncList[EXP_NUMBER]->dump=dump_number;
+  exp_tfuncList[EXP_FLOAT]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_FLOAT]->load=load_float;
+  exp_tfuncList[EXP_FLOAT]->dump=dump_float;
+  exp_tfuncList[EXP_SYMBOL]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_SYMBOL]->load=load_symbol;
+  exp_tfuncList[EXP_SYMBOL]->dump=dump_symbol;
+  /* Phase 2 persistence: lists + lambdas (source-form). */
+  exp_tfuncList[EXP_PAIR]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_PAIR]->load=load_pair;
+  exp_tfuncList[EXP_PAIR]->dump=dump_pair;
+  exp_tfuncList[EXP_LAMBDA]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_LAMBDA]->load=load_lambda;
+  exp_tfuncList[EXP_LAMBDA]->dump=dump_lambda;
 
 
   reserved_symbol=create_dict();
@@ -5077,6 +5458,31 @@ int main(int argc, char *argv[])
   for (i = 0; i < N; ++i) {
     set_get_keyval_dict(reserved_symbol,lispProcList[i].name,val=make_internal(lispProcList[i].cmd,lispProcList[i].flags & FLAG_TAIL_AWARE));
     unrefexp(val);
+  }
+
+  /* CLI flag scan: --noload (or -n) skips the auto-load of db.dump.
+     Filter the flag out of argv in place so the existing positional
+     handling (last arg = file, prev = -i) still works whether the
+     user passes the flag first, last, or in the middle. */
+  int auto_load = 1;
+  {
+    int dst = 1, src;
+    for (src = 1; src < argc; src++) {
+      if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
+        auto_load = 0;
+      } else {
+        argv[dst++] = argv[src];
+      }
+    }
+    argc = dst;
+  }
+
+  /* Auto-load persisted bindings if db.dump exists in CWD. Silent on
+     missing-file (first run, no DB yet); prints a one-line summary on
+     success so the user sees what came back. */
+  if (auto_load) {
+    int loaded = loaddb_from_file(global);
+    if (loaded > 0) printf("alcove: auto-loaded %d entries from db.dump (use --noload to skip)\n", loaded);
   }
 
   if (argc>=2){
@@ -5136,7 +5542,7 @@ int main(int argc, char *argv[])
       if (strf) {
         if (verbose) {
           printf("\x1B[35mstrf:%p\x1B[39m\n",(void*)strf);
-          inspectcmd(refexp(strf),global);
+          inspect_value(strf);   /* borrow, no ref churn */
         }
         printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m",idx);
         print_node(strf);
