@@ -2856,7 +2856,18 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
   /* Cross-function tail call is safe regardless of nlet_depth:
      OP_TAIL_CALL wholesale releases current env's inline slots. */
   int is_cross_tail = tail && !is_self_tail;
-  if (!is_self_tail) {
+  /* Fused LOAD_GLOBAL+CALL: if head is a symbol that isn't a local
+     slot and isn't the self-tail case, we can skip the LOAD_GLOBAL
+     dispatch + PUSH/POP and call via the gcache directly. */
+  int use_call_global = 0, global_idx = -1;
+  if (!is_self_tail && !is_cross_tail &&
+      is_ptr(head) && issymbol(head) &&
+      find_slot(c, head->ptr) < 0) {
+    global_idx = add_const(c, head);
+    if (global_idx < 0) { c->failed = 1; return; }
+    use_call_global = 1;
+  }
+  if (!is_self_tail && !use_call_global) {
     compile_expr(c, head, 0);
     if (c->failed) return;
   }
@@ -2866,9 +2877,12 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
     nargs++;
   }
   if (nargs > 255) { c->failed = 1; return; }
-  if      (is_self_tail)  { emit_u8(c, OP_TAIL_SELF); emit_u8(c, (uint8_t)nargs); }
-  else if (is_cross_tail) { emit_u8(c, OP_TAIL_CALL); emit_u8(c, (uint8_t)nargs); }
-  else                    { emit_u8(c, OP_CALL);      emit_u8(c, (uint8_t)nargs); }
+  if      (is_self_tail)   { emit_u8(c, OP_TAIL_SELF); emit_u8(c, (uint8_t)nargs); }
+  else if (is_cross_tail)  { emit_u8(c, OP_TAIL_CALL); emit_u8(c, (uint8_t)nargs); }
+  else if (use_call_global){ emit_u8(c, OP_CALL_GLOBAL);
+                              emit_u8(c, (uint8_t)global_idx);
+                              emit_u8(c, (uint8_t)nargs); }
+  else                     { emit_u8(c, OP_CALL);      emit_u8(c, (uint8_t)nargs); }
 }
 
 /* Superinstruction fuse table — maps a plain binary op to its fused
@@ -3314,6 +3328,7 @@ tail_reentry:
     [OP_BR_IF_FALSE]  = &&l_br_if_false,
     [OP_BR_IF_TRUE]   = &&l_br_if_true,
     [OP_CALL]         = &&l_call,
+    [OP_CALL_GLOBAL]  = &&l_call_global,
     [OP_TAIL_SELF]    = &&l_tail_self,
     [OP_TAIL_CALL]    = &&l_tail_call,
     [OP_CONS]         = &&l_cons,
@@ -3546,6 +3561,35 @@ l_call: {
     exp_t *callee = stack[base - 1];
     exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
     sp = base - 1;
+    unrefexp(callee);
+    if (ret && iserror(ret)) {
+      while (sp > 0) unrefexp(POP());
+      if (fn_owned) unrefexp(fn);
+      return ret;
+    }
+    if (!ret) ret = NIL_EXP;
+    PUSH(ret);
+    NEXT;
+  }
+
+l_call_global: {
+    /* Fused LOAD_GLOBAL + CALL. The callee is never pushed to the
+       operand stack — we resolve via the gcache directly. */
+    uint8_t idx = READ_U8;
+    uint8_t n   = READ_U8;
+    exp_t *callee;
+    if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
+      callee = refexp(bc->gcache[idx].val);
+    } else {
+      callee = lookup(consts[idx], env);
+      if (!callee) RUNTIME_ERR("Unbound variable");
+      if (!bc->gcache) bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[idx].val = callee;
+      bc->gcache[idx].gen = alcove_global_gen;
+    }
+    int base = sp - n;
+    exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);
+    sp = base;
     unrefexp(callee);
     if (ret && iserror(ret)) {
       while (sp > 0) unrefexp(POP());

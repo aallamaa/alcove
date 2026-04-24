@@ -155,6 +155,7 @@ typedef enum {
   OP_BR_IF_TRUE,
 
   OP_CALL,           /* u8 nargs        → [fn, a0..aN-1] → result */
+  OP_CALL_GLOBAL,    /* u8 const_idx, u8 nargs → fused LOAD_GLOBAL+CALL */
   OP_TAIL_SELF,      /* u8 nargs        → rebind inline slots, PC=0 */
   OP_TAIL_CALL,      /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to new fn */
 
