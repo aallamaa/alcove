@@ -175,6 +175,10 @@ typedef enum {
   OP_SLOT_GT_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */
   OP_SLOT_GE_FIX,    /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */
 
+  /* Slot-vs-slot comparison — fuses LOAD_SLOT+LOAD_SLOT+<cmp> into one
+     dispatch. Emitted by compile_for (hot path). */
+  OP_SLOT_LE_SLOT,   /* u8 slot_a, u8 slot_b → push (slot_a <= slot_b) */
+
   OP_MAX
 } alc_op;
 

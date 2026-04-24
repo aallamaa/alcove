@@ -2902,6 +2902,7 @@ static const char *bc_opname(uint8_t op) {
     case OP_SLOT_LE_FIX:  return "SLOT_LE_FIX";
     case OP_SLOT_GT_FIX:  return "SLOT_GT_FIX";
     case OP_SLOT_GE_FIX:  return "SLOT_GE_FIX";
+    case OP_SLOT_LE_SLOT: return "SLOT_LE_SLOT";
     default:              return "??";
   }
 }
@@ -2942,6 +2943,10 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
              (int)code[pc+1], (int)imm);
       return 4;
     }
+    case OP_SLOT_LE_SLOT:
+      printf("  %04d  %s slot_a=%d slot_b=%d\n", pc, bc_opname(op),
+             (int)code[pc+1], (int)code[pc+2]);
+      return 3;
     default:
       printf("  %04d  ?? 0x%02x\n", pc, op);
       return 1;
@@ -4372,9 +4377,11 @@ static void compile_for(compiler_t *c, exp_t *form, int tail) {
   c->nlet_depth++;
   int loop_top = c->ncode;
 
-  emit_u8(c, OP_LOAD_SLOT); emit_u8(c, (uint8_t)counter_slot);
-  emit_u8(c, OP_LOAD_SLOT); emit_u8(c, (uint8_t)end_slot);
-  emit_u8(c, OP_LE);
+  /* Fused slot-vs-slot compare: replaces LOAD_SLOT+LOAD_SLOT+LE with
+     one dispatch. Saves 2 dispatches per iteration in the hot loop. */
+  emit_u8(c, OP_SLOT_LE_SLOT);
+  emit_u8(c, (uint8_t)counter_slot);
+  emit_u8(c, (uint8_t)end_slot);
   emit_u8(c, OP_BR_IF_FALSE);
   int patch_exit = c->ncode; emit_i16(c, 0);
 
@@ -4683,6 +4690,7 @@ tail_reentry:
     [OP_SLOT_LE_FIX]  = &&l_slot_le_fix,
     [OP_SLOT_GT_FIX]  = &&l_slot_gt_fix,
     [OP_SLOT_GE_FIX]  = &&l_slot_ge_fix,
+    [OP_SLOT_LE_SLOT] = &&l_slot_le_slot,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -5108,6 +5116,25 @@ l_slot_ge_fix:
     PUSH(da >= (double)imm ? TRUE_EXP : NIL_EXP),
     ">=");
   NEXT;
+
+l_slot_le_slot: {
+    /* Hot-path superinst for `for`: reads two slots, pushes t/nil for
+       (slot_a <= slot_b). Fuses LOAD_SLOT+LOAD_SLOT+LE into one dispatch. */
+    uint8_t idx_a = READ_U8;
+    uint8_t idx_b = READ_U8;
+    exp_t *a = env->inline_vals[idx_a];
+    exp_t *b = env->inline_vals[idx_b];
+    if (isnumber(a) && isnumber(b)) {
+      PUSH(FIX_VAL(a) <= FIX_VAL(b) ? TRUE_EXP : NIL_EXP);
+    } else if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
+      double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;
+      double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;
+      PUSH(da <= db ? TRUE_EXP : NIL_EXP);
+    } else {
+      RUNTIME_ERR("Illegal value in <=");
+    }
+    NEXT;
+  }
 
 #undef SLOT_FIX_NUMERIC
 
@@ -5620,9 +5647,29 @@ int main(int argc, char *argv[])
   destroy_dict(dict);
   destroy_env(global);
   destroy_dict(reserved_symbol);
+  /* Free every exp_tfunc slot we allocated in the type-fn registration
+     (CHAR/STRING were here originally; the rest were added when
+     persistence grew to cover number/float/symbol/pair/lambda/macro). */
   free(exp_tfuncList[EXP_CHAR]);
   free(exp_tfuncList[EXP_STRING]);
+  free(exp_tfuncList[EXP_NUMBER]);
+  free(exp_tfuncList[EXP_FLOAT]);
+  free(exp_tfuncList[EXP_SYMBOL]);
+  free(exp_tfuncList[EXP_PAIR]);
+  free(exp_tfuncList[EXP_LAMBDA]);
+  free(exp_tfuncList[EXP_MACRO]);
   unrefexp(t);
   unrefexp(nil);
-
+  /* Immortal singletons — unrefexp is a no-op on them (see line 181),
+     so without an explicit free here they show up as "definitely lost"
+     at program exit. Release ptr field first for the symbol singleton. */
+  if (true_singleton) {
+    if (true_singleton->ptr) free(true_singleton->ptr);
+    free(true_singleton);
+    true_singleton = NULL;
+  }
+  if (nil_singleton) {
+    free(nil_singleton);
+    nil_singleton = NULL;
+  }
 }
