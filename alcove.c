@@ -112,6 +112,27 @@ lispProc lispProcList[]={
   {"inspect",2,1,0,inspectcmd},
   {"disasm",2,1,0,disasmcmd},
   {"dir",2,1,0,dircmd},
+  /* Stdlib additions (math/seq/predicates). */
+  {"mod",2,1,0,modcmd},
+  {"abs",2,1,0,abscmd},
+  {"max",2,1,0,maxcmd},
+  {"min",2,1,0,mincmd},
+  {"length",2,1,0,lengthcmd},
+  {"nth",2,1,0,nthcmd},
+  {"reverse",2,1,0,reversecmd},
+  {"append",2,1,0,appendcmd},
+  {"number?",2,1,0,numberpcmd},
+  {"string?",2,1,0,stringpcmd},
+  {"symbol?",2,1,0,symbolpcmd},
+  {"pair?",2,1,0,pairpcmd},
+  {"fn?",2,1,0,fnpcmd},
+  {"exit",2,1,0,exitcmd},
+  {"quit",2,1,0,exitcmd},
+  {"random",2,1,0,randomcmd},
+  {"apply",2,1,0,applycmd},
+  {"map",2,1,0,mapcmd},
+  {"filter",2,1,0,filtercmd},
+  {"reduce",2,1,0,reducecmd},
 
 };
 
@@ -2089,6 +2110,343 @@ exp_t *prncmd(exp_t *e, env_t *env){
   exp_t *ret;
   ret=prcmd(e,env);
   printf("\n");
+  return ret;
+}
+
+/* Forward decl needed by applycmd below; defined further down. */
+static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+
+/* ---------------- Standard-library builtins (math/seq/predicates) ----------------
+   Each follows the prn/expt pattern: walk e->next, EVAL each arg, type-check,
+   produce result, unrefexp args + form, return owned ref. */
+
+/* (mod a b) — integer modulo. Both args must be fixnums. */
+exp_t *modcmd(exp_t *e, env_t *env) {
+  exp_t *a=NULL, *b=NULL, *ret=NULL;
+  if (e->next && e->next->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    b = EVAL(e->next->next->content, env);
+    if (iserror(b)) { unrefexp(a); unrefexp(e); return b; }
+    if (isnumber(a) && isnumber(b) && FIX_VAL(b) != 0) {
+      int64_t va = FIX_VAL(a), vb = FIX_VAL(b);
+      ret = MAKE_FIX(va - (va / vb) * vb);   /* C99 truncated div */
+    } else {
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "mod needs two non-zero fixnums");
+    }
+  } else {
+    ret = error(ERROR_MISSING_PARAMETER, e, env, "(mod a b)");
+  }
+  unrefexp(a); unrefexp(b); unrefexp(e);
+  return ret;
+}
+
+/* (abs x) — |x| for fixnum or float. */
+exp_t *abscmd(exp_t *e, env_t *env) {
+  exp_t *a=NULL, *ret=NULL;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    if (isnumber(a)) { int64_t v = FIX_VAL(a); ret = MAKE_FIX(v < 0 ? -v : v); }
+    else if (isfloat(a)) { ret = make_floatf(a->f < 0 ? -a->f : a->f); }
+    else ret = error(ERROR_ILLEGAL_VALUE, e, env, "abs: not a number");
+  } else ret = error(ERROR_MISSING_PARAMETER, e, env, "(abs x)");
+  unrefexp(a); unrefexp(e);
+  return ret;
+}
+
+/* Helper for max/min: numeric "less than" between two values, promoting
+   to double if either is a float. Returns 1 if a < b, 0 otherwise. -1
+   on type error (caller checks). */
+static int alc_numlt(exp_t *a, exp_t *b, int *err) {
+  *err = 0;
+  if (isnumber(a) && isnumber(b)) return FIX_VAL(a) < FIX_VAL(b);
+  if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
+    double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;
+    double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;
+    return da < db;
+  }
+  *err = 1; return 0;
+}
+
+/* (max a b ...) — variadic; at least one arg required. */
+exp_t *maxcmd(exp_t *e, env_t *env) {
+  exp_t *cur = e->next;
+  if (!cur) { unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(max ...)"); }
+  exp_t *best = EVAL(cur->content, env);
+  if (iserror(best)) { unrefexp(e); return best; }
+  cur = cur->next;
+  while (cur) {
+    exp_t *v = EVAL(cur->content, env);
+    if (iserror(v)) { unrefexp(best); unrefexp(e); return v; }
+    int err; int lt = alc_numlt(best, v, &err);
+    if (err) { unrefexp(best); unrefexp(v); unrefexp(e);
+               return error(ERROR_ILLEGAL_VALUE,e,env,"max: non-numeric"); }
+    if (lt) { unrefexp(best); best = v; } else unrefexp(v);
+    cur = cur->next;
+  }
+  unrefexp(e);
+  return best;
+}
+/* (min a b ...) */
+exp_t *mincmd(exp_t *e, env_t *env) {
+  exp_t *cur = e->next;
+  if (!cur) { unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(min ...)"); }
+  exp_t *best = EVAL(cur->content, env);
+  if (iserror(best)) { unrefexp(e); return best; }
+  cur = cur->next;
+  while (cur) {
+    exp_t *v = EVAL(cur->content, env);
+    if (iserror(v)) { unrefexp(best); unrefexp(e); return v; }
+    int err; int lt = alc_numlt(v, best, &err);
+    if (err) { unrefexp(best); unrefexp(v); unrefexp(e);
+               return error(ERROR_ILLEGAL_VALUE,e,env,"min: non-numeric"); }
+    if (lt) { unrefexp(best); best = v; } else unrefexp(v);
+    cur = cur->next;
+  }
+  unrefexp(e);
+  return best;
+}
+
+/* (length x) — list length, string length, or 0 for nil. */
+exp_t *lengthcmd(exp_t *e, env_t *env) {
+  exp_t *a=NULL, *ret=NULL;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    int64_t n = 0;
+    if (isstring(a)) n = a->ptr ? (int64_t)strlen((char*)a->ptr) : 0;
+    else if (a == nil_singleton) n = 0;
+    else if (ispair(a)) {
+      exp_t *cur = a;
+      while (cur && cur->content) { n++; cur = cur->next; }
+    } else {
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "length: not a list/string");
+      goto done;
+    }
+    ret = MAKE_FIX(n);
+  } else ret = error(ERROR_MISSING_PARAMETER, e, env, "(length x)");
+ done:
+  unrefexp(a); unrefexp(e);
+  return ret;
+}
+
+/* (nth n list) — 0-indexed; returns nil if out of range. */
+exp_t *nthcmd(exp_t *e, env_t *env) {
+  exp_t *a=NULL, *b=NULL, *ret=NIL_EXP;
+  if (e->next && e->next->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    b = EVAL(e->next->next->content, env);
+    if (iserror(b)) { unrefexp(a); unrefexp(e); return b; }
+    if (isnumber(a)) {
+      int64_t idx = FIX_VAL(a);
+      exp_t *cur = b;
+      while (idx > 0 && cur && cur->next) { cur = cur->next; idx--; }
+      if (idx == 0 && cur && cur->content) ret = refexp(cur->content);
+    }
+  }
+  unrefexp(a); unrefexp(b); unrefexp(e);
+  return ret;
+}
+
+/* (reverse list) — non-destructive; returns a new list. */
+exp_t *reversecmd(exp_t *e, env_t *env) {
+  exp_t *a=NULL, *acc = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    exp_t *cur = a;
+    while (cur && cur->content) {
+      exp_t *node = make_node(refexp(cur->content));
+      node->next = (acc == NIL_EXP) ? NULL : acc;
+      acc = node;
+      cur = cur->next;
+    }
+  }
+  unrefexp(a); unrefexp(e);
+  return acc;
+}
+
+/* (append list1 list2 ...) — flat concat into a new list (cars are
+   shared with inputs but the cons spine is fresh). */
+exp_t *appendcmd(exp_t *e, env_t *env) {
+  exp_t *head = NULL, *tail = NULL;
+  exp_t *cur_arg = e->next;
+  while (cur_arg) {
+    exp_t *list = EVAL(cur_arg->content, env);
+    if (iserror(list)) { if (head) unrefexp(head); unrefexp(e); return list; }
+    exp_t *cur = list;
+    while (cur && cur->content) {
+      exp_t *node = make_node(refexp(cur->content));
+      if (!head) { head = node; tail = node; }
+      else { tail->next = node; tail = node; }
+      cur = cur->next;
+    }
+    unrefexp(list);
+    cur_arg = cur_arg->next;
+  }
+  unrefexp(e);
+  return head ? head : NIL_EXP;
+}
+
+/* Type predicates — return t/nil. */
+#define PRED_CMD(name, pred) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *a=NULL, *ret=NIL_EXP; \
+  if (e->next) { \
+    a = EVAL(e->next->content, env); \
+    if (iserror(a)) { unrefexp(e); return a; } \
+    if (pred) ret = TRUE_EXP; \
+  } \
+  unrefexp(a); unrefexp(e); \
+  return ret; \
+}
+PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
+PRED_CMD(stringpcmd, isstring(a))
+PRED_CMD(symbolpcmd, issymbol(a))
+PRED_CMD(pairpcmd,   (ispair(a) && a->content))
+PRED_CMD(fnpcmd,     (islambda(a) || isinternal(a)))
+#undef PRED_CMD
+
+/* (exit) / (exit code) — terminate the process. */
+exp_t *exitcmd(exp_t *e, env_t *env) {
+  int code = 0;
+  if (e->next) {
+    exp_t *a = EVAL(e->next->content, env);
+    if (isnumber(a)) code = (int)FIX_VAL(a);
+    unrefexp(a);
+  }
+  unrefexp(e); (void)env;
+  exit(code);
+}
+
+/* (random n) — pseudo-random fixnum in [0, n). Seeded once from time. */
+exp_t *randomcmd(exp_t *e, env_t *env) {
+  static int seeded = 0;
+  if (!seeded) { srand((unsigned)gettimeusec()); seeded = 1; }
+  int64_t n = 0;
+  if (e->next) {
+    exp_t *a = EVAL(e->next->content, env);
+    if (isnumber(a)) n = FIX_VAL(a);
+    unrefexp(a);
+  }
+  unrefexp(e);
+  if (n <= 0) return MAKE_FIX(0);
+  return MAKE_FIX((int64_t)((double)rand() / ((double)RAND_MAX + 1) * (double)n));
+}
+
+/* (map fn list) — non-destructive; returns a new list of (fn x) values. */
+exp_t *mapcmd(exp_t *e, env_t *env) {
+  exp_t *fn=NULL, *xs=NULL, *head=NULL, *tail=NULL;
+  if (!(e->next && e->next->next)) {
+    unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(map fn list)");
+  }
+  fn = EVAL(e->next->content, env);
+  if (iserror(fn)) { unrefexp(e); return fn; }
+  xs = EVAL(e->next->next->content, env);
+  if (iserror(xs)) { unrefexp(fn); unrefexp(e); return xs; }
+  exp_t *cur = xs;
+  while (cur && cur->content) {
+    exp_t *argv[1] = { refexp(cur->content) };
+    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    if (res && iserror(res)) {
+      if (head) unrefexp(head);
+      unrefexp(fn); unrefexp(xs); unrefexp(e);
+      return res;
+    }
+    if (!res) res = NIL_EXP;
+    exp_t *node = make_node(res);
+    if (!head) { head = node; tail = node; }
+    else { tail->next = node; tail = node; }
+    cur = cur->next;
+  }
+  unrefexp(fn); unrefexp(xs); unrefexp(e);
+  return head ? head : NIL_EXP;
+}
+/* (filter pred list) — keep elements where (pred x) is truthy. */
+exp_t *filtercmd(exp_t *e, env_t *env) {
+  exp_t *fn=NULL, *xs=NULL, *head=NULL, *tail=NULL;
+  if (!(e->next && e->next->next)) {
+    unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(filter pred list)");
+  }
+  fn = EVAL(e->next->content, env);
+  if (iserror(fn)) { unrefexp(e); return fn; }
+  xs = EVAL(e->next->next->content, env);
+  if (iserror(xs)) { unrefexp(fn); unrefexp(e); return xs; }
+  exp_t *cur = xs;
+  while (cur && cur->content) {
+    exp_t *argv[1] = { refexp(cur->content) };
+    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    if (res && iserror(res)) {
+      if (head) unrefexp(head);
+      unrefexp(fn); unrefexp(xs); unrefexp(e);
+      return res;
+    }
+    int keep = (res != NULL && res != NIL_EXP);
+    if (res) unrefexp(res);
+    if (keep) {
+      exp_t *node = make_node(refexp(cur->content));
+      if (!head) { head = node; tail = node; }
+      else { tail->next = node; tail = node; }
+    }
+    cur = cur->next;
+  }
+  unrefexp(fn); unrefexp(xs); unrefexp(e);
+  return head ? head : NIL_EXP;
+}
+/* (reduce fn init list) — left fold: ((fn (fn init x0) x1) x2 ...). */
+exp_t *reducecmd(exp_t *e, env_t *env) {
+  exp_t *fn=NULL, *acc=NULL, *xs=NULL;
+  if (!(e->next && e->next->next && e->next->next->next)) {
+    unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(reduce fn init list)");
+  }
+  fn  = EVAL(e->next->content, env);
+  if (iserror(fn)) { unrefexp(e); return fn; }
+  acc = EVAL(e->next->next->content, env);
+  if (iserror(acc)) { unrefexp(fn); unrefexp(e); return acc; }
+  xs  = EVAL(e->next->next->next->content, env);
+  if (iserror(xs)) { unrefexp(fn); unrefexp(acc); unrefexp(e); return xs; }
+  exp_t *cur = xs;
+  while (cur && cur->content) {
+    exp_t *argv[2] = { acc, refexp(cur->content) };  /* acc transferred */
+    acc = vm_invoke_values(fn, 2, argv, env);
+    if (acc && iserror(acc)) {
+      unrefexp(fn); unrefexp(xs); unrefexp(e);
+      return acc;
+    }
+    if (!acc) acc = NIL_EXP;
+    cur = cur->next;
+  }
+  unrefexp(fn); unrefexp(xs); unrefexp(e);
+  return acc;
+}
+
+/* (apply fn args-list) — call fn with each element of args-list as
+   separate args. Implemented by re-using vm_invoke_values for compiled
+   lambdas; falls back to AST invoke otherwise. */
+exp_t *applycmd(exp_t *e, env_t *env) {
+  exp_t *fn=NULL, *args=NULL, *ret=NULL;
+  if (e->next && e->next->next) {
+    fn = EVAL(e->next->content, env);
+    if (iserror(fn)) { unrefexp(e); return fn; }
+    args = EVAL(e->next->next->content, env);
+    if (iserror(args)) { unrefexp(fn); unrefexp(e); return args; }
+    /* Materialize args as an exp_t** so vm_invoke_values can take it. */
+    int n = 0; exp_t *c = args;
+    while (c && c->content) { n++; c = c->next; }
+    exp_t **argv = (n > 0) ? memalloc(n, sizeof(exp_t*)) : NULL;
+    int i = 0; c = args;
+    while (c && c->content && i < n) { argv[i++] = refexp(c->content); c = c->next; }
+    if (islambda(fn)) {
+      ret = vm_invoke_values(fn, n, argv, env);
+    } else {
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "apply: first arg not a fn");
+      for (i = 0; i < n; i++) unrefexp(argv[i]);
+    }
+    free(argv);
+  } else ret = error(ERROR_MISSING_PARAMETER, e, env, "(apply fn args)");
+  unrefexp(fn); unrefexp(args); unrefexp(e);
   return ret;
 }
 

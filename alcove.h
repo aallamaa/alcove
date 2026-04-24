@@ -442,6 +442,26 @@ exp_t *timecmd(exp_t *e,env_t *env);
 exp_t *inspectcmd(exp_t *e,env_t *env);
 exp_t *disasmcmd(exp_t *e,env_t *env);
 exp_t *dircmd(exp_t *e,env_t *env);
+/* stdlib batch */
+exp_t *modcmd(exp_t *e,env_t *env);
+exp_t *abscmd(exp_t *e,env_t *env);
+exp_t *maxcmd(exp_t *e,env_t *env);
+exp_t *mincmd(exp_t *e,env_t *env);
+exp_t *lengthcmd(exp_t *e,env_t *env);
+exp_t *nthcmd(exp_t *e,env_t *env);
+exp_t *reversecmd(exp_t *e,env_t *env);
+exp_t *appendcmd(exp_t *e,env_t *env);
+exp_t *numberpcmd(exp_t *e,env_t *env);
+exp_t *stringpcmd(exp_t *e,env_t *env);
+exp_t *symbolpcmd(exp_t *e,env_t *env);
+exp_t *pairpcmd(exp_t *e,env_t *env);
+exp_t *fnpcmd(exp_t *e,env_t *env);
+exp_t *exitcmd(exp_t *e,env_t *env);
+exp_t *randomcmd(exp_t *e,env_t *env);
+exp_t *applycmd(exp_t *e,env_t *env);
+exp_t *mapcmd(exp_t *e,env_t *env);
+exp_t *filtercmd(exp_t *e,env_t *env);
+exp_t *reducecmd(exp_t *e,env_t *env);
 exp_t *loaddbcmd(exp_t *e,env_t *env);
 int    loaddb_from_file(env_t *env);  /* shared with main() for auto-load */
 /* lisp macro */
