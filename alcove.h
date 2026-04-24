@@ -375,6 +375,8 @@ exp_t *load_pair(exp_t *e,FILE *stream);
 exp_t *dump_pair(exp_t *e,FILE *stream);
 exp_t *load_lambda(exp_t *e,FILE *stream);
 exp_t *dump_lambda(exp_t *e,FILE *stream);
+exp_t *load_macro(exp_t *e,FILE *stream);
+exp_t *dump_macro(exp_t *e,FILE *stream);
 exp_t *make_atom(char *str,int length);
 exp_t *callmacrochar(FILE *stream,unsigned char x);
 exp_t *lookup(exp_t *e,env_t *env);

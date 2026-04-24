@@ -922,6 +922,52 @@ exp_t *load_lambda(exp_t *e, FILE *stream) {
   return e;
 }
 
+/* EXP_MACRO — same on-wire shape as EXP_LAMBDA (defmacrocmd builds an
+   identical exp_t structure, just with type=EXP_MACRO). The only load-
+   side difference is that macros are AST-evaluated, so we skip
+   compile_lambda. Source-form persistence: the macro body is preserved
+   exactly and re-installed at load time. */
+exp_t *dump_macro(exp_t *e, FILE *stream) {
+  /* Identical wire format to dump_lambda (sans the type tag we write
+     here) so a future refactor could share the body. */
+  if (dumptype(stream, &e->type) <= 0) return NULL;
+  const char *name = e->meta ? (const char*)e->meta : "";
+  if (!dump_str((char*)name, stream)) return NULL;
+  uint8_t flags = 0;
+  if (e->content) flags |= 1;
+  if (e->next && e->next->content) flags |= 2;
+  if (fwrite(&flags, 1, 1, stream) != 1) return NULL;
+  if ((flags & 1) && !__DUMP__(e->content, stream)) return NULL;
+  if ((flags & 2) && !__DUMP__(e->next->content, stream)) return NULL;
+  return e;
+}
+exp_t *load_macro(exp_t *e, FILE *stream) {
+  char *name = NULL;
+  if (!load_str(&name, stream)) return NULL;
+  uint8_t flags;
+  if (fread(&flags, 1, 1, stream) != 1) { free(name); return NULL; }
+  exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
+  exp_t *body   = (flags & 2) ? load_exp_t(stream) : NULL;
+  e->content = params;
+  e->next = make_node(body);
+  if (name && name[0]) {
+    e->meta = (keyval_t*)name;
+  } else {
+    free(name);
+    e->meta = NULL;
+  }
+  /* No compile_lambda — macros are AST-evaluated by the macro
+     expander, not the bytecode VM. */
+  return e;
+}
+
+/* EXP_VECTOR — currently an enum-only placeholder in alcove (no
+   make_vector / no user-facing constructor as of this commit). When
+   vectors land, the persistence story will need a length-prefixed
+   recursive dump/load along the lines of dump_pair. Until then, no
+   exp of type EXP_VECTOR can exist, so registering nothing here is
+   correct (savedb's __DUMPABLE__ check will warn if one ever appears). */
+
 
 
 exp_t *make_atom(char *str,int length)
@@ -5444,6 +5490,9 @@ int main(int argc, char *argv[])
   exp_tfuncList[EXP_LAMBDA]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
   exp_tfuncList[EXP_LAMBDA]->load=load_lambda;
   exp_tfuncList[EXP_LAMBDA]->dump=dump_lambda;
+  exp_tfuncList[EXP_MACRO]=(exp_tfunc*)memalloc(1,sizeof(exp_tfunc));
+  exp_tfuncList[EXP_MACRO]->load=load_macro;
+  exp_tfuncList[EXP_MACRO]->dump=dump_macro;
 
 
   reserved_symbol=create_dict();
@@ -5460,16 +5509,21 @@ int main(int argc, char *argv[])
     unrefexp(val);
   }
 
-  /* CLI flag scan: --noload (or -n) skips the auto-load of db.dump.
-     Filter the flag out of argv in place so the existing positional
-     handling (last arg = file, prev = -i) still works whether the
-     user passes the flag first, last, or in the middle. */
+  /* CLI flag scan:
+       --noload / -n       skip auto-load of db.dump
+       -e "<code>"         evaluate the string as a script (skips file read)
+     Flags get filtered out of argv in place so the existing positional
+     handling (last arg = file, prev = -i) still works whether the user
+     passes flags first, last, or in the middle. */
   int auto_load = 1;
+  char *eval_string = NULL;
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
       if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
         auto_load = 0;
+      } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
+        eval_string = argv[++src];
       } else {
         argv[dst++] = argv[src];
       }
@@ -5485,10 +5539,17 @@ int main(int argc, char *argv[])
     if (loaded > 0) printf("alcove: auto-loaded %d entries from db.dump (use --noload to skip)\n", loaded);
   }
 
-  if (argc>=2){
+  if (eval_string) {
+    /* Wrap the inline code as a read-only memory stream so the existing
+       reader/eval loop runs against it unchanged. `evaluatingfile=1`
+       makes the loop skip the REPL prompts and quietly exit on EOF. */
+    stream = fmemopen(eval_string, strlen(eval_string), "r");
+    if (!stream) { printf("alcove: fmemopen failed for -e\n"); exit(1); }
+    evaluatingfile = 1;
+  } else if (argc>=2){
     if ((stream=fopen(argv[argc-1],"r"))){
       evaluatingfile=1;
-      if (strcmp(argv[argc-2],"-i") == 0) 
+      if (strcmp(argv[argc-2],"-i") == 0)
         evaluatingfile|=2;
     }
     else
