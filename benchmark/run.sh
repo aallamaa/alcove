@@ -34,7 +34,7 @@ printf "  python3  %5d ms\n\n" "$STARTUP_PY"
 
 # the four benchmarks (best of 5)
 declare -a ROWS
-for prog in fib fact forsum countdown; do
+for prog in fib fact forsum countdown ackermann listsum sieve; do
   echo "=== $prog (best of 5) ==="
   A=$(best_of 5 "$ALCOVE"  "$prog.alc")
   P=$(best_of 5 "$PYTHON"  "$prog.py")

@@ -1,0 +1,15 @@
+; Iterative-ish prime count up to N. Avoids the obscure
+; recursion+filter interaction by checking each candidate against
+; all smaller primes via reduce.
+(def divides? (n d) (is (mod n d) 0))
+(def has-divisor? (n ds)
+  (if (no ds) nil
+      (if (divides? n (car ds)) t
+          (has-divisor? n (cdr ds)))))
+(def primes-up-to (i n acc)
+  (if (> i n)
+      acc
+      (if (has-divisor? i acc)
+          (primes-up-to (+ i 1) n acc)
+          (primes-up-to (+ i 1) n (cons i acc)))))
+(prn (length (primes-up-to 2 1000 (list))))
