@@ -178,3 +178,46 @@
 (assert "JIT loop fix to 0"          (cdn 1000)                    0)
 (cdn 'sym)                           ; deopt at loop entry
 (assert "JIT loop after deopt"       (cdn 500)                     0)
+
+; 15. JIT generalized slot index — leaf op on the 2nd param (slot 1),
+;     not just slot 0. Uses (+ b 1) so the body stays in the leaf-arith
+;     shape but matches a non-zero slot.
+(def addb (a b) (+ b 1))
+(assert "JIT addb slot1 fix"         (addb 'ignored 41)            42)
+(addb 0 'sym)                        ; deopt path on slot 1; result discarded
+(assert "JIT addb slot1 after deopt" (addb 0 100)                  101)
+
+; 16. JIT multiplication-by-constant leaf — (fn (n) (* n K)).
+;     Tag arithmetic via (t-1)*K + 1; deopt on non-fixnum.
+(def doublen (n) (* n 2))
+(assert "JIT doublen fix"            (doublen 21)                  42)
+(doublen 'sym)                       ; deopt; result discarded
+(assert "JIT doublen after deopt"    (doublen 100)                 200)
+(def triplen (n) (* n 3))
+(assert "JIT triplen 0"              (triplen 0)                   0)
+(assert "JIT triplen negative K"     ((fn (n) (* n -4)) 7)         -28)
+
+; 17. JIT tail loop with one inner global call before the recurse.
+;     New 26-byte shape (amd64 only for now): the (do (g K) (lp ...)) form
+;     emits LOAD_FIX + CALL_GLOBAL + POP between the compare and the arith.
+;     The inner fn is (+ x 1) rather than (x) x to dodge a pre-existing
+;     alcove bug where (do (identity-fn ...) ...) returns nil.
+(def addbump (x) (+ x 1))
+(def lpcall (k) (if (> k 0) (do (addbump 99) (lpcall (- k 1))) k))
+(assert "JIT loop+call to 0"         (lpcall 100)                  0)
+(lpcall 'sym)                        ; deopt at loop entry; result discarded
+(assert "JIT loop+call after deopt"  (lpcall 50)                   0)
+
+; 18. JIT two-call non-tail recursion (the fib shape, amd64 only).
+;     (def f (n) (if (cmp n K1) n (+ (g (op n K2)) (g (op n K3)))))
+;     The new matcher generates ~190 bytes of native that does the base
+;     case inline and only enters a frame for the recursive path.
+;     Tag-checks each call return; non-fixnum bails through frame teardown.
+(def jfib (n) (if (< n 2) n (+ (jfib (- n 1)) (jfib (- n 2)))))
+(assert "JIT fib base 0"             (jfib 0)                      0)
+(assert "JIT fib base 1"             (jfib 1)                      1)
+(assert "JIT fib 10"                 (jfib 10)                     55)
+(assert "JIT fib 20"                 (jfib 20)                     6765)
+(assert "JIT fib 30"                 (jfib 30)                     832040)
+(jfib 'sym)                          ; deopt at entry; result discarded
+(assert "JIT fib after deopt"        (jfib 15)                     610)

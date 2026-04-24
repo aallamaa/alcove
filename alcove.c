@@ -104,6 +104,7 @@ lispProc lispProcList[]={
   {"savedb",2,1,0,savedbcmd},
   {"ispersistent",2,1,0,ispersistentcmd},
   {"inspect",2,1,0,inspectcmd},
+  {"disasm",2,1,0,disasmcmd},
 
 };
 
@@ -2202,6 +2203,24 @@ exp_t *inspectcmd(exp_t *e,env_t *env){
   unrefexp(e);
   return NULL;
 }
+
+/* (disasm fn)  — evaluates fn, expects a compiled lambda, prints its
+   bytecode op-by-op plus the JIT install status. Useful for verifying
+   what bytecode the compiler produces (no more ad-hoc fprintf in C). */
+exp_t *disasmcmd(exp_t *e, env_t *env) {
+  exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
+  if (arg && iserror(arg)) { unrefexp(e); return arg; }
+  if (!arg || !is_ptr(arg) || !islambda(arg)) {
+    printf("\x1B[96m(disasm): not a lambda\x1B[39m\n");
+  } else if (!(arg->flags & FLAG_COMPILED) || !arg->bc) {
+    printf("\x1B[96m(disasm): lambda is not compiled (runs as AST)\x1B[39m\n");
+  } else {
+    disasm_bytecode(arg->bc);
+  }
+  unrefexp(arg);
+  unrefexp(e);
+  return NULL;
+}
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
 
@@ -2432,6 +2451,111 @@ static exp_t *make_tail_marker(exp_t *fn, exp_t *call_form, env_t *env)
 
 /* ---------------- Bytecode compiler + VM ---------------- */
 
+/* Map an opcode byte to its mnemonic. Used by disasm_bytecode. */
+static const char *bc_opname(uint8_t op) {
+  switch (op) {
+    case OP_HALT:         return "HALT";
+    case OP_RET:          return "RET";
+    case OP_POP:          return "POP";
+    case OP_LOAD_FIX:     return "LOAD_FIX";
+    case OP_LOAD_CONST:   return "LOAD_CONST";
+    case OP_LOAD_SLOT:    return "LOAD_SLOT";
+    case OP_LOAD_GLOBAL:  return "LOAD_GLOBAL";
+    case OP_STORE_SLOT:   return "STORE_SLOT";
+    case OP_BIND_SLOT:    return "BIND_SLOT";
+    case OP_UNBIND_SLOT:  return "UNBIND_SLOT";
+    case OP_ADD:          return "ADD";
+    case OP_SUB:          return "SUB";
+    case OP_MUL:          return "MUL";
+    case OP_DIV:          return "DIV";
+    case OP_LT:           return "LT";
+    case OP_GT:           return "GT";
+    case OP_LE:           return "LE";
+    case OP_GE:           return "GE";
+    case OP_IS:           return "IS";
+    case OP_ISO:          return "ISO";
+    case OP_NOT:          return "NOT";
+    case OP_JUMP:         return "JUMP";
+    case OP_BR_IF_FALSE:  return "BR_IF_FALSE";
+    case OP_BR_IF_TRUE:   return "BR_IF_TRUE";
+    case OP_CALL:         return "CALL";
+    case OP_CALL_GLOBAL:  return "CALL_GLOBAL";
+    case OP_TAIL_SELF:    return "TAIL_SELF";
+    case OP_TAIL_CALL:    return "TAIL_CALL";
+    case OP_CONS:         return "CONS";
+    case OP_CAR:          return "CAR";
+    case OP_CDR:          return "CDR";
+    case OP_LIST:         return "LIST";
+    case OP_SLOT_ADD_FIX: return "SLOT_ADD_FIX";
+    case OP_SLOT_SUB_FIX: return "SLOT_SUB_FIX";
+    case OP_SLOT_LT_FIX:  return "SLOT_LT_FIX";
+    case OP_SLOT_LE_FIX:  return "SLOT_LE_FIX";
+    case OP_SLOT_GT_FIX:  return "SLOT_GT_FIX";
+    case OP_SLOT_GE_FIX:  return "SLOT_GE_FIX";
+    default:              return "??";
+  }
+}
+
+/* Decode one instruction at code[pc] and print it. Returns the byte
+   length (1..4) so the caller can advance. */
+static int bc_disasm_one(const uint8_t *code, int pc) {
+  uint8_t op = code[pc];
+  switch (op) {
+    case OP_HALT: case OP_RET: case OP_POP:
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+    case OP_LT: case OP_GT: case OP_LE: case OP_GE:
+    case OP_IS: case OP_ISO: case OP_NOT:
+    case OP_CONS: case OP_CAR: case OP_CDR:
+      printf("  %04d  %s\n", pc, bc_opname(op));
+      return 1;
+    case OP_LOAD_FIX: case OP_JUMP:
+    case OP_BR_IF_FALSE: case OP_BR_IF_TRUE: {
+      int16_t imm = (int16_t)((uint16_t)code[pc+1] | ((uint16_t)code[pc+2] << 8));
+      printf("  %04d  %s %d\n", pc, bc_opname(op), (int)imm);
+      return 3;
+    }
+    case OP_LOAD_CONST: case OP_LOAD_SLOT: case OP_LOAD_GLOBAL:
+    case OP_STORE_SLOT: case OP_BIND_SLOT:  case OP_UNBIND_SLOT:
+    case OP_CALL: case OP_TAIL_SELF: case OP_TAIL_CALL:
+    case OP_LIST:
+      printf("  %04d  %s %d\n", pc, bc_opname(op), (int)code[pc+1]);
+      return 2;
+    case OP_CALL_GLOBAL:
+      printf("  %04d  %s const_idx=%d nargs=%d\n", pc, bc_opname(op),
+             (int)code[pc+1], (int)code[pc+2]);
+      return 3;
+    case OP_SLOT_ADD_FIX: case OP_SLOT_SUB_FIX:
+    case OP_SLOT_LT_FIX:  case OP_SLOT_LE_FIX:
+    case OP_SLOT_GT_FIX:  case OP_SLOT_GE_FIX: {
+      int16_t imm = (int16_t)((uint16_t)code[pc+2] | ((uint16_t)code[pc+3] << 8));
+      printf("  %04d  %s slot=%d imm=%d\n", pc, bc_opname(op),
+             (int)code[pc+1], (int)imm);
+      return 4;
+    }
+    default:
+      printf("  %04d  ?? 0x%02x\n", pc, op);
+      return 1;
+  }
+}
+
+/* Print a human-readable dump of a bytecode body: header (size + nconsts
+   + JIT status) followed by one line per instruction. */
+void disasm_bytecode(bytecode_t *bc) {
+  if (!bc) { printf("  (no bytecode)\n"); return; }
+  printf("\x1B[96mbytecode: %d bytes, %d consts", bc->ncode, bc->nconsts);
+#ifdef ALCOVE_JIT
+  if (bc->jit) printf(", jit installed (%zu byte mmap page)", bc->jit_size);
+  else printf(", jit not installed");
+#endif
+  printf("\x1B[39m\n");
+  int pc = 0;
+  while (pc < bc->ncode) {
+    int adv = bc_disasm_one(bc->code, pc);
+    if (adv <= 0) break;
+    pc += adv;
+  }
+}
+
 void bytecode_free(bytecode_t *bc) {
   if (!bc) return;
   int i;
@@ -2446,25 +2570,131 @@ void bytecode_free(bytecode_t *bc) {
 }
 
 #ifdef ALCOVE_JIT
-/* ---------------- JIT (arm64-only proof of concept) ----------------
-   Recognizes a narrow set of lambda body shapes and emits arm64
+/* ---------------- JIT (arm64 + amd64 backends) ----------------
+   Recognizes a narrow set of lambda body shapes and emits native
    machine code that bypasses the bytecode dispatch loop entirely.
-   Currently handled (one-param lambdas only):
-     - LOAD_SLOT 0; RET                     →  identity      (n)
+
+   Shapes handled by BOTH backends (leaf, no stack frame, no runtime
+   callouts — generalized to any slot < ENV_INLINE_SLOTS):
+     - LOAD_SLOT s; RET                     →  identity      (n)
      - LOAD_FIX K; RET                      →  constant      K
-     - LOAD_SLOT 0; LOAD_FIX K; ADD; RET    →  (+ n K) for K in int16
-     - LOAD_SLOT 0; LOAD_FIX K; SUB; RET    →  (- n K) for K in int16
+     - LOAD_SLOT s; LOAD_FIX K; ADD; RET    →  (+ s K) for K in int16
+     - LOAD_SLOT s; LOAD_FIX K; SUB; RET    →  (- s K) for K in int16
+     - LOAD_SLOT s; LOAD_FIX K; MUL; RET    →  (* s K) via (t-1)*K + 1
+     - SLOT_ADD_FIX / SLOT_SUB_FIX leaf     →  same as above (fused form)
+     - 19-byte self-tail counter loop       →  try_jit_simple_tail_loop
+
+   Shapes handled by amd64 ONLY (arm64 fall-through to bytecode — see
+   TODOs in the arm64 backend). These DO establish a frame and DO call
+   into the runtime via jit_call_global1_{drop,value}:
+     - 26-byte tail loop + inner global call  →  try_jit_tail_loop_with_call
+     - 28-byte two-call recursion (fib shape) →  try_jit_recurse_add_two
+
    Anything else: jit_compile returns 0; the bytecode interpreter
    handles the call.
-   This is foundation work — copy-and-patch templates, broader op
-   coverage, and call-out support to alcove's runtime are next-session
-   work. The win here is the wiring: mmap, write-protect toggle on
-   Apple Silicon, instruction emission, and the dispatch hook in
-   vm_invoke_values. */
 
-#if !defined(__aarch64__)
-#error "ALCOVE_JIT currently requires arm64. Disable with -UALCOVE_JIT."
+   Calling convention: the JITted function takes one arg (env_t*) and
+   returns exp_t* (NULL signals deopt → caller falls back to vm_run).
+   On arm64 (AAPCS) that's x0 in / x0 out; on amd64 (System V) that's
+   rdi in / rax out. Leaf shapes never touch the stack or callee-saved
+   regs. The two amd64 "with runtime call" shapes establish a 16-aligned
+   frame (push rbx, optionally sub rsp, #pad) and restore on exit. */
+
+#if !defined(__aarch64__) && !defined(__x86_64__)
+#error "ALCOVE_JIT requires __aarch64__ or __x86_64__. Disable with -UALCOVE_JIT."
 #endif
+
+/* Forward decl — vm_invoke_values is static in this file and defined
+   later, but the JIT-to-runtime trampoline below needs to call it. */
+static struct exp_t *vm_invoke_values(struct exp_t *fn, int nargs,
+                                       struct exp_t **argv, struct env_t *env);
+
+/* Value-returning version of the call thunk. Same lookup + invoke path,
+   but returns the actual result (which may be a tagged fixnum, a heap
+   exp_t* such as an error, or NULL). The JIT site is responsible for
+   tag-checking the return; non-fixnum returns get propagated to the
+   caller as-is (errors surface naturally; NULL triggers a bytecode
+   re-run via the JIT's standard NULL=deopt convention).
+   Marked unused because only the amd64 matchers call it today; arm64
+   backends will pick it up when they grow equivalent shapes. */
+__attribute__((unused))
+static exp_t *jit_call_global1_value(bytecode_t *bc, env_t *env,
+                                      uint8_t const_idx, exp_t *arg) {
+  exp_t *callee;
+  if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
+    callee = refexp(bc->gcache[const_idx].val);
+  } else {
+    callee = lookup(bc->consts[const_idx], env);
+    if (!callee) {
+      unrefexp(arg);
+      return error(ERROR_ILLEGAL_VALUE, bc->consts[const_idx], env,
+                   "Unbound variable");
+    }
+    if (!bc->gcache) bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+    bc->gcache[const_idx].val = callee;
+    bc->gcache[const_idx].gen = alcove_global_gen;
+  }
+  exp_t *argv[1] = { arg };
+  exp_t *ret = vm_invoke_values(callee, 1, argv, env);
+  unrefexp(callee);
+  return ret;
+}
+
+/* JIT-to-runtime callout. Mirrors OP_CALL_GLOBAL semantics: looks up
+   bc->consts[const_idx] in the global env (going through bc->gcache for
+   amortized cost), invokes it with one arg, and drops the success
+   return value (the inner call sits before an OP_POP in the bytecode).
+   Returns NULL on success, or an error exp_t* to propagate to the JIT's
+   caller — the JIT site checks rax after `call` and bails if non-NULL.
+   Marked unused because only the amd64 matchers call it today. */
+__attribute__((unused))
+static exp_t *jit_call_global1_drop(bytecode_t *bc, env_t *env,
+                                     uint8_t const_idx, exp_t *arg) {
+  exp_t *callee;
+  if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
+    callee = refexp(bc->gcache[const_idx].val);
+  } else {
+    callee = lookup(bc->consts[const_idx], env);
+    if (!callee) {
+      unrefexp(arg);
+      return error(ERROR_ILLEGAL_VALUE, bc->consts[const_idx], env,
+                   "Unbound variable");
+    }
+    if (!bc->gcache) bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+    bc->gcache[const_idx].val = callee;
+    bc->gcache[const_idx].gen = alcove_global_gen;
+  }
+  exp_t *argv[1] = { arg };
+  exp_t *ret = vm_invoke_values(callee, 1, argv, env);
+  unrefexp(callee);
+  if (ret && iserror(ret)) return ret;     /* propagate */
+  if (ret) unrefexp(ret);                  /* discard non-error */
+  return NULL;
+}
+
+/* Page allocation + W^X dance — shared by both backends. */
+static void *jit_alloc(size_t sz) {
+  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef __APPLE__
+  flags |= MAP_JIT;
+#endif
+  void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
+  return (p == MAP_FAILED) ? NULL : p;
+}
+static void jit_write_begin(void) {
+#ifdef __APPLE__
+  pthread_jit_write_protect_np(0);
+#endif
+}
+static void jit_write_end(void *p, size_t sz) {
+#ifdef __APPLE__
+  pthread_jit_write_protect_np(1);
+#endif
+  __builtin___clear_cache((char*)p, (char*)p + sz);
+}
+
+#if defined(__aarch64__)
+/* ===================== arm64 backend ===================== */
 
 /* arm64 instruction encoders. All return uint32_t little-endian; arm64
    is fixed-width 4-byte instructions. */
@@ -2521,6 +2751,11 @@ static uint32_t arm64_tbz(int rt, int bit, int off_insns) {
 static uint32_t arm64_mov_reg(int rd, int rm) {
   return 0xAA0003E0u | ((uint32_t)rm << 16) | (uint32_t)rd;
 }
+/* MUL Xd, Xn, Xm  — alias for MADD Xd, Xn, Xm, XZR (signed 64-bit mul,
+   low 64 bits of result, no flags). */
+static uint32_t arm64_mul(int rd, int rn, int rm) {
+  return 0x9B007C00u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) | (uint32_t)rd;
+}
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs. */
 static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
@@ -2532,25 +2767,11 @@ static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
   return n;
 }
 
-static void *jit_alloc(size_t sz) {
-  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#ifdef __APPLE__
-  flags |= MAP_JIT;
-#endif
-  void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
-  return (p == MAP_FAILED) ? NULL : p;
-}
-static void jit_write_begin(void) {
-#ifdef __APPLE__
-  pthread_jit_write_protect_np(0);
-#endif
-}
-static void jit_write_end(void *p, size_t sz) {
-#ifdef __APPLE__
-  pthread_jit_write_protect_np(1);
-#endif
-  __builtin___clear_cache((char*)p, (char*)p + sz);
-}
+/* TODO(arm64): port try_jit_tail_loop_with_call from the amd64 backend.
+   The amd64 path JITs (def lp (k) (if (cmp k K1) (do (g K) (lp (op k K2))) k))
+   by establishing a frame (x19 = env, save lr/fp), calling a C trampoline
+   via BLR for the inner global call, and propagating any error returned.
+   Until this lands, arm64 falls back to bytecode for that shape. */
 
 /* Try to JIT a self-tail-recursive counter loop body of the form:
      (def f (n) (if (cmp n K1) (f (op n K2)) n))
@@ -2634,7 +2855,13 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
     out[n++] = arm64_add_imm(1, 1, arith_delta);
   /* tag bit preserved across ±(K2<<3); subsequent loads stay tagged. */
   out[n++] = arm64_str_imm(1, 0, slot_off);            /* str x1, [x0,#off] */
-  out[n++] = arm64_b(loop_top - n);                    /* b loop_top */
+  /* Compute the rel-to-loop-top displacement from the branch's OWN PC
+     (i.e. the current value of n) before writing it. Doing both in one
+     `out[n++] = arm64_b(loop_top - n)` leaves the evaluation order of
+     the LHS's n++ vs the RHS's read of n unspecified (C sequence-point
+     rules) — gcc 14 was observed to pick the wanted order but it is
+     not portable. */
+  { int cur = n++; out[cur] = arm64_b(loop_top - cur); }  /* b loop_top */
   /* end: */
   int end_pc = n;
   out[patch_bcond] = arm64_b_cond(cond, end_pc - patch_bcond);
@@ -2646,6 +2873,10 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_movz(0, 0, 0);                      /* mov x0, #0 (NULL) */
   out[n++] = arm64_ret();
 
+  /* Worst case: 12 instructions (load, tbz, cmp, b.cond, sub/add, str,
+     b loop, mov, ret, movz, ret + slack). Caller's buffer is uint32_t
+     insns[32] — comfortable margin. Trip if a future tweak overruns. */
+  assert(n <= 16);
   *outn = n;
   return 1;
 }
@@ -2669,45 +2900,59 @@ int jit_compile(bytecode_t *bc) {
     n += emit_mov64(insns + n, 0, tagged);
     insns[n++] = arm64_ret();
   }
-  else if (bc->ncode == 3 && c[0] == OP_LOAD_SLOT && c[1] == 0 && c[2] == OP_RET) {
-    /* (fn (n) n) — return env->inline_vals[0]. */
-    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+  else if (bc->ncode == 3 && c[0] == OP_LOAD_SLOT &&
+           c[1] < ENV_INLINE_SLOTS && c[2] == OP_RET) {
+    /* (fn (... s ...) s) — return env->inline_vals[s]. */
+    int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)c[1] * 8;
+    insns[n++] = arm64_ldr_imm(0, 0, slot_off);
     insns[n++] = arm64_ret();
   }
-  else if (bc->ncode == 7 && c[0] == OP_LOAD_SLOT && c[1] == 0 &&
+  else if (bc->ncode == 7 && c[0] == OP_LOAD_SLOT &&
+           c[1] < ENV_INLINE_SLOTS &&
            c[2] == OP_LOAD_FIX &&
-           (c[5] == OP_ADD || c[5] == OP_SUB) && c[6] == OP_RET) {
-    /* (fn (n) (op n K)) where K fits int16. ADD/SUB on a tagged
-       fixnum is just ±(K<<3): the low tag bit is preserved. */
+           (c[5] == OP_ADD || c[5] == OP_SUB || c[5] == OP_MUL) &&
+           c[6] == OP_RET) {
+    /* (fn (... s ...) (op s K)) for K in int16, op in {+, -, *}.
+       For ADD/SUB: ±(K<<3) preserves the tag bit directly.
+       For MUL:     drop tag (sub 1), imul by K, re-tag (add 1). */
     int16_t k = (int16_t)((uint16_t)c[3] | ((uint16_t)c[4] << 8));
-    int delta = ((int)k) << 3;        /* fits because |K| <= 32767 */
-    if (delta < 0 || delta > 4095) return 0;  /* out of immediate range */
-    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
-    int patch_tbz = n;
-    insns[n++] = 0;                            /* tbz x0,#0,deopt */
-    insns[n++] = (c[5] == OP_ADD) ? arm64_add_imm(0, 0, delta)
-                                  : arm64_sub_imm(0, 0, delta);
-    insns[n++] = arm64_ret();
-    int deopt_pc = n;
-    insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
-    insns[n++] = arm64_movz(0, 0, 0);          /* mov x0, #0 (NULL) */
-    insns[n++] = arm64_ret();
-  }
-  /* Also handle the slot-fix superinstructions that the compiler emits
-     today instead of the 3-op sequence. */
-  else if (bc->ncode == 5 &&
-           c[0] == OP_LOAD_SLOT && c[1] == 0 &&
-           (c[2] == OP_SLOT_ADD_FIX || c[2] == OP_SLOT_SUB_FIX) &&
-           0 /* would need to re-read slot/imm; defer */ ) {
-    return 0;
+    int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)c[1] * 8;
+    if (c[5] == OP_MUL) {
+      insns[n++] = arm64_ldr_imm(0, 0, slot_off);
+      int patch_tbz = n;
+      insns[n++] = 0;                            /* tbz x0,#0,deopt */
+      insns[n++] = arm64_sub_imm(0, 0, 1);       /* drop tag bit */
+      n += emit_mov64(insns + n, 1, (uint64_t)(int64_t)k);  /* x1 = K (sign-ext) */
+      insns[n++] = arm64_mul(0, 0, 1);           /* x0 = (v<<3) * K = (v*K)<<3 */
+      insns[n++] = arm64_add_imm(0, 0, 1);       /* re-tag */
+      insns[n++] = arm64_ret();
+      int deopt_pc = n;
+      insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+      insns[n++] = arm64_movz(0, 0, 0);
+      insns[n++] = arm64_ret();
+    } else {
+      int delta = ((int)k) << 3;
+      if (delta < 0 || delta > 4095) return 0;   /* arm64 imm12 limit */
+      insns[n++] = arm64_ldr_imm(0, 0, slot_off);
+      int patch_tbz = n;
+      insns[n++] = 0;                            /* tbz x0,#0,deopt */
+      insns[n++] = (c[5] == OP_ADD) ? arm64_add_imm(0, 0, delta)
+                                    : arm64_sub_imm(0, 0, delta);
+      insns[n++] = arm64_ret();
+      int deopt_pc = n;
+      insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+      insns[n++] = arm64_movz(0, 0, 0);          /* mov x0, #0 (NULL) */
+      insns[n++] = arm64_ret();
+    }
   }
   else if (bc->ncode == 5 &&
            (c[0] == OP_SLOT_ADD_FIX || c[0] == OP_SLOT_SUB_FIX) &&
-           c[1] == 0 && c[4] == OP_RET) {
+           c[1] < ENV_INLINE_SLOTS && c[4] == OP_RET) {
     int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
     int delta = ((int)k) << 3;
     if (delta < 0 || delta > 4095) return 0;
-    insns[n++] = arm64_ldr_imm(0, 0, offsetof(env_t, inline_vals[0]));
+    int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)c[1] * 8;
+    insns[n++] = arm64_ldr_imm(0, 0, slot_off);
     int patch_tbz = n;
     insns[n++] = 0;                            /* tbz x0,#0,deopt */
     insns[n++] = (c[0] == OP_SLOT_ADD_FIX) ? arm64_add_imm(0, 0, delta)
@@ -2722,6 +2967,9 @@ int jit_compile(bytecode_t *bc) {
     return 0;  /* shape not recognized */
   }
 
+  /* All current shapes fit in well under 32 instructions. Trip if a
+     future shape (or a refactor of an existing one) overruns insns[32]. */
+  assert(n <= 32);
   size_t sz = (size_t)n * 4;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
@@ -2735,6 +2983,670 @@ int jit_compile(bytecode_t *bc) {
   bc->jit_size = mapsz;
   return 1;
 }
+
+#endif /* __aarch64__ */
+
+#if defined(__x86_64__)
+/* ===================== amd64 backend ===================== */
+
+/* x86-64 instruction encoders (System V ABI: arg in rdi, return in rax).
+   We use only RAX, RCX, RDI — all in the low 8 register set, so REX.B
+   and REX.R extensions are never needed; REX.W=1 (0x48) appears on
+   every 64-bit op. Encoders write raw bytes into a buffer and return
+   the byte count. */
+
+#define X64_RAX 0
+#define X64_RCX 1
+#define X64_RDX 2
+#define X64_RBX 3
+#define X64_RSI 6
+#define X64_RDI 7
+
+/* mov r64, [base + disp32]   →  REX.W 0x8B /r disp32 */
+static int x64_mov_reg_mem(uint8_t *buf, int dst, int base, int32_t disp) {
+  buf[0] = 0x48;
+  buf[1] = 0x8B;
+  buf[2] = (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7));
+  memcpy(buf + 3, &disp, 4);
+  return 7;
+}
+/* mov [base + disp32], r64   →  REX.W 0x89 /r disp32 */
+static int x64_mov_mem_reg(uint8_t *buf, int src, int base, int32_t disp) {
+  buf[0] = 0x48;
+  buf[1] = 0x89;
+  buf[2] = (uint8_t)(0x80 | ((src & 7) << 3) | (base & 7));
+  memcpy(buf + 3, &disp, 4);
+  return 7;
+}
+/* mov r64, imm64   →  REX.W 0xB8+r imm64 (10 bytes) */
+static int x64_mov_imm64(uint8_t *buf, int dst, uint64_t imm) {
+  buf[0] = 0x48;
+  buf[1] = (uint8_t)(0xB8 + (dst & 7));
+  memcpy(buf + 2, &imm, 8);
+  return 10;
+}
+/* mov r64, r64   →  REX.W 0x89 /r */
+static int x64_mov_reg_reg(uint8_t *buf, int dst, int src) {
+  buf[0] = 0x48;
+  buf[1] = 0x89;
+  buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
+  return 3;
+}
+/* xor r32, r32 — zero-idiom; clears the full r64 in 2 bytes. */
+static int x64_zero_reg(uint8_t *buf, int dst) {
+  buf[0] = 0x31;
+  buf[1] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (dst & 7));
+  return 2;
+}
+/* add r64, sign-extended imm32   →  REX.W 0x81 /0 imm32 */
+static int x64_add_imm32(uint8_t *buf, int dst, int32_t imm) {
+  buf[0] = 0x48;
+  buf[1] = 0x81;
+  buf[2] = (uint8_t)(0xC0 | (dst & 7));         /* /0, mod=11 */
+  memcpy(buf + 3, &imm, 4);
+  return 7;
+}
+/* sub r64, sign-extended imm32   →  REX.W 0x81 /5 imm32 */
+static int x64_sub_imm32(uint8_t *buf, int dst, int32_t imm) {
+  buf[0] = 0x48;
+  buf[1] = 0x81;
+  buf[2] = (uint8_t)(0xE8 | (dst & 7));         /* /5, mod=11 */
+  memcpy(buf + 3, &imm, 4);
+  return 7;
+}
+/* cmp r64, sign-extended imm32   →  REX.W 0x81 /7 imm32 */
+static int x64_cmp_imm32(uint8_t *buf, int dst, int32_t imm) {
+  buf[0] = 0x48;
+  buf[1] = 0x81;
+  buf[2] = (uint8_t)(0xF8 | (dst & 7));         /* /7, mod=11 */
+  memcpy(buf + 3, &imm, 4);
+  return 7;
+}
+/* imul r64, r/m64, sign-extended imm32   →  REX.W 0x69 /r imm32 (7 bytes
+   when r=r/m). 64-bit signed multiply, low 64 bits of result, no flags
+   relevant for our use. */
+static int x64_imul_reg_reg_imm32(uint8_t *buf, int dst, int src, int32_t imm) {
+  buf[0] = 0x48;
+  buf[1] = 0x69;
+  buf[2] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  memcpy(buf + 3, &imm, 4);
+  return 7;
+}
+/* test r/m8, imm8   →  0xF6 /0 imm8.  Used for tag-bit check on AL/CL. */
+static int x64_test_reg8_imm8(uint8_t *buf, int reg, uint8_t imm) {
+  buf[0] = 0xF6;
+  buf[1] = (uint8_t)(0xC0 | (reg & 7));
+  buf[2] = imm;
+  return 3;
+}
+static int x64_ret(uint8_t *buf) { buf[0] = 0xC3; return 1; }
+/* jmp rel32 (5 bytes). disp is from end of this instruction. */
+static int x64_jmp_rel32(uint8_t *buf, int32_t disp) {
+  buf[0] = 0xE9;
+  memcpy(buf + 1, &disp, 4);
+  return 5;
+}
+/* jcc rel32 (6 bytes). cc is the low nibble of the secondary opcode:
+   jz=0x04, jl=0x0C, jge=0x0D, jle=0x0E, jg=0x0F. */
+static int x64_jcc_rel32(uint8_t *buf, uint8_t cc, int32_t disp) {
+  buf[0] = 0x0F;
+  buf[1] = (uint8_t)(0x80 | cc);
+  memcpy(buf + 2, &disp, 4);
+  return 6;
+}
+/* push r64 (low 8 regs only) — 1 byte: 0x50+r */
+static int x64_push_reg(uint8_t *buf, int reg) {
+  buf[0] = (uint8_t)(0x50 + (reg & 7));
+  return 1;
+}
+/* pop r64 (low 8 regs only) — 1 byte: 0x58+r */
+static int x64_pop_reg(uint8_t *buf, int reg) {
+  buf[0] = (uint8_t)(0x58 + (reg & 7));
+  return 1;
+}
+/* call r/m64 — 0xFF /2. Register form for low 8 regs: 0xFF 0xD0+r (2 bytes). */
+static int x64_call_reg(uint8_t *buf, int reg) {
+  buf[0] = 0xFF;
+  buf[1] = (uint8_t)(0xD0 + (reg & 7));
+  return 2;
+}
+/* test r64, r64 — REX.W 0x85 /r (3 bytes). Sets ZF=1 iff value is zero;
+   we use it to test the trampoline's exp_t* return for NULL. */
+static int x64_test_reg_reg(uint8_t *buf, int dst, int src) {
+  buf[0] = 0x48;
+  buf[1] = 0x85;
+  buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
+  return 3;
+}
+/* mov [rsp + 0], r64.  RSP base requires SIB even with mod=00 (because
+   r/m=100 with mod=00 normally means [disp32]; the SIB redirects it). */
+static int x64_mov_rsp_reg(uint8_t *buf, int src) {
+  buf[0] = 0x48;
+  buf[1] = 0x89;
+  buf[2] = (uint8_t)(0x04 | ((src & 7) << 3));   /* mod=00, reg=src, r/m=100 (SIB) */
+  buf[3] = 0x24;                                  /* SIB: scale=00, index=100 (none), base=100 (rsp) */
+  return 4;
+}
+/* add r64, [rsp + 0]  (counterpart of x64_mov_rsp_reg for the load side) */
+static int x64_add_reg_rsp(uint8_t *buf, int dst) {
+  buf[0] = 0x48;
+  buf[1] = 0x03;
+  buf[2] = (uint8_t)(0x04 | ((dst & 7) << 3));
+  buf[3] = 0x24;
+  return 4;
+}
+
+/* Patch the rel32 of a previously emitted forward branch.
+   `branch_start` = byte offset of the branch's first byte.
+   `branch_size`  = total size of the branch instruction (5 or 6).
+   `target`       = byte offset to jump to. */
+static void x64_patch_rel32(uint8_t *buf, int branch_start, int branch_size, int target) {
+  int32_t rel = (int32_t)(target - (branch_start + branch_size));
+  memcpy(buf + branch_start + branch_size - 4, &rel, 4);
+}
+
+/* Same shape detector as the arm64 path: a self-tail counter loop with
+   compare + arith on a single param slot. See the arm64 version's
+   comment block above for the bytecode layout (19 bytes total). */
+static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 19) return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX) return 0;
+  uint8_t cmp_slot = c[1];
+  int16_t cmp_imm  = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+
+  uint8_t arith_op = c[7];
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX) return 0;
+  uint8_t arith_slot = c[8];
+  int16_t arith_imm  = (int16_t)((uint16_t)c[9] | ((uint16_t)c[10] << 8));
+
+  if (c[11] != OP_TAIL_SELF || c[12] != 1) return 0;
+  if (c[13] != OP_JUMP) return 0;
+  if (c[16] != OP_LOAD_SLOT) return 0;
+  uint8_t load_slot = c[17];
+  if (c[18] != OP_RET) return 0;
+
+  if (cmp_slot != arith_slot || cmp_slot != load_slot) return 0;
+  if (cmp_slot >= ENV_INLINE_SLOTS) return 0;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+
+  /* int16<<3 fits comfortably as sign-extended imm32 — no narrow imm12
+     limit like arm64. */
+  int32_t cmp_tagged  = ((int32_t)cmp_imm << 3) | 1;
+  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+
+  /* Invert the bytecode comparison for "branch out of the loop on the
+     failing case". x86 cc nibbles: jl=0x0C jge=0x0D jle=0x0E jg=0x0F. */
+  uint8_t inv_cc;
+  switch (cmp_op) {
+    case OP_SLOT_GT_FIX: inv_cc = 0x0E; break;  /* !GT → jle */
+    case OP_SLOT_LT_FIX: inv_cc = 0x0D; break;  /* !LT → jge */
+    case OP_SLOT_GE_FIX: inv_cc = 0x0C; break;  /* !GE → jl  */
+    case OP_SLOT_LE_FIX: inv_cc = 0x0F; break;  /* !LE → jg  */
+    default: return 0;
+  }
+
+  int n = 0;
+
+  /* mov rcx, [rdi + slot_off] */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, slot_off);
+  /* test cl, 1 — verify tag bit set; if not, deopt. */
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_start = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);          /* jz deopt (placeholder) */
+
+  int loop_top = n;
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  int jcc_end_start = n;
+  n += x64_jcc_rel32(buf + n, inv_cc, 0);        /* j<inv> end (placeholder) */
+  if (arith_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  /* tag bit preserved across ±(K2<<3); subsequent loads stay tagged. */
+  n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, slot_off);
+  /* jmp loop_top */
+  {
+    int jmp_start = n;
+    n += x64_jmp_rel32(buf + n, (int32_t)(loop_top - (jmp_start + 5)));
+  }
+
+  int end_pc = n;
+  n += x64_mov_reg_reg(buf + n, X64_RAX, X64_RCX);   /* mov rax, rcx */
+  n += x64_ret(buf + n);
+
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);               /* xor eax, eax */
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
+  x64_patch_rel32(buf, jz_start,      6, deopt_pc);
+
+  /* Worst case ~55 bytes (load, test, jcc, cmp, jcc, sub/add, mov,
+     jmp, mov, ret, xor, ret + slack). Caller's buffer is uint8_t buf[256]. */
+  assert(n <= 80);
+  *outn = n;
+  return 1;
+}
+
+/* Tail counter loop with one inner global call before the recurse.
+   Bytecode shape (26 bytes), produced by:
+     (def lp (k) (if (cmp k K1) (do (g K_arg) (lp (op k K2))) k))
+   where g is a global function:
+     [ 0] SLOT_<cmp>_FIX slot K1   4 bytes
+     [ 4] BR_IF_FALSE off          3 bytes
+     [ 7] LOAD_FIX K_arg           3 bytes
+     [10] CALL_GLOBAL const_idx,1  3 bytes
+     [13] OP_POP                   1 byte
+     [14] SLOT_<op>_FIX slot K2    4 bytes
+     [18] TAIL_SELF 1              2 bytes
+     [20] JUMP off                 3 bytes (unreachable)
+     [23] LOAD_SLOT slot           2 bytes
+     [25] RET                      1 byte
+   Codegen establishes a frame (push rbx; rbx = env), runs the loop
+   body in rcx, calls jit_call_global1_drop for the inner call, and
+   propagates any error rax holds. Deopt before frame setup so the
+   tag-check failure path is just `xor eax,eax; ret`. */
+static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 26) return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX) return 0;
+  uint8_t slot = c[1];
+  if (slot >= ENV_INLINE_SLOTS) return 0;
+  int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  if (c[7] != OP_LOAD_FIX) return 0;
+  int16_t arg_imm = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
+
+  if (c[10] != OP_CALL_GLOBAL) return 0;
+  uint8_t const_idx = c[11];
+  if (c[12] != 1) return 0;                /* nargs must be 1 */
+  if (const_idx >= bc->nconsts) return 0;
+
+  if (c[13] != OP_POP) return 0;
+
+  uint8_t arith_op = c[14];
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX) return 0;
+  if (c[15] != slot) return 0;
+  int16_t arith_imm = (int16_t)((uint16_t)c[16] | ((uint16_t)c[17] << 8));
+
+  if (c[18] != OP_TAIL_SELF || c[19] != 1) return 0;
+  if (c[20] != OP_JUMP) return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != slot) return 0;
+  if (c[25] != OP_RET) return 0;
+
+  int32_t slot_off    = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
+  int32_t cmp_tagged  = ((int32_t)cmp_imm << 3) | 1;
+  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+  int64_t tagged_arg  = ((int64_t)arg_imm << 3) | 1;
+
+  uint8_t inv_cc;
+  switch (cmp_op) {
+    case OP_SLOT_GT_FIX: inv_cc = 0x0E; break;   /* !GT → jle */
+    case OP_SLOT_LT_FIX: inv_cc = 0x0D; break;   /* !LT → jge */
+    case OP_SLOT_GE_FIX: inv_cc = 0x0C; break;   /* !GE → jl  */
+    case OP_SLOT_LE_FIX: inv_cc = 0x0F; break;   /* !LE → jg  */
+    default: return 0;
+  }
+
+  int n = 0;
+
+  /* Tag-check before any frame setup so deopt is a 3-instruction sled. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_deopt = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);          /* jz deopt (placeholder) */
+
+  /* Frame: push rbx (1 byte). After entry rsp ends in 0x8; one push
+     gives 0x0 → 16-byte aligned for the upcoming `call`. rbx = env. */
+  n += x64_push_reg(buf + n, X64_RBX);
+  n += x64_mov_reg_reg(buf + n, X64_RBX, X64_RDI);
+
+  int loop_top = n;
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RBX, slot_off);
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  int jcc_end = n;
+  n += x64_jcc_rel32(buf + n, inv_cc, 0);        /* placeholder */
+
+  /* Inner call: jit_call_global1_drop(bc, env, const_idx, MAKE_FIX(arg)).
+     SysV arg regs: rdi rsi rdx rcx. We materialize bc, thunk addr,
+     and the tagged arg as 64-bit immediates; const_idx fits in 8 bits
+     but we still write the full reg (zero-extended). */
+  n += x64_mov_imm64(buf + n, X64_RDI, (uint64_t)(uintptr_t)bc);
+  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RBX);
+  n += x64_mov_imm64(buf + n, X64_RDX, (uint64_t)const_idx);
+  n += x64_mov_imm64(buf + n, X64_RCX, (uint64_t)tagged_arg);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&jit_call_global1_drop);
+  n += x64_call_reg(buf + n, X64_RAX);
+  /* On non-NULL return: error to propagate. */
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+  int jnz_err = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);          /* jnz err_exit (placeholder) */
+
+  /* Apply arith on slot (reload rcx — caller-saved, may be clobbered). */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RBX, slot_off);
+  if (arith_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RBX, slot_off);
+  {
+    int jmp_start = n;
+    n += x64_jmp_rel32(buf + n, (int32_t)(loop_top - (jmp_start + 5)));
+  }
+
+  /* end: load final slot value, tear down frame, return. */
+  int end_pc = n;
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RBX, slot_off);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* err_exit: rax already holds the error from the trampoline. */
+  int err_pc = n;
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* deopt (no frame to tear down — we hadn't pushed yet). */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jcc_end,  6, end_pc);
+  x64_patch_rel32(buf, jnz_err,  6, err_pc);
+  x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
+
+  /* Worst case ~134 bytes (entry tag-check + frame setup + ~45-byte
+     call sequence + arith + jmp + exits). buf is 256 bytes. */
+  assert(n <= 160);
+  *outn = n;
+  return 1;
+}
+
+/* Two-call non-tail recursion (the fib shape). 28-byte body:
+     (def f (n) (if (cmp n K1) n (+ (g (op n K2)) (g (op n K3)))))
+   Bytecode:
+     [ 0] SLOT_<cmp>_FIX slot K1     4    (cmp_op ∈ {<, <=, >, >=})
+     [ 4] BR_IF_FALSE off            3
+     [ 7] LOAD_SLOT slot             2    (then: return n)
+     [ 9] JUMP off                   3
+     [12] SLOT_<op>_FIX slot K2      4    (else: (op n K2))
+     [16] CALL_GLOBAL idx_a, 1       3    (g(...))
+     [19] SLOT_<op>_FIX slot K3      4    ((op n K3))
+     [23] CALL_GLOBAL idx_b, 1       3    (g(...))
+     [26] OP_ADD                     1
+     [27] OP_RET                     1
+   Codegen establishes a frame (push rbx; sub rsp,16 — gives both
+   alignment for the call and a slot for the saved first-call result),
+   does two value-returning callouts via jit_call_global1_value, and
+   adds the tagged results via `(a + b) - 1`. Tag-checks each call
+   result; on non-fixnum we tear down the frame and propagate rax as-is
+   (errors surface naturally; NULL triggers a bytecode re-run). */
+static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 28) return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX) return 0;
+  uint8_t slot = c[1];
+  if (slot >= ENV_INLINE_SLOTS) return 0;
+  int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  if (c[7] != OP_LOAD_SLOT || c[8] != slot) return 0;
+  if (c[9] != OP_JUMP) return 0;
+
+  uint8_t op_a = c[12];
+  if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX) return 0;
+  if (c[13] != slot) return 0;
+  int16_t K2 = (int16_t)((uint16_t)c[14] | ((uint16_t)c[15] << 8));
+
+  if (c[16] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_a = c[17];
+  if (c[18] != 1) return 0;
+  if (idx_a >= bc->nconsts) return 0;
+
+  uint8_t op_b = c[19];
+  if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX) return 0;
+  if (c[20] != slot) return 0;
+  int16_t K3 = (int16_t)((uint16_t)c[21] | ((uint16_t)c[22] << 8));
+
+  if (c[23] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_b = c[24];
+  if (c[25] != 1) return 0;
+  if (idx_b >= bc->nconsts) return 0;
+
+  if (c[26] != OP_ADD) return 0;
+  if (c[27] != OP_RET) return 0;
+
+  int32_t slot_off  = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
+  int32_t K1_tagged = ((int32_t)K1 << 3) | 1;
+  int32_t K2_delta  = ((int32_t)K2) << 3;
+  int32_t K3_delta  = ((int32_t)K3) << 3;
+
+  /* Branch into recurse on the FAILURE of the base-case predicate.
+     Same inv_cc table as the tail-loop matchers — comparing tagged
+     fixnums on x86 with signed jcc preserves the underlying ordering. */
+  uint8_t inv_cc;
+  switch (cmp_op) {
+    case OP_SLOT_GT_FIX: inv_cc = 0x0E; break;   /* recurse on jle */
+    case OP_SLOT_LT_FIX: inv_cc = 0x0D; break;   /* recurse on jge */
+    case OP_SLOT_GE_FIX: inv_cc = 0x0C; break;   /* recurse on jl  */
+    case OP_SLOT_LE_FIX: inv_cc = 0x0F; break;   /* recurse on jg  */
+    default: return 0;
+  }
+
+  int n = 0;
+
+  /* Tag-check on n; deopt to bytecode if not a fixnum. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_deopt = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* Compare n against K1 tagged. Branch to recurse on the inverted cond. */
+  n += x64_cmp_imm32(buf + n, X64_RAX, K1_tagged);
+  int jcc_recurse = n;
+  n += x64_jcc_rel32(buf + n, inv_cc, 0);
+
+  /* Base case: return n (already in rax). No frame to tear down. */
+  n += x64_ret(buf + n);
+
+  /* Recurse: build a 24-byte frame (push rbx + sub rsp,16). After entry
+     rsp%16=8; push gives 0; sub keeps it 0 → aligned for the upcoming
+     call. The 16-byte stack region holds the saved first-call result at
+     [rsp+0] (the second 8 bytes are unused padding). */
+  int recurse_pc = n;
+  n += x64_push_reg(buf + n, X64_RBX);
+  n += x64_sub_imm32(buf + n, 4 /* rsp */, 16);
+  n += x64_mov_reg_reg(buf + n, X64_RBX, X64_RDI);    /* rbx = env */
+
+  /* call 1: jit_call_global1_value(bc, env, idx_a, MAKE_FIX(n op K2)) */
+  n += x64_mov_imm64(buf + n, X64_RDI, (uint64_t)(uintptr_t)bc);
+  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RBX);
+  n += x64_mov_imm64(buf + n, X64_RDX, (uint64_t)idx_a);
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RBX, slot_off);
+  if (op_a == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, K2_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, K2_delta);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&jit_call_global1_value);
+  n += x64_call_reg(buf + n, X64_RAX);
+
+  /* tag-check call1 result; non-fixnum → bail (propagate rax). */
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_bail1 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* save call1 result on stack */
+  n += x64_mov_rsp_reg(buf + n, X64_RAX);
+
+  /* call 2: same as call 1 with idx_b and K3 */
+  n += x64_mov_imm64(buf + n, X64_RDI, (uint64_t)(uintptr_t)bc);
+  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RBX);
+  n += x64_mov_imm64(buf + n, X64_RDX, (uint64_t)idx_b);
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RBX, slot_off);
+  if (op_b == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, K3_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, K3_delta);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&jit_call_global1_value);
+  n += x64_call_reg(buf + n, X64_RAX);
+
+  /* tag-check call2 result */
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_bail2 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* tagged add: rax = call2 + call1 - 1 */
+  n += x64_add_reg_rsp(buf + n, X64_RAX);            /* rax += [rsp]   */
+  n += x64_sub_imm32(buf + n, X64_RAX, 1);           /* drop the duplicated tag bit */
+
+  /* tear down frame and return */
+  n += x64_add_imm32(buf + n, 4 /* rsp */, 16);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* bail: tear down frame, return rax (NULL → deopt; error → propagate) */
+  int bail_pc = n;
+  n += x64_add_imm32(buf + n, 4 /* rsp */, 16);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* deopt (no frame): */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jcc_recurse, 6, recurse_pc);
+  x64_patch_rel32(buf, jz_bail1,    6, bail_pc);
+  x64_patch_rel32(buf, jz_bail2,    6, bail_pc);
+  x64_patch_rel32(buf, jz_deopt,    6, deopt_pc);
+
+  /* Worst case ~190 bytes (entry tag-check + 2 ~45-byte call sequences
+     + tag-checks + tagged add + frame teardown + bail + deopt). buf
+     is 256 bytes. The matcher with the largest emission. */
+  assert(n <= 224);
+  *outn = n;
+  return 1;
+}
+
+int jit_compile(bytecode_t *bc) {
+  if (!bc || bc->jit) return bc && bc->jit ? 1 : 0;
+  uint8_t *c = bc->code;
+
+  uint8_t buf[256];
+  int n = 0;
+
+  if (try_jit_simple_tail_loop(bc, buf, &n)) {
+    /* matched — fall through to mmap+install */
+  } else
+  if (try_jit_tail_loop_with_call(bc, buf, &n)) {
+    /* matched — fall through to mmap+install */
+  } else
+  if (try_jit_recurse_add_two(bc, buf, &n)) {
+    /* matched — fall through to mmap+install */
+  } else
+  if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
+    /* (fn () K)  →  mov rax, tagged; ret */
+    int16_t k = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
+    uint64_t tagged = ((uint64_t)(int64_t)k << 3) | 1;
+    n += x64_mov_imm64(buf + n, X64_RAX, tagged);
+    n += x64_ret(buf + n);
+  }
+  else if (bc->ncode == 3 && c[0] == OP_LOAD_SLOT &&
+           c[1] < ENV_INLINE_SLOTS && c[2] == OP_RET) {
+    /* (fn (... s ...) s)  →  mov rax, [rdi + slot_off]; ret */
+    int32_t slot_off = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
+    n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
+    n += x64_ret(buf + n);
+  }
+  else if (bc->ncode == 7 && c[0] == OP_LOAD_SLOT &&
+           c[1] < ENV_INLINE_SLOTS &&
+           c[2] == OP_LOAD_FIX &&
+           (c[5] == OP_ADD || c[5] == OP_SUB || c[5] == OP_MUL) &&
+           c[6] == OP_RET) {
+    /* (fn (... s ...) (op s K)) for K in int16, op in {+, -, *}.
+       For ADD/SUB: ±(K<<3) preserves the tag bit directly.
+       For MUL:     drop tag (sub 1), imul by K, re-tag (add 1). */
+    int16_t k = (int16_t)((uint16_t)c[3] | ((uint16_t)c[4] << 8));
+    int32_t slot_off = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
+    n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
+    n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+    int jz_start = n;
+    n += x64_jcc_rel32(buf + n, 0x04, 0);
+    if (c[5] == OP_MUL) {
+      n += x64_sub_imm32(buf + n, X64_RAX, 1);            /* drop tag */
+      n += x64_imul_reg_reg_imm32(buf + n, X64_RAX, X64_RAX, (int32_t)k);
+      n += x64_add_imm32(buf + n, X64_RAX, 1);            /* re-tag */
+    } else {
+      int32_t delta = ((int32_t)k) << 3;
+      if (c[5] == OP_ADD)
+        n += x64_add_imm32(buf + n, X64_RAX, delta);
+      else
+        n += x64_sub_imm32(buf + n, X64_RAX, delta);
+    }
+    n += x64_ret(buf + n);
+    int deopt_pc = n;
+    n += x64_zero_reg(buf + n, X64_RAX);
+    n += x64_ret(buf + n);
+    x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+  }
+  /* slot-fix superinstruction form: SLOT_ADD_FIX/SLOT_SUB_FIX slot K, RET */
+  else if (bc->ncode == 5 &&
+           (c[0] == OP_SLOT_ADD_FIX || c[0] == OP_SLOT_SUB_FIX) &&
+           c[1] < ENV_INLINE_SLOTS && c[4] == OP_RET) {
+    int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+    int32_t delta = ((int32_t)k) << 3;
+    int32_t slot_off = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
+    n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
+    n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+    int jz_start = n;
+    n += x64_jcc_rel32(buf + n, 0x04, 0);
+    if (c[0] == OP_SLOT_ADD_FIX)
+      n += x64_add_imm32(buf + n, X64_RAX, delta);
+    else
+      n += x64_sub_imm32(buf + n, X64_RAX, delta);
+    n += x64_ret(buf + n);
+    int deopt_pc = n;
+    n += x64_zero_reg(buf + n, X64_RAX);
+    n += x64_ret(buf + n);
+    x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+  }
+  else {
+    return 0;  /* shape not recognized */
+  }
+
+  /* Each matcher has its own internal assert against its expected upper
+     bound; this is the catch-all that protects buf as a whole, including
+     the inline leaf-shape paths above. */
+  assert(n <= (int)sizeof(buf));
+  size_t sz = (size_t)n;
+  size_t pagesz = 4096;
+  size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
+  void *page = jit_alloc(mapsz);
+  if (!page) return 0;
+  jit_write_begin();
+  memcpy(page, buf, sz);
+  jit_write_end(page, sz);
+  bc->jit = (exp_t *(*)(env_t *))page;
+  bc->jit_mem = page;
+  bc->jit_size = mapsz;
+  return 1;
+}
+
+#endif /* __x86_64__ */
+
 #endif /* ALCOVE_JIT */
 
 typedef struct compiler_t {
@@ -3146,6 +4058,26 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     if (!strcmp(s, "with"))  { compile_with(c, e, tail); return; }
     if (!strcmp(s, "for"))   { compile_for(c, e, tail); return; }
     if (!strcmp(s, "="))     { compile_assign(c, e, tail); return; }
+    if (!strcmp(s, "do")) {
+      /* Sequential eval, return last value. Same shape as the body
+         walk in compile_lambda — emit each expr, POP between, last
+         one keeps tail position. (do) with no exprs evaluates to nil. */
+      exp_t *b = e->next;
+      if (!b) {
+        int k = add_const(c, nil_singleton);
+        emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k);
+        return;
+      }
+      int saw_any = 0;
+      for (; b; b = b->next) {
+        if (saw_any) emit_u8(c, OP_POP);
+        int is_last = (b->next == NULL);
+        compile_expr(c, b->content, is_last && tail);
+        if (c->failed) return;
+        saw_any = 1;
+      }
+      return;
+    }
     if (!strcmp(s, "cons")) {
       exp_t *a = cadr(e), *b = caddr(e);
       if (!a || !b) { c->failed = 1; return; }

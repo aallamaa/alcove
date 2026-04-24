@@ -195,8 +195,9 @@ typedef struct bytecode_t {
   gcache_entry *gcache;  /* lazily allocated, sized = nconsts */
   /* Optional native-code fast path. When set, vm_invoke_values calls
      this directly instead of running the dispatch loop. Returns the
-     result exp_t* in x0. Populated by jit_compile() when ALCOVE_JIT is
-     enabled and the bytecode matches a recognized shape. */
+     result exp_t* (NULL signals deopt → caller falls back to vm_run).
+     Populated by jit_compile() when ALCOVE_JIT is enabled and the
+     bytecode matches a recognized shape. */
   exp_t  *(*jit)(struct env_t *env);
   void     *jit_mem;     /* mmap'd page; freed via munmap on bytecode_free */
   size_t    jit_size;
@@ -205,6 +206,7 @@ typedef struct bytecode_t {
 extern uint64_t alcove_global_gen;
 
 void     bytecode_free(bytecode_t *bc);
+void     disasm_bytecode(bytecode_t *bc);   /* opcode-by-opcode dump for debugging */
 int      compile_lambda(exp_t *fn);                      /* 1 on success, 0 on fallback */
 exp_t   *vm_run(exp_t *fn, struct env_t *env);           /* runs bytecode; returns owned */
 #ifdef ALCOVE_JIT
@@ -422,6 +424,7 @@ exp_t *forcmd(exp_t *e, env_t *env);
 exp_t *eachcmd(exp_t *e,env_t *env);
 exp_t *timecmd(exp_t *e,env_t *env);
 exp_t *inspectcmd(exp_t *e,env_t *env);
+exp_t *disasmcmd(exp_t *e,env_t *env);
 /* lisp macro */
 exp_t *defcmd(exp_t *e, env_t *env);
 exp_t *expandmacrocmd(exp_t *e,env_t *env);

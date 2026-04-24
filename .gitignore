@@ -1,0 +1,12 @@
+# Build artifacts (the default `make` target produces ./alcove).
+alcove
+
+# Cross-compile / benchmark A-B comparison binaries.
+alcove.*
+!alcove.c
+!alcove.h
+
+# Editor / OS crud.
+*.o
+*.swp
+.DS_Store

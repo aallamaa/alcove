@@ -1,4 +1,32 @@
 [TODO] setup etag to index with emacs
+[TODO] BUG: (do (id-fn arg) other) returns nil when id-fn is the literal
+       identity (def f (x) x). Reproduces under bytecode-only build (no
+       JIT involvement). Repro: (def f (x) x); (prn (do (f 1) 42))
+       prints blank instead of 42. Workaround in test.alc uses (+ x 1)
+       in the JIT loop+call test. Suspect interaction between identity
+       lambda's bytecode (LOAD_SLOT 0; RET) and the OP_POP that compile_do
+       inserts after the call. Discovered while wiring (do ...) into the
+       compiler — pre-existing issue surfaced once that path went live.
+
+[DONE] add amd64 JIT backend alongside existing arm64 (auto-detected via
+       uname -m; fib went 1.5x slower → 2.3x faster than python on x86_64)
+[DONE] make `make` default to JIT release; add `make nojit` opt-out
+[DONE] generalize JIT leaf shapes to any slot < ENV_INLINE_SLOTS
+       (was hardcoded slot 0 → only single-param functions could JIT)
+[DONE] add multiplication-by-constant leaf JIT shape (* n K) on both
+       backends; tag arithmetic via (t-1)*K + 1
+[DONE] add (do ...) to the bytecode compiler (was always failing → AST
+       fallback, which blocked any downstream JIT on bodies using do)
+[DONE] amd64 JIT for tail loop with one inner global call (the fact
+       wrapper shape); needs JIT-to-runtime callout via C trampoline
+[DONE] amd64 JIT for two-call non-tail recursion (the fib shape); two
+       value-returning callouts + saved first-result on stack + tagged add
+[DONE] add (disasm fn) built-in for inspecting compiled lambda bytecode
+       + JIT install status (replaces ad-hoc fprintf debugging in C)
+[DONE] verify arm64 backend end-to-end via qemu-aarch64 cross-compile
+       (72/72 tests pass on both arches; same outcomes)
+[DONE] fix arm64 sequence-point UB in try_jit_simple_tail_loop branch
+       displacement (out[n++] = arm64_b(loop_top - n) was unspecified-order)
 [DONE] fix macro / code expand-macro1 (fixed commit 90a7e69da94ebdd0e2781a22dd559484d216736b )
 [TODO] should we store 8 bytes values directly inside content pointer of pair instead of pointing to another object
 [TODO] fix error handling / freeing ressources with setjmp (gave up using setjmp too many side effects 1d339c702754297eb5b8c324f2713670da125dd2)
