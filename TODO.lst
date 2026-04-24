@@ -64,3 +64,47 @@
 [TODO] check http://okasaki.blogspot.co.uk/2008/02/ten-years-of-purely-functional-data.html
 [TODO] check http://en.wikipedia.org/wiki/Binary_space_partitioning 
 [TODO] check http://adtinfo.org/index.html
+
+[DONE] REPL: readline tab completion + history + multi-line continuation
+       (auto-detected via /usr/include/readline/readline.h presence)
+[DONE] closures: (fn ...) and (def ...) capture defining env; mutating
+       closures via walk-up updatebang ((= captured-var ...) finds the
+       outer slot); 0-arg defs fixed (var2env empty-params bug)
+[DONE] zero-cost stdlib batch: mod abs max min length nth reverse
+       append number? string? symbol? pair? fn? exit quit random apply
+       map filter reduce — 18 builtins, no perf impact (hot paths
+       untouched)
+[DONE] OP_SLOT_LE_SLOT superinst — fuses LOAD_SLOT+LOAD_SLOT+LE for
+       compile_for; forsum 21→18ms (parity with python)
+[DONE] benchmarks: ackermann, listsum, sieve added; ackermann 2.2x
+       faster than python, listsum 1.8x faster, sieve 7x slower (deep
+       AST recursion + interp int — known weakness)
+[DONE] FFI: (ffi-fn LIB FN-NAME RET-TYPE ARG-TYPES...) via libffi;
+       supports void/int/long/double/string/ptr; max 8 args; full
+       examples + README in ffi-examples/
+[DONE] documented test 95/1 on amd64 + arm64 (qemu)
+
+[TODO] BUG: (filter pred (cdr xs)) inside a recursive fn evaluates to
+       blank/error after one or more iterations. Repro:
+         (def f (xs)
+           (if (no xs) (list)
+               (cons (car xs) (f (filter (fn (x) (> x 3)) (cdr xs))))))
+         (prn (f (list 5 1 6 2 7)))   ; prints nothing
+       Same fn without filter (just (cdr xs)) works. Workaround in
+       benchmark/sieve.alc uses iterative has-divisor? walk instead.
+       Suspect refcount issue in filter or in the recursion+filter
+       interaction.
+
+[TODO] Reserved-name shadowing: lookup() checks reserved_symbol BEFORE
+       env, so `(= time (ffi-fn ...))` doesn't take effect at top level
+       (alcove's builtin time wins). Either flip lookup order or
+       provide an explicit "shadow" form.
+
+[TODO] FFI: support struct-by-value, varargs (printf), callbacks (qsort
+       comparator). Each needs a libffi closure setup but no fundamental
+       blocker.
+
+[TODO] Compile lambda for closures (currently AST-only). Bytecode VM's
+       gcache caches global resolutions per-bc; for closures the cache
+       would be wrong if a captured var mutates. Either disable gcache
+       for closures or change OP_LOAD_GLOBAL semantics for that case.
