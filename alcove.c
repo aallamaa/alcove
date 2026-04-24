@@ -29,6 +29,7 @@
 #ifdef ALCOVE_JIT
 #include <sys/mman.h>
 #include <stddef.h>
+#include <unistd.h>   /* isatty for the readline REPL gate */
 #ifdef __APPLE__
 #include <pthread.h>
 #endif
@@ -46,6 +47,10 @@ exp_tfunc* exp_tfuncList[EXP_MAXSIZE];
 /* Canonical singletons — pointer set at main() startup. */
 exp_t *nil_singleton = NULL;
 exp_t *true_singleton = NULL;
+
+/* Global env handle for the readline tab-completion callback (which
+   takes no user-data param). Set in main() before the REPL loop. */
+struct env_t *g_global_env = NULL;
 
 /* Set by invoke's body loop / ifcmd's selected-branch eval. When true,
    evaluate returns a trampoline marker instead of recursing into
@@ -5481,6 +5486,122 @@ exp_t *evaluate(exp_t *e,env_t *env)
   return ret;
 } 
 
+#ifdef ALCOVE_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+
+/* Iterate over a dict and emit names matching `prefix` into the
+   readline-allocated match list. Each match must be malloc'd; readline
+   takes ownership and free()s it. */
+static void rl_collect_dict(dict_t *d, const char *prefix, size_t plen,
+                             char ***out, int *nout, int *cap) {
+  if (!d) return;
+  int h; size_t i; keyval_t *k;
+  for (h = 0; h < 2; h++) {
+    if (!d->ht[h].size) continue;
+    for (i = 0; i < d->ht[h].size; i++) {
+      for (k = d->ht[h].table[i]; k; k = k->next) {
+        if (!k->key) continue;
+        if (plen && strncmp((const char*)k->key, prefix, plen) != 0) continue;
+        if (*nout >= *cap) {
+          *cap = *cap ? *cap * 2 : 16;
+          *out = realloc(*out, sizeof(char*) * (*cap));
+        }
+        (*out)[(*nout)++] = strdup((const char*)k->key);
+      }
+    }
+  }
+}
+
+/* readline completion generator — called repeatedly with state=0 first,
+   then state>0 until it returns NULL. Builds the match list lazily on
+   the first call. */
+static char *alcove_completion_generator(const char *text, int state) {
+  static char **matches = NULL;
+  static int n_matches = 0;
+  static int cap = 0;
+  static int idx = 0;
+  if (state == 0) {
+    /* fresh request — free any leftover from previous match attempt */
+    int j; for (j = 0; j < n_matches; j++) free(matches[j]);
+    free(matches); matches = NULL; n_matches = 0; cap = 0; idx = 0;
+
+    size_t tlen = strlen(text);
+    rl_collect_dict(reserved_symbol, text, tlen, &matches, &n_matches, &cap);
+    /* Walk env chain inner→outer (covers global defs). */
+    env_t *cur;
+    for (cur = g_global_env; cur; cur = cur->root) {
+      int i;
+      for (i = 0; i < cur->n_inline; i++) {
+        const char *kk = cur->inline_keys[i];
+        if (!kk) continue;
+        if (tlen && strncmp(kk, text, tlen) != 0) continue;
+        if (n_matches >= cap) {
+          cap = cap ? cap * 2 : 16;
+          matches = realloc(matches, sizeof(char*) * cap);
+        }
+        matches[n_matches++] = strdup(kk);
+      }
+      rl_collect_dict(cur->d, text, tlen, &matches, &n_matches, &cap);
+    }
+  }
+  if (idx < n_matches) return matches[idx++];   /* readline frees the strdup */
+  return NULL;
+}
+static char **alcove_rl_completer(const char *text, int start, int end) {
+  (void)start; (void)end;
+  rl_attempted_completion_over = 1;          /* skip default file completion */
+  return rl_completion_matches(text, alcove_completion_generator);
+}
+
+/* Quick paren depth — comments and string literals don't count. Returns
+   the running depth (0 = balanced, >0 = need more, <0 = extra closer). */
+static int rl_paren_depth(const char *s) {
+  int depth = 0, in_string = 0;
+  while (*s) {
+    if (in_string) {
+      if (*s == '\\' && s[1]) s += 2;
+      else if (*s == '"') { in_string = 0; s++; }
+      else s++;
+    } else {
+      if (*s == '"') { in_string = 1; s++; }
+      else if (*s == '(') { depth++; s++; }
+      else if (*s == ')') { depth--; s++; }
+      else if (*s == ';') { while (*s && *s != '\n') s++; }
+      else s++;
+    }
+  }
+  return depth;
+}
+
+/* Read one complete top-level form from the terminal. Continues
+   prompting (with a continuation prompt) until paren balance hits 0.
+   Returned string is malloc'd. NULL on EOF. */
+static char *rl_read_form(int idx) {
+  char prompt[64];
+  snprintf(prompt, sizeof prompt,
+           "\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx);
+  char *line = readline(prompt);
+  if (!line) return NULL;                    /* Ctrl-D on empty line */
+  size_t len = strlen(line);
+  size_t cap = len + 256;
+  char *acc = malloc(cap);
+  memcpy(acc, line, len + 1);
+  free(line);
+  while (rl_paren_depth(acc) > 0) {
+    char *more = readline("    ... ");
+    if (!more) break;
+    size_t need = strlen(acc) + strlen(more) + 2;
+    if (need > cap) { cap = need * 2; acc = realloc(acc, cap); }
+    strcat(acc, "\n");
+    strcat(acc, more);
+    free(more);
+  }
+  if (acc[0]) add_history(acc);
+  return acc;
+}
+#endif /* ALCOVE_READLINE */
+
 int main(int argc, char *argv[])
 {
   //  char *cmd_res;
@@ -5583,6 +5704,21 @@ int main(int argc, char *argv[])
       { printf("Error opening %s\n",argv[argc-1]); exit(1);}
   }
   else stream=stdin;
+
+#ifdef ALCOVE_READLINE
+  /* Enable line editing + tab completion + history when stdin is a tty.
+     Non-interactive (pipe / file redirect / scripted) stays on the plain
+     reader path. The completer needs g_global_env to walk env bindings. */
+  int rl_active = (stream == stdin) && isatty(fileno(stdin));
+  if (rl_active) {
+    g_global_env = global;
+    rl_attempted_completion_function = alcove_rl_completer;
+    /* Use space as the only word separator so e.g. (fib|TAB completes
+       the symbol "fib" with "(" left of cursor counted as boundary. */
+    rl_basic_word_break_characters = " \t\n()'`,;\"";
+  }
+#endif
+
   exp_t* stre=NULL;
   //make_string(strdict,strlen(strdict));
   exp_t* strf=NULL;
@@ -5599,7 +5735,47 @@ int main(int argc, char *argv[])
       else printf("STRF TEST NOTOK\n");
       del_keyval_dict(dict,"TOTO");*/
   //unrefexp(stre);
-  
+
+#ifdef ALCOVE_READLINE
+  if (rl_active) {
+    /* Interactive readline-based REPL: per-iteration we read a complete
+       top-level form (continuation prompt for unbalanced parens) into
+       a string, fmemopen it, and run the same eval+print pipeline as
+       the file path against the memstream. */
+    while (1) {
+      idx++;
+      char *line = rl_read_form(idx);
+      if (!line) { printf("\n"); goto endcleanly; }
+      if (!line[0]) { free(line); idx--; continue; }
+      FILE *ls = fmemopen(line, strlen(line), "r");
+      while (1) {
+        stre = reader(ls, 0, 0);
+        if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF)) {
+          unrefexp(stre); break;
+        }
+        if (issymbol(stre) && strcmp((char*)stre->ptr,"quit")==0) {
+          unrefexp(stre); fclose(ls); free(line); goto endcleanly;
+        }
+        if (issymbol(stre) && strcmp((char*)stre->ptr,"toeval")==0) {
+          toeval=1-toeval; printf("%d\n",toeval); unrefexp(stre); continue;
+        }
+        strf = NULL;
+        if (toeval) strf = evaluate(stre, global);
+        else        unrefexp(stre);
+        if (strf) {
+          if (verbose) { printf("\x1B[35mstrf:%p\x1B[39m\n",(void*)strf); inspect_value(strf); }
+          printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m",idx);
+          print_node(strf);
+          unrefexp(strf);
+        } else printf("nil");
+        printf("\n\n");
+      }
+      fclose(ls);
+      free(line);
+    }
+  }
+#endif
+
   while (1){
     idx++;
     strf=NULL;
