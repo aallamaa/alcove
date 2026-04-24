@@ -200,6 +200,14 @@ inline int unrefexp(exp_t *e){
     if (e->bc && e->type == EXP_LAMBDA) {
       bytecode_free(e->bc);
     }
+    /* Closure capture lives in lambda/macro's wrapper-node bc field
+       (see fncmd / defcmd / defmacrocmd). Release it BEFORE unref'ing
+       the wrapper, since after that e->next may be freed. */
+    if ((e->type == EXP_LAMBDA || e->type == EXP_MACRO)
+        && e->next && e->next->bc) {
+      destroy_env((env_t*)e->next->bc);
+      e->next->bc = NULL;
+    }
     if (e->next) unrefexp(e->next);
     if ((e->type==EXP_SYMBOL)||(e->type==EXP_STRING)||(e->type==EXP_ERROR))
       free(e->ptr);
@@ -1347,25 +1355,42 @@ exp_t *updatebang(exp_t *keyv,env_t *env,exp_t *val){
   if (val==NULL) val=NIL_EXP;
   if (issymbol(keyv) || isstring(keyv)) {  // form (= "qweqwe" 10) (= weq 10)
       if (islambda(val) && val->meta==NULL) val->meta=(keyval_t *)strdup(keyv->ptr);
-      /* If the name is bound in one of the inline function-param slots,
-         update in place so lookup (which scans inline first) sees the
-         new value instead of being shadowed by a stale dict entry. */
+      /* Walk env chain inner→outer looking for an existing binding;
+         mutate it in place if found. This is what makes mutable
+         closures work — `(= n ...)` inside (fn (...) ...) finds the
+         captured n in the closure's env, instead of silently creating
+         a fresh local that shadows it. The walk also handles the local
+         case (let-bound slots in current env) correctly. */
       {
-        int i;
-        for (i=0; i<env->n_inline; i++) {
-          if (strcmp(env->inline_keys[i], keyv->ptr)==0) {
-            unrefexp(env->inline_vals[i]);
-            env->inline_vals[i] = refexp(val);
-            unrefexp(keyv);
-            return refexp(val);
+        env_t *cur = env;
+        while (cur) {
+          int i;
+          for (i=0; i<cur->n_inline; i++) {
+            if (strcmp(cur->inline_keys[i], keyv->ptr)==0) {
+              unrefexp(cur->inline_vals[i]);
+              cur->inline_vals[i] = refexp(val);
+              unrefexp(keyv);
+              return refexp(val);
+            }
           }
+          if (cur->d) {
+            keyval_t *kv = set_get_keyval_dict(cur->d, keyv->ptr, NULL);
+            if (kv) {
+              /* found — replace and bump global gen so any cached
+                 lookups of this name re-resolve. */
+              unrefexp(kv->val);
+              kv->val = refexp(val);
+              alcove_global_gen++;
+              unrefexp(keyv);
+              return refexp(val);
+            }
+          }
+          cur = cur->root;
         }
       }
+      /* No existing binding anywhere — create in current env. */
       if (!(env->d)) env->d=create_dict();
       ret=set_get_keyval_dict(env->d,keyv->ptr,val);
-      /* This binding may shadow a global; conservatively invalidate
-         bytecode global caches. Bumping is cheap (atomic counter); the
-         cache only re-walks env on the next use. */
       alcove_global_gen++;
       unrefexp(keyv); return refexp(val);}
   else if (ispair(keyv)) 
@@ -1457,7 +1482,19 @@ exp_t *fncmd(exp_t *e, env_t *env)
       val=make_node(refexp(header));
       val->next=vali;
       val->type=EXP_LAMBDA;
-      compile_lambda(val);
+      /* Closure: stash the env at fn-creation time in the wrapper
+         node's `bc` field (unused for non-bytecode wrappers — see
+         comment in unrefexp). invoke() later uses this as the new
+         call env's root, so let/with bindings from the enclosing scope
+         resolve correctly. For top-level fns env is global, so the
+         capture is just an extra ref on global (cheap). */
+      if (env) val->next->bc = (struct bytecode_t *)ref_env(env);
+      /* Compile only when there's no real captured scope — the bytecode
+         VM's gcache caches global resolutions per-bc, which is wrong if
+         a captured `n` from a let later mutates. Closures (env != global,
+         i.e. env->root != NULL) run as AST. Top-level fns still compile
+         and JIT as before. */
+      if (!env || !env->root) compile_lambda(val);
     }
     else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
   }
@@ -1487,7 +1524,13 @@ exp_t *defcmd(exp_t *e, env_t *env)
           val->next=vali;
           val->type=EXP_LAMBDA;
           val->meta=(keyval_t *)strdup(name->ptr);
-          compile_lambda(val);  /* silent fallback to AST if body unsupported */
+          /* Closure: capture defining env (see fncmd for rationale). */
+          if (env) val->next->bc = (struct bytecode_t *)ref_env(env);
+          /* Compile only when defined at top level (env->root == NULL).
+             A nested (def ...) inside a let captures the let env and
+             runs as AST so name lookups walk the captured chain. */
+          if (!env || !env->root)
+            compile_lambda(val);  /* silent fallback to AST if body unsupported */
           if (!(env->d)) env->d=create_dict();
           ret=set_get_keyval_dict(env->d,name->ptr,val);
           alcove_global_gen++;  /* invalidate bytecode global-resolution caches */
@@ -1544,6 +1587,7 @@ exp_t *defmacrocmd(exp_t *e, env_t *env)
         val->next=vali;
         val->type=EXP_MACRO;
         val->meta=(keyval_t *) strdup(name->ptr);
+        if (env) val->next->bc = (struct bytecode_t *)ref_env(env);
         if (!(env->d)) env->d=create_dict();
         ret=set_get_keyval_dict(env->d,name->ptr,val);
         alcove_global_gen++;
@@ -2801,7 +2845,11 @@ exp_t *var2env(exp_t *e,exp_t *var, exp_t *val,env_t *env,int evalexp)
   exp_t *retvar;
   exp_t *curval=val;
 
-  while (curvar){
+  /* Empty params `()` are represented by nil_singleton — a pair with
+     NULL content/next. Without the content check, the loop would enter
+     once and either bind NULL as a key or hit "missing parameter" if
+     no args were passed. The content check makes 0-arg defs work. */
+  while (curvar && curvar->content){
     if ((curval)) {
       if ((retvar = (evalexp?EVAL(curval->content, env->root):refexp(curval->content)))) {
         if (evalexp && iserror(retvar)) {
@@ -5165,7 +5213,10 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env)
     int i; for (i = 0; i < nargs; i++) unrefexp(argv[i]);
     return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: not a lambda");
   }
-  env_t *newenv = make_env(env);
+  /* Honor closure capture (see invoke()). For top-level fns this is
+     just global so behavior is unchanged. */
+  env_t *captured = (env_t *)fn->next->bc;
+  env_t *newenv = make_env(captured ? captured : env);
   /* callingfnc stays NULL — OP_CALL is always non-tail from our side. */
 
   exp_t *p = fn->content;
@@ -5236,7 +5287,12 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
   if (verbose) { printf("invoke:"); print_node(e); printf("\n"); }
   {
     exp_t *body = fn->next->content;
-    newenv = make_env(env);
+    /* Closure: if fn captured an env at creation, use it as the new
+       call frame's parent so let/with bindings from the defining scope
+       resolve before walking up to global. Top-level fns also have a
+       capture (= global), so behavior is unchanged for them. */
+    env_t *captured = (env_t *)fn->next->bc;
+    newenv = make_env(captured ? captured : env);
     newenv->callingfnc = refexp(e);
     if ((ret = var2env(e, fn->content, e->next, newenv, true))) {
       destroy_env(newenv);

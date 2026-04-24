@@ -221,3 +221,26 @@
 (assert "JIT fib 30"                 (jfib 30)                     832040)
 (jfib 'sym)                          ; deopt at entry; result discarded
 (assert "JIT fib after deopt"        (jfib 15)                     610)
+
+; 19. Closures — fn captures the env at creation time; let-bound and
+;     fn-param vars from the enclosing scope resolve correctly when
+;     the closure is invoked later. Mutating closures (= on a captured
+;     var) updates the captured slot, not a shadowing local.
+(def make-adder (n) (fn (x) (+ x n)))
+(= add5 (make-adder 5))
+(= add10 (make-adder 10))
+(assert "closure: add5 100"          (add5 100)                    105)
+(assert "closure: add10 100"         (add10 100)                   110)
+(def make-counter (dummy) (let n 0 (fn (d) (= n (+ n 1)))))
+(= ca (make-counter 0))
+(= cb (make-counter 0))
+(ca 0) (ca 0) (ca 0)
+(assert "closure: counter ca = 4"    (ca 0)                        4)
+(assert "closure: counter cb = 1"    (cb 0)                        1)
+(def f2 (n) (let m 10 (fn (d) (+ n m))))
+(assert "closure: nested let cap"    ((f2 5) 0)                    15)
+
+; 20. Zero-argument defs (was a pre-existing var2env bug — empty-params
+;     loop entered once and errored on missing param).
+(def zhello () (+ 1 2))
+(assert "0-arg def returns 3"        (zhello)                      3)
