@@ -3469,6 +3469,7 @@ static const char *bc_opname(uint8_t op) {
     case OP_SUB:          return "SUB";
     case OP_MUL:          return "MUL";
     case OP_DIV:          return "DIV";
+    case OP_MOD:          return "MOD";
     case OP_LT:           return "LT";
     case OP_GT:           return "GT";
     case OP_LE:           return "LE";
@@ -3504,7 +3505,7 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
   uint8_t op = code[pc];
   switch (op) {
     case OP_HALT: case OP_RET: case OP_POP:
-    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
     case OP_LT: case OP_GT: case OP_LE: case OP_GE:
     case OP_IS: case OP_ISO: case OP_NOT:
     case OP_CONS: case OP_CAR: case OP_CDR:
@@ -4715,6 +4716,7 @@ static int op_for_head(const char *s) {
   if (!strcmp(s, "-"))   return OP_SUB;
   if (!strcmp(s, "*"))   return OP_MUL;
   if (!strcmp(s, "/"))   return OP_DIV;
+  if (!strcmp(s, "mod")) return OP_MOD;
   if (!strcmp(s, "<"))   return OP_LT;
   if (!strcmp(s, ">"))   return OP_GT;
   if (!strcmp(s, "<="))  return OP_LE;
@@ -5257,6 +5259,7 @@ tail_reentry:
     [OP_SUB]          = &&l_sub,
     [OP_MUL]          = &&l_mul,
     [OP_DIV]          = &&l_div,
+    [OP_MOD]          = &&l_mod,
     [OP_LT]           = &&l_lt,
     [OP_GT]           = &&l_gt,
     [OP_LE]           = &&l_le,
@@ -5412,6 +5415,20 @@ l_div: {
       COERCE_TO_DOUBLE(b, db, "Illegal value in /");
       if (db == 0) RUNTIME_ERR("Illegal division by 0");
       PUSH(make_floatf(da / db));
+    }
+    NEXT;
+  }
+l_mod: {
+    /* Truncated modulo (C99 %), matches modcmd. Lifts (mod a b) from
+       a builtin-call-back-to-AST round-trip into one VM dispatch. */
+    exp_t *b = POP(), *a = POP();
+    if (isnumber(a) && isnumber(b)) {
+      int64_t bb = FIX_VAL(b);
+      if (bb == 0) RUNTIME_ERR("Illegal modulo by 0");
+      int64_t va = FIX_VAL(a);
+      PUSH(MAKE_FIX(va - (va / bb) * bb));
+    } else {
+      RUNTIME_ERR("mod: integer operands only");
     }
     NEXT;
   }

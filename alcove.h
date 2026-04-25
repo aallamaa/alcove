@@ -148,7 +148,7 @@ typedef enum {
   OP_BIND_SLOT,      /* u8 idx          → pop → inline_vals[idx], bump n_inline */
   OP_UNBIND_SLOT,    /* u8 idx          → unref + NULL inline_vals[idx] */
 
-  OP_ADD, OP_SUB, OP_MUL, OP_DIV,
+  OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD,
   OP_LT,  OP_GT,  OP_LE,  OP_GE,
   OP_IS,  OP_ISO, OP_NOT,
 
