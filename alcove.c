@@ -6371,14 +6371,25 @@ int main(int argc, char *argv[])
       char *line = rl_read_form(idx);
       if (!line) { printf("\n"); goto endcleanly; }
       if (!line[0]) { free(line); idx--; continue; }
-      FILE *ls = fmemopen(line, strlen(line), "r");
+      /* Append a newline so reader sees a token terminator after the
+         last bare symbol/number on the line — without it,
+         fmemopen("quit",4,"r") would EOF mid-token and the reader
+         would return a parse error instead of the symbol. */
+      size_t llen = strlen(line);
+      char *line_nl = memalloc(llen + 2, 1);
+      memcpy(line_nl, line, llen);
+      line_nl[llen] = '\n';
+      line_nl[llen+1] = 0;
+      FILE *ls = fmemopen(line_nl, llen + 1, "r");
       while (1) {
         stre = reader(ls, 0, 0);
         if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF)) {
           unrefexp(stre); break;
         }
-        if (issymbol(stre) && strcmp((char*)stre->ptr,"quit")==0) {
-          unrefexp(stre); fclose(ls); free(line); goto endcleanly;
+        if (issymbol(stre) &&
+            (strcmp((char*)stre->ptr,"quit")==0 ||
+             strcmp((char*)stre->ptr,"exit")==0)) {
+          unrefexp(stre); fclose(ls); free(line_nl); free(line); goto endcleanly;
         }
         if (issymbol(stre) && strcmp((char*)stre->ptr,"toeval")==0) {
           toeval=1-toeval; printf("%d\n",toeval); unrefexp(stre); continue;
@@ -6395,6 +6406,7 @@ int main(int argc, char *argv[])
         printf("\n\n");
       }
       fclose(ls);
+      free(line_nl);
       free(line);
     }
   }
@@ -6419,7 +6431,7 @@ int main(int argc, char *argv[])
       if (stre) printf("\x1B[35mstre:%p\x1B[39m\n",(void*)stre);
       print_node(stre);printf("\n");
     }
-    if (issymbol(stre) && (strcmp(stre->ptr,"quit")==0)) { unrefexp(stre); break;}
+    if (issymbol(stre) && (strcmp(stre->ptr,"quit")==0 || strcmp(stre->ptr,"exit")==0)) { unrefexp(stre); break;}
     if (issymbol(stre) && (strcmp(stre->ptr,"toeval")==0)) { toeval=1-toeval;printf("%d\n",toeval);}
     //
     if (toeval)
