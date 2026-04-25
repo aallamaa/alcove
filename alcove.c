@@ -133,6 +133,8 @@ lispProc lispProcList[]={
   {"map",2,1,0,mapcmd},
   {"filter",2,1,0,filtercmd},
   {"reduce",2,1,0,reducecmd},
+  {"any?",2,1,0,anypcmd},
+  {"all?",2,1,0,allpcmd},
   {"ffi-fn",2,1,0,ffifncmd},
 
 };
@@ -2600,6 +2602,60 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
   }
   unrefexp(fn); unrefexp(xs); unrefexp(e);
   return acc;
+}
+
+/* (any? pred list) — return t as soon as (pred x) is truthy for any
+   element of list, nil if none match. Walks in C with one
+   vm_invoke_values per element instead of recursive bytecode. */
+exp_t *anypcmd(exp_t *e, env_t *env) {
+  exp_t *fn=NULL, *xs=NULL, *ret=NIL_EXP;
+  if (!(e->next && e->next->next)) {
+    unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(any? pred list)");
+  }
+  fn = EVAL(e->next->content, env);
+  if (iserror(fn)) { unrefexp(e); return fn; }
+  xs = EVAL(e->next->next->content, env);
+  if (iserror(xs)) { unrefexp(fn); unrefexp(e); return xs; }
+  exp_t *cur = xs;
+  while (cur && cur->content) {
+    exp_t *argv[1] = { refexp(cur->content) };
+    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    if (res && iserror(res)) {
+      unrefexp(fn); unrefexp(xs); unrefexp(e); return res;
+    }
+    int truthy = (res != NULL && res != NIL_EXP);
+    if (res) unrefexp(res);
+    if (truthy) { ret = TRUE_EXP; break; }
+    cur = cur->next;
+  }
+  unrefexp(fn); unrefexp(xs); unrefexp(e);
+  return ret;
+}
+/* (all? pred list) — return t if (pred x) is truthy for every
+   element, nil at the first failure. Empty list → t. */
+exp_t *allpcmd(exp_t *e, env_t *env) {
+  exp_t *fn=NULL, *xs=NULL, *ret=TRUE_EXP;
+  if (!(e->next && e->next->next)) {
+    unrefexp(e); return error(ERROR_MISSING_PARAMETER,e,env,"(all? pred list)");
+  }
+  fn = EVAL(e->next->content, env);
+  if (iserror(fn)) { unrefexp(e); return fn; }
+  xs = EVAL(e->next->next->content, env);
+  if (iserror(xs)) { unrefexp(fn); unrefexp(e); return xs; }
+  exp_t *cur = xs;
+  while (cur && cur->content) {
+    exp_t *argv[1] = { refexp(cur->content) };
+    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    if (res && iserror(res)) {
+      unrefexp(fn); unrefexp(xs); unrefexp(e); return res;
+    }
+    int truthy = (res != NULL && res != NIL_EXP);
+    if (res) unrefexp(res);
+    if (!truthy) { ret = NIL_EXP; break; }
+    cur = cur->next;
+  }
+  unrefexp(fn); unrefexp(xs); unrefexp(e);
+  return ret;
 }
 
 /* (apply fn args-list) — call fn with each element of args-list as

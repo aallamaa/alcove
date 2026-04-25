@@ -108,3 +108,31 @@
        gcache caches global resolutions per-bc; for closures the cache
        would be wrong if a captured var mutates. Either disable gcache
        for closures or change OP_LOAD_GLOBAL semantics for that case.
+
+[DONE] OP_MOD bytecode op + JIT shape for (fn (a b) (is (mod a b) K))
+       — divides? was running as AST because mod was an unrecognized
+       builtin. Now: mod is one bytecode op; divides? compiles to 10
+       bytes + JITs to ~70 bytes of native (idiv + cmovz). sieve raw
+       17ms → 6ms.
+[DONE] (any? pred list) and (all? pred list) builtins — walk in C
+       with one vm_invoke_values per element. Useful when called
+       outside recursive contexts; see TODO below for the bug that
+       limits use inside.
+
+[TODO] BUG: (do (fn-call) other) loses `other` in AST-eval mode when
+       fn-call is anything but prn — the second expression silently
+       doesn't run. Repro:
+         (def f (i) (if (> i 3) i (do (any? (fn (d) (is d 0)) (list 1)) (f (+ i 1)))))
+         (f 1)         ; → only iter 1, no recursion
+       Or even simpler:
+         (def g (x) x) (def f (i) (if (> i 3) i (do (g 5) (f (+ i 1)))))
+         (f 1)         ; → also stops after iter 1
+       NOT a do-only bug — same shape via (if cond (do ...) ...) or
+       (if (some-call-with-inline-closure ...) X Y) where the inline
+       closure captures the recursive fn's env. With a top-level helper
+       wrapping the call, recursion proceeds. Suspect refcount issue
+       in the AST evaluator's flow when an internal cmd creates a
+       closure that captures the calling env. Workaround: extract the
+       closure-creation into a top-level def. Documented impact: the
+       sieve benchmark uses an explicit recursive is-prime-given
+       instead of (any? (fn (d) ...) acc) for this reason.

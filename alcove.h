@@ -464,6 +464,8 @@ exp_t *applycmd(exp_t *e,env_t *env);
 exp_t *mapcmd(exp_t *e,env_t *env);
 exp_t *filtercmd(exp_t *e,env_t *env);
 exp_t *reducecmd(exp_t *e,env_t *env);
+exp_t *anypcmd(exp_t *e,env_t *env);
+exp_t *allpcmd(exp_t *e,env_t *env);
 exp_t *ffifncmd(exp_t *e,env_t *env);
 exp_t *loaddbcmd(exp_t *e,env_t *env);
 int    loaddb_from_file(env_t *env);  /* shared with main() for auto-load */

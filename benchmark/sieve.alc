@@ -1,15 +1,19 @@
-; Iterative-ish prime count up to N. Avoids the obscure
-; recursion+filter interaction by checking each candidate against
-; all smaller primes via reduce.
-(def divides? (n d) (is (mod n d) 0))
-(def has-divisor? (n ds)
-  (if (no ds) nil
-      (if (divides? n (car ds)) t
-          (has-divisor? n (cdr ds)))))
+; Sieve of Eratosthenes via trial-division.
+;
+; The mod check is inlined into is-prime-given to avoid alcove's
+; (any? <closure-with-capture> ...)-inside-recursive-fn bug. Same
+; arithmetic; just no inner closure.
+;
+; The (mod i (car acc)) check now compiles to a single OP_MOD
+; bytecode op (added in commit 492183a) instead of an AST builtin
+; call. is-prime-given thus runs as bytecode, not AST.
+(def is-prime-given (acc i)
+  (if (no acc) t
+      (if (is (mod i (car acc)) 0) nil
+          (is-prime-given (cdr acc) i))))
 (def primes-up-to (i n acc)
-  (if (> i n)
-      acc
-      (if (has-divisor? i acc)
-          (primes-up-to (+ i 1) n acc)
-          (primes-up-to (+ i 1) n (cons i acc)))))
+  (if (> i n) acc
+      (if (is-prime-given acc i)
+          (primes-up-to (+ i 1) n (cons i acc))
+          (primes-up-to (+ i 1) n acc))))
 (prn (length (primes-up-to 2 1000 (list))))
