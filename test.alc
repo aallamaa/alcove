@@ -269,3 +269,22 @@
                                           (list 3 4))              t)
 (assert "reduce sum"                 (reduce (fn (a b) (+ a b)) 0 (list 1 2 3 4 5))  15)
 (assert "apply 3 args"               (apply (fn (a b c) (+ a (+ b c))) (list 10 20 30))  60)
+
+; 22. any? / all? — predicate-walks via vm_invoke_values.
+;     The closure-in-recursion fix means (any? (fn (d) ...) ...)
+;     inside a recursive function now works correctly.
+(assert "any? has match"             (any? (fn (x) (> x 3)) (list 1 2 3 4))  t)
+(assert "any? no match"              (any? (fn (x) (> x 100)) (list 1 2 3))  nil)
+(assert "any? empty"                 (any? (fn (x) (> x 0)) (list))           nil)
+(assert "all? all match"             (all? (fn (x) (> x 0)) (list 1 2 3))     t)
+(assert "all? one fails"             (all? (fn (x) (> x 0)) (list 1 0 3))     nil)
+(assert "all? empty"                 (all? (fn (x) (> x 0)) (list))           t)
+; Closure-in-recursion: this used to break before the var2env-via-caller-env fix.
+(def jit-sieve-fn (i n)
+  (def jit-sieve-up (j acc)
+    (if (> j n) acc
+        (if (any? (fn (d) (is (mod j d) 0)) acc)
+            (jit-sieve-up (+ j 1) acc)
+            (jit-sieve-up (+ j 1) (cons j acc)))))
+  (length (jit-sieve-up i (list))))
+(assert "any?-in-recursion: π(100)" (jit-sieve-fn 2 100) 25)

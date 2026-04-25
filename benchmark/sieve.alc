@@ -1,12 +1,10 @@
-; Sieve of Eratosthenes via trial-division.
+; Sieve of Eratosthenes via trial-division. Inlined predicate
+; (no closure) since the inlined recursive walk has lower per-call
+; overhead than (any? (fn (d) ...) acc) — though both work since
+; the closure-in-recursion fix.
 ;
-; The mod check is inlined into is-prime-given to avoid alcove's
-; (any? <closure-with-capture> ...)-inside-recursive-fn bug. Same
-; arithmetic; just no inner closure.
-;
-; The (mod i (car acc)) check now compiles to a single OP_MOD
-; bytecode op (added in commit 492183a) instead of an AST builtin
-; call. is-prime-given thus runs as bytecode, not AST.
+; (mod i (car acc)) compiles to a single OP_MOD bytecode op
+; (added in commit 492183a) instead of an AST builtin call.
 (def is-prime-given (acc i)
   (if (no acc) t
       (if (is (mod i (car acc)) 0) nil

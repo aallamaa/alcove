@@ -5,6 +5,11 @@ The integration is one builtin: `(ffi-fn LIB FN-NAME RETURN-TYPE ARG-TYPES…)`
 returns a callable; you store it like any value and call it like any
 alcove function.
 
+> **Security:** FFI runs C code with the full privileges of the alcove
+> process. A user script can `(ffi-fn "libc.so.6" "system" "int" "string")`
+> and execute arbitrary shell commands. Only run scripts you trust —
+> there is no sandbox.
+
 ## Quick example
 
 ```

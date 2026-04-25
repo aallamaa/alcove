@@ -26,10 +26,11 @@
 #include <ctype.h>
 #include <math.h>
 #include <assert.h>
+#include <unistd.h>   /* isatty for the readline REPL gate; needed even
+                          when ALCOVE_JIT is off. */
 #ifdef ALCOVE_JIT
 #include <sys/mman.h>
 #include <stddef.h>
-#include <unistd.h>   /* isatty for the readline REPL gate */
 #ifdef __APPLE__
 #include <pthread.h>
 #endif
@@ -2170,7 +2171,11 @@ static struct ffi_lib_cache { char *name; void *h; struct ffi_lib_cache *next; }
 static void *alc_ffi_dlopen(const char *name) {
   struct ffi_lib_cache *c;
   for (c = g_ffi_libs; c; c = c->next) if (!strcmp(c->name, name)) return c->h;
-  void *h = dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+  /* RTLD_LOCAL keeps the lib's symbols out of the global namespace —
+     reduces accidental shadowing if multiple libs export the same
+     name. RTLD_NOW resolves all symbols at load so dlsym failures
+     surface promptly. */
+  void *h = dlopen(name, RTLD_NOW | RTLD_LOCAL);
   if (!h) return NULL;
   c = (struct ffi_lib_cache*)memalloc(1, sizeof(*c));
   c->name = strdup(name); c->h = h; c->next = g_ffi_libs; g_ffi_libs = c;
@@ -2313,8 +2318,13 @@ exp_t *modcmd(exp_t *e, env_t *env) {
     if (isnumber(a) && isnumber(b) && FIX_VAL(b) != 0) {
       int64_t va = FIX_VAL(a), vb = FIX_VAL(b);
       ret = MAKE_FIX(va - (va / vb) * vb);   /* C99 truncated div */
+    } else if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
+      double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;
+      double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;
+      if (db == 0.0) ret = error(ERROR_DIV_BY0, e, env, "mod by 0");
+      else ret = make_floatf(fmod(da, db));
     } else {
-      ret = error(ERROR_ILLEGAL_VALUE, e, env, "mod needs two non-zero fixnums");
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "mod needs numeric operands");
     }
   } else {
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(mod a b)");
@@ -5567,7 +5577,9 @@ l_div: {
   }
 l_mod: {
     /* Truncated modulo (C99 %), matches modcmd. Lifts (mod a b) from
-       a builtin-call-back-to-AST round-trip into one VM dispatch. */
+       a builtin-call-back-to-AST round-trip into one VM dispatch.
+       Float operands fall back to fmod for parity with what users
+       expect from mathematical modulo. */
     exp_t *b = POP(), *a = POP();
     if (isnumber(a) && isnumber(b)) {
       int64_t bb = FIX_VAL(b);
@@ -5575,7 +5587,11 @@ l_mod: {
       int64_t va = FIX_VAL(a);
       PUSH(MAKE_FIX(va - (va / bb) * bb));
     } else {
-      RUNTIME_ERR("mod: integer operands only");
+      double da, db;
+      COERCE_TO_DOUBLE(a, da, "Illegal value in mod");
+      COERCE_TO_DOUBLE(b, db, "Illegal value in mod");
+      if (db == 0.0) RUNTIME_ERR("Illegal modulo by 0");
+      PUSH(make_floatf(fmod(da, db)));
     }
     NEXT;
   }
@@ -5991,18 +6007,41 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env)
     exp_t *body = fn->next->content;
     /* Closure: if fn captured an env at creation, use it as the new
        call frame's parent so let/with bindings from the defining scope
-       resolve before walking up to global. Top-level fns also have a
-       capture (= global), so behavior is unchanged for them. */
+       resolve before walking up to global. Args themselves must be
+       evaluated in the CALLER's env (where their free vars live) — so
+       we eval first, bind into newenv with evalexp=false. */
     env_t *captured = (env_t *)fn->next->bc;
+    /* Pre-evaluate args in the caller's env. Build a fresh list of
+       pre-evaluated values so var2env can bind them without re-eval. */
+    exp_t *evald_args = NULL, *evald_tail = NULL;
+    {
+      exp_t *src;
+      for (src = e->next; src; src = src->next) {
+        exp_t *v = EVAL(src->content, env);
+        if (v && iserror(v)) {
+          /* clean up partial evald list */
+          if (evald_args) unrefexp(evald_args);
+          unrefexp(fn);
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return v;
+        }
+        exp_t *node = make_node(v ? v : NIL_EXP);
+        if (!evald_args) { evald_args = node; evald_tail = node; }
+        else { evald_tail->next = node; evald_tail = node; }
+      }
+    }
     newenv = make_env(captured ? captured : env);
     newenv->callingfnc = refexp(e);
-    if ((ret = var2env(e, fn->content, e->next, newenv, true))) {
+    if ((ret = var2env(e, fn->content, evald_args, newenv, false))) {
+      if (evald_args) unrefexp(evald_args);
       destroy_env(newenv);
       unrefexp(fn);
       unrefexp(e);
       in_tail_position = outer_tail;
       return ret;
     }
+    if (evald_args) unrefexp(evald_args);
 
     /* Compiled body: cross-function tail calls lose TCO here (internal
        OP_TAIL_SELF still applies). */

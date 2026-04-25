@@ -67,6 +67,13 @@ endif
 # -Os removed
 test: parser
 	./alcove test.alc
+ifeq ($(FFI_OK),yes)
+	@echo
+	@echo "=== ffi examples ==="
+	@$(MAKE) -C ffi-examples run >/dev/null 2>&1 \
+	 && echo "ffi-examples: ok" \
+	 || (echo "ffi-examples: FAILED" && exit 1)
+endif
 benchmark: speed
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.
