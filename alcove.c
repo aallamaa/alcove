@@ -4101,6 +4101,23 @@ static int x64_jcc_rel32(uint8_t *buf, uint8_t cc, int32_t disp) {
   memcpy(buf + 2, &disp, 4);
   return 6;
 }
+/* cqo: sign-extend rax → rdx:rax (needed before idiv) — REX.W 0x99 */
+static int x64_cqo(uint8_t *buf) { buf[0] = 0x48; buf[1] = 0x99; return 2; }
+
+/* idiv r64 — signed divide rdx:rax by r/m64; quotient → rax,
+   remainder → rdx. REX.W 0xF7 /7. For low regs: 0xF8|reg in ModR/M. */
+static int x64_idiv_reg(uint8_t *buf, int divisor) {
+  buf[0] = 0x48; buf[1] = 0xF7; buf[2] = (uint8_t)(0xF8 | (divisor & 7));
+  return 3;
+}
+
+/* cmovz r64, r64 — REX.W 0x0F 0x44 ModR/M. dst gets src if ZF=1. */
+static int x64_cmovz_reg_reg(uint8_t *buf, int dst, int src) {
+  buf[0] = 0x48; buf[1] = 0x0F; buf[2] = 0x44;
+  buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  return 4;
+}
+
 /* push r64 (low 8 regs only) — 1 byte: 0x50+r */
 static int x64_push_reg(uint8_t *buf, int reg) {
   buf[0] = (uint8_t)(0x50 + (reg & 7));
@@ -4548,6 +4565,77 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   return 1;
 }
 
+/* (fn (a b) (is (mod a b) K)) — 2-param leaf computing tagged
+   modulo + equality, returns t/nil. The divides? shape from sieve.
+   Bytecode (10 bytes):
+     [0] LOAD_SLOT a       2
+     [2] LOAD_SLOT b       2
+     [4] MOD               1
+     [5] LOAD_FIX K        3
+     [8] IS                1
+     [9] RET               1
+
+   Codegen: load both slots into rax/rcx, tag-check both, untag (sub 1),
+   idiv. Compare remainder with K shifted (no re-tag needed since IS
+   compares the underlying value bits). Return TRUE_EXP/NIL_EXP via
+   cmovz. Avoids vm_invoke_values entirely — saves ~200ns/call. */
+static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 10) return 0;
+  uint8_t *c = bc->code;
+  if (c[0] != OP_LOAD_SLOT || c[1] >= ENV_INLINE_SLOTS) return 0;
+  if (c[2] != OP_LOAD_SLOT || c[3] >= ENV_INLINE_SLOTS) return 0;
+  if (c[4] != OP_MOD) return 0;
+  if (c[5] != OP_LOAD_FIX) return 0;
+  int16_t K = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
+  if (c[8] != OP_IS) return 0;
+  if (c[9] != OP_RET) return 0;
+
+  int32_t off_a = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
+  int32_t off_b = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[3] * 8;
+  int32_t k_shifted = ((int32_t)K) << 3;       /* compare against (K<<3) */
+
+  int n = 0;
+
+  /* Load both slots tagged. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_a);
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, off_b);
+  /* Tag-check both — bail to bytecode if either isn't a fixnum. */
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz1 = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz2 = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* Untag both (drop low bit). After this, rax=a<<3 and rcx=b<<3. */
+  n += x64_sub_imm32(buf + n, X64_RAX, 1);
+  n += x64_sub_imm32(buf + n, X64_RCX, 1);
+  /* Guard against div-by-zero — bail rather than crash. */
+  n += x64_test_reg_reg(buf + n, X64_RCX, X64_RCX);
+  int jz_bz = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* Sign-extend rax into rdx:rax, then signed div. rdx ← (a<<3) % (b<<3)
+     which equals (a%b)<<3 — same scaling property as add/sub. */
+  n += x64_cqo(buf + n);
+  n += x64_idiv_reg(buf + n, X64_RCX);
+  /* Compare remainder against K<<3 (tag bits irrelevant — all values
+     here have bit0=0). cmovz selects TRUE_EXP if equal. */
+  n += x64_cmp_imm32(buf + n, X64_RDX, k_shifted);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)nil_singleton);
+  n += x64_mov_imm64(buf + n, X64_RCX, (uint64_t)(uintptr_t)true_singleton);
+  n += x64_cmovz_reg_reg(buf + n, X64_RAX, X64_RCX);
+  n += x64_ret(buf + n);
+
+  /* Single deopt point — return NULL → caller's vm_run kicks in. */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jz1,   6, deopt_pc);
+  x64_patch_rel32(buf, jz2,   6, deopt_pc);
+  x64_patch_rel32(buf, jz_bz, 6, deopt_pc);
+
+  assert(n <= 96);
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit) return bc && bc->jit ? 1 : 0;
   uint8_t *c = bc->code;
@@ -4562,6 +4650,9 @@ int jit_compile(bytecode_t *bc) {
     /* matched — fall through to mmap+install */
   } else
   if (try_jit_recurse_add_two(bc, buf, &n)) {
+    /* matched — fall through to mmap+install */
+  } else
+  if (try_jit_modeq_leaf(bc, buf, &n)) {
     /* matched — fall through to mmap+install */
   } else
   if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
