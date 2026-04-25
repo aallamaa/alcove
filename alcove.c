@@ -6134,15 +6134,20 @@ static void rl_collect_dict(dict_t *d, const char *prefix, size_t plen,
 
 /* readline completion generator — called repeatedly with state=0 first,
    then state>0 until it returns NULL. Builds the match list lazily on
-   the first call. */
+   the first call.
+
+   readline takes ownership of every string we return and free()s it
+   itself. On a fresh state==0 call we therefore must NOT free the
+   strings still in our array — only the array storage. The strings
+   readline never consumed (if any) leak; in practice readline
+   exhausts the generator so this is rare. */
 static char *alcove_completion_generator(const char *text, int state) {
   static char **matches = NULL;
   static int n_matches = 0;
   static int cap = 0;
   static int idx = 0;
   if (state == 0) {
-    /* fresh request — free any leftover from previous match attempt */
-    int j; for (j = 0; j < n_matches; j++) free(matches[j]);
+    /* Drop the array but NOT its contents — readline owns those now. */
     free(matches); matches = NULL; n_matches = 0; cap = 0; idx = 0;
 
     size_t tlen = strlen(text);
