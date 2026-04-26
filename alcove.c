@@ -7473,16 +7473,15 @@ int main(int argc, char *argv[])
   free(exp_tfuncList[EXP_MACRO]);
   unrefexp(t);
   unrefexp(nil);
-  /* Immortal singletons — unrefexp is a no-op on them (see line 181),
-     so without an explicit free here they show up as "definitely lost"
-     at program exit. Release ptr field first for the symbol singleton. */
+  /* Immortal singletons. We can't free() the exp_t pointer itself
+     anymore (it lives inside the bump-allocator chunk, not a separate
+     malloc), but the strdup'd ptr field for the "t" symbol can be
+     released. The chunks themselves are reclaimed by the OS at exit. */
   if (true_singleton) {
     if (true_singleton->ptr) free(true_singleton->ptr);
-    free(true_singleton);
     true_singleton = NULL;
   }
   if (nil_singleton) {
-    free(nil_singleton);
     nil_singleton = NULL;
   }
 }
