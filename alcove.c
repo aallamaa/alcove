@@ -5427,6 +5427,42 @@ static uint32_t arm64_cbz(int rt, int off_insns) {
   return 0xB4000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
          (uint32_t)(rt & 0x1f);
 }
+/* CBNZ Xt, label — branch if Xt is non-zero. */
+static uint32_t arm64_cbnz(int rt, int off_insns) {
+  return 0xB5000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
+         (uint32_t)(rt & 0x1f);
+}
+/* 32-bit register encoders (W-form). nref is `int` so we load/store 4 bytes. */
+/* LDR Wt, [Xn, #imm]  — imm is 4-byte aligned offset, 0..16380. */
+static uint32_t arm64_ldr_w_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 4) & 0xfff;
+  return 0xB9400000u | (imm12 << 10) | ((uint32_t)rn << 5) | (uint32_t)rt;
+}
+/* STR Wt, [Xn, #imm]. */
+static uint32_t arm64_str_w_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 4) & 0xfff;
+  return 0xB9000000u | (imm12 << 10) | ((uint32_t)rn << 5) | (uint32_t)rt;
+}
+/* ADD Wd, Wn, #imm12 (no shift). */
+static uint32_t arm64_add_w_imm(int rd, int rn, int imm) {
+  return 0x11000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* SUB Wd, Wn, #imm12 (no shift). */
+static uint32_t arm64_sub_w_imm(int rd, int rn, int imm) {
+  return 0x51000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* CMP Wn, Wm — alias for SUBS WZR, Wn, Wm. */
+__attribute__((unused))
+static uint32_t arm64_cmp_reg_w(int rn, int rm) {
+  return 0x6B000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) | 31u;
+}
+/* CBZ Wt, label — 32-bit variant. */
+static uint32_t arm64_cbz_w(int rt, int off_insns) {
+  return 0x34000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
+         (uint32_t)(rt & 0x1f);
+}
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs.
  */
@@ -5807,6 +5843,202 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
   assert(n <= 32);
+  *outn = n;
+  return 1;
+}
+
+/* safe? from nqueens.alc — 71-byte exact-match shape.
+     (def safe? (c qs offset)
+       (if (no qs) t
+           (if (is c (car qs)) nil
+               (if (is (+ c offset) (car qs)) nil
+                   (if (is (- c offset) (car qs)) nil
+                       (safe? c (cdr qs) (+ offset 1)))))))
+   Hot inner loop in nqueens. Walks the placed-queens list, checking
+   column + diagonal conflicts. Inline refexp/unrefexp for the cdr walk;
+   falls through to bytecode (NULL deopt) if a refcount actually hits 0. */
+static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 71) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t s_qs = c[1];
+  if (c[2] != OP_NOT) return 0;
+  if (c[3] != OP_BR_IF_FALSE) return 0;
+  if (c[6] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_t = c[7];
+  if (c[8] != OP_JUMP) return 0;
+  if (c[11] != OP_LOAD_SLOT) return 0;
+  uint8_t s_c = c[12];
+  if (c[13] != OP_LOAD_SLOT || c[14] != s_qs) return 0;
+  if (c[15] != OP_CAR) return 0;
+  if (c[16] != OP_IS) return 0;
+  if (c[17] != OP_BR_IF_FALSE) return 0;
+  if (c[20] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil1 = c[21];
+  if (c[22] != OP_JUMP) return 0;
+  if (c[25] != OP_LOAD_SLOT || c[26] != s_c) return 0;
+  if (c[27] != OP_LOAD_SLOT) return 0;
+  uint8_t s_off = c[28];
+  if (c[29] != OP_ADD) return 0;
+  if (c[30] != OP_LOAD_SLOT || c[31] != s_qs) return 0;
+  if (c[32] != OP_CAR) return 0;
+  if (c[33] != OP_IS) return 0;
+  if (c[34] != OP_BR_IF_FALSE) return 0;
+  if (c[37] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil2 = c[38];
+  if (c[39] != OP_JUMP) return 0;
+  if (c[42] != OP_LOAD_SLOT || c[43] != s_c) return 0;
+  if (c[44] != OP_LOAD_SLOT || c[45] != s_off) return 0;
+  if (c[46] != OP_SUB) return 0;
+  if (c[47] != OP_LOAD_SLOT || c[48] != s_qs) return 0;
+  if (c[49] != OP_CAR) return 0;
+  if (c[50] != OP_IS) return 0;
+  if (c[51] != OP_BR_IF_FALSE) return 0;
+  if (c[54] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil3 = c[55];
+  if (c[56] != OP_JUMP) return 0;
+  if (c[59] != OP_LOAD_SLOT || c[60] != s_c) return 0;
+  if (c[61] != OP_LOAD_SLOT || c[62] != s_qs) return 0;
+  if (c[63] != OP_CDR) return 0;
+  if (c[64] != OP_SLOT_ADD_FIX || c[65] != s_off || c[66] != 1 || c[67] != 0) return 0;
+  if (c[68] != OP_TAIL_SELF || c[69] != 3) return 0;
+  if (c[70] != OP_RET) return 0;
+
+  if (idx_t >= bc->nconsts) return 0;
+  exp_t *ct = bc->consts[idx_t];
+  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+    return 0;
+  for (int k = 0; k < 3; k++) {
+    uint8_t idx = (k == 0) ? idx_nil1 : (k == 1) ? idx_nil2 : idx_nil3;
+    if (idx >= bc->nconsts) return 0;
+    exp_t *cn = bc->consts[idx];
+    if (!is_ptr(cn) || !issymbol(cn) ||
+        strcmp((const char *)cn->ptr, "nil") != 0) return 0;
+  }
+  if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
+      s_off >= ENV_INLINE_SLOTS) return 0;
+
+  int off_c   = (int)offsetof(env_t, inline_vals[0]) + (int)s_c   * 8;
+  int off_qs  = (int)offsetof(env_t, inline_vals[0]) + (int)s_qs  * 8;
+  int off_off = (int)offsetof(env_t, inline_vals[0]) + (int)s_off * 8;
+  int off_cont = (int)offsetof(struct exp_t, content);
+  int off_next = (int)offsetof(struct exp_t, next);
+  int off_nref = (int)offsetof(struct exp_t, nref);
+  if (off_c > 32760 || off_qs > 32760 || off_off > 32760 ||
+      off_cont > 32760 || off_next > 32760 || off_nref > 16380) return 0;
+
+  int n = 0;
+  int entry_pc = n;
+
+  /* Preload nil + true into x9, x10 (live across iterations). */
+  n += emit_mov64(out + n, 9,  (uint64_t)(uintptr_t)nil_singleton);
+  n += emit_mov64(out + n, 10, (uint64_t)(uintptr_t)true_singleton);
+
+  /* x1 = qs. If null or nil → return t. */
+  out[n++] = arm64_ldr_imm(1, 0, off_qs);
+  int patch_t1 = n; out[n++] = 0;          /* cbz x1, ret_t */
+  out[n++] = arm64_cmp_reg(1, 9);
+  int patch_t2 = n; out[n++] = 0;          /* b.eq ret_t */
+
+  /* x2 = car(qs) tagged. Tag-check. */
+  out[n++] = arm64_ldr_imm(2, 1, off_cont);
+  int patch_da = n; out[n++] = 0;          /* tbz x2,#0,deopt */
+
+  /* x3 = c. If c == car → return nil. */
+  out[n++] = arm64_ldr_imm(3, 0, off_c);
+  out[n++] = arm64_cmp_reg(3, 2);
+  int patch_n1 = n; out[n++] = 0;          /* b.eq ret_nil */
+
+  /* x4 = offset. Tag-check. */
+  out[n++] = arm64_ldr_imm(4, 0, off_off);
+  int patch_db = n; out[n++] = 0;          /* tbz x4,#0,deopt */
+
+  /* (c + off)_tagged = c_tagged + off_tagged - 1. Compare with car. */
+  out[n++] = arm64_add_reg(5, 3, 4);
+  out[n++] = arm64_sub_imm(5, 5, 1);
+  out[n++] = arm64_cmp_reg(5, 2);
+  int patch_n2 = n; out[n++] = 0;          /* b.eq ret_nil */
+
+  /* (c - off)_tagged = c_tagged - off_tagged + 1. Compare with car. */
+  out[n++] = arm64_sub_reg(5, 3, 4);
+  out[n++] = arm64_add_imm(5, 5, 1);
+  out[n++] = arm64_cmp_reg(5, 2);
+  int patch_n3 = n; out[n++] = 0;          /* b.eq ret_nil */
+
+  /* Cdr walk. x5 = cdr(qs) = qs->next. */
+  out[n++] = arm64_ldr_imm(5, 1, off_next);
+
+  /* refexp(x5) inline: skip if NULL/nil/true; else nref++. */
+  int patch_skip_ref_a = n; out[n++] = 0;  /* cbz x5, skip_ref */
+  out[n++] = arm64_cmp_reg(5, 9);
+  int patch_skip_ref_b = n; out[n++] = 0;  /* b.eq skip_ref */
+  out[n++] = arm64_cmp_reg(5, 10);
+  int patch_skip_ref_c = n; out[n++] = 0;  /* b.eq skip_ref */
+  out[n++] = arm64_ldr_w_imm(6, 5, off_nref);
+  out[n++] = arm64_add_w_imm(6, 6, 1);
+  out[n++] = arm64_str_w_imm(6, 5, off_nref);
+  int skip_ref_pc = n;
+
+  /* unrefexp(x1=qs) inline: skip if NULL/nil/true; else nref--; if 0 deopt. */
+  int patch_skip_unref_a = n; out[n++] = 0;  /* cbz x1, skip_unref */
+  out[n++] = arm64_cmp_reg(1, 9);
+  int patch_skip_unref_b = n; out[n++] = 0;
+  out[n++] = arm64_cmp_reg(1, 10);
+  int patch_skip_unref_c = n; out[n++] = 0;
+  out[n++] = arm64_ldr_w_imm(6, 1, off_nref);
+  out[n++] = arm64_sub_w_imm(6, 6, 1);
+  out[n++] = arm64_str_w_imm(6, 1, off_nref);
+  int patch_to_deopt = n; out[n++] = 0;       /* cbz w6, deopt */
+  int skip_unref_pc = n;
+
+  /* slot[qs] = cdr (x5) */
+  out[n++] = arm64_str_imm(5, 0, off_qs);
+
+  /* offset += 8 (tagged add 1). */
+  out[n++] = arm64_add_imm(4, 4, 8);
+  out[n++] = arm64_str_imm(4, 0, off_off);
+
+  /* tail-self: b entry */
+  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+
+  /* ret_t: x0 = true_singleton */
+  int ret_t_pc = n;
+  out[n++] = arm64_mov_reg(0, 10);
+  out[n++] = arm64_ret();
+
+  /* ret_nil: x0 = nil_singleton */
+  int ret_nil_pc = n;
+  out[n++] = arm64_mov_reg(0, 9);
+  out[n++] = arm64_ret();
+
+  /* deopt: x0 = NULL */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  /* Patch all forward branches. */
+  out[patch_t1] = arm64_cbz(1, ret_t_pc - patch_t1);
+  out[patch_t2] = arm64_b_cond(0 /* EQ */, ret_t_pc - patch_t2);
+  out[patch_da] = arm64_tbz(2, 0, deopt_pc - patch_da);
+  out[patch_db] = arm64_tbz(4, 0, deopt_pc - patch_db);
+  out[patch_n1] = arm64_b_cond(0, ret_nil_pc - patch_n1);
+  out[patch_n2] = arm64_b_cond(0, ret_nil_pc - patch_n2);
+  out[patch_n3] = arm64_b_cond(0, ret_nil_pc - patch_n3);
+
+  out[patch_skip_ref_a] = arm64_cbz(5, skip_ref_pc - patch_skip_ref_a);
+  out[patch_skip_ref_b] = arm64_b_cond(0, skip_ref_pc - patch_skip_ref_b);
+  out[patch_skip_ref_c] = arm64_b_cond(0, skip_ref_pc - patch_skip_ref_c);
+
+  out[patch_skip_unref_a] = arm64_cbz(1, skip_unref_pc - patch_skip_unref_a);
+  out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
+  out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
+  out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+
+  /* Suppress unused-on-some-paths warnings. */
+  (void)arm64_cbnz; (void)arm64_cmp_reg_w;
+
+  assert(n <= 96);
   *outn = n;
   return 1;
 }
@@ -6514,6 +6746,8 @@ int jit_compile(bytecode_t *bc) {
     /* tak — fall through */
   } else if (try_jit_mark_from(bc, insns, &n)) {
     /* sieve-fast inner loop — fall through */
+  } else if (try_jit_safe_p(bc, insns, &n)) {
+    /* nqueens safe? — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
