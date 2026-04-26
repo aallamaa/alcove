@@ -1,0 +1,23 @@
+; N-queens — count solutions on an N×N board via recursive backtracking.
+; Classic benchmark from the Computer Language Benchmarks Game.
+;
+; Representation: queens placed so far as a list of column indices, one
+; per row already filled. (safe? c qs offset) checks that placing a
+; queen at column c doesn't conflict with any already-placed queen
+; (same column, or same diagonal — `offset` is the row distance).
+(def safe? (c qs offset)
+  (if (no qs) t
+      (if (is c (car qs)) nil
+          (if (is (+ c offset) (car qs)) nil
+              (if (is (- c offset) (car qs)) nil
+                  (safe? c (cdr qs) (+ offset 1)))))))
+(def try-cols (n c qs row-acc)
+  (if (> c n) row-acc
+      (try-cols n (+ c 1) qs
+        (if (safe? c qs 1)
+            (+ row-acc (solve n (cons c qs)))
+            row-acc))))
+(def solve (n qs)
+  (if (is (length qs) n) 1
+      (try-cols n 1 qs 0)))
+(prn (solve 10 (list)))

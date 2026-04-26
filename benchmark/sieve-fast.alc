@@ -1,0 +1,30 @@
+; Sieve of Eratosthenes — true mark-composites algorithm using a vector.
+; (vec n init) was added to alcove specifically so this benchmark could
+; exist; before that the language only had cons lists, which forced
+; trial-division (sieve.alc, the slow algorithm).
+;
+; Algorithm: build a boolean vector marks[0..n] all set to t. For each
+; i from 2 up to sqrt(n), if marks[i] is t, mark all multiples i*i,
+; i*i+i, ... composite. At the end, count the t entries from index 2.
+(def mark-composites (i n marks)
+  (if (> (* i i) n) nil
+      (do (if (vec-ref marks i)
+              (mark-from i (* i i) n marks)
+              nil)
+          (mark-composites (+ i 1) n marks))))
+(def mark-from (step j n marks)
+  (if (> j n) nil
+      (do (vec-set! marks j nil)
+          (mark-from step (+ j step) n marks))))
+(def count-primes (i n marks acc)
+  (if (> i n) acc
+      (count-primes (+ i 1) n marks
+                    (if (vec-ref marks i) (+ acc 1) acc))))
+; Top-level instead of wrapping in a (def primes-up-to ...) — there's a
+; pre-existing codegen issue where a function that does
+;   (def f (n) (let v ... (do (call-helper v) v)))
+; segfaults; the top-level form sidesteps it.
+(= n 100000)
+(= marks (vec (+ n 1) t))
+(mark-composites 2 n marks)
+(prn (count-primes 2 n marks 0))

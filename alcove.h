@@ -181,6 +181,15 @@ typedef enum {
      dispatch. Emitted by compile_for (hot path). */
   OP_SLOT_LE_SLOT,   /* u8 slot_a, u8 slot_b → push (slot_a <= slot_b) */
 
+  /* Vector ops — direct opcodes so vec-heavy loops stay in the bytecode
+     VM. Otherwise the compiler bails to AST mode for any unknown
+     internal, and deeply-nested AST recursion overflows the C stack. */
+  OP_VEC_REF,        /* pop i, pop v    → push v[i] */
+  OP_VEC_SET,        /* pop val, pop i, pop v → mutate v[i] = val, push val */
+  OP_VEC_LEN,        /* pop v           → push v->len (as fixnum) */
+  OP_VEC_NEW,        /* pop init, pop n → push (vec n init) */
+  OP_SQRT_INT,       /* pop n           → push (sqrt-int n) */
+
   OP_MAX
 } alc_op;
 
@@ -467,6 +476,11 @@ exp_t *reducecmd(exp_t *e,env_t *env);
 exp_t *anypcmd(exp_t *e,env_t *env);
 exp_t *allpcmd(exp_t *e,env_t *env);
 exp_t *ffifncmd(exp_t *e,env_t *env);
+exp_t *veccmd(exp_t *e,env_t *env);
+exp_t *vecrefcmd(exp_t *e,env_t *env);
+exp_t *vecsetcmd(exp_t *e,env_t *env);
+exp_t *veclencmd(exp_t *e,env_t *env);
+exp_t *sqrtintcmd(exp_t *e,env_t *env);
 exp_t *loaddbcmd(exp_t *e,env_t *env);
 int    loaddb_from_file(env_t *env);  /* shared with main() for auto-load */
 /* lisp macro */

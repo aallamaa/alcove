@@ -137,6 +137,14 @@ lispProc lispProcList[]={
   {"any?",2,1,0,anypcmd},
   {"all?",2,1,0,allpcmd},
   {"ffi-fn",2,1,0,ffifncmd},
+  /* Vectors — O(1) random-access array. (vec n init) creates length-n
+     vector filled with init; (vec-ref v i), (vec-set! v i val), (vec-len v). */
+  {"vec",2,1,0,veccmd},
+  {"vec-ref",2,1,0,vecrefcmd},
+  {"vec-set!",2,1,0,vecsetcmd},
+  {"vec-len",2,1,0,veclencmd},
+  /* Integer sqrt — for trial-division early exit. */
+  {"sqrt-int",2,1,0,sqrtintcmd},
 
 };
 
@@ -257,6 +265,13 @@ inline int unrefexp(exp_t *e){
     else if (e->type==EXP_FFI) {
       extern void alc_ffi_free(void *ptr);   /* defined alongside ffi_call */
       alc_ffi_free(e->ptr);
+    }
+    else if (e->type==EXP_VECTOR && e->ptr) {
+      typedef struct { int64_t len; exp_t *data[]; } _alc_vec_local_t;
+      _alc_vec_local_t *v = (_alc_vec_local_t*)e->ptr;
+      int64_t i;
+      for (i = 0; i < v->len; i++) unrefexp(v->data[i]);
+      free(v);
     }
     else if (((e->type>=EXP_NUMBER)&&(e->type<=EXP_BOOLEAN))||(e->type==EXP_INTERNAL)) {
     }
@@ -730,6 +745,17 @@ void print_node(exp_t *node)
   else if (node->type==EXP_SYMBOL) printf("\x1B[92m%s%s\x1B[39m",verbose?"_sym:":"",(char *) node->ptr);
   else if (node->type==EXP_STRING) printf("\x1B[92m%s\"%s\"\x1B[39m",verbose?"_str:":"",(char *) node->ptr);
   else if (node->type==EXP_FLOAT) printf("\x1B[92m%s%lf\x1B[39m",verbose?"_flo:":"",node->f);
+  else if (node->type==EXP_VECTOR) {
+    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_p_t;
+    _alc_vec_p_t *v = (_alc_vec_p_t*)node->ptr;
+    printf("#[");
+    int64_t i;
+    for (i = 0; i < v->len; i++) {
+      if (i) printf(" ");
+      print_node(v->data[i]);
+    }
+    printf("]");
+  }
   else {
     printf("\x1B[92mtype: %d ptr: %08lx\x1B[39m",node->type,(unsigned long) node->ptr);
   }
@@ -2098,6 +2124,135 @@ exp_t *sqrtcmd(exp_t *e, env_t *env){
   unrefexp(v);
   unrefexp(e);
   return ret;
+}
+
+/* ---------------- Vectors ----------------
+   Mutable, O(1) random-access array of exp_t*. Layout:
+     e->type = EXP_VECTOR
+     e->ptr  = alc_vec_t* with header { len } + data[len]
+   Each element holds an owning ref. Refcount + free walk all elements
+   in unrefexp. The slow-sieve trial-division benchmark wins from this
+   because we can use a sqrt-cutoff on smallest-first vector iteration
+   instead of cdr-walking a largest-first cons list. */
+typedef struct { int64_t len; exp_t *data[]; } alc_vec_t;
+
+exp_t *make_vector(int64_t n, exp_t *fill) {
+  alc_vec_t *v = (alc_vec_t*)memalloc(1, sizeof(alc_vec_t) + (size_t)n * sizeof(exp_t*));
+  v->len = n;
+  int64_t i;
+  for (i = 0; i < n; i++) v->data[i] = refexp(fill);
+  exp_t *e = make_nil();
+  e->type = EXP_VECTOR;
+  e->ptr  = v;
+  return e;
+}
+
+exp_t *veccmd(exp_t *e, env_t *env) {
+  exp_t *nexp = NULL, *fill = NIL_EXP;
+  if (e->next) nexp = EVAL(e->next->content, env);
+  if (iserror(nexp)) { unrefexp(e); return nexp; }
+  if (e->next && e->next->next)
+    fill = EVAL(e->next->next->content, env);
+  if (iserror(fill)) { unrefexp(nexp); unrefexp(e); return fill; }
+  if (!isnumber(nexp)) {
+    if (nexp) unrefexp(nexp); unrefexp(fill); unrefexp(e);
+    return error(ERROR_NUMBER_EXPECTED, e, env, "(vec n init): n must be a number");
+  }
+  int64_t n = FIX_VAL(nexp);
+  if (n < 0) n = 0;
+  unrefexp(nexp);
+  exp_t *ret = make_vector(n, fill);
+  unrefexp(fill);
+  unrefexp(e);
+  return ret;
+}
+
+exp_t *vecrefcmd(exp_t *e, env_t *env) {
+  exp_t *vexp=NULL, *iexp=NULL;
+  if (e->next) vexp = EVAL(e->next->content, env);
+  if (iserror(vexp)) { unrefexp(e); return vexp; }
+  if (e->next && e->next->next) iexp = EVAL(e->next->next->content, env);
+  if (iserror(iexp)) { unrefexp(vexp); unrefexp(e); return iexp; }
+  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+    if (vexp) unrefexp(vexp);
+    if (iexp) unrefexp(iexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args");
+  }
+  alc_vec_t *v = (alc_vec_t*)vexp->ptr;
+  int64_t i = FIX_VAL(iexp);
+  if (i < 0 || i >= v->len) {
+    unrefexp(vexp); unrefexp(iexp); unrefexp(e);
+    return error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-ref: index out of range");
+  }
+  exp_t *ret = refexp(v->data[i]);
+  unrefexp(vexp); unrefexp(iexp); unrefexp(e);
+  return ret;
+}
+
+exp_t *vecsetcmd(exp_t *e, env_t *env) {
+  exp_t *vexp=NULL, *iexp=NULL, *valexp=NULL;
+  if (e->next) vexp = EVAL(e->next->content, env);
+  if (iserror(vexp)) { unrefexp(e); return vexp; }
+  if (e->next && e->next->next) iexp = EVAL(e->next->next->content, env);
+  if (iserror(iexp)) { unrefexp(vexp); unrefexp(e); return iexp; }
+  if (e->next && e->next->next && e->next->next->next)
+    valexp = EVAL(e->next->next->next->content, env);
+  if (iserror(valexp)) { unrefexp(vexp); unrefexp(iexp); unrefexp(e); return valexp; }
+  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+    if (vexp) unrefexp(vexp);
+    if (iexp) unrefexp(iexp);
+    if (valexp) unrefexp(valexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args");
+  }
+  alc_vec_t *v = (alc_vec_t*)vexp->ptr;
+  int64_t i = FIX_VAL(iexp);
+  if (i < 0 || i >= v->len) {
+    unrefexp(vexp); unrefexp(iexp); unrefexp(valexp); unrefexp(e);
+    return error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-set!: index out of range");
+  }
+  /* Replace the slot — drop old ref, install new (transfer valexp's). */
+  unrefexp(v->data[i]);
+  v->data[i] = valexp;     /* ownership transferred */
+  unrefexp(vexp); unrefexp(iexp); unrefexp(e);
+  return refexp(v->data[i]);   /* return the value, like (= ...) */
+}
+
+exp_t *veclencmd(exp_t *e, env_t *env) {
+  exp_t *vexp=NULL;
+  if (e->next) vexp = EVAL(e->next->content, env);
+  if (iserror(vexp)) { unrefexp(e); return vexp; }
+  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR) {
+    if (vexp) unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-len v): not a vector");
+  }
+  int64_t n = ((alc_vec_t*)vexp->ptr)->len;
+  unrefexp(vexp); unrefexp(e);
+  return MAKE_FIX(n);
+}
+
+/* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
+   avoid a sqrt + double→int round-trip in pure-integer code (common
+   in trial-division early exit). */
+exp_t *sqrtintcmd(exp_t *e, env_t *env) {
+  exp_t *v=NULL;
+  if (e->next) v = EVAL(e->next->content, env);
+  if (iserror(v)) { unrefexp(e); return v; }
+  if (!isnumber(v)) {
+    if (v) unrefexp(v);
+    unrefexp(e);
+    return error(ERROR_NUMBER_EXPECTED, e, env, "(sqrt-int n): n must be a fixnum");
+  }
+  int64_t n = FIX_VAL(v);
+  unrefexp(v); unrefexp(e);
+  if (n < 0) return MAKE_FIX(0);
+  int64_t r = (int64_t)sqrt((double)n);
+  /* Correct for double imprecision: tighten boundary. */
+  while ((r + 1) * (r + 1) <= n) r++;
+  while (r * r > n) r--;
+  return MAKE_FIX(r);
 }
 
 exp_t *expcmd(exp_t *e, env_t *env){
@@ -3641,6 +3796,11 @@ static const char *bc_opname(uint8_t op) {
     case OP_SLOT_GT_FIX:  return "SLOT_GT_FIX";
     case OP_SLOT_GE_FIX:  return "SLOT_GE_FIX";
     case OP_SLOT_LE_SLOT: return "SLOT_LE_SLOT";
+    case OP_VEC_REF:      return "VEC_REF";
+    case OP_VEC_SET:      return "VEC_SET";
+    case OP_VEC_LEN:      return "VEC_LEN";
+    case OP_VEC_NEW:      return "VEC_NEW";
+    case OP_SQRT_INT:     return "SQRT_INT";
     default:              return "??";
   }
 }
@@ -3655,6 +3815,8 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
     case OP_LT: case OP_GT: case OP_LE: case OP_GE:
     case OP_IS: case OP_ISO: case OP_NOT:
     case OP_CONS: case OP_CAR: case OP_CDR:
+    case OP_VEC_REF: case OP_VEC_SET: case OP_VEC_LEN:
+    case OP_VEC_NEW: case OP_SQRT_INT:
       printf("  %04d  %s\n", pc, bc_opname(op));
       return 1;
     case OP_LOAD_FIX: case OP_JUMP:
@@ -5966,6 +6128,48 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       emit_u8(c, OP_LIST); emit_u8(c, (uint8_t)n);
       return;
     }
+    if (!strcmp(s, "vec-ref")) {
+      exp_t *v = cadr(e), *i = caddr(e);
+      if (!v || !i) { c->failed = 1; return; }
+      compile_expr(c, v, 0); if (c->failed) return;
+      compile_expr(c, i, 0); if (c->failed) return;
+      emit_u8(c, OP_VEC_REF);
+      return;
+    }
+    if (!strcmp(s, "vec-set!")) {
+      exp_t *v = cadr(e), *i = caddr(e), *x = cadddr(e);
+      if (!v || !i || !x) { c->failed = 1; return; }
+      compile_expr(c, v, 0); if (c->failed) return;
+      compile_expr(c, i, 0); if (c->failed) return;
+      compile_expr(c, x, 0); if (c->failed) return;
+      emit_u8(c, OP_VEC_SET);
+      return;
+    }
+    if (!strcmp(s, "vec-len")) {
+      exp_t *v = cadr(e);
+      if (!v) { c->failed = 1; return; }
+      compile_expr(c, v, 0); if (c->failed) return;
+      emit_u8(c, OP_VEC_LEN);
+      return;
+    }
+    if (!strcmp(s, "vec")) {
+      exp_t *n = cadr(e), *init = caddr(e);
+      if (!n) { c->failed = 1; return; }
+      compile_expr(c, n, 0); if (c->failed) return;
+      if (init) compile_expr(c, init, 0);
+      else { int k = add_const(c, nil_singleton);
+             emit_u8(c, OP_LOAD_CONST); emit_u8(c, (uint8_t)k); }
+      if (c->failed) return;
+      emit_u8(c, OP_VEC_NEW);
+      return;
+    }
+    if (!strcmp(s, "sqrt-int")) {
+      exp_t *a = cadr(e);
+      if (!a) { c->failed = 1; return; }
+      compile_expr(c, a, 0); if (c->failed) return;
+      emit_u8(c, OP_SQRT_INT);
+      return;
+    }
     if (!strcmp(s, "quote")) {
       exp_t *q = cadr(e);
       int k = add_const(c, q ? q : nil_singleton);
@@ -6130,6 +6334,11 @@ tail_reentry:
     [OP_SLOT_GT_FIX]  = &&l_slot_gt_fix,
     [OP_SLOT_GE_FIX]  = &&l_slot_ge_fix,
     [OP_SLOT_LE_SLOT] = &&l_slot_le_slot,
+    [OP_VEC_REF]      = &&l_vec_ref,
+    [OP_VEC_SET]      = &&l_vec_set,
+    [OP_VEC_LEN]      = &&l_vec_len,
+    [OP_VEC_NEW]      = &&l_vec_new,
+    [OP_SQRT_INT]     = &&l_sqrt_int,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -6596,6 +6805,80 @@ l_slot_le_slot: {
   }
 
 #undef SLOT_FIX_NUMERIC
+
+l_vec_ref: {
+    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_t;
+    exp_t *iexp = POP(), *vexp = POP();
+    if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+      unrefexp(iexp); unrefexp(vexp); RUNTIME_ERR("vec-ref: bad args");
+    }
+    _alc_vec_t *v = (_alc_vec_t*)vexp->ptr;
+    int64_t i = FIX_VAL(iexp);
+    if (i < 0 || i >= v->len) {
+      unrefexp(iexp); unrefexp(vexp);
+      RUNTIME_ERR("vec-ref: index out of range");
+    }
+    exp_t *r = refexp(v->data[i]);
+    unrefexp(iexp); unrefexp(vexp);
+    PUSH(r);
+    NEXT;
+  }
+l_vec_set: {
+    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_t;
+    exp_t *valexp = POP(), *iexp = POP(), *vexp = POP();
+    if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+      unrefexp(valexp); unrefexp(iexp); unrefexp(vexp);
+      RUNTIME_ERR("vec-set!: bad args");
+    }
+    _alc_vec_t *v = (_alc_vec_t*)vexp->ptr;
+    int64_t i = FIX_VAL(iexp);
+    if (i < 0 || i >= v->len) {
+      unrefexp(valexp); unrefexp(iexp); unrefexp(vexp);
+      RUNTIME_ERR("vec-set!: index out of range");
+    }
+    unrefexp(v->data[i]);
+    v->data[i] = valexp;          /* transfer */
+    /* Push the value back like (= ...) does. We borrow the slot, so refexp
+       to keep our own ref balanced after unrefexp(vexp) below. */
+    PUSH(refexp(v->data[i]));
+    unrefexp(iexp); unrefexp(vexp);
+    NEXT;
+  }
+l_vec_len: {
+    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_t;
+    exp_t *vexp = POP();
+    if (!is_ptr(vexp) || vexp->type != EXP_VECTOR) {
+      unrefexp(vexp); RUNTIME_ERR("vec-len: not a vector");
+    }
+    int64_t n = ((_alc_vec_t*)vexp->ptr)->len;
+    unrefexp(vexp);
+    PUSH(MAKE_FIX(n));
+    NEXT;
+  }
+l_vec_new: {
+    extern exp_t *make_vector(int64_t n, exp_t *fill);
+    exp_t *initexp = POP(), *nexp = POP();
+    if (!isnumber(nexp)) {
+      unrefexp(initexp); unrefexp(nexp); RUNTIME_ERR("vec: n must be a number");
+    }
+    int64_t n = FIX_VAL(nexp);
+    if (n < 0) n = 0;
+    exp_t *vec = make_vector(n, initexp);
+    unrefexp(initexp); unrefexp(nexp);
+    PUSH(vec);
+    NEXT;
+  }
+l_sqrt_int: {
+    exp_t *nexp = POP();
+    if (!isnumber(nexp)) { unrefexp(nexp); RUNTIME_ERR("sqrt-int: not a number"); }
+    int64_t n = FIX_VAL(nexp);
+    int64_t r = (n < 0) ? 0 : (int64_t)sqrt((double)n);
+    while ((r + 1) * (r + 1) <= n) r++;
+    while (r * r > n) r--;
+    unrefexp(nexp);
+    PUSH(MAKE_FIX(r));
+    NEXT;
+  }
 
 #undef BIN_ARITH
 #undef CMP_OP
