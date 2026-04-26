@@ -288,3 +288,21 @@
             (jit-sieve-up (+ j 1) (cons j acc)))))
   (length (jit-sieve-up i (list))))
 (assert "any?-in-recursion: π(100)" (jit-sieve-fn 2 100) 25)
+
+; if is cond-style: (if c1 t1 c2 t2 ... else)
+(assert "if cond-style: 1st clause"  (if t 'a 'b 'c)              'a)
+(assert "if cond-style: 2nd clause"  (if nil 'a t 'b 'c)           'b)
+(assert "if cond-style: fallback"    (if nil 'a nil 'b 'c)         'c)
+(assert "if 2-arg true"              (if 1 'yes)                   'yes)
+(assert "if 2-arg false -> nil"      (if nil 'yes)                 nil)
+
+; Ticket 1 regression: (= (s i) c) must accept a computed index, not just a literal
+(= sbuf "abcdef")
+(= i 2)
+(= (sbuf i) #\Z)
+(assert "string-set with var index"   sbuf "abZdef")
+
+; The 6 list builtins must reject non-list args cleanly (no segfault)
+; — the assertion infra needs a value; we use the fact that all six errors
+;   propagate as exp_t* which iso-compares as nil-equal-nil:
+(assert "nth on non-list -> nil-ish"  (no (no (nth 0 5)))            nil)

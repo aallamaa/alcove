@@ -27,45 +27,59 @@ else
   PKG_FFI    := install libffi-dev (or your distro's equivalent)
 endif
 
-# Auto-detect libreadline for REPL line editing + tab completion. The
-# project still builds and runs without it (just the plain stdin loop);
-# we only enable when the dev header is available.
-# Linux:        /usr/include/readline/readline.h (system pkg)
-# macOS+brew:   $(brew --prefix readline)/include/readline/readline.h
-#               (Apple's libedit doesn't ship the header at all)
-RL_BREW := $(shell command -v brew >/dev/null 2>&1 && brew --prefix readline 2>/dev/null)
-RL_OK   := no
-ifneq ($(wildcard /usr/include/readline/readline.h),)
-  RL_FLAGS := -DALCOVE_READLINE=1
-  RL_LIBS  := -lreadline
+# Auto-detect libreadline for REPL line editing + tab completion. Try
+# pkg-config first (covers macOS Homebrew + most Linux distros), fall
+# back to a header sniff. macOS's libedit doesn't ship the header at
+# all, so brew's readline is the supported path on Darwin.
+RL_PC_OK := $(shell pkg-config --exists readline 2>/dev/null && echo yes)
+ifeq ($(RL_PC_OK),yes)
+  RL_FLAGS := -DALCOVE_READLINE=1 $(shell pkg-config --cflags readline)
+  RL_LIBS  := $(shell pkg-config --libs readline)
   RL_OK    := yes
-else ifneq ($(RL_BREW),)
-ifneq ($(wildcard $(RL_BREW)/include/readline/readline.h),)
-  RL_FLAGS := -DALCOVE_READLINE=1 -I$(RL_BREW)/include
-  RL_LIBS  := -L$(RL_BREW)/lib -lreadline
-  RL_OK    := yes
+else
+  RL_BREW  := $(shell command -v brew >/dev/null 2>&1 && brew --prefix readline 2>/dev/null)
+  ifneq ($(wildcard /usr/include/readline/readline.h),)
+    RL_FLAGS := -DALCOVE_READLINE=1
+    RL_LIBS  := -lreadline
+    RL_OK    := yes
+  else ifneq ($(RL_BREW),)
+  ifneq ($(wildcard $(RL_BREW)/include/readline/readline.h),)
+    RL_FLAGS := -DALCOVE_READLINE=1 -I$(RL_BREW)/include
+    RL_LIBS  := -L$(RL_BREW)/lib -lreadline
+    RL_OK    := yes
+  endif
+  endif
 endif
-endif
+RL_OK    := $(or $(RL_OK),no)
 
-# Auto-detect libffi for the (ffi-fn ...) builtin. Without it, ffi-fn
-# is unavailable but everything else still builds (e.g. cross-compiling
-# for arm64 without libffi installed).
-# Linux:        /usr/include/{,x86_64-linux-gnu/,aarch64-linux-gnu/}ffi.h
-# macOS+brew:   $(brew --prefix libffi)/include/ffi.h (Apple ships libffi
-#               as a system lib but no header in the SDK, so brew's libffi
-#               is the supported path on Darwin)
-FFI_BREW := $(shell command -v brew >/dev/null 2>&1 && brew --prefix libffi 2>/dev/null)
-FFI_OK   := no
-ifneq ($(or $(wildcard /usr/include/ffi.h),$(wildcard /usr/include/x86_64-linux-gnu/ffi.h),$(wildcard /usr/include/aarch64-linux-gnu/ffi.h)),)
-  FFI_FLAGS := -DALCOVE_FFI=1
-  FFI_LIBS  := -lffi -ldl
+# Auto-detect libffi for the (ffi-fn ...) builtin. pkg-config is the
+# universal answer (works on macOS Homebrew, Debian/Ubuntu, Fedora,
+# Arch, MSYS2). Header sniff is the fallback for systems without
+# pkg-config installed.
+FFI_PC_OK := $(shell pkg-config --exists libffi 2>/dev/null && echo yes)
+ifeq ($(FFI_PC_OK),yes)
+  FFI_FLAGS := -DALCOVE_FFI=1 $(shell pkg-config --cflags libffi)
+  FFI_LIBS  := $(shell pkg-config --libs libffi)
   FFI_OK    := yes
-else ifneq ($(FFI_BREW),)
-ifneq ($(wildcard $(FFI_BREW)/include/ffi.h),)
-  FFI_FLAGS := -DALCOVE_FFI=1 -I$(FFI_BREW)/include
-  FFI_LIBS  := -L$(FFI_BREW)/lib -lffi
-  FFI_OK    := yes
+else
+  FFI_HDR_OK := $(shell test -f /usr/include/ffi.h \
+                       -o -f /usr/include/x86_64-linux-gnu/ffi.h \
+                       -o -f /usr/include/aarch64-linux-gnu/ffi.h \
+                       && echo yes)
+  ifeq ($(FFI_HDR_OK),yes)
+    FFI_FLAGS := -DALCOVE_FFI=1
+    FFI_LIBS  := -lffi
+    FFI_OK    := yes
+  endif
 endif
+FFI_OK    := $(or $(FFI_OK),no)
+
+# dlopen/dlsym live in libdl on Linux but in libSystem on macOS — the
+# pkg-config path doesn't include -ldl, so add it ourselves on Linux.
+ifeq ($(FFI_OK),yes)
+  ifeq ($(UNAME_S),Linux)
+    FFI_LIBS += -ldl
+  endif
 endif
 
 # Reusable hint snippet — prints a one-shot summary of what's missing

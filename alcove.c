@@ -1756,21 +1756,38 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
         unrefexp(key);
         goto finish;
       } else {
+        /* (= (str i) char) — write char into string at i. The index
+           must be EVAL'd, not read off the AST: the car/cdr branches
+           above already do this; the string branch was a long-standing
+           gap that silently no-op'd whenever i wasn't a literal. */
+        exp_t *idx = NULL;
         key = EVAL(key, env);
         if (isstring(key)) {
-          key2 = cadr(keyv);
-          if (key2 && isnumber(key2) && ischar(val))
-            if ((FIX_VAL(key2) >= 0) &&
-                (FIX_VAL(key2) < (int64_t)strlen(key->ptr))) {
-              *((char *)key->ptr + FIX_VAL(key2)) =
+          idx = EVAL(cadr(keyv), env);
+          if iserror (idx) {
+            unrefexp(key);
+            unrefexp(keyv);
+            unrefexp(val);
+            return idx;
+          }
+          if (idx && isnumber(idx) && ischar(val)) {
+            if ((FIX_VAL(idx) >= 0) &&
+                (FIX_VAL(idx) < (int64_t)strlen(key->ptr))) {
+              *((char *)key->ptr + FIX_VAL(idx)) =
                   (unsigned char)CHAR_VAL(val);
+              if (idx) unrefexp(idx);
+              unrefexp(key);
               goto finish;
-            } else
+            } else {
               fret = error(ERROR_INDEX_OUT_OF_RANGE, keyv, env,
                            "Error index out of range");
-          else
+            }
+          } else {
             fret = error(ERROR_NUMBER_EXPECTED, keyv, env,
                          "Error number and char expected");
+          }
+          if (idx) unrefexp(idx);
+          unrefexp(key);
           unrefexp(keyv);
           unrefexp(val);
           return fret;
@@ -3590,7 +3607,7 @@ PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
 PRED_CMD(stringpcmd, isstring(a))
 PRED_CMD(symbolpcmd, issymbol(a))
 PRED_CMD(pairpcmd, (ispair(a) && a->content))
-PRED_CMD(fnpcmd, (islambda(a) || isinternal(a)))
+PRED_CMD(fnpcmd, (islambda(a) || isinternal(a) || isffi(a)))
 #undef PRED_CMD
 
 /* (exit) / (exit code) — terminate the process. */

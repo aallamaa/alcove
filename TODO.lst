@@ -136,3 +136,12 @@
        closure-creation into a top-level def. Documented impact: the
        sieve benchmark uses an explicit recursive is-prime-given
        instead of (any? (fn (d) ...) acc) for this reason.
+
+[TODO] WATCH: possible (def f () ...) body-form drop when body is a
+       (case ...) over multi-form (do ...) arms, called from a tight
+       (while ... (do ... (f) ...)) loop. Symptom: f's first body form
+       (e.g. (prn "step1")) silently skipped while later forms run.
+       Could not minimize on 2026-04-26 — current test cases all pass.
+       Next sighting: capture (disasm f) output and the surrounding
+       while/do AST. Suspect related to the existing identity-lambda
+       OP_POP-after-do TODO above.
