@@ -18,6 +18,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -516,6 +517,7 @@ inline void tokenappend(token_t *token, char *src, int len) {
     strncpy(tmp, token->data, token->maxsize);
     token->maxsize *= d;
     free(token->data);
+    token->data = tmp;       /* WAS MISSING — UAF on the next access. */
   }
   strncpy(token->data + token->size, src, len);
   token->size += len;
@@ -935,8 +937,22 @@ inline exp_t *make_quote(exp_t *node) {
 }
 
 inline exp_t *make_integer(char *str) {
-  /* Tagged immediate: no heap allocation. atoll for 64-bit range. */
-  return MAKE_FIX(atoll(str));
+  /* Tagged immediate: no heap allocation. Use strtoll so we can detect
+     out-of-range literals — fixnum is int61, so anything outside
+     [-2^60, 2^60) silently wrapped under atoll. We promote oversize
+     ints to floats (matches the ARC convention; preserves magnitude
+     and reports approximate value) rather than silently truncating. */
+  errno = 0;
+  char *end;
+  long long v = strtoll(str, &end, 10);
+  int64_t fix_max = ((int64_t)1 << 60) - 1;
+  int64_t fix_min = -((int64_t)1 << 60);
+  if (errno == ERANGE || v > fix_max || v < fix_min) {
+    /* Out of fixnum range — fall through to float. strtod handles the
+       same digit string and gives the closest double. */
+    return make_floatf(strtod(str, &end));
+  }
+  return MAKE_FIX((int64_t)v);
 }
 
 inline exp_t *make_integeri(int64_t i) { return MAKE_FIX(i); }
@@ -1714,11 +1730,16 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
         if (cur->d) {
           keyval_t *kv = set_get_keyval_dict(cur->d, keyv->ptr, NULL);
           if (kv) {
-            /* found — replace and bump global gen so any cached
-               lookups of this name re-resolve. */
+            /* Bump gen BEFORE the unref. The reverse order is a TOCTOU:
+               under threading (or even under a JIT callout that re-enters
+               and reads bc->gcache while we're between the unref and the
+               bump), the cache reader could see a still-matching gen
+               pointing at a freed value, then refexp the freed pointer.
+               alcove is single-threaded today; this is hardening for the
+               documented future-threading goal. */
+            alcove_global_gen++;
             unrefexp(kv->val);
             kv->val = refexp(val);
-            alcove_global_gen++;
             unrefexp(keyv);
             return refexp(val);
           }
@@ -3058,6 +3079,16 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     n_a++;
     cur = cur->next;
   }
+  /* If we hit the cap and there are still more arg types, refuse rather
+     than silently truncate — a binding with the wrong arity reads stack
+     garbage at call time. Bump ALC_FFI_MAX_ARGS if a real use case needs
+     more than 8 args. */
+  if (cur) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env,
+                "ffi-fn: too many arg types (max %d supported)",
+                ALC_FFI_MAX_ARGS);
+    goto cleanup;
+  }
 
   if (!isstring(libname) || !isstring(fnname) || !isstring(rtype)) {
     err = error(ERROR_ILLEGAL_VALUE, e, env,
@@ -3163,27 +3194,50 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     void *p;
   } slots[ALC_FFI_MAX_ARGS];
   void *avalues[ALC_FFI_MAX_ARGS];
+  /* Type-mismatched args used to silently coerce to 0/NULL — calling
+     a strlen-binding with a number then crashed in C. Now we refuse
+     up front with a clear error so the caller knows which slot is
+     wrong instead of seeing a SIGSEGV deep in libc. */
+  for (int i = 0; i < nargs; i++) {
+    exp_t *a = args[i];
+    int ok = 0;
+    switch (f->arg_tags[i]) {
+    case AFFI_INT:    case AFFI_LONG:  ok = isnumber(a) || isfloat(a); break;
+    case AFFI_DOUBLE: ok = isnumber(a) || isfloat(a); break;
+    case AFFI_STRING: ok = isstring(a); break;
+    case AFFI_PTR:    ok = isnumber(a) || a == NIL_EXP; break;
+    default:          ok = 1; break;
+    }
+    if (!ok) {
+      int j;
+      for (j = 0; j < nargs; j++) unrefexp(args[j]);
+      return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
+                   "ffi: %s: arg %d wrong type for tag %d",
+                   f->display_name ? f->display_name : "?",
+                   i, (int)f->arg_tags[i]);
+    }
+  }
   for (int i = 0; i < nargs; i++) {
     exp_t *a = args[i];
     switch (f->arg_tags[i]) {
     case AFFI_INT:
-      slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a) : 0;
+      slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a) : (int32_t)a->f;
       avalues[i] = &slots[i].i;
       break;
     case AFFI_LONG:
-      slots[i].l = isnumber(a) ? FIX_VAL(a) : 0;
+      slots[i].l = isnumber(a) ? FIX_VAL(a) : (int64_t)a->f;
       avalues[i] = &slots[i].l;
       break;
     case AFFI_DOUBLE:
-      slots[i].d = isfloat(a) ? a->f : (isnumber(a) ? (double)FIX_VAL(a) : 0.0);
+      slots[i].d = isfloat(a) ? a->f : (double)FIX_VAL(a);
       avalues[i] = &slots[i].d;
       break;
     case AFFI_STRING:
-      slots[i].s = isstring(a) ? (const char *)a->ptr : NULL;
+      slots[i].s = (const char *)a->ptr;
       avalues[i] = &slots[i].s;
       break;
     case AFFI_PTR:
-      slots[i].p = isnumber(a) ? (void *)(uintptr_t)FIX_VAL(a) : NULL;
+      slots[i].p = (a == NIL_EXP) ? NULL : (void *)(uintptr_t)FIX_VAL(a);
       avalues[i] = &slots[i].p;
       break;
     default:
@@ -3213,10 +3267,19 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
   case AFFI_DOUBLE:
     ret = make_floatf(rval.d);
     break;
-  case AFFI_STRING:
-    ret =
-        rval.p ? make_string((char *)rval.p, strlen((char *)rval.p)) : NIL_EXP;
+  case AFFI_STRING: {
+    /* strlen on an arbitrary returned pointer is a footgun — if the C
+       function returned a non-string or a non-NUL-terminated buffer
+       we'd OOB-read the heap. Use strnlen with a generous cap so
+       runaway strings get truncated instead of crashing. */
+    if (!rval.p) {
+      ret = NIL_EXP;
+    } else {
+      size_t len = strnlen((const char *)rval.p, 1u << 24);
+      ret = make_string((char *)rval.p, (int)len);
+    }
     break;
+  }
   case AFFI_PTR:
     ret = MAKE_FIX((int64_t)(uintptr_t)rval.p);
     break;
