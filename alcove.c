@@ -961,14 +961,35 @@ size_t dumpsize_t(FILE *stream, size_t *len) {
   return fwrite(len, sizeof(size_t), 1, stream);
 }
 
+/* Sanity bound for nested-pair recursion in dump format. ~64K levels at
+   the C stack costs ~4MB; well under the typical 8MB stack but blocks
+   the trivially-malicious "millions of nested pairs" file. */
+#define ALCOVE_LOAD_MAX_DEPTH 16384
+static int alcove_load_depth = 0;
+
 exp_t *load_exp_t(FILE *stream) {
   exp_t *resp = make_nil();
-  if (loadtype(stream, &(resp->type)) > 0) {
-    return __LOAD__(resp, stream);
-  } else {
+  if (loadtype(stream, &(resp->type)) <= 0) {
     unrefexp(resp);
     return NULL;
   }
+  /* Validate the type tag against the dispatch table BEFORE __LOAD__
+     indexes exp_tfuncList[type]. A malicious db.dump with type=0xFFFF
+     would otherwise read out-of-bounds and indirect-call whatever
+     pointer-shaped bytes are there at startup. */
+  if (resp->type < 1 || resp->type >= EXP_MAXSIZE ||
+      !exp_tfuncList[resp->type] || !exp_tfuncList[resp->type]->load) {
+    unrefexp(resp);
+    return NULL;
+  }
+  if (++alcove_load_depth > ALCOVE_LOAD_MAX_DEPTH) {
+    --alcove_load_depth;
+    unrefexp(resp);
+    return NULL;
+  }
+  exp_t *r = __LOAD__(resp, stream);
+  --alcove_load_depth;
+  return r;
 }
 
 exp_t *dump_exp_t(exp_t *e, FILE *stream) { return __DUMP__(e, stream); }
@@ -993,12 +1014,27 @@ exp_t *dump_char(exp_t *e, FILE *stream) {
   return e;
 }
 
+/* Cap on string lengths from a db.dump file. 16 MiB is plenty for any
+   real symbol/string we'd persist; bigger values are almost certainly
+   either corruption or a malicious header trying to wrap (length+1 -> 0
+   then giant fread). The cap is checked before the alloc so neither
+   the wrap nor the read happens on bad input. */
+#define ALCOVE_LOAD_MAX_STRLEN ((size_t)1 << 24)
+
 char *load_str(char **pptr, FILE *stream) {
   size_t length;
   char *ptr;
   if (loadsize_t(stream, &length) <= 0)
     return NULL;
+  if (length > ALCOVE_LOAD_MAX_STRLEN) {
+    *pptr = NULL;
+    return NULL;
+  }
   ptr = *pptr = memalloc(length + 1, sizeof(char));
+  if (!ptr) {
+    *pptr = NULL;
+    return NULL;
+  }
   if (fread(ptr, 1, length, stream) != length) {
     free(ptr);
     *pptr = NULL;
@@ -2520,8 +2556,15 @@ exp_t *sqrtcmd(exp_t *e, env_t *env) {
    alc_vec_t is now declared in alcove.h. */
 
 exp_t *make_vector(int64_t n, exp_t *fill) {
-  alc_vec_t *v =
-      (alc_vec_t *)memalloc(1, sizeof(alc_vec_t) + (size_t)n * sizeof(exp_t *));
+  /* Hard cap to keep `(size_t)n * sizeof(exp_t*)` from wrapping. With
+     int61 fixnums n can reach 2^60; n * 8 wraps modulo SIZE_MAX and
+     hands us a tiny alloc that the loop then writes terabytes past.
+     1<<32 elements (32 GiB of pointers) is well past any sane vector;
+     anything bigger we refuse rather than guess. */
+  if (n < 0 || n > ((int64_t)1 << 32)) return NULL;
+  size_t bytes = sizeof(alc_vec_t) + (size_t)n * sizeof(exp_t *);
+  alc_vec_t *v = (alc_vec_t *)memalloc(1, bytes);
+  if (!v) return NULL;
   v->len = n;
   int64_t i;
   for (i = 0; i < n; i++)
@@ -2562,6 +2605,11 @@ exp_t *veccmd(exp_t *e, env_t *env) {
   unrefexp(nexp);
   exp_t *ret = make_vector(n, fill);
   unrefexp(fill);
+  if (!ret) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "(vec n ...): n is too large or alloc failed");
+  }
   unrefexp(e);
   return ret;
 }
@@ -3414,13 +3462,21 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
       return b;
     }
     if (isnumber(a)) {
+      /* b must be a heap pair (or nil) — without is_ptr we'd dereference
+         the tag bits of a tagged immediate. Same fix pattern as
+         appendcmd / reversecmd. nil/empty list is a clean miss. */
+      if (b && b != NIL_EXP && !ispair(b)) {
+        unrefexp(a); unrefexp(b); unrefexp(e);
+        return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                     "nth: second argument is not a list");
+      }
       int64_t idx = FIX_VAL(a);
       exp_t *cur = b;
-      while (idx > 0 && cur && cur->next) {
+      while (idx > 0 && is_ptr(cur) && ispair(cur) && cur->next) {
         cur = cur->next;
         idx--;
       }
-      if (idx == 0 && cur && cur->content)
+      if (idx == 0 && is_ptr(cur) && ispair(cur) && cur->content)
         ret = refexp(cur->content);
     }
   }
@@ -3593,8 +3649,13 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return xs;
   }
+  if (xs && xs != NIL_EXP && !ispair(xs)) {
+    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "map: second argument is not a list");
+  }
   exp_t *cur = xs;
-  while (cur && cur->content) {
+  while (is_ptr(cur) && ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -3641,8 +3702,13 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return xs;
   }
+  if (xs && xs != NIL_EXP && !ispair(xs)) {
+    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "filter: second argument is not a list");
+  }
   exp_t *cur = xs;
-  while (cur && cur->content) {
+  while (is_ptr(cur) && ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -3699,6 +3765,11 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return xs;
   }
+  if (xs && xs != NIL_EXP && !ispair(xs)) {
+    unrefexp(fn); unrefexp(acc); unrefexp(xs); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "reduce: third argument is not a list");
+  }
 
   /* Fast path: detect a simple 6-byte binary-arithmetic lambda
      (fn (a b) (op a b)) — bytecode is LOAD_SLOT 0, LOAD_SLOT 1, OP, RET.
@@ -3724,7 +3795,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   if (fast_op) {
-    while (cur && cur->content) {
+    while (is_ptr(cur) && ispair(cur) && cur->content) {
       exp_t *x = cur->content;
       if (isnumber(acc) && isnumber(x)) {
         int64_t a = FIX_VAL(acc), b = FIX_VAL(x);
@@ -3749,7 +3820,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
       cur = cur->next;
     }
   } else {
-    while (cur && cur->content) {
+    while (is_ptr(cur) && ispair(cur) && cur->content) {
       exp_t *argv[2] = {acc, refexp(cur->content)};
       acc = vm_invoke_values(fn, 2, argv, env);
       if (acc && iserror(acc)) {
@@ -3790,8 +3861,13 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return xs;
   }
+  if (xs && xs != NIL_EXP && !ispair(xs)) {
+    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "any?: second argument is not a list");
+  }
   exp_t *cur = xs;
-  while (cur && cur->content) {
+  while (is_ptr(cur) && ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -3834,8 +3910,13 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return xs;
   }
+  if (xs && xs != NIL_EXP && !ispair(xs)) {
+    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "all?: second argument is not a list");
+  }
   exp_t *cur = xs;
-  while (cur && cur->content) {
+  while (is_ptr(cur) && ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
