@@ -5811,6 +5811,117 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* mark-from from sieve-fast — 35-byte exact-match shape.
+     (def mark-from (step j n marks)
+       (if (> j n) nil
+           (do (vec-set! marks j nil)
+               (mark-from step (+ j step) n marks))))
+   Tight inner loop — writes nil into marks[j], increments j by step,
+   tail-self. ~10 instructions per iteration. */
+static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 35) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t s_j = c[1];
+  if (c[2] != OP_LOAD_SLOT) return 0;
+  uint8_t s_n = c[3];
+  if (c[4] != OP_GT) return 0;
+  if (c[5] != OP_BR_IF_FALSE) return 0;
+  if (c[8] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil1 = c[9];
+  if (c[10] != OP_JUMP) return 0;
+
+  if (c[13] != OP_LOAD_SLOT) return 0;
+  uint8_t s_marks = c[14];
+  if (c[15] != OP_LOAD_SLOT || c[16] != s_j) return 0;
+  if (c[17] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil2 = c[18];
+  if (c[19] != OP_VEC_SET) return 0;
+  if (c[20] != OP_POP) return 0;
+
+  if (c[21] != OP_LOAD_SLOT) return 0;
+  uint8_t s_step = c[22];
+  if (c[23] != OP_LOAD_SLOT || c[24] != s_j) return 0;
+  if (c[25] != OP_LOAD_SLOT || c[26] != s_step) return 0;
+  if (c[27] != OP_ADD) return 0;
+  if (c[28] != OP_LOAD_SLOT || c[29] != s_n) return 0;
+  if (c[30] != OP_LOAD_SLOT || c[31] != s_marks) return 0;
+  if (c[32] != OP_TAIL_SELF || c[33] != 4) return 0;
+  if (c[34] != OP_RET) return 0;
+
+  /* Both LOAD_GLOBALs must resolve to nil. */
+  if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts) return 0;
+  exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
+  if (!is_ptr(cn1) || !issymbol(cn1) ||
+      strcmp((const char *)cn1->ptr, "nil") != 0) return 0;
+  if (!is_ptr(cn2) || !issymbol(cn2) ||
+      strcmp((const char *)cn2->ptr, "nil") != 0) return 0;
+
+  if (s_j >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
+      s_step >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS) return 0;
+
+  int off_j     = (int)offsetof(env_t, inline_vals[0]) + (int)s_j     * 8;
+  int off_n     = (int)offsetof(env_t, inline_vals[0]) + (int)s_n     * 8;
+  int off_step  = (int)offsetof(env_t, inline_vals[0]) + (int)s_step  * 8;
+  int off_marks = (int)offsetof(env_t, inline_vals[0]) + (int)s_marks * 8;
+  int off_ptr   = (int)offsetof(struct exp_t, ptr);
+  if (off_j > 32760 || off_n > 32760 || off_step > 32760 ||
+      off_marks > 32760 || off_ptr > 32760) return 0;
+
+  int n = 0;
+
+  int entry_pc = n;
+  /* x1 = j tagged, x2 = n tagged. */
+  out[n++] = arm64_ldr_imm(1, 0, off_j);
+  out[n++] = arm64_ldr_imm(2, 0, off_n);
+  int patch_da = n; out[n++] = 0;            /* tbz x1,#0,deopt */
+  int patch_db = n; out[n++] = 0;            /* tbz x2,#0,deopt */
+
+  /* if (j > n): return nil. cmp x1, x2; b.gt done */
+  out[n++] = arm64_cmp_reg(1, 2);
+  int patch_done = n; out[n++] = 0;          /* b.gt done */
+
+  /* x3 = marks (exp_t*), then x3 = marks->ptr (alc_vec_t*). */
+  out[n++] = arm64_ldr_imm(3, 0, off_marks);
+  out[n++] = arm64_ldr_imm(3, 3, off_ptr);
+
+  /* x4 = marks_ptr + j_tagged + 7 = &data[j_untagged]. */
+  out[n++] = arm64_add_reg(4, 3, 1);
+  out[n++] = arm64_add_imm(4, 4, 7);
+
+  /* x5 = nil_singleton; *(x4) = x5. */
+  n += emit_mov64(out + n, 5, (uint64_t)(uintptr_t)nil_singleton);
+  out[n++] = arm64_str_imm(5, 4, 0);
+
+  /* j = j + step - 1 (tagged-arith — drop the extra tag bit). */
+  out[n++] = arm64_ldr_imm(6, 0, off_step);
+  out[n++] = arm64_add_reg(1, 1, 6);
+  out[n++] = arm64_sub_imm(1, 1, 1);
+  out[n++] = arm64_str_imm(1, 0, off_j);
+
+  /* tail-self: b entry */
+  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+
+  /* done: x0 = nil */
+  int done_pc = n;
+  n += emit_mov64(out + n, 0, (uint64_t)(uintptr_t)nil_singleton);
+  out[n++] = arm64_ret();
+
+  /* deopt */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
+  out[patch_da]   = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db]   = arm64_tbz(2, 0, deopt_pc - patch_db);
+
+  assert(n <= 64);
+  *outn = n;
+  return 1;
+}
+
 /* Tail counter loop with one inner global call before the recurse.
    26-byte body produced by:
      (def lp (k) (if (cmp k K1) (do (g K_arg) (lp (op k K2))) k))
@@ -6401,6 +6512,8 @@ int jit_compile(bytecode_t *bc) {
     /* ackermann — fall through */
   } else if (try_jit_tak(bc, insns, &n)) {
     /* tak — fall through */
+  } else if (try_jit_mark_from(bc, insns, &n)) {
+    /* sieve-fast inner loop — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
