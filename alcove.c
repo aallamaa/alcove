@@ -5811,6 +5811,144 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* Knuth's tak — 50-byte exact-match shape.
+     (def tak (x y z) (if (no (< y x)) z
+                          (tak (tak (- x 1) y z)
+                               (tak (- y 1) z x)
+                               (tak (- z 1) x y))))
+   Three nested non-tail self-calls + one tail self-call. Each inner call
+   is a direct intra-buffer BL into our own entry. We stash the 3 originals
+   and 3 intermediate results in the stack frame across calls. */
+static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 50) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t s_y = c[1];
+  if (c[2] != OP_LOAD_SLOT) return 0;
+  uint8_t s_x = c[3];
+  if (c[4] != OP_LT) return 0;
+  if (c[5] != OP_NOT) return 0;
+  if (c[6] != OP_BR_IF_FALSE) return 0;
+  if (c[9] != OP_LOAD_SLOT) return 0;
+  uint8_t s_z = c[10];
+  if (c[11] != OP_JUMP) return 0;
+
+  if (c[14] != OP_SLOT_SUB_FIX || c[15] != s_x || c[16] != 1 || c[17] != 0) return 0;
+  if (c[18] != OP_LOAD_SLOT || c[19] != s_y) return 0;
+  if (c[20] != OP_LOAD_SLOT || c[21] != s_z) return 0;
+  if (c[22] != OP_CALL_GLOBAL) return 0;
+  if (c[24] != 3) return 0;
+
+  if (c[25] != OP_SLOT_SUB_FIX || c[26] != s_y || c[27] != 1 || c[28] != 0) return 0;
+  if (c[29] != OP_LOAD_SLOT || c[30] != s_z) return 0;
+  if (c[31] != OP_LOAD_SLOT || c[32] != s_x) return 0;
+  if (c[33] != OP_CALL_GLOBAL) return 0;
+  if (c[35] != 3) return 0;
+
+  if (c[36] != OP_SLOT_SUB_FIX || c[37] != s_z || c[38] != 1 || c[39] != 0) return 0;
+  if (c[40] != OP_LOAD_SLOT || c[41] != s_x) return 0;
+  if (c[42] != OP_LOAD_SLOT || c[43] != s_y) return 0;
+  if (c[44] != OP_CALL_GLOBAL) return 0;
+  if (c[46] != 3) return 0;
+  if (c[47] != OP_TAIL_SELF || c[48] != 3 || c[49] != OP_RET) return 0;
+
+  if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS || s_z >= ENV_INLINE_SLOTS)
+    return 0;
+
+  int off_x = (int)offsetof(env_t, inline_vals[0]) + (int)s_x * 8;
+  int off_y = (int)offsetof(env_t, inline_vals[0]) + (int)s_y * 8;
+  int off_z = (int)offsetof(env_t, inline_vals[0]) + (int)s_z * 8;
+  if (off_x > 32760 || off_y > 32760 || off_z > 32760) return 0;
+
+  /* Frame: 80 bytes. [sp+0]=fp, +8=lr, +16=x19, +24=pad, +32..+48=orig
+     x/y/z, +56..+72=t1/t2/t3. */
+  int n = 0;
+  int entry_pc = n;
+  out[n++] = arm64_ldr_imm(1, 0, off_y);
+  out[n++] = arm64_ldr_imm(2, 0, off_x);
+  int patch_da = n; out[n++] = 0;
+  int patch_db = n; out[n++] = 0;
+
+  out[n++] = arm64_cmp_reg(1, 2);
+  int patch_recurse = n; out[n++] = 0;
+  out[n++] = arm64_ldr_imm(0, 0, off_z);
+  out[n++] = arm64_ret();
+
+  int recurse_pc = n;
+  out[n++] = arm64_stp_pre_sp(29, 30, -80);
+  out[n++] = arm64_stp_off_sp(19, 20, 16);
+  out[n++] = arm64_mov_from_sp(29);
+  out[n++] = arm64_mov_reg(19, 0);
+
+  out[n++] = arm64_str_imm(2, 31, 32);
+  out[n++] = arm64_str_imm(1, 31, 40);
+  out[n++] = arm64_ldr_imm(3, 0, off_z);
+  out[n++] = arm64_str_imm(3, 31, 48);
+
+  out[n++] = arm64_sub_imm(2, 2, 8);
+  out[n++] = arm64_str_imm(2, 0, off_x);
+  { int cur = n++; out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu); }
+  int patch_b1 = n; out[n++] = 0;
+  out[n++] = arm64_str_imm(0, 31, 56);
+  out[n++] = arm64_mov_reg(0, 19);
+
+  out[n++] = arm64_ldr_imm(1, 31, 40);
+  out[n++] = arm64_sub_imm(1, 1, 8);
+  out[n++] = arm64_str_imm(1, 0, off_x);
+  out[n++] = arm64_ldr_imm(1, 31, 48);
+  out[n++] = arm64_str_imm(1, 0, off_y);
+  out[n++] = arm64_ldr_imm(1, 31, 32);
+  out[n++] = arm64_str_imm(1, 0, off_z);
+  { int cur = n++; out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu); }
+  int patch_b2 = n; out[n++] = 0;
+  out[n++] = arm64_str_imm(0, 31, 64);
+  out[n++] = arm64_mov_reg(0, 19);
+
+  out[n++] = arm64_ldr_imm(1, 31, 48);
+  out[n++] = arm64_sub_imm(1, 1, 8);
+  out[n++] = arm64_str_imm(1, 0, off_x);
+  out[n++] = arm64_ldr_imm(1, 31, 32);
+  out[n++] = arm64_str_imm(1, 0, off_y);
+  out[n++] = arm64_ldr_imm(1, 31, 40);
+  out[n++] = arm64_str_imm(1, 0, off_z);
+  { int cur = n++; out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu); }
+  int patch_b3 = n; out[n++] = 0;
+  out[n++] = arm64_str_imm(0, 31, 72);
+  out[n++] = arm64_mov_reg(0, 19);
+
+  out[n++] = arm64_ldr_imm(1, 31, 56);
+  out[n++] = arm64_str_imm(1, 0, off_x);
+  out[n++] = arm64_ldr_imm(1, 31, 64);
+  out[n++] = arm64_str_imm(1, 0, off_y);
+  out[n++] = arm64_ldr_imm(1, 31, 72);
+  out[n++] = arm64_str_imm(1, 0, off_z);
+
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 80);
+  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+
+  int bail_pc = n;
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 80);
+  out[n++] = arm64_ret();
+
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_recurse] = arm64_b_cond(11 /* LT */, recurse_pc - patch_recurse);
+  out[patch_b1] = arm64_tbz(0, 0, bail_pc - patch_b1);
+  out[patch_b2] = arm64_tbz(0, 0, bail_pc - patch_b2);
+  out[patch_b3] = arm64_tbz(0, 0, bail_pc - patch_b3);
+  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
+
+  assert(n <= 96);
+  *outn = n;
+  return 1;
+}
+
 /* The Ackermann function: 53-byte exact-match shape.
      (def ack (m n)
        (if (is m 0) (+ n 1)
@@ -6147,6 +6285,8 @@ int jit_compile(bytecode_t *bc) {
     /* (is (mod a b) K) leaf — fall through */
   } else if (try_jit_ackermann(bc, insns, &n)) {
     /* ackermann — fall through */
+  } else if (try_jit_tak(bc, insns, &n)) {
+    /* tak — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
