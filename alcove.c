@@ -2072,7 +2072,13 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   while (cur->root) cur = cur->root;
   if (cur->d) dump_dict(cur->d, stream);
   fclose(stream);
-  if (path_arg) unrefexp(path_arg);
+  /* Successful explicit save → adopt this path as the session default,
+     so a follow-up (loaddb) or (savedb) targets the same file. The
+     strdup leaks across the run but session-default is set rarely. */
+  if (path_arg) {
+    alcove_db_path = strdup(path);
+    unrefexp(path_arg);
+  }
   return e;
 }
 
@@ -2145,7 +2151,12 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
     return err;
   }
   printf("loaded %d entries from %s\n", n, path);
-  if (path_arg) unrefexp(path_arg);
+  /* Successful explicit load → adopt as session default. Same rule as
+     savedb: the last filename you mentioned is the active one. */
+  if (path_arg) {
+    alcove_db_path = strdup(path);
+    unrefexp(path_arg);
+  }
   unrefexp(e);
   return MAKE_FIX(n);
 }
