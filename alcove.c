@@ -9668,31 +9668,46 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   env_t *newenv = make_env(captured ? captured : env);
   /* callingfnc stays NULL — OP_CALL is always non-tail from our side. */
 
-  exp_t *p = fn->content;
-  int i = 0;
-  while (p && i < nargs) {
-    if (!is_ptr(p->content) || !issymbol(p->content)) {
-      int j;
-      for (j = i; j < nargs; j++)
-        unrefexp(argv[j]);
-      destroy_env(newenv);
-      return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
+  /* Fast path: compiled lambdas have their param keys cached in
+     bc->param_keys, so we skip the per-call walk over fn->content
+     (a cons-list traversal) and the per-param type check. ~30 cycles
+     saved per call on the typical 2-3 arg case — material on call-
+     heavy benchmarks like nqueens (~1M calls). */
+  if ((fn->flags & FLAG_COMPILED) && fn->bc && fn->bc->nparams == nargs &&
+      nargs <= ENV_INLINE_SLOTS) {
+    int i;
+    for (i = 0; i < nargs; i++) {
+      newenv->inline_keys[i] = fn->bc->param_keys[i];
+      newenv->inline_vals[i] = argv[i];
     }
-    if (newenv->n_inline < ENV_INLINE_SLOTS) {
-      newenv->inline_keys[newenv->n_inline] = (char *)p->content->ptr;
-      newenv->inline_vals[newenv->n_inline] = argv[i];
-      newenv->n_inline++;
-    } else {
-      if (!newenv->d)
-        newenv->d = create_dict();
-      set_get_keyval_dict(newenv->d, p->content->ptr, argv[i]);
-      unrefexp(argv[i]);
+    newenv->n_inline = nargs;
+  } else {
+    exp_t *p = fn->content;
+    int i = 0;
+    while (p && i < nargs) {
+      if (!is_ptr(p->content) || !issymbol(p->content)) {
+        int j;
+        for (j = i; j < nargs; j++)
+          unrefexp(argv[j]);
+        destroy_env(newenv);
+        return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
+      }
+      if (newenv->n_inline < ENV_INLINE_SLOTS) {
+        newenv->inline_keys[newenv->n_inline] = (char *)p->content->ptr;
+        newenv->inline_vals[newenv->n_inline] = argv[i];
+        newenv->n_inline++;
+      } else {
+        if (!newenv->d)
+          newenv->d = create_dict();
+        set_get_keyval_dict(newenv->d, p->content->ptr, argv[i]);
+        unrefexp(argv[i]);
+      }
+      p = p->next;
+      i++;
     }
-    p = p->next;
-    i++;
+    while (i < nargs)
+      unrefexp(argv[i++]);
   }
-  while (i < nargs)
-    unrefexp(argv[i++]);
 
   exp_t *ret;
   if (fn->flags & FLAG_COMPILED) {
