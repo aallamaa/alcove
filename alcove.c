@@ -54,108 +54,146 @@ struct env_t *g_global_env = NULL;
    invoke, giving us O(1) C stack for tail-recursive code. */
 static int in_tail_position = 0;
 
-/* Builtin registration. Every entry's `arity` and `level` columns are
-   the same today; the macros hide them. Use LISPCMD_TAIL for control-
+/* Builtin registration. `arity` and `level` are reserved fields (the
+   first for future per-call arity checks, the second for sandbox tiers);
+   nothing reads them today. `doc` is a one-line help string colocated
+   with each cmd's definition (search for `static const char doc_<name>[]`
+   near the corresponding cmd function). Use LISPCMD_TAIL for control-
    flow forms (if, do) that need FLAG_TAIL_AWARE so evaluate() exposes
    in_tail_position to them. */
-#define LISPCMD(name, fn) {name, 2, 0, 0, fn}
-#define LISPCMD_TAIL(name, fn) {name, 2, FLAG_TAIL_AWARE, 0, fn}
+#define LISPCMD(name, fn, doc) {name, -1, 0, 0, doc, fn}
+#define LISPCMD_TAIL(name, fn, doc) {name, -1, FLAG_TAIL_AWARE, 0, doc, fn}
+
+/* Forward declarations for doc strings defined alongside each cmd
+   function. Each is `static const char doc_<symbolname>[]` so a future
+   reader can grep `doc_+` to land directly on the help text + the body. */
+extern const char doc_verbose[], doc_quote[], doc_if[], doc_do[];
+extern const char doc_when[], doc_while[], doc_repeat[];
+extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
+extern const char doc_let[], doc_with[];
+extern const char doc_eq[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
+extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
+extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
+extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
+extern const char doc_sqrt[], doc_sqrtint[], doc_exp[], doc_expt[], doc_random[];
+extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
+extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
+extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
+extern const char doc_def[], doc_fn[], doc_defmacro[], doc_macroexpand[];
+extern const char doc_eval[], doc_apply[];
+extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
+extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
+extern const char doc_pr[], doc_prn[];
+extern const char doc_persist[], doc_forget[], doc_savedb[], doc_loaddb[];
+extern const char doc_ispersistent[];
+extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
+extern const char doc_time[], doc_exit[];
+extern const char doc_ffifn[];
+extern const char doc_doc[], doc_help[];
+
+/* Forward decls for the new help builtins (defined below the table). */
+exp_t *doccmd(exp_t *e, env_t *env);
+exp_t *helpcmd(exp_t *e, env_t *env);
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
-    LISPCMD("verbose", verbosecmd),
-    LISPCMD("quote", quotecmd),
-    LISPCMD_TAIL("if", ifcmd),
-    LISPCMD_TAIL("do", docmd),
-    LISPCMD("when", whencmd),
-    LISPCMD("while", whilecmd),
-    LISPCMD("repeat", repeatcmd),
-    LISPCMD("and", andcmd),
-    LISPCMD("or", orcmd),
-    LISPCMD("case", casecmd),
-    LISPCMD("for", forcmd),
-    LISPCMD("each", eachcmd),
-    LISPCMD("let", letcmd),
-    LISPCMD("with", withcmd),
+    LISPCMD("verbose",       verbosecmd,     doc_verbose),
+    LISPCMD("quote",         quotecmd,       doc_quote),
+    LISPCMD_TAIL("if",       ifcmd,          doc_if),
+    LISPCMD_TAIL("do",       docmd,          doc_do),
+    LISPCMD("when",          whencmd,        doc_when),
+    LISPCMD("while",         whilecmd,       doc_while),
+    LISPCMD("repeat",        repeatcmd,      doc_repeat),
+    LISPCMD("and",           andcmd,         doc_and),
+    LISPCMD("or",            orcmd,          doc_or),
+    LISPCMD("case",          casecmd,        doc_case),
+    LISPCMD("for",           forcmd,         doc_for),
+    LISPCMD("each",          eachcmd,        doc_each),
+    LISPCMD("let",           letcmd,         doc_let),
+    LISPCMD("with",          withcmd,        doc_with),
     /* Comparison / equality */
-    LISPCMD("=", equalcmd),
-    LISPCMD("<", cmpcmd),
-    LISPCMD(">", cmpcmd),
-    LISPCMD("<=", cmpcmd),
-    LISPCMD(">=", cmpcmd),
-    LISPCMD("is", iscmd),
-    LISPCMD("iso", isocmd),
-    LISPCMD("in", incmd),
-    LISPCMD("no", nocmd),
+    LISPCMD("=",             equalcmd,       doc_eq),
+    LISPCMD("<",             cmpcmd,         doc_lt),
+    LISPCMD(">",             cmpcmd,         doc_gt),
+    LISPCMD("<=",            cmpcmd,         doc_le),
+    LISPCMD(">=",            cmpcmd,         doc_ge),
+    LISPCMD("is",            iscmd,          doc_is),
+    LISPCMD("iso",           isocmd,         doc_iso),
+    LISPCMD("in",            incmd,          doc_in),
+    LISPCMD("no",            nocmd,          doc_no),
     /* Arithmetic */
-    LISPCMD("+", pluscmd),
-    LISPCMD("*", multiplycmd),
-    LISPCMD("-", minuscmd),
-    LISPCMD("/", dividecmd),
-    LISPCMD("mod", modcmd),
-    LISPCMD("abs", abscmd),
-    LISPCMD("max", maxcmd),
-    LISPCMD("min", mincmd),
-    LISPCMD("odd", oddcmd),
-    LISPCMD("sqrt", sqrtcmd),
-    LISPCMD("sqrt-int", sqrtintcmd),
-    LISPCMD("exp", expcmd),
-    LISPCMD("expt", exptcmd),
-    LISPCMD("random", randomcmd),
+    LISPCMD("+",             pluscmd,        doc_plus),
+    LISPCMD("*",             multiplycmd,    doc_mul),
+    LISPCMD("-",             minuscmd,       doc_minus),
+    LISPCMD("/",             dividecmd,      doc_div),
+    LISPCMD("mod",           modcmd,         doc_mod),
+    LISPCMD("abs",           abscmd,         doc_abs),
+    LISPCMD("max",           maxcmd,         doc_max),
+    LISPCMD("min",           mincmd,         doc_min),
+    LISPCMD("odd",           oddcmd,         doc_odd),
+    LISPCMD("sqrt",          sqrtcmd,        doc_sqrt),
+    LISPCMD("sqrt-int",      sqrtintcmd,     doc_sqrtint),
+    LISPCMD("exp",           expcmd,         doc_exp),
+    LISPCMD("expt",          exptcmd,        doc_expt),
+    LISPCMD("**",            exptcmd,        doc_expt),    /* Python-ish alias */
+    LISPCMD("random",        randomcmd,      doc_random),
     /* Pairs and lists */
-    LISPCMD("cons", conscmd),
-    LISPCMD("car", carcmd),
-    LISPCMD("cdr", cdrcmd),
-    LISPCMD("list", listcmd),
-    LISPCMD("length", lengthcmd),
-    LISPCMD("nth", nthcmd),
-    LISPCMD("reverse", reversecmd),
-    LISPCMD("append", appendcmd),
+    LISPCMD("cons",          conscmd,        doc_cons),
+    LISPCMD("car",           carcmd,         doc_car),
+    LISPCMD("cdr",           cdrcmd,         doc_cdr),
+    LISPCMD("list",          listcmd,        doc_list),
+    LISPCMD("length",        lengthcmd,      doc_length),
+    LISPCMD("nth",           nthcmd,         doc_nth),
+    LISPCMD("reverse",       reversecmd,     doc_reverse),
+    LISPCMD("append",        appendcmd,      doc_append),
     /* Vectors — O(1) random-access array */
-    LISPCMD("vec", veccmd),
-    LISPCMD("vec-ref", vecrefcmd),
-    LISPCMD("vec-set!", vecsetcmd),
-    LISPCMD("vec-len", veclencmd),
+    LISPCMD("vec",           veccmd,         doc_vec),
+    LISPCMD("vec-ref",       vecrefcmd,      doc_vecref),
+    LISPCMD("vec-set!",      vecsetcmd,      doc_vecset),
+    LISPCMD("vec-len",       veclencmd,      doc_veclen),
     /* Functions and binding */
-    LISPCMD("def", defcmd),
-    LISPCMD("fn", fncmd),
-    LISPCMD("defmacro", defmacrocmd),
-    LISPCMD("macroexpand-1", expandmacrocmd),
-    LISPCMD("eval", evalcmd),
-    LISPCMD("apply", applycmd),
+    LISPCMD("def",           defcmd,         doc_def),
+    LISPCMD("fn",            fncmd,          doc_fn),
+    LISPCMD("defmacro",      defmacrocmd,    doc_defmacro),
+    LISPCMD("macroexpand-1", expandmacrocmd, doc_macroexpand),
+    LISPCMD("eval",          evalcmd,        doc_eval),
+    LISPCMD("apply",         applycmd,       doc_apply),
     /* Higher-order */
-    LISPCMD("map", mapcmd),
-    LISPCMD("filter", filtercmd),
-    LISPCMD("reduce", reducecmd),
-    LISPCMD("any?", anypcmd),
-    LISPCMD("all?", allpcmd),
+    LISPCMD("map",           mapcmd,         doc_map),
+    LISPCMD("filter",        filtercmd,      doc_filter),
+    LISPCMD("reduce",        reducecmd,      doc_reduce),
+    LISPCMD("any?",          anypcmd,        doc_any),
+    LISPCMD("all?",          allpcmd,        doc_all),
     /* Predicates */
-    LISPCMD("number?", numberpcmd),
-    LISPCMD("string?", stringpcmd),
-    LISPCMD("symbol?", symbolpcmd),
-    LISPCMD("pair?", pairpcmd),
-    LISPCMD("fn?", fnpcmd),
+    LISPCMD("number?",       numberpcmd,     doc_numberp),
+    LISPCMD("string?",       stringpcmd,     doc_stringp),
+    LISPCMD("symbol?",       symbolpcmd,     doc_symbolp),
+    LISPCMD("pair?",         pairpcmd,       doc_pairp),
+    LISPCMD("fn?",           fnpcmd,         doc_fnp),
     /* I/O */
-    LISPCMD("pr", prcmd),
-    LISPCMD("print", prcmd),
-    LISPCMD("prn", prncmd),
-    LISPCMD("println", prncmd),
+    LISPCMD("pr",            prcmd,          doc_pr),
+    LISPCMD("print",         prcmd,          doc_pr),
+    LISPCMD("prn",           prncmd,         doc_prn),
+    LISPCMD("println",       prncmd,         doc_prn),
     /* Persistence */
-    LISPCMD("persist", persistcmd),
-    LISPCMD("forget", forgetcmd),
-    LISPCMD("savedb", savedbcmd),
-    LISPCMD("loaddb", loaddbcmd),
-    LISPCMD("ispersistent", ispersistentcmd),
+    LISPCMD("persist",       persistcmd,     doc_persist),
+    LISPCMD("forget",        forgetcmd,      doc_forget),
+    LISPCMD("savedb",        savedbcmd,      doc_savedb),
+    LISPCMD("loaddb",        loaddbcmd,      doc_loaddb),
+    LISPCMD("ispersistent",  ispersistentcmd,doc_ispersistent),
     /* Introspection / utilities */
-    LISPCMD("inspect", inspectcmd),
-    LISPCMD("disasm", disasmcmd),
-    LISPCMD("source", sourcecmd),
-    LISPCMD("dir", dircmd),
-    LISPCMD("time", timecmd),
-    LISPCMD("exit", exitcmd),
-    LISPCMD("quit", exitcmd),
+    LISPCMD("inspect",       inspectcmd,     doc_inspect),
+    LISPCMD("disasm",        disasmcmd,      doc_disasm),
+    LISPCMD("source",        sourcecmd,      doc_source),
+    LISPCMD("dir",           dircmd,         doc_dir),
+    LISPCMD("time",          timecmd,        doc_time),
+    LISPCMD("exit",          exitcmd,        doc_exit),
+    LISPCMD("quit",          exitcmd,        doc_exit),
+    /* Help / discovery */
+    LISPCMD("doc",           doccmd,         doc_doc),
+    LISPCMD("help",          helpcmd,        doc_help),
     /* FFI */
-    LISPCMD("ffi-fn", ffifncmd),
+    LISPCMD("ffi-fn",        ffifncmd,       doc_ffifn),
 };
 #undef LISPCMD
 #undef LISPCMD_TAIL
@@ -1717,6 +1755,7 @@ finish:
    are resolved dynamically against the CALLER's env chain at invoke
    time. If closure semantics are ever added, the env arena and the
    bytecode VM's lifetime assumptions both need revisiting. */
+const char doc_fn[] = "(fn (params...) body...) — anonymous function. Body is a sequence; the last expression's value is returned.";
 exp_t *fncmd(exp_t *e, env_t *env) {
   exp_t *val;
   exp_t *vali;
@@ -1755,6 +1794,7 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   return val;
 }
 
+const char doc_def[] = "(def name (params...) body...) — define a named function. Body that uses only supported forms compiles to bytecode (sometimes JIT'd).";
 exp_t *defcmd(exp_t *e, env_t *env) {
   exp_t *val;
   exp_t *vali;
@@ -1801,6 +1841,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
   return val;
 }
 
+const char doc_macroexpand[] = "(macroexpand-1 form) — expand the outermost macro call in form once and return the resulting code.";
 exp_t *expandmacrocmd(exp_t *e, env_t *env) {
   exp_t *tmpexp;
   exp_t *tmpexp2;
@@ -1821,6 +1862,7 @@ finish:
   return tmpexp;
 }
 
+const char doc_defmacro[] = "(defmacro name (params...) body) — define a macro. Body returns a code form that replaces the call site at expansion time.";
 exp_t *defmacrocmd(exp_t *e, env_t *env) {
   exp_t *val;
   exp_t *vali;
@@ -1864,6 +1906,7 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+const char doc_verbose[] = "(verbose) — toggle the global verbose flag (debug-print every evaluation).";
 exp_t *verbosecmd(exp_t *e, env_t *env) {
   if (verbose ^= 1)
     printf("verbose on\n");
@@ -1872,6 +1915,7 @@ exp_t *verbosecmd(exp_t *e, env_t *env) {
   unrefexp(e);
   return NULL;
 }
+const char doc_quote[] = "(quote x) — return x without evaluating it. Reader shorthand: 'x.";
 exp_t *quotecmd(exp_t *e, env_t *env) {
   exp_t *ret = refexp(cadr(e));
   unrefexp(e);
@@ -1879,6 +1923,7 @@ exp_t *quotecmd(exp_t *e, env_t *env) {
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
+const char doc_if[] = "(if test then [else]) — branch on test. Falsey is nil/empty; everything else (including 0 and \"\") is truthy.";
 exp_t *ifcmd(exp_t *e, env_t *env) {
   /* Tail-aware: propagates in_tail_position to the selected branch. */
   int outer_tail = in_tail_position;
@@ -1930,6 +1975,7 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
   }
 }
 
+const char doc_eq[] = "(= place val) — assign val to place. Place can be a symbol, (car/cdr ...), or (str i) for in-place char update.";
 exp_t *equalcmd(exp_t *e, env_t *env) {
   exp_t *tmpexp = EVAL(caddr(e), env);
   exp_t *tmpkey = refexp(cadr(e));
@@ -1942,6 +1988,7 @@ exp_t *equalcmd(exp_t *e, env_t *env) {
   /* to be unrefed tmpkey in case of evaluate */
 }
 
+const char doc_persist[] = "(persist sym) — mark sym so its current binding survives savedb / loaddb (db.dump).";
 exp_t *persistcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
@@ -1958,6 +2005,7 @@ exp_t *persistcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_ispersistent[] = "(ispersistent sym) — t if sym is currently marked persistent, nil otherwise.";
 exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   int64_t ret = 0;
@@ -1976,6 +2024,7 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   }
 }
 
+const char doc_forget[] = "(forget sym) — undo (persist sym): the binding will not be saved by savedb.";
 exp_t *forgetcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
@@ -1991,19 +2040,33 @@ exp_t *forgetcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_savedb[] = "(savedb) writes to ./db.dump. (savedb \"path\") writes to the given file.";
 exp_t *savedbcmd(exp_t *e, env_t *env) {
+  /* Resolve the target path: optional first arg, else default. The arg
+     is evaluated so callers can build the path: (savedb (str ...)). */
+  const char *path = "db.dump";
+  exp_t *path_arg = NULL;
+  if (e->next) {
+    path_arg = EVAL(e->next->content, env);
+    if (iserror(path_arg)) { unrefexp(e); return path_arg; }
+    if (!is_ptr(path_arg) || !isstring(path_arg)) {
+      unrefexp(path_arg); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "savedb: optional argument must be a filename string");
+    }
+    path = (const char *)path_arg->ptr;
+  }
   env_t *cur = env;
-  FILE *stream = fopen("db.dump", "w");
+  FILE *stream = fopen(path, "w");
   if (!stream) {
+    if (path_arg) unrefexp(path_arg);
     return error(ERROR_ILLEGAL_VALUE, e, env,
-                 "Unable to open db.dump for writing");
+                 "Unable to open '%s' for writing", path);
   }
-  while (cur->root) {
-    cur = cur->root;
-  }
-  if (cur->d)
-    dump_dict(cur->d, stream);
+  while (cur->root) cur = cur->root;
+  if (cur->d) dump_dict(cur->d, stream);
   fclose(stream);
+  if (path_arg) unrefexp(path_arg);
   return e;
 }
 
@@ -2016,8 +2079,8 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
    currently have load/dump fns registered (alcove.c:5260-5265), so any
    other types weren't actually written by savedb in the first place —
    loaddb here is symmetric with what savedb actually persists. */
-int loaddb_from_file(env_t *env) {
-  FILE *stream = fopen("db.dump", "r");
+int loaddb_from_file_path(env_t *env, const char *path) {
+  FILE *stream = fopen(path, "r");
   if (!stream)
     return -1;
   env_t *cur = env;
@@ -2047,17 +2110,45 @@ int loaddb_from_file(env_t *env) {
   return n;
 }
 
+/* Back-compat shim: the path-less callers (auto-load at startup, the
+   no-arg (loaddb)) keep working without re-plumbing every site. */
+int loaddb_from_file(env_t *env) {
+  return loaddb_from_file_path(env, "db.dump");
+}
+
+const char doc_loaddb[] = "(loaddb) reads ./db.dump. (loaddb \"path\") reads from the given file. Done at startup too unless --noload (and respects --db).";
 exp_t *loaddbcmd(exp_t *e, env_t *env) {
-  int n = loaddb_from_file(env);
-  if (n < 0) {
-    return error(ERROR_ILLEGAL_VALUE, e, env,
-                 "Unable to open db.dump for reading");
+  const char *path = "db.dump";
+  exp_t *path_arg = NULL;
+  if (e->next) {
+    path_arg = EVAL(e->next->content, env);
+    if (iserror(path_arg)) { unrefexp(e); return path_arg; }
+    if (!is_ptr(path_arg) || !isstring(path_arg)) {
+      unrefexp(path_arg); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "loaddb: optional argument must be a filename string");
+    }
+    path = (const char *)path_arg->ptr;
   }
-  printf("loaded %d entries from db.dump\n", n);
+  int n = loaddb_from_file_path(env, path);
+  if (n < 0) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                       "Unable to open '%s' for reading", path);
+    if (path_arg) unrefexp(path_arg);
+    return err;
+  }
+  printf("loaded %d entries from %s\n", n, path);
+  if (path_arg) unrefexp(path_arg);
   unrefexp(e);
   return MAKE_FIX(n);
 }
 
+/* cmpcmd serves four lisp names; one doc per dispatch keeps the table
+   clean. Comparisons are variadic: (< a b c) means a<b AND b<c. */
+const char doc_lt[] = "(< a b ...) — strictly less than (chained: each pair must hold).";
+const char doc_gt[] = "(> a b ...) — strictly greater than (chained).";
+const char doc_le[] = "(<= a b ...) — less than or equal (chained).";
+const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
 exp_t *cmpcmd(exp_t *e, env_t *env) {
   exp_t *op = car(e); /* operator symbol, borrowed */
   exp_t *result = NULL;
@@ -2113,6 +2204,7 @@ finish:
   return result;
 }
 
+const char doc_plus[] = "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
 exp_t *pluscmd(exp_t *e, env_t *env) {
   int64_t sum_i = 0;
   expfloat sum_f = 0;
@@ -2165,6 +2257,7 @@ finish:
   return ret;
 }
 
+const char doc_mul[] = "(* x ...) — product of all args. (*) is 1.";
 exp_t *multiplycmd(exp_t *e, env_t *env) {
   int64_t sum_i = 1;
   expfloat sum_f = 1;
@@ -2220,6 +2313,7 @@ finish:
   return ret;
 }
 
+const char doc_minus[] = "(- a) negates; (- a b c ...) subtracts the rest from a.";
 exp_t *minuscmd(exp_t *e, env_t *env) {
   int64_t sum_i = 0;
   expfloat sum_f = 0;
@@ -2284,6 +2378,7 @@ finish:
   return ret;
 }
 
+const char doc_div[] = "(/ a b ...) — divide a by the rest. Integer division if all args are ints; otherwise float.";
 exp_t *dividecmd(exp_t *e, env_t *env) {
   int64_t sum_i = 0;
   expfloat sum_f = 0;
@@ -2363,6 +2458,7 @@ finish:
   return ret;
 }
 
+const char doc_sqrt[] = "(sqrt x) — float square root. See sqrt-int for the integer version.";
 exp_t *sqrtcmd(exp_t *e, env_t *env) {
   exp_t *v;
   exp_t *ret;
@@ -2406,6 +2502,7 @@ exp_t *make_vector(int64_t n, exp_t *fill) {
   return e;
 }
 
+const char doc_vec[] = "(vec n init) — fixed-size vector of n cells initialised to init. (vec n) defaults init to nil.";
 exp_t *veccmd(exp_t *e, env_t *env) {
   exp_t *nexp = NULL, *fill = NIL_EXP;
   if (e->next)
@@ -2439,6 +2536,7 @@ exp_t *veccmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_vecref[] = "(vec-ref v i) — read element i of vector v (O(1)). 0-based index.";
 exp_t *vecrefcmd(exp_t *e, env_t *env) {
   exp_t *vexp = NULL, *iexp = NULL;
   if (e->next)
@@ -2478,6 +2576,7 @@ exp_t *vecrefcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_vecset[] = "(vec-set! v i x) — store x into element i of vector v. Returns x.";
 exp_t *vecsetcmd(exp_t *e, env_t *env) {
   exp_t *vexp = NULL, *iexp = NULL, *valexp = NULL;
   if (e->next)
@@ -2530,6 +2629,7 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
   return refexp(v->data[i]); /* return the value, like (= ...) */
 }
 
+const char doc_veclen[] = "(vec-len v) — number of cells in vector v.";
 exp_t *veclencmd(exp_t *e, env_t *env) {
   exp_t *vexp = NULL;
   if (e->next)
@@ -2553,6 +2653,7 @@ exp_t *veclencmd(exp_t *e, env_t *env) {
 /* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
    avoid a sqrt + double→int round-trip in pure-integer code (common
    in trial-division early exit). */
+const char doc_sqrtint[] = "(sqrt-int n) — integer square root (floor). Faster than (int (sqrt n)) and exact.";
 exp_t *sqrtintcmd(exp_t *e, env_t *env) {
   exp_t *v = NULL;
   if (e->next)
@@ -2582,6 +2683,7 @@ exp_t *sqrtintcmd(exp_t *e, env_t *env) {
   return MAKE_FIX(r);
 }
 
+const char doc_exp[] = "(exp x) — natural exponential e^x.";
 exp_t *expcmd(exp_t *e, env_t *env) {
   exp_t *v;
   exp_t *ret;
@@ -2602,6 +2704,7 @@ exp_t *expcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_expt[] = "(expt b e) — b raised to the e power.";
 exp_t *exptcmd(exp_t *e, env_t *env) {
   exp_t *v = NULL;
   exp_t *v2 = NULL;
@@ -2632,6 +2735,8 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+/* prcmd backs both `pr` and `print`; prncmd backs `prn` and `println`. */
+const char doc_pr[] = "(pr x ...) — print each arg with no separator and no trailing newline. Alias: print.";
 exp_t *prcmd(exp_t *e, env_t *env) {
   exp_t *v = e;
   exp_t *val;
@@ -2651,6 +2756,7 @@ exp_t *prcmd(exp_t *e, env_t *env) {
   return NULL;
 }
 
+const char doc_prn[] = "(prn x ...) — like pr, then a newline. Alias: println.";
 exp_t *prncmd(exp_t *e, env_t *env) {
   exp_t *ret;
   ret = prcmd(e, env);
@@ -2669,6 +2775,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
    ffi_call, and marshals the result back.
 
    Conditional on -DALCOVE_FFI=1 (Makefile auto-detects via ffi.h). */
+const char doc_ffifn[] = "(ffi-fn lib name ret arg-types ...) — bind a C function from a shared library. Types: void int long uint ulong ptr cstr double float. ALCOVE_FFI build only.";
 #ifdef ALCOVE_FFI
 #include <dlfcn.h>
 #include <ffi.h>
@@ -2989,6 +3096,7 @@ void alc_ffi_free(void *ptr) {
    arg, type-check, produce result, unrefexp args + form, return owned ref. */
 
 /* (mod a b) — integer modulo. Both args must be fixnums. */
+const char doc_mod[] = "(mod a b) — remainder of a / b. Sign follows the divisor for floats; truncation for ints.";
 exp_t *modcmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *b = NULL, *ret = NULL;
   if (e->next && e->next->next) {
@@ -3026,6 +3134,7 @@ exp_t *modcmd(exp_t *e, env_t *env) {
 }
 
 /* (abs x) — |x| for fixnum or float. */
+const char doc_abs[] = "(abs x) — absolute value.";
 exp_t *abscmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *ret = NULL;
   if (e->next) {
@@ -3065,6 +3174,7 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
 }
 
 /* (max a b ...) — variadic; at least one arg required. */
+const char doc_max[] = "(max x ...) — largest of the args.";
 exp_t *maxcmd(exp_t *e, env_t *env) {
   exp_t *cur = e->next;
   if (!cur) {
@@ -3103,6 +3213,7 @@ exp_t *maxcmd(exp_t *e, env_t *env) {
   return best;
 }
 /* (min a b ...) */
+const char doc_min[] = "(min x ...) — smallest of the args.";
 exp_t *mincmd(exp_t *e, env_t *env) {
   exp_t *cur = e->next;
   if (!cur) {
@@ -3142,6 +3253,7 @@ exp_t *mincmd(exp_t *e, env_t *env) {
 }
 
 /* (length x) — list length, string length, or 0 for nil. */
+const char doc_length[] = "(length x) — element count of a list/string/vector.";
 exp_t *lengthcmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *ret = NULL;
   if (e->next) {
@@ -3175,6 +3287,7 @@ done:
 }
 
 /* (nth n list) — 0-indexed; returns nil if out of range. */
+const char doc_nth[] = "(nth xs i) — 0-based element of list/string/vector.";
 exp_t *nthcmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *b = NULL, *ret = NIL_EXP;
   if (e->next && e->next->next) {
@@ -3207,6 +3320,7 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
 }
 
 /* (reverse list) — non-destructive; returns a new list. */
+const char doc_reverse[] = "(reverse xs) — list with elements in reverse order.";
 exp_t *reversecmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *acc = NIL_EXP;
   if (e->next) {
@@ -3215,8 +3329,17 @@ exp_t *reversecmd(exp_t *e, env_t *env) {
       unrefexp(e);
       return a;
     }
+    /* Reject non-list args before walking — same fix pattern as appendcmd:
+       a tagged immediate (fixnum, char) passes the `cur != NULL` check
+       and segfaults on the deref of cur->content. nil/empty is fine. */
+    if (a && a != NIL_EXP && !ispair(a)) {
+      unrefexp(a);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "reverse: argument is not a list");
+    }
     exp_t *cur = a;
-    while (cur && cur->content) {
+    while (is_ptr(cur) && ispair(cur) && cur->content) {
       exp_t *node = make_node(refexp(cur->content));
       node->next = (acc == NIL_EXP) ? NULL : acc;
       acc = node;
@@ -3230,6 +3353,7 @@ exp_t *reversecmd(exp_t *e, env_t *env) {
 
 /* (append list1 list2 ...) — flat concat into a new list (cars are
    shared with inputs but the cons spine is fresh). */
+const char doc_append[] = "(append xs ys ...) — concatenate lists.";
 exp_t *appendcmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   exp_t *cur_arg = e->next;
@@ -3241,8 +3365,19 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
       unrefexp(e);
       return list;
     }
+    /* nil/empty (which lispers freely pass to append) is a no-op. Anything
+       that isn't a heap pair is a hard error — without this guard, a
+       tagged fixnum like (append 10 ...) walks `cur->content` which
+       dereferences the tag bits and segfaults. */
+    if (list && list != NIL_EXP && !ispair(list)) {
+      if (head) unrefexp(head);
+      unrefexp(list);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "append: argument is not a list");
+    }
     exp_t *cur = list;
-    while (cur && cur->content) {
+    while (is_ptr(cur) && ispair(cur) && cur->content) {
       exp_t *node = make_node(refexp(cur->content));
       if (!head) {
         head = node;
@@ -3277,6 +3412,13 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
     unrefexp(e);                                                               \
     return ret;                                                                \
   }
+/* The five type-predicate cmds, expanded from the PRED_CMD macro above.
+   Each takes a single arg and returns t / nil. */
+const char doc_numberp[] = "(number? x) — t if x is a fixnum or float.";
+const char doc_stringp[] = "(string? x) — t if x is a string.";
+const char doc_symbolp[] = "(symbol? x) — t if x is a symbol.";
+const char doc_pairp[]   = "(pair? x) — t if x is a non-empty pair (cons cell).";
+const char doc_fnp[]     = "(fn? x) — t if x is callable (lambda or builtin).";
 PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
 PRED_CMD(stringpcmd, isstring(a))
 PRED_CMD(symbolpcmd, issymbol(a))
@@ -3285,6 +3427,7 @@ PRED_CMD(fnpcmd, (islambda(a) || isinternal(a)))
 #undef PRED_CMD
 
 /* (exit) / (exit code) — terminate the process. */
+const char doc_exit[] = "(exit) or (exit code) — terminate the process. Default exit code is 0. Alias: quit.";
 exp_t *exitcmd(exp_t *e, env_t *env) {
   int code = 0;
   if (e->next) {
@@ -3299,6 +3442,7 @@ exp_t *exitcmd(exp_t *e, env_t *env) {
 }
 
 /* (random n) — pseudo-random fixnum in [0, n). Seeded once from time. */
+const char doc_random[] = "(random n) — uniform fixnum in [0, n). (random) gives a 64-bit value.";
 exp_t *randomcmd(exp_t *e, env_t *env) {
   static int seeded = 0;
   if (!seeded) {
@@ -3320,6 +3464,7 @@ exp_t *randomcmd(exp_t *e, env_t *env) {
 }
 
 /* (map fn list) — non-destructive; returns a new list of (fn x) values. */
+const char doc_map[] = "(map fn xs ...) — apply fn to corresponding elements of one or more lists; returns a new list.";
 exp_t *mapcmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *head = NULL, *tail = NULL;
   if (!(e->next && e->next->next)) {
@@ -3367,6 +3512,7 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 /* (filter pred list) — keep elements where (pred x) is truthy. */
+const char doc_filter[] = "(filter pred xs) — list of elements of xs for which (pred elem) is truthy.";
 exp_t *filtercmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *head = NULL, *tail = NULL;
   if (!(e->next && e->next->next)) {
@@ -3417,6 +3563,7 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 /* (reduce fn init list) — left fold: ((fn (fn init x0) x1) x2 ...). */
+const char doc_reduce[] = "(reduce fn init xs) — left fold: (fn (fn (fn init x0) x1) x2)... Returns init for empty xs.";
 exp_t *reducecmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *acc = NULL, *xs = NULL;
   if (!(e->next && e->next->next && e->next->next->next)) {
@@ -3514,6 +3661,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
 /* (any? pred list) — return t as soon as (pred x) is truthy for any
    element of list, nil if none match. Walks in C with one
    vm_invoke_values per element instead of recursive bytecode. */
+const char doc_any[] = "(any? pred xs) — t if pred is truthy for at least one element. Short-circuits.";
 exp_t *anypcmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *ret = NIL_EXP;
   if (!(e->next && e->next->next)) {
@@ -3557,6 +3705,7 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
 }
 /* (all? pred list) — return t if (pred x) is truthy for every
    element, nil at the first failure. Empty list → t. */
+const char doc_all[] = "(all? pred xs) — t if pred is truthy for every element (vacuously t for empty). Short-circuits.";
 exp_t *allpcmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *ret = TRUE_EXP;
   if (!(e->next && e->next->next)) {
@@ -3602,6 +3751,7 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
 /* (apply fn args-list) — call fn with each element of args-list as
    separate args. Implemented by re-using vm_invoke_values for compiled
    lambdas; falls back to AST invoke otherwise. */
+const char doc_apply[] = "(apply fn args) — call fn with the elements of the list args as its arguments.";
 exp_t *applycmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *args = NULL, *ret = NULL;
   if (e->next && e->next->next) {
@@ -3646,6 +3796,7 @@ exp_t *applycmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_odd[] = "(odd x) — t if integer x is odd, nil otherwise.";
 exp_t *oddcmd(exp_t *e, env_t *env) {
   exp_t *ret;
   if (e->next && isnumber(e->next->content))
@@ -3656,6 +3807,7 @@ exp_t *oddcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_do[] = "(do expr ...) — evaluate exprs in order; returns the value of the last one.";
 exp_t *docmd(exp_t *e, env_t *env) {
   /* Tail-aware: propagates in_tail_position to the final expression so
      a tail call inside (do ... (f x)) actually gets TCO. Returns the
@@ -3680,6 +3832,7 @@ exp_t *docmd(exp_t *e, env_t *env) {
   return ret ? ret : NIL_EXP;
 }
 
+const char doc_when[] = "(when test expr ...) — if test is truthy, evaluate the body in order; else nil.";
 exp_t *whencmd(exp_t *e, env_t *env) {
   exp_t *val = cadr(e);
   exp_t *cur = cddr(e);
@@ -3703,6 +3856,7 @@ exp_t *whencmd(exp_t *e, env_t *env) {
   }
 }
 
+const char doc_while[] = "(while test expr ...) — re-evaluate body while test stays truthy. Returns nil.";
 exp_t *whilecmd(exp_t *e, env_t *env) {
   exp_t *val = cadr(e);
   exp_t *cur = cddr(e);
@@ -3725,6 +3879,7 @@ exp_t *whilecmd(exp_t *e, env_t *env) {
   }
 }
 
+const char doc_repeat[] = "(repeat n expr ...) — run body n times, returning the last expression's value.";
 exp_t *repeatcmd(exp_t *e, env_t *env) {
   exp_t *val = EVAL(cadr(e), env);
   exp_t *cur = cddr(e);
@@ -3764,6 +3919,7 @@ exp_t *repeatcmd(exp_t *e, env_t *env) {
   }
 }
 
+const char doc_and[] = "(and expr ...) — short-circuit AND. (and) is t. Returns the last truthy or first falsey value.";
 exp_t *andcmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *ret = NULL;
@@ -3779,6 +3935,7 @@ finish:
   return ret;
 }
 
+const char doc_or[] = "(or expr ...) — short-circuit OR. (or) is nil. Returns the first truthy value, else nil.";
 exp_t *orcmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *ret = NULL;
@@ -3796,6 +3953,7 @@ finish:
   return ret;
 }
 
+const char doc_no[] = "(no x) — t if x is nil or empty list/string, nil otherwise. The canonical \"is falsey?\" test.";
 exp_t *nocmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *tmpexp = EVAL(car(cur), env);
@@ -3860,6 +4018,7 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
   return ret;
 }
 
+const char doc_is[] = "(is a b) — pointer/value identity (eq?). Same fixnum or same heap object.";
 exp_t *iscmd(exp_t *e, env_t *env) {
   exp_t *ret = NULL;
   exp_t *cur1 = EVAL(cadr(e), env);
@@ -3880,6 +4039,7 @@ exp_t *iscmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into pairs/strings/vectors.";
 exp_t *isocmd(exp_t *e, env_t *env) {
   exp_t *ret = NULL;
   exp_t *cur1 = EVAL(cadr(e), env);
@@ -3900,6 +4060,7 @@ exp_t *isocmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_in[] = "(in val a b c ...) — t if (is val) matches any of the rest.";
 exp_t *incmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *val = EVAL(cadr(e), env);
@@ -3931,6 +4092,7 @@ exp_t *incmd(exp_t *e, env_t *env) {
   return cur;
 }
 
+const char doc_case[] = "(case key (val expr) ... (else expr)) — switch on key. First matching val wins; else clause optional.";
 exp_t *casecmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *val = EVAL(cadr(e), env);
@@ -3954,6 +4116,7 @@ exp_t *casecmd(exp_t *e, env_t *env) {
   return cur;
 }
 
+const char doc_for[] = "(for var start end body ...) — iterate var from start to end inclusive, evaluating body. Returns last body value.";
 exp_t *forcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret = NULL;
@@ -4035,6 +4198,7 @@ error:
   return ret;
 }
 
+const char doc_each[] = "(each var coll body ...) — bind var to each element of coll (list/string/vector) and run body.";
 exp_t *eachcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *curvar;
@@ -4098,6 +4262,7 @@ finish:
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+const char doc_time[] = "(time expr) — evaluate expr, print elapsed wall time, and return the value.";
 exp_t *timecmd(exp_t *e, env_t *env) {
   unrefexp(e);
   return make_integeri(gettimeusec());
@@ -4207,6 +4372,7 @@ static void inspect_value(exp_t *v) {
    Also called directly from the REPL's verbose mode at the bottom of the
    file (passing the already-evaluated result), which is why the display
    logic lives in inspect_value above rather than inline here. */
+const char doc_inspect[] = "(inspect x) — print internal representation: type, refcount, and (for lambdas) compile/JIT status.";
 exp_t *inspectcmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
   if (arg && iserror(arg)) {
@@ -4276,6 +4442,7 @@ static void dir_collect_dict(dict_t *d, const char *needle, dir_entry_t **arr,
   }
 }
 
+const char doc_dir[] = "(dir) — list every name bound in the current environment chain.";
 exp_t *dircmd(exp_t *e, env_t *env) {
   const char *needle = NULL;
   int show_builtins = 0;
@@ -4379,6 +4546,7 @@ exp_t *dircmd(exp_t *e, env_t *env) {
 /* (disasm fn)  — evaluates fn, expects a compiled lambda, prints its
    bytecode op-by-op plus the JIT install status. Useful for verifying
    what bytecode the compiler produces (no more ad-hoc fprintf in C). */
+const char doc_disasm[] = "(disasm fn) — print the bytecode of a compiled function (or note that it's not compiled).";
 exp_t *disasmcmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
   if (arg && iserror(arg)) {
@@ -4584,6 +4752,7 @@ static void pp_form(exp_t *e, int indent) {
    the name; for anonymous lambdas it's `fn` or `mac`.  Closures get
    a "; closure over <env>" comment so the user knows the body's
    free vars resolve against a captured environment. */
+const char doc_source[] = "(source fn) — print the original (params) + body for a user-defined function.";
 exp_t *sourcecmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
   if (arg && iserror(arg)) {
@@ -4627,6 +4796,7 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
+const char doc_cons[] = "(cons x ys) — pair with car=x, cdr=ys. To prepend onto a list: (cons elem list).";
 exp_t *conscmd(exp_t *e, env_t *env) {
   exp_t *a = EVAL(cadr(e), env);
   if iserror (a) {
@@ -4650,6 +4820,7 @@ exp_t *conscmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+const char doc_cdr[] = "(cdr xs) — tail of a pair / rest of a list.";
 exp_t *cdrcmd(exp_t *e, env_t *env) {
   exp_t *tmpexp = EVAL(cadr(e), env);
   exp_t *tmpexp2 = tmpexp;
@@ -4661,6 +4832,7 @@ exp_t *cdrcmd(exp_t *e, env_t *env) {
   return tmpexp;
 }
 
+const char doc_car[] = "(car xs) — head of a pair / first element of a list.";
 exp_t *carcmd(exp_t *e, env_t *env) {
   exp_t *tmpexp = EVAL(cadr(e), env);
   exp_t *tmpexp2 = tmpexp;
@@ -4671,6 +4843,7 @@ exp_t *carcmd(exp_t *e, env_t *env) {
   return tmpexp;
 }
 
+const char doc_list[] = "(list x ...) — construct a list of all args. (list) is nil.";
 exp_t *listcmd(exp_t *e, env_t *env) {
   exp_t *a = cdr(e);
   exp_t *tmpexp = NULL;
@@ -4701,12 +4874,14 @@ error:
   return tmpexp;
 }
 
+const char doc_eval[] = "(eval expr) — evaluate a quoted expression as code in the current env.";
 exp_t *evalcmd(exp_t *e, env_t *env) {
   exp_t *ret = evaluate(EVAL(cadr(e), env), env);
   unrefexp(e);
   return ret;
 }
 
+const char doc_let[] = "(let var val body) — bind var to val in body. The binding is local; body returns its last expression.";
 exp_t *letcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret;
@@ -4744,6 +4919,7 @@ finish:
   return ret;
 }
 
+const char doc_with[] = "(with (var1 val1 var2 val2 ...) body) — bind all pairs in parallel, then evaluate body.";
 exp_t *withcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret;
@@ -12129,6 +12305,79 @@ static char *rl_read_form(int idx) {
 }
 #endif /* ALCOVE_READLINE */
 
+/* Help / discovery — both implemented at file scope so they can scan
+   lispProcList[] (defined at the top of this file). doccmd looks up a
+   single symbol; helpcmd lists everything (or, given a name, defers to
+   doccmd). The arity/level fields of lispProc are reserved (see the
+   struct comment); doc is the only field we surface here. */
+const char doc_doc[] = "(doc name) — print the documentation for a builtin.";
+const char doc_help[] = "(help) — list every builtin and its docstring. (help name) is (doc name).";
+
+/* Resolve the arg to a name string. Accepts:
+     (doc cons)    — bare symbol (literal head — common interactive form)
+     (doc 'cons)   — quoted symbol (evaluation yields the symbol)
+     (doc "cons")  — string literal
+   On success returns a borrowed const char*; on failure returns NULL after
+   *err is set to the error exp_t to propagate. The caller is responsible
+   for unrefing eval_owned if it's non-NULL (the buffer holding evaluated
+   args we need to keep alive across the printf). */
+static const char *doc_resolve_name(exp_t *arg, env_t *env,
+                                    exp_t **eval_owned, exp_t **err) {
+  *eval_owned = NULL; *err = NULL;
+  if (is_ptr(arg) && issymbol(arg)) return (const char *)arg->ptr;
+  if (is_ptr(arg) && isstring(arg)) return (const char *)arg->ptr;
+  /* Anything else: evaluate and look again. */
+  exp_t *v = EVAL(arg, env);
+  if (iserror(v)) { *err = v; return NULL; }
+  if (is_ptr(v) && (issymbol(v) || isstring(v))) {
+    *eval_owned = v;
+    return (const char *)v->ptr;
+  }
+  unrefexp(v);
+  *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "doc/help: argument must be a symbol or string");
+  return NULL;
+}
+
+exp_t *doccmd(exp_t *e, env_t *env) {
+  exp_t *arg = cadr(e);
+  if (!arg) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "doc: expected a name, e.g. (doc cons) or (doc 'cons)");
+  }
+  exp_t *owned = NULL, *err = NULL;
+  const char *name = doc_resolve_name(arg, env, &owned, &err);
+  if (!name) { unrefexp(e); return err; }
+  int N = (int)(sizeof(lispProcList) / sizeof(lispProc));
+  int found = 0;
+  for (int i = 0; i < N; i++) {
+    if (strcmp(lispProcList[i].name, name) == 0) {
+      if (lispProcList[i].doc) printf("%s\n", lispProcList[i].doc);
+      else printf("(no documentation for %s)\n", name);
+      found = 1;
+      break;
+    }
+  }
+  if (!found)
+    printf("(no builtin named '%s'; try (help) to list them)\n", name);
+  if (owned) unrefexp(owned);
+  unrefexp(e);
+  return NIL_EXP;
+}
+
+exp_t *helpcmd(exp_t *e, env_t *env) {
+  exp_t *arg = cadr(e);
+  if (arg) return doccmd(e, env);    /* (help name) — defer */
+  int N = (int)(sizeof(lispProcList) / sizeof(lispProc));
+  for (int i = 0; i < N; i++) {
+    printf("  %-16s %s\n", lispProcList[i].name,
+           lispProcList[i].doc ? lispProcList[i].doc : "");
+  }
+  unrefexp(e);
+  return NIL_EXP;
+}
+
 int main(int argc, char *argv[]) {
   dict_t *dict = create_dict();
   env_t *global = make_env(NULL);
@@ -12187,13 +12436,16 @@ int main(int argc, char *argv[]) {
   }
 
   /* CLI flag scan:
-       --noload / -n       skip auto-load of db.dump
+       --noload / -n       skip auto-load of the db file
+       --db <path>         use <path> instead of ./db.dump for auto-load
+                           (and as the default for (savedb)/(loaddb))
        -e "<code>"         evaluate the string as a script (skips file read)
      Flags get filtered out of argv in place so the existing positional
      handling (last arg = file, prev = -i) still works whether the user
      passes flags first, last, or in the middle. */
   int auto_load = 1;
   char *eval_string = NULL;
+  const char *db_path = "db.dump";
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
@@ -12201,6 +12453,8 @@ int main(int argc, char *argv[]) {
         auto_load = 0;
       } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
         eval_string = argv[++src];
+      } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
+        db_path = argv[++src];
       } else {
         argv[dst++] = argv[src];
       }
@@ -12208,15 +12462,15 @@ int main(int argc, char *argv[]) {
     argc = dst;
   }
 
-  /* Auto-load persisted bindings if db.dump exists in CWD. Silent on
+  /* Auto-load persisted bindings from the chosen db path. Silent on
      missing-file (first run, no DB yet); prints a one-line summary on
      success so the user sees what came back. */
   if (auto_load) {
-    int loaded = loaddb_from_file(global);
+    int loaded = loaddb_from_file_path(global, db_path);
     if (loaded > 0)
-      printf("alcove: auto-loaded %d entries from db.dump (use --noload to "
+      printf("alcove: auto-loaded %d entries from %s (use --noload to "
              "skip)\n",
-             loaded);
+             loaded, db_path);
   }
 
   if (eval_string) {

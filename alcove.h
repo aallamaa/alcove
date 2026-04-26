@@ -368,9 +368,10 @@ typedef struct env_t {
 
 typedef struct lispProc {
   char *name;
-  int arity;
-  int flags; /*1 is macro*/
-  int level; /* security level */
+  int arity;          /* reserved — not yet enforced. -1 = variadic. */
+  int flags;          /* FLAG_TAIL_AWARE, ...; see alcove.h. */
+  int level;          /* reserved — security tier for sandbox modes. */
+  const char *doc;    /* one-line help string; NULL = undocumented. */
   lispCmd *cmd;
 } lispProc;
 
