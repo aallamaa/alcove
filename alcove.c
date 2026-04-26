@@ -5369,18 +5369,33 @@ static uint32_t arm64_orr_imm_bit0(int rd, int rn) {
 }
 /* STP Xt1, Xt2, [SP, #imm]!  — pre-indexed store-pair, SP -= |imm|.
    imm is in BYTES, must be 8-aligned, signed 7-bit shifted (×8). */
-__attribute__((unused))
 static uint32_t arm64_stp_pre_sp(int rt1, int rt2, int byte_offset) {
   uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
   return 0xA9800000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
          (uint32_t)rt1;
 }
 /* LDP Xt1, Xt2, [SP], #imm  — post-indexed load-pair, SP += imm. */
-__attribute__((unused))
 static uint32_t arm64_ldp_post_sp(int rt1, int rt2, int byte_offset) {
   uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
   return 0xA8C00000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
          (uint32_t)rt1;
+}
+/* STP Xt1, Xt2, [SP, #imm]   — signed-offset store-pair (no writeback). */
+static uint32_t arm64_stp_off_sp(int rt1, int rt2, int byte_offset) {
+  uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
+  return 0xA9000000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
+         (uint32_t)rt1;
+}
+/* LDP Xt1, Xt2, [SP, #imm]   — signed-offset load-pair (no writeback). */
+static uint32_t arm64_ldp_off_sp(int rt1, int rt2, int byte_offset) {
+  uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
+  return 0xA9400000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
+         (uint32_t)rt1;
+}
+/* MOV Xd, SP  — alias of ADD Xd, SP, #0. SP is encoded as Rn=31 in
+   ADD/SUB-immediate forms (only XZR otherwise). */
+static uint32_t arm64_mov_from_sp(int rd) {
+  return 0x91000000u | (31u << 5) | (uint32_t)rd;  /* add Rd, SP, #0 */
 }
 /* BL #imm  — branch with link, signed 26-bit instruction offset (±128MB).
    Caller computes off_insns relative to this BL's PC. */
@@ -5796,6 +5811,150 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* The Ackermann function: 53-byte exact-match shape.
+     (def ack (m n)
+       (if (is m 0) (+ n 1)
+           (if (is n 0) (ack (- m 1) 1)
+               (ack (- m 1) (ack m (- n 1))))))
+   m==0 and n==0 cases run inline (no frame); the general case opens a
+   frame, recursive-CALLs the inner ack(m, n-1) via intra-buffer BL,
+   then tail-self's to ack(m-1, result). */
+static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 53) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t slot_m = c[1];
+  if (c[2] != OP_LOAD_FIX || c[3] != 0 || c[4] != 0) return 0;
+  if (c[5] != OP_IS) return 0;
+  if (c[6] != OP_BR_IF_FALSE) return 0;
+
+  if (c[9] != OP_SLOT_ADD_FIX) return 0;
+  uint8_t slot_n_check = c[10];
+  if (c[11] != 1 || c[12] != 0) return 0;
+  if (c[13] != OP_JUMP) return 0;
+
+  if (c[16] != OP_LOAD_SLOT) return 0;
+  uint8_t slot_n = c[17];
+  if (slot_n != slot_n_check) return 0;
+  if (c[18] != OP_LOAD_FIX || c[19] != 0 || c[20] != 0) return 0;
+  if (c[21] != OP_IS) return 0;
+  if (c[22] != OP_BR_IF_FALSE) return 0;
+
+  if (c[25] != OP_SLOT_SUB_FIX || c[26] != slot_m) return 0;
+  if (c[27] != 1 || c[28] != 0) return 0;
+  if (c[29] != OP_LOAD_FIX || c[30] != 1 || c[31] != 0) return 0;
+  if (c[32] != OP_TAIL_SELF || c[33] != 2) return 0;
+  if (c[34] != OP_JUMP) return 0;
+
+  if (c[37] != OP_SLOT_SUB_FIX || c[38] != slot_m) return 0;
+  if (c[39] != 1 || c[40] != 0) return 0;
+  if (c[41] != OP_LOAD_SLOT || c[42] != slot_m) return 0;
+  if (c[43] != OP_SLOT_SUB_FIX || c[44] != slot_n) return 0;
+  if (c[45] != 1 || c[46] != 0) return 0;
+  if (c[47] != OP_CALL_GLOBAL) return 0;
+  if (c[49] != 2) return 0;
+  if (c[50] != OP_TAIL_SELF || c[51] != 2 || c[52] != OP_RET) return 0;
+  if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS) return 0;
+
+  int off_m = (int)offsetof(env_t, inline_vals[0]) + (int)slot_m * 8;
+  int off_n = (int)offsetof(env_t, inline_vals[0]) + (int)slot_n * 8;
+  if (off_m > 32760 || off_n > 32760) return 0;
+
+  int n = 0;
+
+  /* entry: load m,n into x1,x2; tag-check both. x0 stays as env. */
+  int entry_pc = n;
+  out[n++] = arm64_ldr_imm(1, 0, off_m);   /* x1 = m */
+  out[n++] = arm64_ldr_imm(2, 0, off_n);   /* x2 = n */
+  int patch_da = n; out[n++] = 0;          /* tbz x1,#0,deopt */
+  int patch_db = n; out[n++] = 0;          /* tbz x2,#0,deopt */
+
+  /* if m == FIX(0) (= 1): return n + 8 (= n + FIX(1) - FIX(0) = n+1 tagged). */
+  out[n++] = arm64_cmp_imm(1, 1);
+  int patch_not_m0 = n; out[n++] = 0;      /* b.ne not_m0 */
+  out[n++] = arm64_add_imm(0, 2, 8);       /* x0 = x2 + 8 (tagged n+1) */
+  out[n++] = arm64_ret();
+
+  int not_m0_pc = n;
+  /* if n == FIX(0) (= 1): tail-self (m-1, 1). */
+  out[n++] = arm64_cmp_imm(2, 1);
+  int patch_not_n0 = n; out[n++] = 0;      /* b.ne not_n0 */
+  out[n++] = arm64_sub_imm(1, 1, 8);       /* x1 = m - 8 (tagged m-1) */
+  out[n++] = arm64_str_imm(1, 0, off_m);
+  n += emit_mov64(out + n, 3, 9);          /* tagged 1 = 9 */
+  out[n++] = arm64_str_imm(3, 0, off_n);
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);    /* b entry */
+  }
+
+  /* not_n0: nested CALL ack(m, n-1), then tail-self (m-1, result). */
+  int not_n0_pc = n;
+
+  /* prologue: stp x29,x30 (FP/LR); stp x19,x20. 32-byte frame, 16-aligned. */
+  out[n++] = arm64_stp_pre_sp(29, 30, -32);     /* sp -= 32; [sp+0]=fp,[sp+8]=lr */
+  out[n++] = arm64_stp_off_sp(19, 20, 16);      /* stp x19, x20, [sp, #16] */
+  out[n++] = arm64_mov_from_sp(29);             /* mov x29, sp */
+
+  out[n++] = arm64_mov_reg(19, 0);              /* x19 = env */
+  out[n++] = arm64_mov_reg(20, 1);              /* x20 = m_orig */
+
+  /* slot_n = n - 1 (tagged: -8). x2 still has n. */
+  out[n++] = arm64_sub_imm(2, 2, 8);
+  out[n++] = arm64_str_imm(2, 0, off_n);
+  /* slot_m unchanged — inner needs ack(m, n-1). */
+
+  /* BL entry (intra-buffer). */
+  {
+    int cur = n++;
+    int off = entry_pc - cur;
+    out[cur] = 0x94000000u | ((uint32_t)off & 0x3FFFFFFu);
+  }
+
+  /* tag-check result in x0; bail on non-fixnum. */
+  int patch_bail = n; out[n++] = 0;             /* tbz x0,#0,bail */
+
+  /* tail-self prep: slot_m = m_orig - 1, slot_n = result, env back in x0. */
+  out[n++] = arm64_sub_imm(20, 20, 8);
+  out[n++] = arm64_str_imm(20, 19, off_m);
+  out[n++] = arm64_str_imm(0,  19, off_n);
+  out[n++] = arm64_mov_reg(0, 19);
+
+  /* epilogue then b entry (tail-self). */
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);      /* ldp x19, x20, [sp, #16] */
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);     /* ldp fp,lr ; sp += 32 */
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);
+  }
+
+  /* bail: tear down + return x0 (NULL/error). */
+  int bail_pc = n;
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);      /* ldp x19, x20, [sp, #16] */
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  /* deopt (no frame yet). */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  /* Patch forward branches. */
+  out[patch_not_m0] = arm64_b_cond(1 /* NE */, not_m0_pc - patch_not_m0);
+  out[patch_not_n0] = arm64_b_cond(1 /* NE */, not_n0_pc - patch_not_n0);
+  out[patch_bail]   = arm64_tbz(0, 0, bail_pc - patch_bail);
+  out[patch_da]     = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db]     = arm64_tbz(2, 0, deopt_pc - patch_db);
+
+  /* Suppress unused-warning for the helper we resolved inline. */
+  (void)arm64_stp_pre_sp; (void)arm64_ldp_post_sp;
+
+  assert(n <= 64);
+  *outn = n;
+  return 1;
+}
+
 /* (fn (a b) (is (mod a b) K)) — 10-byte 2-param leaf, the divides? shape.
    Computes (a mod b == K) and returns t/nil. Native: sdiv + msub for the
    remainder, csel for the boolean result. ~10 cycles vs ~150 in bytecode. */
@@ -5970,8 +6129,10 @@ int jit_compile(bytecode_t *bc) {
     return bc && bc->jit ? 1 : 0;
   uint8_t *c = bc->code;
 
-  /* Identify the body shape. */
-  uint32_t insns[32];
+  /* Identify the body shape. arm64 instructions are fixed 4 bytes each;
+     128 ints = 512 bytes, matching the amd64 backend's buf[512]. The
+     widest shape today is ackermann (~50 instructions). */
+  uint32_t insns[128];
   int n = 0;
 
   if (try_jit_simple_tail_loop(bc, insns, &n)) {
@@ -5984,6 +6145,8 @@ int jit_compile(bytecode_t *bc) {
     /* iterative for-loop accumulator (forsum) — fall through */
   } else if (try_jit_modeq_leaf(bc, insns, &n)) {
     /* (is (mod a b) K) leaf — fall through */
+  } else if (try_jit_ackermann(bc, insns, &n)) {
+    /* ackermann — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
@@ -6058,9 +6221,9 @@ int jit_compile(bytecode_t *bc) {
     return 0; /* shape not recognized */
   }
 
-  /* All current shapes fit in well under 32 instructions. Trip if a
-     future shape (or a refactor of an existing one) overruns insns[32]. */
-  assert(n <= 32);
+  /* Hard cap is the insns[128] declaration above; trip if anything
+     exceeds the buffer. The widest shape today is ackermann (~50). */
+  assert(n <= 128);
   size_t sz = (size_t)n * 4;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);

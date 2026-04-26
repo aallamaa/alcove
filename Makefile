@@ -27,14 +27,20 @@ endif
 
 # Auto-detect libffi for the (ffi-fn ...) builtin. Without it, ffi-fn
 # is unavailable but everything else still builds (e.g. cross-compiling
-# for arm64 without libffi-dev:arm64 installed).
-FFI_OK := $(shell test -f /usr/include/x86_64-linux-gnu/ffi.h -o -f /usr/include/ffi.h -o -f /usr/include/aarch64-linux-gnu/ffi.h && echo yes)
-ifeq ($(FFI_OK),yes)
+# for arm64 without libffi installed).
+# Linux:        /usr/include/{,x86_64-linux-gnu/,aarch64-linux-gnu/}ffi.h
+# macOS+brew:   $(brew --prefix libffi)/include/ffi.h (Apple ships libffi
+#               as a system lib but no header in the SDK, so brew's libffi
+#               is the supported path on Darwin)
+FFI_BREW := $(shell command -v brew >/dev/null 2>&1 && brew --prefix libffi 2>/dev/null)
+ifneq ($(or $(wildcard /usr/include/ffi.h),$(wildcard /usr/include/x86_64-linux-gnu/ffi.h),$(wildcard /usr/include/aarch64-linux-gnu/ffi.h)),)
   FFI_FLAGS := -DALCOVE_FFI=1
   FFI_LIBS  := -lffi -ldl
-else
-  FFI_FLAGS :=
-  FFI_LIBS  :=
+else ifneq ($(FFI_BREW),)
+ifneq ($(wildcard $(FFI_BREW)/include/ffi.h),)
+  FFI_FLAGS := -DALCOVE_FFI=1 -I$(FFI_BREW)/include
+  FFI_LIBS  := -L$(FFI_BREW)/lib -lffi
+endif
 endif
 
 # Default goal: JIT release build (auto-arch). Explicit opt-outs:
