@@ -75,6 +75,8 @@ extern const char doc_eq[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
 extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
 extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
 extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
+extern const char doc_bitand[], doc_bitor[], doc_bitxor[], doc_bitnot[];
+extern const char doc_shl[], doc_shr[];
 extern const char doc_sqrt[], doc_sqrtint[], doc_exp[], doc_expt[], doc_random[];
 extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
 extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
@@ -91,9 +93,18 @@ extern const char doc_time[], doc_exit[];
 extern const char doc_ffifn[];
 extern const char doc_doc[], doc_help[];
 
-/* Forward decls for the new help builtins (defined below the table). */
+/* Forward decls for cmds defined below the table — every callee must be
+   visible at table-init time. The original cmds had a top-level
+   #pragma-style sweep (functions all sit in alcove.c above this point);
+   newer additions land below and need explicit decls. */
 exp_t *doccmd(exp_t *e, env_t *env);
 exp_t *helpcmd(exp_t *e, env_t *env);
+exp_t *bitandcmd(exp_t *e, env_t *env);
+exp_t *bitorcmd(exp_t *e, env_t *env);
+exp_t *bitxorcmd(exp_t *e, env_t *env);
+exp_t *bitnotcmd(exp_t *e, env_t *env);
+exp_t *shlcmd(exp_t *e, env_t *env);
+exp_t *shrcmd(exp_t *e, env_t *env);
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
@@ -137,6 +148,17 @@ lispProc lispProcList[] = {
     LISPCMD("expt",          exptcmd,        doc_expt),
     LISPCMD("**",            exptcmd,        doc_expt),    /* Python-ish alias */
     LISPCMD("random",        randomcmd,      doc_random),
+    /* Bitwise — int-only. C-style spelling + Lisp-style aliases. */
+    LISPCMD("bit-and",       bitandcmd,      doc_bitand),
+    LISPCMD("&",             bitandcmd,      doc_bitand),
+    LISPCMD("bit-or",        bitorcmd,       doc_bitor),
+    /* No "|" alias — the reader uses | as a macro char for pipe-mode. */
+    LISPCMD("bit-xor",       bitxorcmd,      doc_bitxor),
+    LISPCMD("^",             bitxorcmd,      doc_bitxor),
+    LISPCMD("bit-not",       bitnotcmd,      doc_bitnot),
+    LISPCMD("~",             bitnotcmd,      doc_bitnot),
+    LISPCMD("<<",            shlcmd,         doc_shl),
+    LISPCMD(">>",            shrcmd,         doc_shr),
     /* Pairs and lists */
     LISPCMD("cons",          conscmd,        doc_cons),
     LISPCMD("car",           carcmd,         doc_car),
@@ -3173,6 +3195,62 @@ exp_t *modcmd(exp_t *e, env_t *env) {
   unrefexp(a);
   unrefexp(b);
   unrefexp(e);
+  return ret;
+}
+
+/* Bitwise ops on integers. Both args must be fixnums; floats are
+   rejected. Shifts mask the count to 0..63 so (<< 1 64) == (<< 1 0). */
+#define BITOP_AB(name, expr)                                                   \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *a = NULL, *b = NULL, *ret = NULL;                                   \
+    if (e->next && e->next->next) {                                            \
+      a = EVAL(e->next->content, env);                                         \
+      if (iserror(a)) { unrefexp(e); return a; }                               \
+      b = EVAL(e->next->next->content, env);                                   \
+      if (iserror(b)) { unrefexp(a); unrefexp(e); return b; }                  \
+      if (isnumber(a) && isnumber(b)) {                                        \
+        int64_t va = FIX_VAL(a), vb = FIX_VAL(b);                              \
+        ret = MAKE_FIX(expr);                                                  \
+      } else {                                                                 \
+        ret = error(ERROR_ILLEGAL_VALUE, e, env,                               \
+                    "bit op requires two integer args");                       \
+      }                                                                        \
+    } else {                                                                   \
+      ret = error(ERROR_MISSING_PARAMETER, e, env,                             \
+                  "bit op needs two args");                                    \
+    }                                                                          \
+    unrefexp(a); unrefexp(b); unrefexp(e);                                     \
+    return ret;                                                                \
+  }
+
+const char doc_bitand[] = "(bit-and a b) — bitwise AND on two integers. Alias: &.";
+BITOP_AB(bitandcmd, va & vb)
+const char doc_bitor[]  = "(bit-or a b) — bitwise OR on two integers. (No `|` alias: the reader uses | as a macro char.)";
+BITOP_AB(bitorcmd,  va | vb)
+const char doc_bitxor[] = "(bit-xor a b) — bitwise XOR on two integers. Alias: ^.";
+BITOP_AB(bitxorcmd, va ^ vb)
+const char doc_shl[]    = "(<< x n) — bitwise shift x left by n bits. Wraps inside int61.";
+BITOP_AB(shlcmd,    (int64_t)((uint64_t)va << (vb & 63)))
+const char doc_shr[]    = "(>> x n) — arithmetic shift x right by n bits (sign-preserving).";
+BITOP_AB(shrcmd,    va >> (vb & 63))
+#undef BITOP_AB
+
+/* (~ x) — bitwise NOT. ~0 is -1 (all bits set, fits cleanly in int61). */
+const char doc_bitnot[] = "(~ x) — bitwise NOT (complement). Alias: bit-not.";
+exp_t *bitnotcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NULL;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    if (isnumber(a)) {
+      ret = MAKE_FIX(~FIX_VAL(a));
+    } else {
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "~ requires an integer arg");
+    }
+  } else {
+    ret = error(ERROR_MISSING_PARAMETER, e, env, "(~ x) needs one arg");
+  }
+  unrefexp(a); unrefexp(e);
   return ret;
 }
 
