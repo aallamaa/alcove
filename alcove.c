@@ -766,7 +766,10 @@ inline exp_t *make_fromstr(char *str,int length)
 {
   exp_t *cur=make_nil();
   cur->ptr=memalloc(length+1,sizeof(char));
-  strncpy(cur->ptr,str,length);
+  /* memcpy not strncpy: we explicitly NUL-terminate at +length below.
+     strncpy here triggers -Wstringop-truncation because the count
+     equals the source length, with no room for the implicit NUL. */
+  memcpy(cur->ptr,str,length);
   *((char*)cur->ptr+length)='\0';
   return cur;
 }
@@ -1600,7 +1603,6 @@ exp_t *fncmd(exp_t *e, env_t *env)
 
 exp_t *defcmd(exp_t *e, env_t *env)
 {
-  keyval_t *ret;
   exp_t *val;
   exp_t *vali;
   exp_t *name;
@@ -1627,7 +1629,7 @@ exp_t *defcmd(exp_t *e, env_t *env)
           if (!env || !env->root)
             compile_lambda(val);  /* silent fallback to AST if body unsupported */
           if (!(env->d)) env->d=create_dict();
-          ret=set_get_keyval_dict(env->d,name->ptr,val);
+          set_get_keyval_dict(env->d,name->ptr,val);   /* return value (the kv) unused */
           alcove_global_gen++;  /* invalidate bytecode global-resolution caches */
         }
       else val = error(EXP_ERROR_BODY_NOT_LIST,e,env,"Error body is not a list");
@@ -1664,7 +1666,6 @@ exp_t *expandmacrocmd(exp_t *e,env_t *env){
 
 exp_t *defmacrocmd(exp_t *e, env_t *env)
 {
-  keyval_t *ret;
   exp_t *val;
   exp_t *vali;
   exp_t *name;
@@ -1684,7 +1685,7 @@ exp_t *defmacrocmd(exp_t *e, env_t *env)
         val->meta=(keyval_t *) strdup(name->ptr);
         if (env) val->next->bc = (struct bytecode_t *)ref_env(env);
         if (!(env->d)) env->d=create_dict();
-        ret=set_get_keyval_dict(env->d,name->ptr,val);
+        set_get_keyval_dict(env->d,name->ptr,val);   /* return value (the kv) unused */
         alcove_global_gen++;
       }
 
@@ -2155,7 +2156,8 @@ exp_t *veccmd(exp_t *e, env_t *env) {
     fill = EVAL(e->next->next->content, env);
   if (iserror(fill)) { unrefexp(nexp); unrefexp(e); return fill; }
   if (!isnumber(nexp)) {
-    if (nexp) unrefexp(nexp); unrefexp(fill); unrefexp(e);
+    if (nexp) unrefexp(nexp);
+    unrefexp(fill); unrefexp(e);
     return error(ERROR_NUMBER_EXPECTED, e, env, "(vec n init): n must be a number");
   }
   int64_t n = FIX_VAL(nexp);
@@ -2384,6 +2386,8 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   exp_t *atypes[ALC_FFI_MAX_ARGS] = {0};
   int n_a = 0;
   exp_t *err = NULL;
+  exp_t *ret = NULL;            /* declared up here so the `goto cleanup`
+                                   above doesn't jump over its init */
 
   if (!cur || !cur->next || !cur->next->next) {
     err = error(ERROR_MISSING_PARAMETER, e, env,
@@ -2433,7 +2437,7 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   f->display_name = (char*)memalloc(dnlen, 1);
   snprintf(f->display_name, dnlen, "%s:%s", (char*)libname->ptr, (char*)fnname->ptr);
 
-  exp_t *ret = make_nil();
+  ret = make_nil();
   ret->type = EXP_FFI;
   ret->ptr  = f;
 
@@ -3166,7 +3170,6 @@ exp_t *forcmd(exp_t *e,env_t *env){
   exp_t *curin;
   exp_t *lastidx=NULL;
   exp_t *retval=NULL;
-  keyval_t *keyv;
 
   if ((curvar=e->next)) {
     if ((curval=curvar->next)){
@@ -3206,7 +3209,7 @@ exp_t *forcmd(exp_t *e,env_t *env){
         {
           /* Rebind the loop variable to a fresh tagged fixnum. Tagged
              immediates don't allocate, so this is free. */
-          keyv = set_get_keyval_dict(newenv->d, curvar->content->ptr, MAKE_FIX(counter));
+          set_get_keyval_dict(newenv->d, curvar->content->ptr, MAKE_FIX(counter));
           curval=curin;
           while (curval) {
             if (ret) unrefexp(ret);
@@ -3237,7 +3240,6 @@ exp_t *eachcmd(exp_t *e,env_t *env){
   exp_t *retval=NULL;
   exp_t *tmpexp=NULL;
   exp_t *ret=NULL;
-  keyval_t *keyv;
 
   if ((curvar=e->next)) {
     if ((curval=curvar->next)){
@@ -3249,7 +3251,7 @@ exp_t *eachcmd(exp_t *e,env_t *env){
           curin=curval->next;
           tmpexp=retval;
           while (retval) {
-            keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,car(retval));
+            set_get_keyval_dict(newenv->d,curvar->content->ptr,car(retval));
             curval=curin;
             while (curval) {
               ret=EVAL(curval->content, newenv);
@@ -3591,7 +3593,6 @@ exp_t *letcmd(exp_t *e,env_t *env){
   exp_t *ret;
   exp_t *curvar;
   exp_t *curval;
-  keyval_t *keyv;
 
   if ((curvar=e->next)) {
     if ((curval=curvar->next)){
@@ -3600,7 +3601,7 @@ exp_t *letcmd(exp_t *e,env_t *env){
       if (issymbol(curvar->content)) {
         if ((ret=EVAL(curval->content, env))==NULL) ret=NIL_EXP;
         if iserror(ret) goto finish;
-        keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,ret);
+        set_get_keyval_dict(newenv->d,curvar->content->ptr,ret);
         unrefexp(ret);
         ret=NULL;
       }
@@ -3629,7 +3630,6 @@ exp_t *withcmd(exp_t *e,env_t *env){
   exp_t *curvar;
   exp_t *curval;
   exp_t *curex;
-  keyval_t *keyv;
   
   if ((curvar=e->next)) {
     if (!ispair(curvar->content)) {
@@ -3645,7 +3645,7 @@ exp_t *withcmd(exp_t *e,env_t *env){
           if (issymbol(curvar->content)) { 
             ret=EVAL(curval->content, env);
             if iserror(ret) goto finish;
-            keyv=set_get_keyval_dict(newenv->d,curvar->content->ptr,ret);
+            set_get_keyval_dict(newenv->d,curvar->content->ptr,ret);
             unrefexp(ret);
             ret = NULL;
           }
@@ -3958,7 +3958,12 @@ static exp_t *jit_call_global1_value(bytecode_t *bc, env_t *env,
 /* JIT-to-runtime callout for the 2-arg case. Same shape as the 1-arg
    variant but takes a pointer to a 2-element argv on the stack so the
    JIT site doesn't need an r8 helper. Returns the call's value in the
-   normal way (NULL → deopt; error → propagate). */
+   normal way (NULL → deopt; error → propagate).
+   Currently unused: the ackermann/tak shapes do direct intra-buffer
+   CALL into their own entry instead of going through this helper.
+   Kept around because the next 2-arg shape that ISN'T self-recursive
+   will need it. */
+__attribute__((unused))
 static exp_t *jit_call_global2_value(bytecode_t *bc, env_t *env,
                                       uint8_t const_idx, exp_t **argv2) {
   exp_t *callee;
@@ -7726,9 +7731,6 @@ static char *rl_read_form(int idx) {
 
 int main(int argc, char *argv[])
 {
-  //  char *cmd_res;
-  char *strdict="test dict";
-  //keyval_t* kv;
   dict_t* dict=create_dict();
   env_t *global=make_env(NULL);
   FILE *stream;
