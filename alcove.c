@@ -5776,6 +5776,110 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* 48-byte for-loop accumulator shape — forsum pattern.
+     (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S)))))
+   Iteratively: i, s untagged; loop while i <= n; s += K_step_s; i++. */
+static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 48) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_FIX) return 0;
+  int16_t K_init_s = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
+  if (c[3] != OP_BIND_SLOT) return 0;
+  if (c[5] != OP_LOAD_FIX) return 0;
+  int16_t K_init_i = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
+  if (c[8] != OP_BIND_SLOT) return 0;
+  if (c[10] != OP_LOAD_SLOT) return 0;
+  uint8_t slot_arg = c[11];
+  if (c[12] != OP_BIND_SLOT) return 0;
+  if (c[14] != OP_LOAD_CONST) return 0;
+  if (c[16] != OP_SLOT_LE_SLOT) return 0;
+  if (c[19] != OP_BR_IF_FALSE) return 0;
+  int16_t br_off = (int16_t)((uint16_t)c[20] | ((uint16_t)c[21] << 8));
+  if (br_off != 19) return 0;
+  if (c[22] != OP_POP) return 0;
+
+  uint8_t step_s_op = c[23];
+  if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX) return 0;
+  int16_t K_step_s = (int16_t)((uint16_t)c[25] | ((uint16_t)c[26] << 8));
+  if (c[27] != OP_STORE_SLOT) return 0;
+
+  if (c[29] != OP_LOAD_SLOT) return 0;
+  if (c[31] != OP_LOAD_FIX) return 0;
+  int16_t K_step_i = (int16_t)((uint16_t)c[32] | ((uint16_t)c[33] << 8));
+  if (K_step_i != 1) return 0;
+  if (c[34] != OP_ADD) return 0;
+  if (c[35] != OP_STORE_SLOT) return 0;
+  if (c[37] != OP_POP) return 0;
+  if (c[38] != OP_JUMP) return 0;
+  int16_t jmp_off = (int16_t)((uint16_t)c[39] | ((uint16_t)c[40] << 8));
+  if (jmp_off != -25) return 0;
+
+  if (c[41] != OP_UNBIND_SLOT) return 0;
+  if (c[43] != OP_UNBIND_SLOT) return 0;
+  if (c[45] != OP_UNBIND_SLOT) return 0;
+  if (c[47] != OP_RET) return 0;
+  if (slot_arg >= ENV_INLINE_SLOTS) return 0;
+
+  int arg_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot_arg * 8;
+  if (arg_off < 0 || arg_off > 32760) return 0;
+
+  /* K_step_s clamped to arm64 add_imm/sub_imm 12-bit range. K_step_i
+     fixed at 1 (verified above). K_init_i / K_init_s arbitrary int16
+     — emit via mov64 to be safe. */
+  int step_abs = (int)K_step_s; if (step_abs < 0) step_abs = -step_abs;
+  if (step_abs > 4095) return 0;
+
+  int n = 0;
+  /* Load + tag-check + untag n_max into x1. */
+  out[n++] = arm64_ldr_imm(1, 0, arg_off);
+  int patch_tbz = n;
+  out[n++] = 0;                                 /* tbz x1,#0,deopt */
+  out[n++] = arm64_asr_imm(1, 1, 3);           /* x1 = n_max (untagged) */
+
+  /* x2 = i (init), x3 = s (init). */
+  n += emit_mov64(out + n, 2, (uint64_t)(int64_t)K_init_i);
+  n += emit_mov64(out + n, 3, (uint64_t)(int64_t)K_init_s);
+
+  /* loop_top: cmp i, n_max; b.gt done */
+  int loop_top = n;
+  out[n++] = arm64_cmp_reg(2, 1);
+  int patch_done = n;
+  out[n++] = 0;                                 /* b.gt done */
+
+  /* s op= K_step_s */
+  if (step_s_op == OP_SLOT_ADD_FIX)
+    out[n++] = arm64_add_imm(3, 3, step_abs);
+  else
+    out[n++] = arm64_sub_imm(3, 3, step_abs);
+
+  /* i++ */
+  out[n++] = arm64_add_imm(2, 2, 1);
+
+  {
+    int cur = n++;
+    out[cur] = arm64_b(loop_top - cur);
+  }
+
+  /* done: x0 = (s << 3) | 1, ret. */
+  int done_pc = n;
+  out[n++] = arm64_lsl_imm(0, 3, 3);
+  out[n++] = arm64_orr_imm_bit0(0, 0);
+  out[n++] = arm64_ret();
+
+  /* deopt: x0 = NULL, ret. */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
+  out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+
+  assert(n <= 32);
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit)
     return bc && bc->jit ? 1 : 0;
@@ -5791,6 +5895,8 @@ int jit_compile(bytecode_t *bc) {
     /* iterative-fib fast path — fall through */
   } else if (try_jit_recurse_mul_one(bc, insns, &n)) {
     /* iterative-fact fast path — fall through */
+  } else if (try_jit_for_loop_inc(bc, insns, &n)) {
+    /* iterative for-loop accumulator (forsum) — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
