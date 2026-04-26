@@ -1,4 +1,4 @@
 ; Build a list 1..N, sum it via reduce. Exercises cons + traversal + HOF.
 (def build (i n acc) (if (> i n) acc (build (+ i 1) n (cons i acc))))
-(= xs (build 1 5000 (list)))
+(= xs (build 1 100000 (list)))
 (prn (reduce (fn (a b) (+ a b)) 0 xs))

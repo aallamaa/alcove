@@ -4217,6 +4217,26 @@ static int x64_mov_rsp_reg(uint8_t *buf, int src) {
   buf[3] = 0x24;                                  /* SIB: scale=00, index=100 (none), base=100 (rsp) */
   return 4;
 }
+/* sar r/m64, imm8  →  REX.W 0xC1 /7 imm8.  Arithmetic shift right by
+   imm8. We use this to untag fixnums (sar reg, 3) where the LSB is the
+   tag bit and the value is in the upper 61 bits with sign-extension. */
+static int x64_sar_imm8(uint8_t *buf, int dst, uint8_t imm) {
+  buf[0] = 0x48;
+  buf[1] = 0xC1;
+  buf[2] = (uint8_t)(0xF8 | (dst & 7));
+  buf[3] = imm;
+  return 4;
+}
+/* imul r64, r/m64  →  REX.W 0x0F 0xAF /r.  Two-operand signed multiply,
+   dst = dst * src. No flags-on-overflow paranoia: alcove fixnums are
+   61-bit, products that would overflow get truncated (caller's problem). */
+static int x64_imul_reg_reg(uint8_t *buf, int dst, int src) {
+  buf[0] = 0x48;
+  buf[1] = 0x0F;
+  buf[2] = 0xAF;
+  buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  return 4;
+}
 /* add r64, [rsp + 0]  (counterpart of x64_mov_rsp_reg for the load side) */
 static int x64_add_reg_rsp(uint8_t *buf, int dst) {
   buf[0] = 0x48;
@@ -4631,6 +4651,267 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   return 1;
 }
 
+/* (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S))))) —
+   the forsum shape. 48-byte exact match for a `for`-loop accumulator
+   that increments by constant. Bytecode pattern:
+     LOAD_FIX K_INIT_S, BIND_SLOT slot_s
+     LOAD_FIX K_INIT_I, BIND_SLOT slot_i
+     LOAD_SLOT 0,       BIND_SLOT slot_n           ; n_max = arg
+     LOAD_CONST C       (preroll, executed once)
+     SLOT_LE_SLOT slot_i slot_n
+     BR_IF_FALSE +19
+     POP
+     SLOT_(ADD|SUB)_FIX slot_s K_STEP_S
+     STORE_SLOT slot_s
+     LOAD_SLOT slot_i, LOAD_FIX 1, ADD, STORE_SLOT slot_i, POP
+     JUMP -25
+     UNBIND_SLOT slot_n, slot_i, slot_s, RET
+   We emit a tight native loop: untag n_max once, run i/s in untagged
+   regs, retag s on exit. ~5 cycles per iteration. */
+static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 48) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0]  != OP_LOAD_FIX) return 0;
+  int16_t K_init_s = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
+  if (c[3]  != OP_BIND_SLOT) return 0;
+  uint8_t slot_s = c[4];
+  if (c[5]  != OP_LOAD_FIX) return 0;
+  int16_t K_init_i = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
+  if (c[8]  != OP_BIND_SLOT) return 0;
+  uint8_t slot_i = c[9];
+  if (c[10] != OP_LOAD_SLOT) return 0;
+  uint8_t slot_arg = c[11];
+  if (c[12] != OP_BIND_SLOT) return 0;
+  uint8_t slot_n = c[13];
+  if (c[14] != OP_LOAD_CONST) return 0;
+  if (c[16] != OP_SLOT_LE_SLOT) return 0;
+  if (c[17] != slot_i || c[18] != slot_n) return 0;
+  if (c[19] != OP_BR_IF_FALSE) return 0;
+  /* loop-exit branch offset: must land on first UNBIND. */
+  int16_t br_off = (int16_t)((uint16_t)c[20] | ((uint16_t)c[21] << 8));
+  if (br_off != 19) return 0;
+  if (c[22] != OP_POP) return 0;
+
+  uint8_t step_s_op = c[23];
+  if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX) return 0;
+  if (c[24] != slot_s) return 0;
+  int16_t K_step_s = (int16_t)((uint16_t)c[25] | ((uint16_t)c[26] << 8));
+  if (c[27] != OP_STORE_SLOT || c[28] != slot_s) return 0;
+
+  if (c[29] != OP_LOAD_SLOT || c[30] != slot_i) return 0;
+  if (c[31] != OP_LOAD_FIX) return 0;
+  int16_t K_step_i = (int16_t)((uint16_t)c[32] | ((uint16_t)c[33] << 8));
+  if (K_step_i != 1) return 0;
+  if (c[34] != OP_ADD) return 0;
+  if (c[35] != OP_STORE_SLOT || c[36] != slot_i) return 0;
+  if (c[37] != OP_POP) return 0;
+  if (c[38] != OP_JUMP) return 0;
+  int16_t jmp_off = (int16_t)((uint16_t)c[39] | ((uint16_t)c[40] << 8));
+  if (jmp_off != -25) return 0;
+
+  if (c[41] != OP_UNBIND_SLOT) return 0;
+  if (c[43] != OP_UNBIND_SLOT) return 0;
+  if (c[45] != OP_UNBIND_SLOT) return 0;
+  if (c[47] != OP_RET) return 0;
+  if (slot_arg >= ENV_INLINE_SLOTS) return 0;
+
+  int32_t arg_off = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot_arg * 8;
+  int n = 0;
+
+  /* Load n_max from arg, tag-check, untag. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, arg_off);
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_deopt = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_sar_imm8(buf + n, X64_RAX, 3);             /* rax = n_max untagged */
+
+  /* Init i (rcx) and s (rdx) untagged. */
+  n += x64_mov_imm64(buf + n, X64_RCX, (uint64_t)(int64_t)K_init_i);
+  n += x64_mov_imm64(buf + n, X64_RDX, (uint64_t)(int64_t)K_init_s);
+
+  /* Loop top: cmp rcx, rax; jg done */
+  int loop_top = n;
+  /* cmp rcx, rax  →  REX.W 0x39 /r, ModR/M 0xC0|src<<3|dst */
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RAX & 7) << 3) | (X64_RCX & 7));
+  int jcc_done = n;
+  n += x64_jcc_rel32(buf + n, 0x0F, 0);              /* jg done */
+
+  /* s += K_step_s (or -=) */
+  if (step_s_op == OP_SLOT_ADD_FIX)
+    n += x64_add_imm32(buf + n, X64_RDX, (int32_t)K_step_s);
+  else
+    n += x64_sub_imm32(buf + n, X64_RDX, (int32_t)K_step_s);
+
+  /* i += 1 */
+  n += x64_add_imm32(buf + n, X64_RCX, 1);
+
+  /* jmp loop_top */
+  int jmp_back_pc = n;
+  n += x64_jmp_rel32(buf + n, 0);
+  x64_patch_rel32(buf, jmp_back_pc, 5, loop_top);
+
+  /* done: re-tag s into rax and return. */
+  int done_pc = n;
+  /* shl rdx, 3 →  REX.W 0xC1 /4 imm8.  ModR/M = 0xE0 | (rdx&7) = 0xE2 */
+  buf[n++] = 0x48; buf[n++] = 0xC1; buf[n++] = (uint8_t)(0xE0 | (X64_RDX & 7)); buf[n++] = 3;
+  /* or rdx, 1  →  REX.W 0x83 /1 imm8.  ModR/M = 0xC8 | (rdx&7) = 0xCA */
+  buf[n++] = 0x48; buf[n++] = 0x83; buf[n++] = (uint8_t)(0xC8 | (X64_RDX & 7)); buf[n++] = 1;
+  n += x64_mov_reg_reg(buf + n, X64_RAX, X64_RDX);
+  n += x64_ret(buf + n);
+
+  /* deopt → return NULL */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jcc_done, 6, done_pc);
+  x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
+
+  assert(n <= 128);
+  *outn = n;
+  return 1;
+}
+
+/* (fn (n) (if (cmp n K1) BASE (* n (f (op n K2))))) — 24-byte
+   non-tail single-arg recursion with multiplication. The fact shape:
+     0000 SLOT_LT_FIX slot=0 imm=K1
+     0004 BR_IF_FALSE +6
+     0007 LOAD_FIX BASE
+     0010 JUMP +10
+     0013 LOAD_SLOT 0
+     0015 SLOT_(SUB|ADD)_FIX slot=0 imm=K2
+     0019 CALL_GLOBAL idx=I nargs=1
+     0022 MUL
+     0023 RET
+   Compiles to: tag-check n; if cmp true return tagged BASE; else save
+   tagged n in rbx; call jit_call_global1_value with (n op K2); tag-check
+   result; tagged-multiply n*result; return. */
+static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 24) return 0;
+  uint8_t *c = bc->code;
+
+  /* base-case predicate */
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_LT_FIX && cmp_op != OP_SLOT_GT_FIX &&
+      cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX) return 0;
+  uint8_t slot = c[1];
+  if (slot >= ENV_INLINE_SLOTS) return 0;
+  int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  if (c[7] != OP_LOAD_FIX) return 0;
+  int16_t BASE = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
+  if (c[10] != OP_JUMP) return 0;
+
+  /* recurse arm */
+  if (c[13] != OP_LOAD_SLOT || c[14] != slot) return 0;
+  uint8_t step_op = c[15];
+  if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX) return 0;
+  if (c[16] != slot) return 0;
+  int16_t K2 = (int16_t)((uint16_t)c[17] | ((uint16_t)c[18] << 8));
+
+  if (c[19] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx = c[20];
+  if (c[21] != 1) return 0;
+  if (idx >= bc->nconsts) return 0;
+  if (c[22] != OP_MUL) return 0;
+  if (c[23] != OP_RET) return 0;
+
+  int32_t slot_off  = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
+  int32_t K1_tagged = ((int32_t)K1   << 3) | 1;
+  int32_t K2_delta  = ((int32_t)K2)  << 3;
+  uint64_t BASE_tag = ((uint64_t)(int64_t)BASE << 3) | 1;
+
+  /* base case taken on the FAILURE of the cmp. The cc here is the one
+     that triggers the BASE return — same convention as recurse_add_two
+     but mirrored (we fall-through into the recurse path on the inverse). */
+  uint8_t inv_cc;
+  switch (cmp_op) {
+    case OP_SLOT_LT_FIX: inv_cc = 0x0D; break;   /* recurse on jge */
+    case OP_SLOT_GT_FIX: inv_cc = 0x0E; break;   /* recurse on jle */
+    case OP_SLOT_LE_FIX: inv_cc = 0x0F; break;   /* recurse on jg  */
+    case OP_SLOT_GE_FIX: inv_cc = 0x0C; break;   /* recurse on jl  */
+    default: return 0;
+  }
+
+  int n = 0;
+
+  /* Tag-check n. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_deopt = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* cmp n, K1_tagged; jcc → recurse on inverted cond. */
+  n += x64_cmp_imm32(buf + n, X64_RAX, K1_tagged);
+  int jcc_recurse = n;
+  n += x64_jcc_rel32(buf + n, inv_cc, 0);
+
+  /* base case: return tagged BASE */
+  n += x64_mov_imm64(buf + n, X64_RAX, BASE_tag);
+  n += x64_ret(buf + n);
+
+  /* recurse: stack now %16=8 (call entry); push rbx + sub rsp,8 → aligned. */
+  int recurse_pc = n;
+  n += x64_push_reg(buf + n, X64_RBX);
+  n += x64_sub_imm32(buf + n, 4 /* rsp */, 8);
+  n += x64_mov_reg_reg(buf + n, X64_RBX, X64_RAX);   /* rbx = tagged n */
+
+  /* call jit_call_global1_value(bc, env, idx, MAKE_FIX(n op K2)).
+     Arg order (SysV): rdi=bc, rsi=env, rdx=idx, rcx=arg. We currently
+     hold env in rdi — move it to rsi first, then load bc into rdi. */
+  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RDI);   /* rsi = env */
+  n += x64_mov_imm64(buf + n, X64_RDI, (uint64_t)(uintptr_t)bc);
+  n += x64_mov_imm64(buf + n, X64_RDX, (uint64_t)idx);
+  n += x64_mov_reg_reg(buf + n, X64_RCX, X64_RBX);
+  if (step_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, K2_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, K2_delta);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&jit_call_global1_value);
+  n += x64_call_reg(buf + n, X64_RAX);
+
+  /* tag-check call result; non-fixnum → bail (NULL/error in rax). */
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_bail = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* Tagged multiply: rax = result, rbx = tagged n. Both have low bit=1.
+     Untag both: sub 1, sar 3 for one operand (any one) → 8a*b = 8(ab),
+     then add 1 to re-tag. */
+  n += x64_sub_imm32(buf + n, X64_RAX, 1);    /* rax = 8r */
+  n += x64_sub_imm32(buf + n, X64_RBX, 1);    /* rbx = 8n */
+  n += x64_sar_imm8 (buf + n, X64_RBX, 3);    /* rbx = n  */
+  n += x64_imul_reg_reg(buf + n, X64_RAX, X64_RBX); /* rax = 8(rn) */
+  n += x64_add_imm32(buf + n, X64_RAX, 1);    /* rax = MAKE_FIX(rn) */
+
+  /* tear down + return */
+  n += x64_add_imm32(buf + n, 4 /* rsp */, 8);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* bail: tear down and return rax (NULL or error exp). */
+  int bail_pc = n;
+  n += x64_add_imm32(buf + n, 4 /* rsp */, 8);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* deopt: no frame */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jcc_recurse, 6, recurse_pc);
+  x64_patch_rel32(buf, jz_bail,     6, bail_pc);
+  x64_patch_rel32(buf, jz_deopt,    6, deopt_pc);
+
+  assert(n <= 200);
+  *outn = n;
+  return 1;
+}
+
 /* (fn (a b) (is (mod a b) K)) — 2-param leaf computing tagged
    modulo + equality, returns t/nil. The divides? shape from sieve.
    Bytecode (10 bytes):
@@ -4702,6 +4983,17 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
   return 1;
 }
 
+/* Set via env: ALCOVE_JIT_TRACE=1 to log which shape (or "miss") matched
+   for each bytecode submitted to jit_compile. Off by default. Cached on
+   first call. */
+static int jit_trace(void) {
+  static int v = -1;
+  if (v < 0) v = (getenv("ALCOVE_JIT_TRACE") != NULL);
+  return v;
+}
+#define JT(shape) do { if (jit_trace()) fprintf(stderr, \
+  "[jit] %-28s ncode=%d\n", (shape), bc->ncode); } while (0)
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit) return bc && bc->jit ? 1 : 0;
   uint8_t *c = bc->code;
@@ -4710,18 +5002,25 @@ int jit_compile(bytecode_t *bc) {
   int n = 0;
 
   if (try_jit_simple_tail_loop(bc, buf, &n)) {
-    /* matched — fall through to mmap+install */
+    JT("simple_tail_loop");
   } else
   if (try_jit_tail_loop_with_call(bc, buf, &n)) {
-    /* matched — fall through to mmap+install */
+    JT("tail_loop_with_call");
   } else
   if (try_jit_recurse_add_two(bc, buf, &n)) {
-    /* matched — fall through to mmap+install */
+    JT("recurse_add_two");
+  } else
+  if (try_jit_recurse_mul_one(bc, buf, &n)) {
+    JT("recurse_mul_one");
+  } else
+  if (try_jit_for_loop_inc(bc, buf, &n)) {
+    JT("for_loop_inc");
   } else
   if (try_jit_modeq_leaf(bc, buf, &n)) {
-    /* matched — fall through to mmap+install */
+    JT("modeq_leaf");
   } else
   if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
+    JT("leaf_const");
     /* (fn () K)  →  mov rax, tagged; ret */
     int16_t k = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
     uint64_t tagged = ((uint64_t)(int64_t)k << 3) | 1;
@@ -4730,6 +5029,7 @@ int jit_compile(bytecode_t *bc) {
   }
   else if (bc->ncode == 3 && c[0] == OP_LOAD_SLOT &&
            c[1] < ENV_INLINE_SLOTS && c[2] == OP_RET) {
+    JT("leaf_identity");
     /* (fn (... s ...) s)  →  mov rax, [rdi + slot_off]; ret */
     int32_t slot_off = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
     n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, slot_off);
@@ -4740,6 +5040,7 @@ int jit_compile(bytecode_t *bc) {
            c[2] == OP_LOAD_FIX &&
            (c[5] == OP_ADD || c[5] == OP_SUB || c[5] == OP_MUL) &&
            c[6] == OP_RET) {
+    JT("leaf_slot_op_fix");
     /* (fn (... s ...) (op s K)) for K in int16, op in {+, -, *}.
        For ADD/SUB: ±(K<<3) preserves the tag bit directly.
        For MUL:     drop tag (sub 1), imul by K, re-tag (add 1). */
@@ -4770,6 +5071,7 @@ int jit_compile(bytecode_t *bc) {
   else if (bc->ncode == 5 &&
            (c[0] == OP_SLOT_ADD_FIX || c[0] == OP_SLOT_SUB_FIX) &&
            c[1] < ENV_INLINE_SLOTS && c[4] == OP_RET) {
+    JT("leaf_slot_fix_super");
     int16_t k = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
     int32_t delta = ((int32_t)k) << 3;
     int32_t slot_off = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
@@ -4788,6 +5090,7 @@ int jit_compile(bytecode_t *bc) {
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
   }
   else {
+    JT("miss");
     return 0;  /* shape not recognized */
   }
 

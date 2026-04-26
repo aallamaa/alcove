@@ -14,4 +14,4 @@
       (if (is-prime-given acc i)
           (primes-up-to (+ i 1) n (cons i acc))
           (primes-up-to (+ i 1) n acc))))
-(prn (length (primes-up-to 2 1000 (list))))
+(prn (length (primes-up-to 2 5000 (list))))

@@ -6,4 +6,4 @@
       (* n (fact (- n 1)))))
 ; call fact 19 many times to amortize startup
 (def loop (k) (if (> k 0) (do (fact 19) (loop (- k 1))) k))
-(prn (loop 10000))
+(prn (loop 100000))

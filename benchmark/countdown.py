@@ -9,4 +9,4 @@ def loop(k):
         countdown(1000)
         k -= 1
     return k
-print(loop(1000))
+print(loop(10000))

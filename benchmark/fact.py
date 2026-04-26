@@ -9,4 +9,4 @@ def loop(k):
         fact(19)
         k -= 1
     return k
-print(loop(10000))
+print(loop(100000))

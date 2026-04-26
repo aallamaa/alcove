@@ -1,4 +1,4 @@
 (def forsum (n)
   (let s 0
     (for i 1 n (= s (+ s 1)))))
-(prn (forsum 1000000))
+(prn (forsum 10000000))
