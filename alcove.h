@@ -189,6 +189,7 @@ typedef enum {
   OP_VEC_LEN,        /* pop v           → push v->len (as fixnum) */
   OP_VEC_NEW,        /* pop init, pop n → push (vec n init) */
   OP_SQRT_INT,       /* pop n           → push (sqrt-int n) */
+  OP_LENGTH,         /* pop list        → push (length list) — walk cons chain */
 
   OP_MAX
 } alc_op;
