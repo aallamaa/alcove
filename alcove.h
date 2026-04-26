@@ -193,6 +193,12 @@ typedef enum {
   OP_MAX
 } alc_op;
 
+/* Mutable random-access array. Held by exp_t->ptr when type==EXP_VECTOR.
+   Each slot holds an owning ref to its element; freed in unrefexp by
+   walking data[0..len). The flexible-array member sits inline so one
+   calloc gives both header and data. */
+typedef struct { int64_t len; struct exp_t *data[]; } alc_vec_t;
+
 /* Global-resolution cache slot. One per consts[] entry; lazily allocated.
    Stores the last lookup result for an OP_LOAD_GLOBAL symbol along with
    the generation it was cached at. Mutations to global bindings bump

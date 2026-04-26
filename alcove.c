@@ -58,95 +58,110 @@ struct env_t *g_global_env = NULL;
    invoke, giving us O(1) C stack for tail-recursive code. */
 static int in_tail_position = 0;
 
-lispProc lispProcList[]={
-  /* name, arity, flags, level, cmd*/
-  {"verbose",2,0,0,verbosecmd},
-  {"quote",2,0,0,quotecmd},
-  {"if",2,FLAG_TAIL_AWARE,0,ifcmd},
-  {"=",2,0,0,equalcmd},
-  {"<",2,0,0,cmpcmd},
-  {">",2,0,0,cmpcmd},
-  {"<=",2,0,0,cmpcmd},
-  {">=",2,0,0,cmpcmd},
-  {"+",2,0,0,pluscmd},
-  {"*",2,0,0,multiplycmd},
-  {"-",2,0,0,minuscmd},
-  {"/",2,0,0,dividecmd},
-  {"cons",2,1,0,conscmd},
-  {"eval",2,1,0,evalcmd},
-  {"car",2,1,0,carcmd},
-  {"cdr",2,1,0,cdrcmd},
-  {"list",2,1,0,listcmd},
-  {"def",2,1,0,defcmd},
-  {"macroexpand-1",2,1,0,expandmacrocmd},
-  {"defmacro",2,1,0,defmacrocmd},
-  {"fn",2,1,0,fncmd},
-  {"let",2,1,0,letcmd},
-  {"with",2,1,0,withcmd},
-  {"sqrt",2,1,0,sqrtcmd},
-  {"exp",2,1,0,expcmd},
-  {"expt",2,1,0,exptcmd},
-  {"pr",2,1,0,prcmd},
-  {"print",2,1,0,prcmd},
-  {"prn",2,1,0,prncmd},
-  {"println",2,1,0,prncmd},
-  {"odd",2,1,0,oddcmd},
-  {"do",2,FLAG_TAIL_AWARE,0,docmd},
-  {"when",2,1,0,whencmd},
-  {"while",2,1,0,whilecmd},
-  {"repeat",2,1,0,repeatcmd},
-  {"and",2,1,0,andcmd},
-  {"or",2,1,0,orcmd},
-  {"no",2,1,0,nocmd},
-  {"is",2,1,0,iscmd},
-  {"iso",2,1,0,isocmd},
-  {"in",2,1,0,incmd},
-  {"case",2,1,0,casecmd},
-  {"for",2,1,0,forcmd},
-  {"each",2,1,0,eachcmd},
-  {"time",2,1,0,timecmd},
-  {"persist",2,1,0,persistcmd},
-  {"forget",2,1,0,forgetcmd},
-  {"savedb",2,1,0,savedbcmd},
-  {"loaddb",2,1,0,loaddbcmd},
-  {"ispersistent",2,1,0,ispersistentcmd},
-  {"inspect",2,1,0,inspectcmd},
-  {"disasm",2,1,0,disasmcmd},
-  {"dir",2,1,0,dircmd},
-  /* Stdlib additions (math/seq/predicates). */
-  {"mod",2,1,0,modcmd},
-  {"abs",2,1,0,abscmd},
-  {"max",2,1,0,maxcmd},
-  {"min",2,1,0,mincmd},
-  {"length",2,1,0,lengthcmd},
-  {"nth",2,1,0,nthcmd},
-  {"reverse",2,1,0,reversecmd},
-  {"append",2,1,0,appendcmd},
-  {"number?",2,1,0,numberpcmd},
-  {"string?",2,1,0,stringpcmd},
-  {"symbol?",2,1,0,symbolpcmd},
-  {"pair?",2,1,0,pairpcmd},
-  {"fn?",2,1,0,fnpcmd},
-  {"exit",2,1,0,exitcmd},
-  {"quit",2,1,0,exitcmd},
-  {"random",2,1,0,randomcmd},
-  {"apply",2,1,0,applycmd},
-  {"map",2,1,0,mapcmd},
-  {"filter",2,1,0,filtercmd},
-  {"reduce",2,1,0,reducecmd},
-  {"any?",2,1,0,anypcmd},
-  {"all?",2,1,0,allpcmd},
-  {"ffi-fn",2,1,0,ffifncmd},
-  /* Vectors — O(1) random-access array. (vec n init) creates length-n
-     vector filled with init; (vec-ref v i), (vec-set! v i val), (vec-len v). */
-  {"vec",2,1,0,veccmd},
-  {"vec-ref",2,1,0,vecrefcmd},
-  {"vec-set!",2,1,0,vecsetcmd},
-  {"vec-len",2,1,0,veclencmd},
-  /* Integer sqrt — for trial-division early exit. */
-  {"sqrt-int",2,1,0,sqrtintcmd},
+/* Builtin registration. Every entry's `arity` and `level` columns are
+   the same today; the macros hide them. Use LISPCMD_TAIL for control-
+   flow forms (if, do) that need FLAG_TAIL_AWARE so evaluate() exposes
+   in_tail_position to them. */
+#define LISPCMD(name, fn)       { name, 2, 0,               0, fn }
+#define LISPCMD_TAIL(name, fn)  { name, 2, FLAG_TAIL_AWARE, 0, fn }
 
+lispProc lispProcList[]={
+  /* Special forms / control flow */
+  LISPCMD     ("verbose",       verbosecmd),
+  LISPCMD     ("quote",         quotecmd),
+  LISPCMD_TAIL("if",            ifcmd),
+  LISPCMD_TAIL("do",            docmd),
+  LISPCMD     ("when",          whencmd),
+  LISPCMD     ("while",         whilecmd),
+  LISPCMD     ("repeat",        repeatcmd),
+  LISPCMD     ("and",           andcmd),
+  LISPCMD     ("or",            orcmd),
+  LISPCMD     ("case",          casecmd),
+  LISPCMD     ("for",           forcmd),
+  LISPCMD     ("each",          eachcmd),
+  LISPCMD     ("let",           letcmd),
+  LISPCMD     ("with",          withcmd),
+  /* Comparison / equality */
+  LISPCMD     ("=",             equalcmd),
+  LISPCMD     ("<",             cmpcmd),
+  LISPCMD     (">",             cmpcmd),
+  LISPCMD     ("<=",            cmpcmd),
+  LISPCMD     (">=",            cmpcmd),
+  LISPCMD     ("is",            iscmd),
+  LISPCMD     ("iso",           isocmd),
+  LISPCMD     ("in",            incmd),
+  LISPCMD     ("no",            nocmd),
+  /* Arithmetic */
+  LISPCMD     ("+",             pluscmd),
+  LISPCMD     ("*",             multiplycmd),
+  LISPCMD     ("-",             minuscmd),
+  LISPCMD     ("/",             dividecmd),
+  LISPCMD     ("mod",           modcmd),
+  LISPCMD     ("abs",           abscmd),
+  LISPCMD     ("max",           maxcmd),
+  LISPCMD     ("min",           mincmd),
+  LISPCMD     ("odd",           oddcmd),
+  LISPCMD     ("sqrt",          sqrtcmd),
+  LISPCMD     ("sqrt-int",      sqrtintcmd),
+  LISPCMD     ("exp",           expcmd),
+  LISPCMD     ("expt",          exptcmd),
+  LISPCMD     ("random",        randomcmd),
+  /* Pairs and lists */
+  LISPCMD     ("cons",          conscmd),
+  LISPCMD     ("car",           carcmd),
+  LISPCMD     ("cdr",           cdrcmd),
+  LISPCMD     ("list",          listcmd),
+  LISPCMD     ("length",        lengthcmd),
+  LISPCMD     ("nth",           nthcmd),
+  LISPCMD     ("reverse",       reversecmd),
+  LISPCMD     ("append",        appendcmd),
+  /* Vectors — O(1) random-access array */
+  LISPCMD     ("vec",           veccmd),
+  LISPCMD     ("vec-ref",       vecrefcmd),
+  LISPCMD     ("vec-set!",      vecsetcmd),
+  LISPCMD     ("vec-len",       veclencmd),
+  /* Functions and binding */
+  LISPCMD     ("def",           defcmd),
+  LISPCMD     ("fn",            fncmd),
+  LISPCMD     ("defmacro",      defmacrocmd),
+  LISPCMD     ("macroexpand-1", expandmacrocmd),
+  LISPCMD     ("eval",          evalcmd),
+  LISPCMD     ("apply",         applycmd),
+  /* Higher-order */
+  LISPCMD     ("map",           mapcmd),
+  LISPCMD     ("filter",        filtercmd),
+  LISPCMD     ("reduce",        reducecmd),
+  LISPCMD     ("any?",          anypcmd),
+  LISPCMD     ("all?",          allpcmd),
+  /* Predicates */
+  LISPCMD     ("number?",       numberpcmd),
+  LISPCMD     ("string?",       stringpcmd),
+  LISPCMD     ("symbol?",       symbolpcmd),
+  LISPCMD     ("pair?",         pairpcmd),
+  LISPCMD     ("fn?",           fnpcmd),
+  /* I/O */
+  LISPCMD     ("pr",            prcmd),
+  LISPCMD     ("print",         prcmd),
+  LISPCMD     ("prn",           prncmd),
+  LISPCMD     ("println",       prncmd),
+  /* Persistence */
+  LISPCMD     ("persist",       persistcmd),
+  LISPCMD     ("forget",        forgetcmd),
+  LISPCMD     ("savedb",        savedbcmd),
+  LISPCMD     ("loaddb",        loaddbcmd),
+  LISPCMD     ("ispersistent",  ispersistentcmd),
+  /* Introspection / utilities */
+  LISPCMD     ("inspect",       inspectcmd),
+  LISPCMD     ("disasm",        disasmcmd),
+  LISPCMD     ("dir",           dircmd),
+  LISPCMD     ("time",          timecmd),
+  LISPCMD     ("exit",          exitcmd),
+  LISPCMD     ("quit",          exitcmd),
+  /* FFI */
+  LISPCMD     ("ffi-fn",        ffifncmd),
 };
+#undef LISPCMD
+#undef LISPCMD_TAIL
 
 
 
@@ -267,8 +282,7 @@ inline int unrefexp(exp_t *e){
       alc_ffi_free(e->ptr);
     }
     else if (e->type==EXP_VECTOR && e->ptr) {
-      typedef struct { int64_t len; exp_t *data[]; } _alc_vec_local_t;
-      _alc_vec_local_t *v = (_alc_vec_local_t*)e->ptr;
+      alc_vec_t *v = (alc_vec_t*)e->ptr;
       int64_t i;
       for (i = 0; i < v->len; i++) unrefexp(v->data[i]);
       free(v);
@@ -746,8 +760,7 @@ void print_node(exp_t *node)
   else if (node->type==EXP_STRING) printf("\x1B[92m%s\"%s\"\x1B[39m",verbose?"_str:":"",(char *) node->ptr);
   else if (node->type==EXP_FLOAT) printf("\x1B[92m%s%lf\x1B[39m",verbose?"_flo:":"",node->f);
   else if (node->type==EXP_VECTOR) {
-    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_p_t;
-    _alc_vec_p_t *v = (_alc_vec_p_t*)node->ptr;
+    alc_vec_t *v = (alc_vec_t*)node->ptr;
     printf("#[");
     int64_t i;
     for (i = 0; i < v->len; i++) {
@@ -2134,8 +2147,8 @@ exp_t *sqrtcmd(exp_t *e, env_t *env){
    Each element holds an owning ref. Refcount + free walk all elements
    in unrefexp. The slow-sieve trial-division benchmark wins from this
    because we can use a sqrt-cutoff on smallest-first vector iteration
-   instead of cdr-walking a largest-first cons list. */
-typedef struct { int64_t len; exp_t *data[]; } alc_vec_t;
+   instead of cdr-walking a largest-first cons list.
+   alc_vec_t is now declared in alcove.h. */
 
 exp_t *make_vector(int64_t n, exp_t *fill) {
   alc_vec_t *v = (alc_vec_t*)memalloc(1, sizeof(alc_vec_t) + (size_t)n * sizeof(exp_t*));
@@ -7033,12 +7046,11 @@ l_slot_le_slot: {
 #undef SLOT_FIX_NUMERIC
 
 l_vec_ref: {
-    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_t;
     exp_t *iexp = POP(), *vexp = POP();
     if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
       unrefexp(iexp); unrefexp(vexp); RUNTIME_ERR("vec-ref: bad args");
     }
-    _alc_vec_t *v = (_alc_vec_t*)vexp->ptr;
+    alc_vec_t *v = (alc_vec_t*)vexp->ptr;
     int64_t i = FIX_VAL(iexp);
     if (i < 0 || i >= v->len) {
       unrefexp(iexp); unrefexp(vexp);
@@ -7050,13 +7062,12 @@ l_vec_ref: {
     NEXT;
   }
 l_vec_set: {
-    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_t;
     exp_t *valexp = POP(), *iexp = POP(), *vexp = POP();
     if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
       unrefexp(valexp); unrefexp(iexp); unrefexp(vexp);
       RUNTIME_ERR("vec-set!: bad args");
     }
-    _alc_vec_t *v = (_alc_vec_t*)vexp->ptr;
+    alc_vec_t *v = (alc_vec_t*)vexp->ptr;
     int64_t i = FIX_VAL(iexp);
     if (i < 0 || i >= v->len) {
       unrefexp(valexp); unrefexp(iexp); unrefexp(vexp);
@@ -7071,12 +7082,11 @@ l_vec_set: {
     NEXT;
   }
 l_vec_len: {
-    typedef struct { int64_t len; exp_t *data[]; } _alc_vec_t;
     exp_t *vexp = POP();
     if (!is_ptr(vexp) || vexp->type != EXP_VECTOR) {
       unrefexp(vexp); RUNTIME_ERR("vec-len: not a vector");
     }
-    int64_t n = ((_alc_vec_t*)vexp->ptr)->len;
+    int64_t n = ((alc_vec_t*)vexp->ptr)->len;
     unrefexp(vexp);
     PUSH(MAKE_FIX(n));
     NEXT;
