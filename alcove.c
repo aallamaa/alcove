@@ -5369,12 +5369,14 @@ static uint32_t arm64_orr_imm_bit0(int rd, int rn) {
 }
 /* STP Xt1, Xt2, [SP, #imm]!  — pre-indexed store-pair, SP -= |imm|.
    imm is in BYTES, must be 8-aligned, signed 7-bit shifted (×8). */
+__attribute__((unused))
 static uint32_t arm64_stp_pre_sp(int rt1, int rt2, int byte_offset) {
   uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
   return 0xA9800000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
          (uint32_t)rt1;
 }
 /* LDP Xt1, Xt2, [SP], #imm  — post-indexed load-pair, SP += imm. */
+__attribute__((unused))
 static uint32_t arm64_ldp_post_sp(int rt1, int rt2, int byte_offset) {
   uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
   return 0xA8C00000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
@@ -5386,6 +5388,7 @@ __attribute__((unused)) static uint32_t arm64_bl(int off_insns) {
   return 0x94000000u | ((uint32_t)off_insns & 0x3FFFFFFu);
 }
 /* BLR Xn  — branch with link to register (indirect call). */
+__attribute__((unused))
 static uint32_t arm64_blr(int rn) {
   return 0xD63F0000u | ((uint32_t)rn << 5);
 }
@@ -5688,6 +5691,91 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* 24-byte one-call recursion shape — fact pattern.
+     (def f (n) (if (cmp n K1) BASE (* n (f (n op K2)))))
+   Iteratively: acc = BASE; while !cmp(n, K1) { acc *= n; n = n op K2 }
+   ~3 cycles per iteration vs ~60 in the bytecode dispatch. */
+static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 24) return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_LT_FIX && cmp_op != OP_SLOT_GT_FIX &&
+      cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX) return 0;
+  uint8_t slot = c[1];
+  if (slot >= ENV_INLINE_SLOTS) return 0;
+  int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  if (c[7] != OP_LOAD_FIX) return 0;
+  int16_t BASE = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
+  if (c[10] != OP_JUMP) return 0;
+
+  if (c[13] != OP_LOAD_SLOT || c[14] != slot) return 0;
+  uint8_t step_op = c[15];
+  if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX) return 0;
+  if (c[16] != slot) return 0;
+  int16_t K2 = (int16_t)((uint16_t)c[17] | ((uint16_t)c[18] << 8));
+
+  if (c[19] != OP_CALL_GLOBAL) return 0;
+  if (c[21] != 1) return 0;
+  if (c[22] != OP_MUL || c[23] != OP_RET) return 0;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
+  if (slot_off < 0 || slot_off > 32760) return 0;
+  if ((int)K1 < 0 || (int)K1 > 4095) return 0;
+  int k2_abs = (int)K2; if (k2_abs < 0) k2_abs = -k2_abs;
+  if (k2_abs > 4095) return 0;
+
+  /* exit cc: BASE returned when cmp_op holds. */
+  int exit_cc;
+  switch (cmp_op) {
+    case OP_SLOT_LT_FIX: exit_cc = 11; break;
+    case OP_SLOT_GT_FIX: exit_cc = 12; break;
+    case OP_SLOT_LE_FIX: exit_cc = 13; break;
+    case OP_SLOT_GE_FIX: exit_cc = 10; break;
+    default: return 0;
+  }
+
+  int n = 0;
+  /* x1 = untagged n; x2 = acc; x3 = scratch (K2 if needed). */
+  out[n++] = arm64_ldr_imm(1, 0, slot_off);
+  int patch_tbz = n;
+  out[n++] = 0;                                 /* tbz x1,#0,deopt */
+  out[n++] = arm64_asr_imm(1, 1, 3);           /* untag */
+  n += emit_mov64(out + n, 2, (uint64_t)(int64_t)BASE);
+
+  int loop_top = n;
+  out[n++] = arm64_cmp_imm(1, (int)K1);
+  int patch_done = n;
+  out[n++] = 0;                                 /* b.<exit_cc> done */
+  out[n++] = arm64_mul(2, 2, 1);               /* acc *= n */
+  if (step_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, k2_abs);
+  else
+    out[n++] = arm64_add_imm(1, 1, k2_abs);
+  {
+    int cur = n++;
+    out[cur] = arm64_b(loop_top - cur);
+  }
+
+  int done_pc = n;
+  out[n++] = arm64_lsl_imm(0, 2, 3);
+  out[n++] = arm64_orr_imm_bit0(0, 0);
+  out[n++] = arm64_ret();
+
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_done] = arm64_b_cond(exit_cc, done_pc - patch_done);
+  out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+
+  assert(n <= 32);
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit)
     return bc && bc->jit ? 1 : 0;
@@ -5701,6 +5789,8 @@ int jit_compile(bytecode_t *bc) {
     /* matched — fall through to mmap+install */
   } else if (try_jit_recurse_add_two(bc, insns, &n)) {
     /* iterative-fib fast path — fall through */
+  } else if (try_jit_recurse_mul_one(bc, insns, &n)) {
+    /* iterative-fact fast path — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {

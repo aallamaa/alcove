@@ -11,13 +11,18 @@ endif
 # Auto-detect libreadline for REPL line editing + tab completion. The
 # project still builds and runs without it (just the plain stdin loop);
 # we only enable when the dev header is available.
-RL_OK := $(shell test -f /usr/include/readline/readline.h && echo yes)
-ifeq ($(RL_OK),yes)
+# Linux:        /usr/include/readline/readline.h (system pkg)
+# macOS+brew:   $(brew --prefix readline)/include/readline/readline.h
+#               (Apple's libedit doesn't ship the header at all)
+RL_BREW := $(shell command -v brew >/dev/null 2>&1 && brew --prefix readline 2>/dev/null)
+ifneq ($(wildcard /usr/include/readline/readline.h),)
   RL_FLAGS := -DALCOVE_READLINE=1
   RL_LIBS  := -lreadline
-else
-  RL_FLAGS :=
-  RL_LIBS  :=
+else ifneq ($(RL_BREW),)
+ifneq ($(wildcard $(RL_BREW)/include/readline/readline.h),)
+  RL_FLAGS := -DALCOVE_READLINE=1 -I$(RL_BREW)/include
+  RL_LIBS  := -L$(RL_BREW)/lib -lreadline
+endif
 endif
 
 # Auto-detect libffi for the (ffi-fn ...) builtin. Without it, ffi-fn
