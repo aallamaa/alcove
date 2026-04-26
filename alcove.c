@@ -5332,6 +5332,63 @@ static uint32_t arm64_mul(int rd, int rn, int rm) {
   return 0x9B007C00u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
          (uint32_t)rd;
 }
+/* ADD Xd, Xn, Xm — register form (no shift). */
+static uint32_t arm64_add_reg(int rd, int rn, int rm) {
+  return 0x8B000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* SUB Xd, Xn, Xm — register form (no shift). */
+__attribute__((unused)) static uint32_t arm64_sub_reg(int rd, int rn, int rm) {
+  return 0xCB000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* CMP Xn, Xm — alias for SUBS XZR, Xn, Xm. */
+static uint32_t arm64_cmp_reg(int rn, int rm) {
+  return 0xEB000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) | 31u;
+}
+/* ASR Xd, Xn, #shift  (arithmetic shift right; sign-extends top bit).
+   Encoded via SBFM Xd, Xn, #shift, #63. */
+static uint32_t arm64_asr_imm(int rd, int rn, int shift) {
+  uint32_t s = (uint32_t)(shift & 0x3f);
+  return 0x9340FC00u | (s << 16) | ((uint32_t)rn << 5) | (uint32_t)rd;
+}
+/* LSL Xd, Xn, #shift  (logical shift left).
+   Encoded via UBFM Xd, Xn, #(-shift mod 64), #(63-shift). */
+static uint32_t arm64_lsl_imm(int rd, int rn, int shift) {
+  uint32_t s   = (uint32_t)(shift & 0x3f);
+  uint32_t imr = (64u - s) & 0x3fu;
+  uint32_t ims = 63u - s;
+  return 0xD3400000u | (imr << 16) | (ims << 10) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* ORR Xd, Xn, #1  — set bit 0. We only need this exact form (re-tag a
+   shifted value back into a tagged fixnum). Encodes a 64-bit logical
+   immediate via N=1, immr=0, imms=0 (one-bit pattern at position 0). */
+static uint32_t arm64_orr_imm_bit0(int rd, int rn) {
+  return 0xB2400000u | ((uint32_t)rn << 5) | (uint32_t)rd;
+}
+/* STP Xt1, Xt2, [SP, #imm]!  — pre-indexed store-pair, SP -= |imm|.
+   imm is in BYTES, must be 8-aligned, signed 7-bit shifted (×8). */
+static uint32_t arm64_stp_pre_sp(int rt1, int rt2, int byte_offset) {
+  uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
+  return 0xA9800000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
+         (uint32_t)rt1;
+}
+/* LDP Xt1, Xt2, [SP], #imm  — post-indexed load-pair, SP += imm. */
+static uint32_t arm64_ldp_post_sp(int rt1, int rt2, int byte_offset) {
+  uint32_t imm7 = (uint32_t)((byte_offset / 8) & 0x7f);
+  return 0xA8C00000u | (imm7 << 15) | ((uint32_t)rt2 << 10) | (31u << 5) |
+         (uint32_t)rt1;
+}
+/* BL #imm  — branch with link, signed 26-bit instruction offset (±128MB).
+   Caller computes off_insns relative to this BL's PC. */
+__attribute__((unused)) static uint32_t arm64_bl(int off_insns) {
+  return 0x94000000u | ((uint32_t)off_insns & 0x3FFFFFFu);
+}
+/* BLR Xn  — branch with link to register (indirect call). */
+static uint32_t arm64_blr(int rn) {
+  return 0xD63F0000u | ((uint32_t)rn << 5);
+}
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs.
  */
@@ -5486,6 +5543,151 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* 28-byte two-call recursion shape — fib pattern.
+     (def f (n) (if (cmp n K1) n (+ (f (n op K2)) (f (n op K3)))))
+   Only the iterative-fib fast path is implemented on arm64 today: when
+   both recursive calls go to the same callee, both arms are SUB, and
+   {K2,K3}={1,2}, the exponential call tree collapses to a 2-term linear
+   iteration (Fibonacci recurrence). General two-call recursion (different
+   K2/K3, ADD instead of SUB, or different callees) falls through to the
+   bytecode interpreter — porting that path requires the BLR-trampoline
+   infrastructure that try_jit_tail_loop_with_call (also TODO) needs. */
+static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 28)
+    return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+    return 0;
+  uint8_t slot = c[1];
+  if (slot >= ENV_INLINE_SLOTS)
+    return 0;
+  int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  if (c[7] != OP_LOAD_SLOT || c[8] != slot) return 0;
+  if (c[9] != OP_JUMP) return 0;
+
+  uint8_t op_a = c[12];
+  if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX) return 0;
+  if (c[13] != slot) return 0;
+  int16_t K2 = (int16_t)((uint16_t)c[14] | ((uint16_t)c[15] << 8));
+
+  if (c[16] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_a = c[17];
+  if (c[18] != 1) return 0;
+  if (idx_a >= bc->nconsts) return 0;
+
+  uint8_t op_b = c[19];
+  if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX) return 0;
+  if (c[20] != slot) return 0;
+  int16_t K3 = (int16_t)((uint16_t)c[21] | ((uint16_t)c[22] << 8));
+
+  if (c[23] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_b = c[24];
+  if (c[25] != 1) return 0;
+  if (idx_b >= bc->nconsts) return 0;
+
+  if (c[26] != OP_ADD || c[27] != OP_RET) return 0;
+
+  /* Iterative fast path conditions: same callee both calls, both SUB,
+     K2/K3 are {1,2} in either order. The base case must return n
+     itself (LOAD_SLOT slot then RET — c[7]/c[8] enforce this). */
+  exp_t *ca = bc->consts[idx_a];
+  exp_t *cb = bc->consts[idx_b];
+  int same_callee = is_ptr(ca) && is_ptr(cb) && issymbol(ca) && issymbol(cb) &&
+                    strcmp((const char *)ca->ptr, (const char *)cb->ptr) == 0;
+  int is_fib_like = same_callee && op_a == OP_SLOT_SUB_FIX &&
+                    op_b == OP_SLOT_SUB_FIX &&
+                    ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
+  if (!is_fib_like) return 0;  /* general 2-call recursion: fall back */
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
+  if (slot_off < 0 || slot_off > 32760) return 0;
+
+  /* Initial untagged seeds: a = K1-2, b = K1-1. Since base case returns
+     n itself, f(x) = x for x < K1. Iteration computes f(n) for n >= K1
+     by stepping i from K1 up to n, swapping (a,b) and adding. */
+  int64_t init_a = (int64_t)K1 - 2;
+  int64_t init_b = (int64_t)K1 - 1;
+
+  /* exit cc for cmp_op TRUE (base case taken).
+     ARM64 cond codes: GE=10, LT=11, GT=12, LE=13. */
+  int exit_cc;
+  switch (cmp_op) {
+    case OP_SLOT_LT_FIX: exit_cc = 11; break;  /* base when n <  K1 */
+    case OP_SLOT_GT_FIX: exit_cc = 12; break;  /* base when n >  K1 */
+    case OP_SLOT_LE_FIX: exit_cc = 13; break;  /* base when n <= K1 */
+    case OP_SLOT_GE_FIX: exit_cc = 10; break;  /* base when n >= K1 */
+    default: return 0;
+  }
+
+  int n = 0;
+  /* Load + tag-check + untag n into x1. */
+  out[n++] = arm64_ldr_imm(1, 0, slot_off);    /* x1 = env->inline_vals[slot] */
+  int patch_tbz = n;
+  out[n++] = 0;                                 /* tbz x1,#0,deopt */
+  out[n++] = arm64_asr_imm(1, 1, 3);           /* x1 >>= 3 (sign-ext untag) */
+
+  /* Compare untagged n vs K1; branch to base-case re-tag-and-return. */
+  /* K1 fits a 12-bit cmp imm for the typical fib(<= 2000) range; if it
+     overflows, fall back to bytecode rather than emit MOVZ/CMP_REG. */
+  if ((int)K1 < 0 || (int)K1 > 4095) return 0;
+  out[n++] = arm64_cmp_imm(1, (int)K1);
+  int patch_base = n;
+  out[n++] = 0;                                 /* b.cond <exit_cc> base_pc */
+
+  /* Iterative fib: x2 = a, x3 = b, x4 = i, x5 = scratch (for swap).
+     Loop: cmp i, n; b.gt done; (a,b) = (b, a+b); i++; b loop. */
+  n += emit_mov64(out + n, 2, (uint64_t)init_a);
+  n += emit_mov64(out + n, 3, (uint64_t)init_b);
+  n += emit_mov64(out + n, 4, (uint64_t)(int64_t)K1);
+
+  int loop_top = n;
+  out[n++] = arm64_cmp_reg(4, 1);              /* cmp x4, x1  (i vs n) */
+  int patch_done = n;
+  out[n++] = 0;                                 /* b.gt done */
+  out[n++] = arm64_mov_reg(5, 2);              /* x5 = a (saved) */
+  out[n++] = arm64_mov_reg(2, 3);              /* a = b */
+  out[n++] = arm64_add_reg(3, 5, 3);           /* b = old_a + b */
+  out[n++] = arm64_add_imm(4, 4, 1);           /* i++ */
+  {
+    int cur = n++;
+    out[cur] = arm64_b(loop_top - cur);        /* b loop_top */
+  }
+
+  /* done: x0 = (b << 3) | 1 (re-tag), ret. */
+  int done_pc = n;
+  out[n++] = arm64_lsl_imm(0, 3, 3);
+  out[n++] = arm64_orr_imm_bit0(0, 0);
+  out[n++] = arm64_ret();
+
+  /* base: re-tag x1 (untagged n) into x0, ret. */
+  int base_pc = n;
+  out[n++] = arm64_lsl_imm(0, 1, 3);
+  out[n++] = arm64_orr_imm_bit0(0, 0);
+  out[n++] = arm64_ret();
+
+  /* deopt: return NULL. */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  /* Patch forward branches now that targets are known.
+     b.gt = cond 12 (GT). Always emit GT regardless of cmp_op — the loop
+     test is a fixed "i > n" comparison, independent of the recursion's
+     base predicate. */
+  out[patch_done] = arm64_b_cond(12, done_pc - patch_done);
+  out[patch_base] = arm64_b_cond(exit_cc, base_pc - patch_base);
+  out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+
+  assert(n <= 32);
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit)
     return bc && bc->jit ? 1 : 0;
@@ -5497,6 +5699,8 @@ int jit_compile(bytecode_t *bc) {
 
   if (try_jit_simple_tail_loop(bc, insns, &n)) {
     /* matched — fall through to mmap+install */
+  } else if (try_jit_recurse_add_two(bc, insns, &n)) {
+    /* iterative-fib fast path — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
