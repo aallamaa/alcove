@@ -6023,7 +6023,7 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   /* Worst case: 12 instructions (load, tbz, cmp, b.cond, sub/add, str,
      b loop, mov, ret, movz, ret + slack). Caller's buffer is uint32_t
      insns[32] — comfortable margin. Trip if a future tweak overruns. */
-  assert(n <= 16);
+  if (n > 16) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6077,15 +6077,21 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
 
   if (c[26] != OP_ADD || c[27] != OP_RET) return 0;
 
-  /* Iterative fast path conditions: same callee both calls, both SUB,
-     K2/K3 are {1,2} in either order. The base case must return n
-     itself (LOAD_SLOT slot then RET — c[7]/c[8] enforce this). */
+  /* Iterative fast path conditions: both calls go to THIS function
+     (self-recursion, not just same-name-each-other), both SUB, K2/K3
+     are {1,2} in either order. The base case must return n itself
+     (LOAD_SLOT slot then RET — c[7]/c[8] enforce this).
+
+     The self-name check is critical: without it any user lambda whose
+     body shape matches gets silently rewritten as iterative-fib-of-its-
+     own-arg, ignoring whatever callee the user actually wrote. */
+  if (!bc->self_name) return 0;
   exp_t *ca = bc->consts[idx_a];
   exp_t *cb = bc->consts[idx_b];
-  int same_callee = is_ptr(ca) && is_ptr(cb) && issymbol(ca) && issymbol(cb) &&
-                    strcmp((const char *)ca->ptr, (const char *)cb->ptr) == 0;
-  int is_fib_like = same_callee && op_a == OP_SLOT_SUB_FIX &&
-                    op_b == OP_SLOT_SUB_FIX &&
+  if (!(is_ptr(ca) && issymbol(ca) && is_ptr(cb) && issymbol(cb))) return 0;
+  if (strcmp((const char *)ca->ptr, bc->self_name) != 0) return 0;
+  if (strcmp((const char *)cb->ptr, bc->self_name) != 0) return 0;
+  int is_fib_like = op_a == OP_SLOT_SUB_FIX && op_b == OP_SLOT_SUB_FIX &&
                     ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
   if (!is_fib_like) return 0;  /* general 2-call recursion: fall back */
 
@@ -6168,7 +6174,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_base] = arm64_b_cond(exit_cc, base_pc - patch_base);
   out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
-  assert(n <= 32);
+  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6200,8 +6206,16 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   int16_t K2 = (int16_t)((uint16_t)c[17] | ((uint16_t)c[18] << 8));
 
   if (c[19] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_call = c[20];
   if (c[21] != 1) return 0;
   if (c[22] != OP_MUL || c[23] != OP_RET) return 0;
+
+  /* Self-name guard (see recurse_add_two): the iterative-fact emission
+     is only correct if the recursive call goes back to THIS function. */
+  if (!bc->self_name || idx_call >= bc->nconsts) return 0;
+  exp_t *callee = bc->consts[idx_call];
+  if (!is_ptr(callee) || !issymbol(callee)) return 0;
+  if (strcmp((const char *)callee->ptr, bc->self_name) != 0) return 0;
 
   int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
   if (slot_off < 0 || slot_off > 32760) return 0;
@@ -6253,7 +6267,7 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_done] = arm64_b_cond(exit_cc, done_pc - patch_done);
   out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
-  assert(n <= 32);
+  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6362,7 +6376,7 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_a] = arm64_cbz(5, skip_pc - patch_skip_a);
   out[patch_skip_b] = arm64_b_cond(0, skip_pc - patch_skip_b);
 
-  assert(n <= 64);
+  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6498,7 +6512,7 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
   out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
 
-  assert(n <= 96);
+  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6694,7 +6708,7 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   /* Suppress unused-on-some-paths warnings. */
   (void)arm64_cbnz; (void)arm64_cmp_reg_w;
 
-  assert(n <= 96);
+  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6805,7 +6819,7 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_da]   = arm64_tbz(1, 0, deopt_pc - patch_da);
   out[patch_db]   = arm64_tbz(2, 0, deopt_pc - patch_db);
 
-  assert(n <= 64);
+  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6917,7 +6931,7 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
   out[patch_end]   = arm64_b_cond(inv_cc, end_pc - patch_end);
   out[patch_deopt] = arm64_tbz(1, 0, deopt_pc - patch_deopt);
 
-  assert(n <= 64);
+  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6949,23 +6963,38 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   if (c[18] != OP_LOAD_SLOT || c[19] != s_y) return 0;
   if (c[20] != OP_LOAD_SLOT || c[21] != s_z) return 0;
   if (c[22] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_a = c[23];
   if (c[24] != 3) return 0;
 
   if (c[25] != OP_SLOT_SUB_FIX || c[26] != s_y || c[27] != 1 || c[28] != 0) return 0;
   if (c[29] != OP_LOAD_SLOT || c[30] != s_z) return 0;
   if (c[31] != OP_LOAD_SLOT || c[32] != s_x) return 0;
   if (c[33] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_b = c[34];
   if (c[35] != 3) return 0;
 
   if (c[36] != OP_SLOT_SUB_FIX || c[37] != s_z || c[38] != 1 || c[39] != 0) return 0;
   if (c[40] != OP_LOAD_SLOT || c[41] != s_x) return 0;
   if (c[42] != OP_LOAD_SLOT || c[43] != s_y) return 0;
   if (c[44] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_c = c[45];
   if (c[46] != 3) return 0;
   if (c[47] != OP_TAIL_SELF || c[48] != 3 || c[49] != OP_RET) return 0;
 
   if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS || s_z >= ENV_INLINE_SLOTS)
     return 0;
+
+  /* All three CALL_GLOBALs must target THIS function — the matcher
+     emits intra-buffer BL to entry. Without the check, any (def f (x y z)
+     ...) with the tak shape silently rewires the calls. */
+  if (!bc->self_name) return 0;
+  if (idx_a >= bc->nconsts || idx_b >= bc->nconsts || idx_c >= bc->nconsts) return 0;
+  exp_t *ka = bc->consts[idx_a], *kb = bc->consts[idx_b], *kc = bc->consts[idx_c];
+  if (!is_ptr(ka) || !issymbol(ka) || !is_ptr(kb) || !issymbol(kb) ||
+      !is_ptr(kc) || !issymbol(kc)) return 0;
+  if (strcmp((const char*)ka->ptr, bc->self_name) != 0 ||
+      strcmp((const char*)kb->ptr, bc->self_name) != 0 ||
+      strcmp((const char*)kc->ptr, bc->self_name) != 0) return 0;
 
   int off_x = (int)offsetof(env_t, inline_vals[0]) + (int)s_x * 8;
   int off_y = (int)offsetof(env_t, inline_vals[0]) + (int)s_y * 8;
@@ -7055,7 +7084,7 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
   out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
 
-  assert(n <= 96);
+  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7102,7 +7131,13 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
   if (c[43] != OP_SLOT_SUB_FIX || c[44] != slot_n) return 0;
   if (c[45] != 1 || c[46] != 0) return 0;
   if (c[47] != OP_CALL_GLOBAL) return 0;
+  uint8_t idx_call = c[48];
   if (c[49] != 2) return 0;
+  /* CALL_GLOBAL must target THIS function (intra-buffer BL). */
+  if (!bc->self_name || idx_call >= bc->nconsts) return 0;
+  exp_t *callee = bc->consts[idx_call];
+  if (!is_ptr(callee) || !issymbol(callee)) return 0;
+  if (strcmp((const char*)callee->ptr, bc->self_name) != 0) return 0;
   if (c[50] != OP_TAIL_SELF || c[51] != 2 || c[52] != OP_RET) return 0;
   if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS) return 0;
 
@@ -7199,7 +7234,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
   /* Suppress unused-warning for the helper we resolved inline. */
   (void)arm64_stp_pre_sp; (void)arm64_ldp_post_sp;
 
-  assert(n <= 64);
+  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7264,7 +7299,7 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_t2] = arm64_tbz(2, 0, deopt_pc - patch_t2);
   out[patch_dz] = arm64_cbz(2,    deopt_pc - patch_dz);
 
-  assert(n <= 32);
+  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7368,7 +7403,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
   out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
-  assert(n <= 32);
+  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7484,7 +7519,7 @@ int jit_compile(bytecode_t *bc) {
 
   /* Hard cap is the insns[128] declaration above; trip if anything
      exceeds the buffer. The widest shape today is ackermann (~50). */
-  assert(n <= 128);
+  if (n > 128) return 0;  /* JIT buffer guard (was assert) */
   size_t sz = (size_t)n * 4;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
@@ -7846,7 +7881,7 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* Worst case ~55 bytes (load, test, jcc, cmp, jcc, sub/add, mov,
      jmp, mov, ret, xor, ret + slack). Caller's buffer is uint8_t buf[256]. */
-  assert(n <= 80);
+  if (n > 80) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8010,7 +8045,7 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
 
   /* Worst case ~134 bytes (entry tag-check + frame setup + ~45-byte
      call sequence + arith + jmp + exits). buf is 256 bytes. */
-  assert(n <= 160);
+  if (n > 160) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8249,7 +8284,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     (void)inv_cc;
     (void)slot;
 
-    assert(n <= 200);
+    if (n > 200) return 0;  /* JIT buffer guard (was assert) */
     *outn = n;
     return 1;
   }
@@ -8344,7 +8379,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Worst case ~190 bytes (entry tag-check + 2 ~45-byte call sequences
      + tag-checks + tagged add + frame teardown + bail + deopt). buf
      is 256 bytes. The matcher with the largest emission. */
-  assert(n <= 224);
+  if (n > 224) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8633,7 +8668,7 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, je_skip_unref2, 6, skip_unref_pc);
   x64_patch_rel32(buf, jz_to_deopt, 6, deopt_pc);
 
-  assert(n <= 480);
+  if (n > 480) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8851,7 +8886,7 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, je_skip_unref2, 6, skip_unref_pc);
   x64_patch_rel32(buf, jz_to_deopt, 6, deopt_pc);
 
-  assert(n <= 480);
+  if (n > 480) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9009,7 +9044,7 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_skip_inc, 6, skip_inc_pc);
   x64_patch_rel32(buf, je_skip_inc, 6, skip_inc_pc);
 
-  assert(n <= 200);
+  if (n > 200) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9192,7 +9227,7 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
 
-  assert(n <= 200);
+  if (n > 200) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9427,7 +9462,7 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
 
-  assert(n <= 480);
+  if (n > 480) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9620,7 +9655,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_deopt_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_deopt_b, 6, deopt_pc);
 
-  assert(n <= 320);
+  if (n > 320) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9780,7 +9815,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
 
-  assert(n <= 128);
+  if (n > 128) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9964,7 +9999,7 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
 
-  assert(n <= 128);
+  if (n > 128) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10045,7 +10080,7 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz2, 6, deopt_pc);
   x64_patch_rel32(buf, jz_bz, 6, deopt_pc);
 
-  assert(n <= 96);
+  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10171,10 +10206,11 @@ int jit_compile(bytecode_t *bc) {
     return 0; /* shape not recognized */
   }
 
-  /* Each matcher has its own internal assert against its expected upper
-     bound; this is the catch-all that protects buf as a whole, including
-     the inline leaf-shape paths above. */
-  assert(n <= (int)sizeof(buf));
+  /* Each matcher has its own internal bound check (returns 0 on
+     overflow); this catch-all protects buf as a whole including the
+     inline leaf-shape paths above. Hard fall-back rather than abort —
+     bytecode will run the body. Survives -DNDEBUG, unlike assert(). */
+  if (n > (int)sizeof(buf)) return 0;
   size_t sz = (size_t)n;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
@@ -11037,6 +11073,7 @@ int compile_lambda(exp_t *fn) {
   bc->nparams = (uint8_t)c.nparams;
   for (int pi = 0; pi < c.nparams; pi++)
     bc->param_keys[pi] = c.slot_names[pi];
+  bc->self_name = (const char *)fn->meta;  /* borrowed; NULL for anon */
   fn->bc = bc;
   fn->flags |= FLAG_COMPILED;
 #ifdef ALCOVE_JIT

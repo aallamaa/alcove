@@ -263,6 +263,13 @@ typedef struct bytecode_t {
      borrowed string ptr from the i-th param symbol's ->ptr. */
   uint8_t nparams;
   char *param_keys[ENV_INLINE_SLOTS];
+  /* Name of the function this bytecode belongs to (borrowed from
+     fn->meta). NULL for anonymous lambdas. JIT shape matchers compare
+     this against the callee symbol of recursive CALL_GLOBAL ops to
+     reject "same shape, different callee" misfires that would otherwise
+     silently rewrite (def myfib (n) (... (otherfn ...) (otherfn ...)))
+     as iterative-fib. */
+  const char *self_name;
   /* Optional native-code fast path. When set, vm_invoke_values calls
      this directly instead of running the dispatch loop. Returns the
      result exp_t* (NULL signals deopt → caller falls back to vm_run).
