@@ -2040,11 +2040,17 @@ exp_t *forgetcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_savedb[] = "(savedb) writes to ./db.dump. (savedb \"path\") writes to the given file.";
+/* Process-wide default db path. Overridden by `alcove --db <path>`;
+   used by (savedb) / (loaddb) when called without an explicit filename
+   AND by the startup auto-loader. So `alcove --db foo.db` uniformly
+   makes foo.db "the" db file for the rest of the session. */
+const char *alcove_db_path = "db.dump";
+
+const char doc_savedb[] = "(savedb) writes to the active db (default ./db.dump, overridden by --db). (savedb \"path\") writes to the given file.";
 exp_t *savedbcmd(exp_t *e, env_t *env) {
-  /* Resolve the target path: optional first arg, else default. The arg
-     is evaluated so callers can build the path: (savedb (str ...)). */
-  const char *path = "db.dump";
+  /* Resolve the target path: optional first arg, else session default.
+     The arg is evaluated so callers can build the path: (savedb (str ...)). */
+  const char *path = alcove_db_path;
   exp_t *path_arg = NULL;
   if (e->next) {
     path_arg = EVAL(e->next->content, env);
@@ -2111,14 +2117,15 @@ int loaddb_from_file_path(env_t *env, const char *path) {
 }
 
 /* Back-compat shim: the path-less callers (auto-load at startup, the
-   no-arg (loaddb)) keep working without re-plumbing every site. */
+   no-arg (loaddb)) keep working without re-plumbing every site.
+   Reads the session default — same as savedb. */
 int loaddb_from_file(env_t *env) {
-  return loaddb_from_file_path(env, "db.dump");
+  return loaddb_from_file_path(env, alcove_db_path);
 }
 
-const char doc_loaddb[] = "(loaddb) reads ./db.dump. (loaddb \"path\") reads from the given file. Done at startup too unless --noload (and respects --db).";
+const char doc_loaddb[] = "(loaddb) reads the active db (default ./db.dump, overridden by --db). (loaddb \"path\") reads from the given file. Auto-runs at startup unless --noload.";
 exp_t *loaddbcmd(exp_t *e, env_t *env) {
-  const char *path = "db.dump";
+  const char *path = alcove_db_path;
   exp_t *path_arg = NULL;
   if (e->next) {
     path_arg = EVAL(e->next->content, env);
@@ -12437,15 +12444,16 @@ int main(int argc, char *argv[]) {
 
   /* CLI flag scan:
        --noload / -n       skip auto-load of the db file
-       --db <path>         use <path> instead of ./db.dump for auto-load
-                           (and as the default for (savedb)/(loaddb))
+       --db <path>         set the session db path. Used by the startup
+                           auto-load AND by future no-arg (savedb) /
+                           (loaddb) calls — so the file you load from is
+                           the same file you save to.
        -e "<code>"         evaluate the string as a script (skips file read)
      Flags get filtered out of argv in place so the existing positional
      handling (last arg = file, prev = -i) still works whether the user
      passes flags first, last, or in the middle. */
   int auto_load = 1;
   char *eval_string = NULL;
-  const char *db_path = "db.dump";
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
@@ -12454,7 +12462,7 @@ int main(int argc, char *argv[]) {
       } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
-        db_path = argv[++src];
+        alcove_db_path = argv[++src];   /* session-wide default */
       } else {
         argv[dst++] = argv[src];
       }
@@ -12466,11 +12474,11 @@ int main(int argc, char *argv[]) {
      missing-file (first run, no DB yet); prints a one-line summary on
      success so the user sees what came back. */
   if (auto_load) {
-    int loaded = loaddb_from_file_path(global, db_path);
+    int loaded = loaddb_from_file_path(global, alcove_db_path);
     if (loaded > 0)
       printf("alcove: auto-loaded %d entries from %s (use --noload to "
              "skip)\n",
-             loaded, db_path);
+             loaded, alcove_db_path);
   }
 
   if (eval_string) {
