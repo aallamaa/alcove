@@ -5847,6 +5847,251 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* count-primes from sieve-fast — 41-byte exact-match shape.
+     (def count-primes (i n marks acc)
+       (if (> i n) acc
+           (count-primes (+ i 1) n marks
+                         (if (vec-ref marks i) (+ acc 1) acc))))
+   Tail loop. Reads marks[i] (singleton t or nil), conditionally
+   increments acc, increments i, tail-self. */
+static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 41) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t s_i = c[1];
+  if (c[2] != OP_LOAD_SLOT) return 0;
+  uint8_t s_n = c[3];
+  if (c[4] != OP_GT) return 0;
+  if (c[5] != OP_BR_IF_FALSE) return 0;
+  if (c[8] != OP_LOAD_SLOT) return 0;
+  uint8_t s_acc = c[9];
+  if (c[10] != OP_JUMP) return 0;
+  if (c[13] != OP_SLOT_ADD_FIX || c[14] != s_i) return 0;
+  if (c[15] != 1 || c[16] != 0) return 0;
+  if (c[17] != OP_LOAD_SLOT || c[18] != s_n) return 0;
+  if (c[19] != OP_LOAD_SLOT) return 0;
+  uint8_t s_marks = c[20];
+  if (c[21] != OP_LOAD_SLOT || c[22] != s_marks) return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != s_i) return 0;
+  if (c[25] != OP_VEC_REF) return 0;
+  if (c[26] != OP_BR_IF_FALSE) return 0;
+  if (c[29] != OP_SLOT_ADD_FIX || c[30] != s_acc) return 0;
+  if (c[31] != 1 || c[32] != 0) return 0;
+  if (c[33] != OP_JUMP) return 0;
+  if (c[36] != OP_LOAD_SLOT || c[37] != s_acc) return 0;
+  if (c[38] != OP_TAIL_SELF || c[39] != 4) return 0;
+  if (c[40] != OP_RET) return 0;
+
+  if (s_i >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
+      s_acc >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS) return 0;
+
+  int off_i     = (int)offsetof(env_t, inline_vals[0]) + (int)s_i     * 8;
+  int off_n     = (int)offsetof(env_t, inline_vals[0]) + (int)s_n     * 8;
+  int off_acc   = (int)offsetof(env_t, inline_vals[0]) + (int)s_acc   * 8;
+  int off_marks = (int)offsetof(env_t, inline_vals[0]) + (int)s_marks * 8;
+  int off_ptr   = (int)offsetof(struct exp_t, ptr);
+  if (off_i > 32760 || off_n > 32760 || off_acc > 32760 ||
+      off_marks > 32760 || off_ptr > 32760) return 0;
+
+  int n = 0;
+  int entry_pc = n;
+
+  /* x9 = nil_singleton, kept across iterations. */
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)nil_singleton);
+
+  out[n++] = arm64_ldr_imm(1, 0, off_i);   /* x1 = i */
+  out[n++] = arm64_ldr_imm(2, 0, off_n);   /* x2 = n */
+  int patch_da = n; out[n++] = 0;
+  int patch_db = n; out[n++] = 0;
+
+  /* if (i > n) → done, return acc */
+  out[n++] = arm64_cmp_reg(1, 2);
+  int patch_done = n; out[n++] = 0;        /* b.gt done */
+
+  /* x3 = marks->ptr (alc_vec_t*) */
+  out[n++] = arm64_ldr_imm(3, 0, off_marks);
+  out[n++] = arm64_ldr_imm(3, 3, off_ptr);
+
+  /* x4 = marks_ptr + i_tagged + 7;  x5 = *(x4) */
+  out[n++] = arm64_add_reg(4, 3, 1);
+  out[n++] = arm64_add_imm(4, 4, 7);
+  out[n++] = arm64_ldr_imm(5, 4, 0);
+
+  /* truthy = (x5 != 0) && (x5 != nil_singleton). If truthy: acc += 8. */
+  int patch_skip_a = n; out[n++] = 0;      /* cbz x5, skip */
+  out[n++] = arm64_cmp_reg(5, 9);
+  int patch_skip_b = n; out[n++] = 0;      /* b.eq skip */
+  /* tagged inc: load acc, add 8, store */
+  out[n++] = arm64_ldr_imm(6, 0, off_acc);
+  out[n++] = arm64_add_imm(6, 6, 8);
+  out[n++] = arm64_str_imm(6, 0, off_acc);
+  int skip_pc = n;
+
+  /* i += 1 (tagged: add 8) */
+  out[n++] = arm64_add_imm(1, 1, 8);
+  out[n++] = arm64_str_imm(1, 0, off_i);
+
+  /* tail-self: b entry */
+  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+
+  /* done: x0 = acc */
+  int done_pc = n;
+  out[n++] = arm64_ldr_imm(0, 0, off_acc);
+  out[n++] = arm64_ret();
+
+  /* deopt */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_done]   = arm64_b_cond(12 /* GT */, done_pc - patch_done);
+  out[patch_da]     = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db]     = arm64_tbz(2, 0, deopt_pc - patch_db);
+  out[patch_skip_a] = arm64_cbz(5, skip_pc - patch_skip_a);
+  out[patch_skip_b] = arm64_b_cond(0, skip_pc - patch_skip_b);
+
+  assert(n <= 64);
+  *outn = n;
+  return 1;
+}
+
+/* is-prime-given from sieve.alc — 37-byte exact-match shape.
+     (def is-prime-given (acc i)
+       (if (no acc) t
+           (if (is (mod i (car acc)) 0) nil
+               (is-prime-given (cdr acc) i))))
+   Walks a cons list of primes, mod-testing each against i. Inline
+   refexp/unrefexp on the cdr walk; deopts to bytecode if a count hits 0. */
+static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 37) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t s_acc = c[1];
+  if (c[2] != OP_NOT) return 0;
+  if (c[3] != OP_BR_IF_FALSE) return 0;
+  if (c[6] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_t = c[7];
+  if (c[8] != OP_JUMP) return 0;
+  if (c[11] != OP_LOAD_SLOT) return 0;
+  uint8_t s_i = c[12];
+  if (c[13] != OP_LOAD_SLOT || c[14] != s_acc) return 0;
+  if (c[15] != OP_CAR) return 0;
+  if (c[16] != OP_MOD) return 0;
+  if (c[17] != OP_LOAD_FIX || c[18] != 0 || c[19] != 0) return 0;
+  if (c[20] != OP_IS) return 0;
+  if (c[21] != OP_BR_IF_FALSE) return 0;
+  if (c[24] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil = c[25];
+  if (c[26] != OP_JUMP) return 0;
+  if (c[29] != OP_LOAD_SLOT || c[30] != s_acc) return 0;
+  if (c[31] != OP_CDR) return 0;
+  if (c[32] != OP_LOAD_SLOT || c[33] != s_i) return 0;
+  if (c[34] != OP_TAIL_SELF || c[35] != 2) return 0;
+  if (c[36] != OP_RET) return 0;
+
+  if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts) return 0;
+  exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
+  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+    return 0;
+  if (!is_ptr(cnil) || !issymbol(cnil) ||
+      strcmp((const char *)cnil->ptr, "nil") != 0) return 0;
+  if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS) return 0;
+
+  int off_acc  = (int)offsetof(env_t, inline_vals[0]) + (int)s_acc * 8;
+  int off_i    = (int)offsetof(env_t, inline_vals[0]) + (int)s_i   * 8;
+  int off_cont = (int)offsetof(struct exp_t, content);
+  int off_next = (int)offsetof(struct exp_t, next);
+  int off_nref = (int)offsetof(struct exp_t, nref);
+  if (off_acc > 32760 || off_i > 32760 ||
+      off_cont > 32760 || off_next > 32760 || off_nref > 16380) return 0;
+
+  int n = 0;
+  int entry_pc = n;
+
+  n += emit_mov64(out + n, 9,  (uint64_t)(uintptr_t)nil_singleton);
+  n += emit_mov64(out + n, 10, (uint64_t)(uintptr_t)true_singleton);
+
+  out[n++] = arm64_ldr_imm(1, 0, off_acc);
+  int patch_t1 = n; out[n++] = 0;
+  out[n++] = arm64_cmp_reg(1, 9);
+  int patch_t2 = n; out[n++] = 0;
+
+  out[n++] = arm64_ldr_imm(2, 1, off_cont);
+  int patch_da = n; out[n++] = 0;
+
+  out[n++] = arm64_ldr_imm(3, 0, off_i);
+  int patch_db = n; out[n++] = 0;
+
+  out[n++] = arm64_sub_imm(2, 2, 1);
+  out[n++] = arm64_sub_imm(3, 3, 1);
+  int patch_dc = n; out[n++] = 0;
+
+  out[n++] = arm64_sdiv(4, 3, 2);
+  out[n++] = arm64_msub(5, 4, 2, 3);
+  int patch_n1 = n; out[n++] = 0;
+
+  out[n++] = arm64_ldr_imm(4, 1, off_next);
+
+  int patch_skip_ref_a = n; out[n++] = 0;
+  out[n++] = arm64_cmp_reg(4, 9);
+  int patch_skip_ref_b = n; out[n++] = 0;
+  out[n++] = arm64_cmp_reg(4, 10);
+  int patch_skip_ref_c = n; out[n++] = 0;
+  out[n++] = arm64_ldr_w_imm(6, 4, off_nref);
+  out[n++] = arm64_add_w_imm(6, 6, 1);
+  out[n++] = arm64_str_w_imm(6, 4, off_nref);
+  int skip_ref_pc = n;
+
+  int patch_skip_unref_a = n; out[n++] = 0;
+  out[n++] = arm64_cmp_reg(1, 9);
+  int patch_skip_unref_b = n; out[n++] = 0;
+  out[n++] = arm64_cmp_reg(1, 10);
+  int patch_skip_unref_c = n; out[n++] = 0;
+  out[n++] = arm64_ldr_w_imm(6, 1, off_nref);
+  out[n++] = arm64_sub_w_imm(6, 6, 1);
+  out[n++] = arm64_str_w_imm(6, 1, off_nref);
+  int patch_to_deopt = n; out[n++] = 0;
+  int skip_unref_pc = n;
+
+  out[n++] = arm64_str_imm(4, 0, off_acc);
+
+  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+
+  int ret_t_pc = n;
+  out[n++] = arm64_mov_reg(0, 10);
+  out[n++] = arm64_ret();
+
+  int ret_nil_pc = n;
+  out[n++] = arm64_mov_reg(0, 9);
+  out[n++] = arm64_ret();
+
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_t1] = arm64_cbz(1, ret_t_pc - patch_t1);
+  out[patch_t2] = arm64_b_cond(0, ret_t_pc - patch_t2);
+  out[patch_da] = arm64_tbz(2, 0, deopt_pc - patch_da);
+  out[patch_db] = arm64_tbz(3, 0, deopt_pc - patch_db);
+  out[patch_dc] = arm64_cbz(2, deopt_pc - patch_dc);
+  out[patch_n1] = arm64_cbz(5, ret_nil_pc - patch_n1);
+
+  out[patch_skip_ref_a] = arm64_cbz(4, skip_ref_pc - patch_skip_ref_a);
+  out[patch_skip_ref_b] = arm64_b_cond(0, skip_ref_pc - patch_skip_ref_b);
+  out[patch_skip_ref_c] = arm64_b_cond(0, skip_ref_pc - patch_skip_ref_c);
+
+  out[patch_skip_unref_a] = arm64_cbz(1, skip_unref_pc - patch_skip_unref_a);
+  out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
+  out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
+  out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+
+  assert(n <= 96);
+  *outn = n;
+  return 1;
+}
+
 /* safe? from nqueens.alc — 71-byte exact-match shape.
      (def safe? (c qs offset)
        (if (no qs) t
@@ -6748,6 +6993,10 @@ int jit_compile(bytecode_t *bc) {
     /* sieve-fast inner loop — fall through */
   } else if (try_jit_safe_p(bc, insns, &n)) {
     /* nqueens safe? — fall through */
+  } else if (try_jit_is_prime_given(bc, insns, &n)) {
+    /* sieve is-prime-given — fall through */
+  } else if (try_jit_count_primes(bc, insns, &n)) {
+    /* sieve-fast count-primes — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
