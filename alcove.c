@@ -5392,6 +5392,26 @@ __attribute__((unused))
 static uint32_t arm64_blr(int rn) {
   return 0xD63F0000u | ((uint32_t)rn << 5);
 }
+/* SDIV Xd, Xn, Xm  — signed 64-bit divide. */
+static uint32_t arm64_sdiv(int rd, int rn, int rm) {
+  return 0x9AC00C00u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* MSUB Xd, Xn, Xm, Xa  — Xd = Xa - Xn*Xm (used to compute remainder). */
+static uint32_t arm64_msub(int rd, int rn, int rm, int ra) {
+  return 0x9B008000u | ((uint32_t)rm << 16) | ((uint32_t)ra << 10) |
+         ((uint32_t)rn << 5) | (uint32_t)rd;
+}
+/* CSEL Xd, Xn, Xm, cond  — Xd = (cond ? Xn : Xm). */
+static uint32_t arm64_csel(int rd, int rn, int rm, int cond) {
+  return 0x9A800000u | ((uint32_t)rm << 16) | ((uint32_t)(cond & 0xf) << 12) |
+         ((uint32_t)rn << 5) | (uint32_t)rd;
+}
+/* CBZ Xt, label — branch if Xt is zero. off in instructions, 19-bit signed. */
+static uint32_t arm64_cbz(int rt, int off_insns) {
+  return 0xB4000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
+         (uint32_t)(rt & 0x1f);
+}
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs.
  */
@@ -5776,6 +5796,71 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* (fn (a b) (is (mod a b) K)) — 10-byte 2-param leaf, the divides? shape.
+   Computes (a mod b == K) and returns t/nil. Native: sdiv + msub for the
+   remainder, csel for the boolean result. ~10 cycles vs ~150 in bytecode. */
+static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 10) return 0;
+  uint8_t *c = bc->code;
+  if (c[0] != OP_LOAD_SLOT || c[1] >= ENV_INLINE_SLOTS) return 0;
+  if (c[2] != OP_LOAD_SLOT || c[3] >= ENV_INLINE_SLOTS) return 0;
+  if (c[4] != OP_MOD) return 0;
+  if (c[5] != OP_LOAD_FIX) return 0;
+  int16_t K = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
+  if (c[8] != OP_IS) return 0;
+  if (c[9] != OP_RET) return 0;
+
+  int off_a = (int)offsetof(env_t, inline_vals[0]) + (int)c[1] * 8;
+  int off_b = (int)offsetof(env_t, inline_vals[0]) + (int)c[3] * 8;
+  if (off_a > 32760 || off_b > 32760) return 0;
+
+  /* (K << 3) is the value we compare against. Untagged a%b is (a<<3) %
+     (b<<3) once we've stripped the tag bit. */
+  int64_t k_shifted = ((int64_t)K) << 3;
+
+  int n = 0;
+  /* Load both slots. */
+  out[n++] = arm64_ldr_imm(1, 0, off_a);   /* x1 = a tagged */
+  out[n++] = arm64_ldr_imm(2, 0, off_b);   /* x2 = b tagged */
+  /* Tag-check both. */
+  int patch_t1 = n; out[n++] = 0;          /* tbz x1,#0,deopt */
+  int patch_t2 = n; out[n++] = 0;          /* tbz x2,#0,deopt */
+  /* Untag (sub 1). After this, x1=a<<3, x2=b<<3. */
+  out[n++] = arm64_sub_imm(1, 1, 1);
+  out[n++] = arm64_sub_imm(2, 2, 1);
+  /* Guard against div-by-zero. */
+  int patch_dz = n; out[n++] = 0;          /* cbz x2, deopt */
+  /* x3 = x1 / x2, then x4 = x1 - x3*x2  (= a%b << 3). */
+  out[n++] = arm64_sdiv(3, 1, 2);
+  out[n++] = arm64_msub(4, 3, 2, 1);
+  /* Compare remainder to K_shifted. K_shifted may be negative or > 4095
+     for some K — go through a register if it doesn't fit imm12. */
+  if (k_shifted >= 0 && k_shifted <= 4095) {
+    out[n++] = arm64_cmp_imm(4, (int)k_shifted);
+  } else {
+    n += emit_mov64(out + n, 5, (uint64_t)k_shifted);
+    out[n++] = arm64_cmp_reg(4, 5);
+  }
+  /* x0 = (eq ? TRUE_EXP : NIL_EXP). */
+  n += emit_mov64(out + n, 6, (uint64_t)(uintptr_t)true_singleton);
+  n += emit_mov64(out + n, 7, (uint64_t)(uintptr_t)nil_singleton);
+  out[n++] = arm64_csel(0, 6, 7, 0 /* EQ */);
+  out[n++] = arm64_ret();
+
+  /* deopt → return NULL */
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  out[patch_t1] = arm64_tbz(1, 0, deopt_pc - patch_t1);
+  out[patch_t2] = arm64_tbz(2, 0, deopt_pc - patch_t2);
+  out[patch_dz] = arm64_cbz(2,    deopt_pc - patch_dz);
+
+  assert(n <= 32);
+  *outn = n;
+  return 1;
+}
+
 /* 48-byte for-loop accumulator shape — forsum pattern.
      (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S)))))
    Iteratively: i, s untagged; loop while i <= n; s += K_step_s; i++. */
@@ -5897,6 +5982,8 @@ int jit_compile(bytecode_t *bc) {
     /* iterative-fact fast path — fall through */
   } else if (try_jit_for_loop_inc(bc, insns, &n)) {
     /* iterative for-loop accumulator (forsum) — fall through */
+  } else if (try_jit_modeq_leaf(bc, insns, &n)) {
+    /* (is (mod a b) K) leaf — fall through */
   } else
 
       if (bc->ncode == 4 && c[0] == OP_LOAD_FIX && c[3] == OP_RET) {
