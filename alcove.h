@@ -235,6 +235,13 @@ typedef struct {
   struct exp_t *data[];
 } alc_vec_t;
 
+/* Inline binding slots per env. The bytecode VM uses slot indices to
+   bypass the per-name dict lookup; bytecode_t.param_keys mirrors the
+   shape so vm_invoke_values can memcpy them in. Defined here (above
+   bytecode_t) so the array dimensions can be expressed symbolically
+   instead of hardcoding "6" and racing the value below. */
+#define ENV_INLINE_SLOTS 6
+
 /* Global-resolution cache slot. One per consts[] entry; lazily allocated.
    Stores the last lookup result for an OP_LOAD_GLOBAL symbol along with
    the generation it was cached at. Mutations to global bindings bump
@@ -255,7 +262,7 @@ typedef struct bytecode_t {
      symbols). nparams is the canonical arity; param_keys[i] is the
      borrowed string ptr from the i-th param symbol's ->ptr. */
   uint8_t nparams;
-  char *param_keys[6]; /* matches ENV_INLINE_SLOTS */
+  char *param_keys[ENV_INLINE_SLOTS];
   /* Optional native-code fast path. When set, vm_invoke_values calls
      this directly instead of running the dispatch loop. Returns the
      result exp_t* (NULL signals deopt → caller falls back to vm_run).
@@ -350,8 +357,9 @@ typedef struct dict_t {
 /* How many function-parameter bindings an env_t holds inline before
    spilling to the dict. Sized for the common recursive-function case
    where all params fit inline, so invoke() skips the dict/table/keyval
-   allocs entirely. Tune up if deeper arities become common. */
-#define ENV_INLINE_SLOTS 6
+   allocs entirely. Tune up if deeper arities become common.
+   Defined above (near bytecode_t.param_keys) so both arrays share the
+   same constant. */
 
 typedef struct env_t {
   struct env_t *root;
@@ -563,7 +571,11 @@ void tokenappend(token_t *token, char *src, int len);
 /* Parser */
 
 #define PARSER_KEEPWHITESPACE 1
-#define PARSER_PIPEMODE 2
+/* PARSER_PIPEMODE was the bitflag for the | reader macro that built
+   wrapped lists; the macro itself was removed (commit 3e81194) so | can
+   serve as bit-or. The flag is preserved as a no-op slot for ABI
+   stability — nothing should set it. */
+#define PARSER_PIPEMODE 2  /* unused, retained as no-op */
 #define PARSER_TERMMACROMODE 4
 
 #endif /* ALCOVE_H */

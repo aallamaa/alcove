@@ -112,12 +112,12 @@ lispProc lispProcList[] = {
     LISPCMD("quote",         quotecmd,       doc_quote),
     LISPCMD_TAIL("if",       ifcmd,          doc_if),
     LISPCMD_TAIL("do",       docmd,          doc_do),
-    LISPCMD("when",          whencmd,        doc_when),
+    LISPCMD_TAIL("when",     whencmd,        doc_when),
     LISPCMD("while",         whilecmd,       doc_while),
     LISPCMD("repeat",        repeatcmd,      doc_repeat),
-    LISPCMD("and",           andcmd,         doc_and),
-    LISPCMD("or",            orcmd,          doc_or),
-    LISPCMD("case",          casecmd,        doc_case),
+    LISPCMD_TAIL("and",      andcmd,         doc_and),
+    LISPCMD_TAIL("or",       orcmd,          doc_or),
+    LISPCMD_TAIL("case",     casecmd,        doc_case),
     LISPCMD("for",           forcmd,         doc_for),
     LISPCMD("each",          eachcmd,        doc_each),
     LISPCMD("let",           letcmd,         doc_let),
@@ -380,13 +380,25 @@ inline int unrefexp(exp_t *e) {
 /* env management*/
 
 /* ---------------- Environment stack arena ----------------
-   alcove has no closures: lambdas do not capture their defining env, so
-   every env created by make_env is destroyed in LIFO order (at the end
-   of the call/let/with/for that made it). We exploit this with a bump
-   allocator: make_env claims sizeof(env_t) bytes from the top of a
-   fixed buffer; destroy_env rolls the top back down.
-   Eliminates the calloc/free pair per function call — typically the
-   single largest fixed cost in a tree-walking Lisp.
+   The common case is LIFO: every env created by make_env is destroyed
+   at the end of the call/let/with/for that made it, so a bump allocator
+   wins over calloc/free per function call.
+
+   Closures complicate this. fncmd / defcmd / defmacrocmd do
+     val->next->bc = (struct bytecode_t *)ref_env(env)
+   to keep the defining env alive while the lambda exists. When that
+   captured env is an arena slot AND the lambda outlives its caller,
+   destroy_env's REFCOUNT_DEC stays > 0 and the bump-pointer rollback
+   at line below is SKIPPED — the slot remains live but is no longer
+   on top of env_arena_sp. Subsequent make_env calls hand out arena
+   slots above it; the captured env is never reused. The only cost is
+   that the bump allocator can fragment under heavy closure use.
+
+   What is NOT safe: assuming arena slots strictly map to nesting
+   depth, or recovering an "earlier" arena slot once it's been ref'd.
+   Any future change that overwrites or recycles non-top arena slots
+   breaks closure correctness silently.
+
    Falls back to malloc() if the arena ever overflows (deep recursion
    beyond ENV_ARENA_SLOTS). */
 
@@ -1480,13 +1492,9 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         continue;
     } else if (ISSINGLEESCAPE & chrmap[x]) { // step 5
       if ((y = getc(stream)) != EOF) {
-        if (keepwspace & PARSER_PIPEMODE) {
-          token = tokenize(x);
-          tokenadd(token, y);
-        } else {
-          if ((ret = escapereader(stream, &token, y)))
-            return ret;
-        }
+        /* PARSER_PIPEMODE branch removed — see alcove.h flag comment. */
+        if ((ret = escapereader(stream, &token, y)))
+          return ret;
       } else
         return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
                      "End of file reached while parsing");
@@ -1523,10 +1531,8 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             continue;
           } else if (ISSINGLEESCAPE & chrmap[y]) {
             if ((z = getc(stream)) != EOF) {
-              if (keepwspace & PARSER_PIPEMODE) {
-                tokenadd(token, y);
-                tokenadd(token, z);
-              } else if ((ret = escapereader(stream, &token, z)))
+              /* PARSER_PIPEMODE branch removed; flag is now no-op. */
+              if ((ret = escapereader(stream, &token, z)))
                 return ret;
             } else {
               freetoken(token);
@@ -1682,7 +1688,6 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
   keyval_t *ret = NULL;
   exp_t *fret = NULL;
   exp_t *key = NULL;
-  exp_t *key2 = NULL;
   if (val == NULL)
     val = NIL_EXP;
   if (issymbol(keyv) || isstring(keyv)) { // form (= "qweqwe" 10) (= weq 10)
@@ -2232,59 +2237,80 @@ const char doc_lt[] = "(< a b ...) — strictly less than (chained: each pair mu
 const char doc_gt[] = "(> a b ...) — strictly greater than (chained).";
 const char doc_le[] = "(<= a b ...) — less than or equal (chained).";
 const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
-exp_t *cmpcmd(exp_t *e, env_t *env) {
-  exp_t *op = car(e); /* operator symbol, borrowed */
-  exp_t *result = NULL;
-  exp_t *v1 = EVAL(cadr(e), env);
-  if iserror (v1) {
-    unrefexp(e);
-    return v1;
+/* Pairwise compare helper. Returns 1 on success with d set to the sign
+   of (a - b); returns 0 on type mismatch (caller raises error). */
+static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
+  if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
+    *d = (isnumber(a) ? (double)FIX_VAL(a) : a->f) -
+         (isnumber(b) ? (double)FIX_VAL(b) : b->f);
+    return 1;
   }
-  exp_t *v2 = EVAL(caddr(e), env);
-  double d = 0;
-  int ret = 0;
+  if (isstring(a) && isstring(b)) { *d = strcmp(a->ptr, b->ptr); return 1; }
+  if (ischar(a) && ischar(b)) {
+    *d = (double)CHAR_VAL(a) - (double)CHAR_VAL(b);
+    return 1;
+  }
+  return 0;
+}
 
-  if iserror (v2) {
-    unrefexp(e);
-    unrefexp(v1);
-    return v2;
-  }
-  if ((isnumber(v1) || isfloat(v1)) && (isnumber(v2) || isfloat(v2))) {
-    d = (isnumber(v1) ? (double)FIX_VAL(v1) : v1->f) -
-        (isnumber(v2) ? (double)FIX_VAL(v2) : v2->f);
-  } else if (isstring(v1) && isstring(v2)) {
-    d = strcmp(v1->ptr, v2->ptr);
-  } else if (ischar(v1) && ischar(v2)) {
-    d = (double)CHAR_VAL(v1) - (double)CHAR_VAL(v2);
-  } else {
-    result = error(ERROR_ILLEGAL_VALUE, e, env,
-                   "Illegal value in compare operation");
-    goto finish;
-  }
+exp_t *cmpcmd(exp_t *e, env_t *env) {
+  exp_t *op = car(e);
   if (!op || !issymbol(op)) {
-    result = error(ERROR_ILLEGAL_VALUE, e, env,
-                   "Missing operator in compare operation");
-    goto finish;
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "compare: missing operator");
   }
-  if (strcmp(op->ptr, "<") == 0)
-    ret = (d < 0);
-  else if (strcmp(op->ptr, ">") == 0)
-    ret = (d > 0);
-  else if (strcmp(op->ptr, "<=") == 0)
-    ret = (d <= 0);
-  else if (strcmp(op->ptr, ">=") == 0)
-    ret = (d >= 0);
+  /* Decode the operator once. Branches keep the same semantics that
+     bytecode SLOT_<cmp>_FIX uses, so chained results agree with the
+     compiler's per-pair comparisons. */
+  int op_kind;
+  if      (strcmp(op->ptr, "<")  == 0) op_kind = 0;
+  else if (strcmp(op->ptr, ">")  == 0) op_kind = 1;
+  else if (strcmp(op->ptr, "<=") == 0) op_kind = 2;
+  else if (strcmp(op->ptr, ">=") == 0) op_kind = 3;
   else {
-    result = error(ERROR_ILLEGAL_VALUE, e, env,
-                   "Illegal operand in compare operation");
-    goto finish;
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "compare: unknown operator");
   }
-  result = (ret ? TRUE_EXP : NIL_EXP);
-finish:
-  unrefexp(v1);
-  unrefexp(v2);
+
+  /* Walk args pairwise: (< a b c d) iff a<b AND b<c AND c<d. 0 or 1
+     args is vacuously true (matches Scheme/Clojure/Python semantics).
+     Doc claimed chaining; the previous implementation only read the
+     first two args and silently dropped the rest. */
+  exp_t *prev = NULL;
+  exp_t *cur_node = e->next;
+  while (cur_node) {
+    exp_t *v = EVAL(cur_node->content, env);
+    if (iserror(v)) {
+      if (prev) unrefexp(prev);
+      unrefexp(e);
+      return v;
+    }
+    if (prev) {
+      double d;
+      if (!alc_pair_cmp(prev, v, &d)) {
+        unrefexp(prev); unrefexp(v); unrefexp(e);
+        return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                     "compare: incompatible types");
+      }
+      int ok = (op_kind == 0) ? (d <  0)
+             : (op_kind == 1) ? (d >  0)
+             : (op_kind == 2) ? (d <= 0)
+             :                  (d >= 0);
+      unrefexp(prev);
+      if (!ok) {
+        unrefexp(v);
+        unrefexp(e);
+        return NIL_EXP;
+      }
+    }
+    prev = v;
+    cur_node = cur_node->next;
+  }
+  if (prev) unrefexp(prev);
   unrefexp(e);
-  return result;
+  return TRUE_EXP;
 }
 
 const char doc_plus[] = "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
@@ -11804,6 +11830,17 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     }
     newenv->n_inline = nargs;
   } else {
+    /* Slow-path bind. Verify expected param count up-front for compiled
+       fns: silently running the body with too few args used to fail
+       later as a misleading "unbound variable". */
+    if ((fn->flags & FLAG_COMPILED) && fn->bc && fn->bc->nparams != nargs) {
+      int i;
+      for (i = 0; i < nargs; i++) unrefexp(argv[i]);
+      destroy_env(newenv);
+      return error(ERROR_ILLEGAL_VALUE, fn, env,
+                   "wrong number of args: expected %d, got %d",
+                   fn->bc->nparams, nargs);
+    }
     exp_t *p = fn->content;
     int i = 0;
     while (p && i < nargs) {
