@@ -5811,6 +5811,118 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* Tail counter loop with one inner global call before the recurse.
+   26-byte body produced by:
+     (def lp (k) (if (cmp k K1) (do (g K_arg) (lp (op k K2))) k))
+   Establish a frame, run the loop in registers, BLR
+   jit_call_global1_drop for the inner call, propagate any error. */
+static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 26) return 0;
+  uint8_t *c = bc->code;
+
+  uint8_t cmp_op = c[0];
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX) return 0;
+  uint8_t slot = c[1];
+  if (slot >= ENV_INLINE_SLOTS) return 0;
+  int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
+
+  if (c[4] != OP_BR_IF_FALSE) return 0;
+  if (c[7] != OP_LOAD_FIX) return 0;
+  int16_t arg_imm = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
+
+  if (c[10] != OP_CALL_GLOBAL) return 0;
+  uint8_t const_idx = c[11];
+  if (c[12] != 1) return 0;
+  if (const_idx >= bc->nconsts) return 0;
+
+  if (c[13] != OP_POP) return 0;
+
+  uint8_t arith_op = c[14];
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX) return 0;
+  if (c[15] != slot) return 0;
+  int16_t arith_imm = (int16_t)((uint16_t)c[16] | ((uint16_t)c[17] << 8));
+
+  if (c[18] != OP_TAIL_SELF || c[19] != 1) return 0;
+  if (c[20] != OP_JUMP) return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != slot) return 0;
+  if (c[25] != OP_RET) return 0;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
+  if (slot_off > 32760) return 0;
+  int64_t cmp_tagged = ((int64_t)cmp_imm << 3) | 1;
+  if (cmp_tagged < 0 || cmp_tagged > 4095) return 0;
+  int arith_delta = ((int)arith_imm) << 3;
+  if (arith_delta < 0 || arith_delta > 4095) return 0;
+  int64_t tagged_arg = ((int64_t)arg_imm << 3) | 1;
+
+  int inv_cc;
+  switch (cmp_op) {
+    case OP_SLOT_GT_FIX: inv_cc = 13; break;
+    case OP_SLOT_LT_FIX: inv_cc = 10; break;
+    case OP_SLOT_GE_FIX: inv_cc = 11; break;
+    case OP_SLOT_LE_FIX: inv_cc = 12; break;
+    default: return 0;
+  }
+
+  int n = 0;
+  out[n++] = arm64_ldr_imm(1, 0, slot_off);
+  int patch_deopt = n; out[n++] = 0;
+
+  out[n++] = arm64_stp_pre_sp(29, 30, -32);
+  out[n++] = arm64_stp_off_sp(19, 20, 16);
+  out[n++] = arm64_mov_from_sp(29);
+  out[n++] = arm64_mov_reg(19, 0);
+
+  int loop_top = n;
+  out[n++] = arm64_ldr_imm(1, 19, slot_off);
+  out[n++] = arm64_cmp_imm(1, (int)cmp_tagged);
+  int patch_end = n; out[n++] = 0;
+
+  n += emit_mov64(out + n, 0, (uint64_t)(uintptr_t)bc);
+  out[n++] = arm64_mov_reg(1, 19);
+  n += emit_mov64(out + n, 2, (uint64_t)const_idx);
+  n += emit_mov64(out + n, 3, (uint64_t)tagged_arg);
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&jit_call_global1_drop);
+  out[n++] = arm64_blr(9);
+
+  int patch_err = n; out[n++] = 0;            /* cbnz x0, err */
+
+  out[n++] = arm64_ldr_imm(1, 19, slot_off);
+  if (arith_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+  else
+    out[n++] = arm64_add_imm(1, 1, arith_delta);
+  out[n++] = arm64_str_imm(1, 19, slot_off);
+  { int cur = n++; out[cur] = arm64_b(loop_top - cur); }
+
+  int end_pc = n;
+  out[n++] = arm64_ldr_imm(0, 19, slot_off);
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  int err_pc = n;
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  int deopt_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  /* CBNZ Xt, label — same format as CBZ, op=1. */
+  uint32_t cbnz_base = 0xB5000000u;
+  out[patch_err]   = cbnz_base |
+                     (((uint32_t)(err_pc - patch_err) & 0x7FFFFu) << 5) | 0u;
+  out[patch_end]   = arm64_b_cond(inv_cc, end_pc - patch_end);
+  out[patch_deopt] = arm64_tbz(1, 0, deopt_pc - patch_deopt);
+
+  assert(n <= 64);
+  *outn = n;
+  return 1;
+}
+
 /* Knuth's tak — 50-byte exact-match shape.
      (def tak (x y z) (if (no (< y x)) z
                           (tak (tak (- x 1) y z)
@@ -6275,6 +6387,8 @@ int jit_compile(bytecode_t *bc) {
 
   if (try_jit_simple_tail_loop(bc, insns, &n)) {
     /* matched — fall through to mmap+install */
+  } else if (try_jit_tail_loop_with_call(bc, insns, &n)) {
+    /* tail loop with one inner call — fall through */
   } else if (try_jit_recurse_add_two(bc, insns, &n)) {
     /* iterative-fib fast path — fall through */
   } else if (try_jit_recurse_mul_one(bc, insns, &n)) {
