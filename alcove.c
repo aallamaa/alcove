@@ -2722,7 +2722,7 @@ exp_t *expcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_expt[] = "(expt b e) — b raised to the e power.";
+const char doc_expt[] = "(expt b e) — b raised to the e power. Stays integer if both args are fixnums and the result fits in 61 bits; falls back to float otherwise. Alias: **.";
 exp_t *exptcmd(exp_t *e, env_t *env) {
   exp_t *v = NULL;
   exp_t *v2 = NULL;
@@ -2741,12 +2741,37 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
         return v2;
       }
     }
-  if ((isfloat(v) || isnumber(v)) && (isfloat(v2) || isnumber(v2)))
-    ret = make_floatf(pow(isfloat(v) ? v->f : (double)FIX_VAL(v),
-                          isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
-  else
+  if ((isfloat(v) || isnumber(v)) && (isfloat(v2) || isnumber(v2))) {
+    /* Integer fast path: both args fixnums, exponent non-negative, and
+       the running product never overflows int64 nor escapes int61.
+       Repeated squaring; falls through to pow() if any step overflows. */
+    if (isnumber(v) && isnumber(v2)) {
+      int64_t k = FIX_VAL(v2);
+      if (k >= 0) {
+        int64_t base = FIX_VAL(v);
+        int64_t r = 1;
+        int overflow = 0;
+        int64_t fix_max = ((int64_t)1 << 60) - 1;
+        int64_t fix_min = -((int64_t)1 << 60);
+        while (k > 0 && !overflow) {
+          if (k & 1) overflow |= __builtin_mul_overflow(r, base, &r);
+          k >>= 1;
+          if (k > 0 && !overflow)
+            overflow |= __builtin_mul_overflow(base, base, &base);
+        }
+        if (!overflow && r >= fix_min && r <= fix_max) {
+          ret = MAKE_FIX(r);
+        }
+      }
+    }
+    if (!ret) {
+      ret = make_floatf(pow(isfloat(v) ? v->f : (double)FIX_VAL(v),
+                            isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
+    }
+  } else {
     ret = error(ERROR_ILLEGAL_VALUE, e, env,
-                "Illegal value in operation"); /*ERROR*/
+                "Illegal value in operation");
+  }
   unrefexp(v);
   unrefexp(v2);
   unrefexp(e);
