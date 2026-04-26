@@ -1,0 +1,26 @@
+; N-queens with a vector-based queen placement.  Mirrors nqueens.alc
+; in algorithm but stores the per-row queen column in a fixed-size
+; vector indexed by row, so:
+;   - no cons cell per placement (the cons-based version allocates one
+;     pair per recursion level and lets the gc-equivalent free path
+;     handle it)
+;   - safe? walks a vector by index instead of a cons chain
+;   - backtracking is implicit: when we recurse with a different col
+;     we just overwrite that row's slot
+(def safe? (col qs row offset)
+  (if (>= offset row) t
+      (if (is col (vec-ref qs offset)) nil
+          (if (is (- col (- row offset)) (vec-ref qs offset)) nil
+              (if (is (+ col (- row offset)) (vec-ref qs offset)) nil
+                  (safe? col qs row (+ offset 1)))))))
+(def try-cols (n row col qs count)
+  (if (>= col n) count
+      (if (safe? col qs row 0)
+          (do (vec-set! qs row col)
+              (try-cols n row (+ col 1) qs (+ count (solve n (+ row 1) qs))))
+          (try-cols n row (+ col 1) qs count))))
+(def solve (n row qs)
+  (if (>= row n) 1
+      (try-cols n row 0 qs 0)))
+(= qs (vec 10 0))
+(prn (solve 10 0 qs))
