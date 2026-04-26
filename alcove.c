@@ -152,7 +152,7 @@ lispProc lispProcList[] = {
     LISPCMD("bit-and",       bitandcmd,      doc_bitand),
     LISPCMD("&",             bitandcmd,      doc_bitand),
     LISPCMD("bit-or",        bitorcmd,       doc_bitor),
-    /* No "|" alias — the reader uses | as a macro char for pipe-mode. */
+    LISPCMD("|",             bitorcmd,       doc_bitor),
     LISPCMD("bit-xor",       bitxorcmd,      doc_bitxor),
     LISPCMD("^",             bitxorcmd,      doc_bitxor),
     LISPCMD("bit-not",       bitnotcmd,      doc_bitnot),
@@ -1335,22 +1335,12 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
   } else if (x == '\'') {
     vnode = reader(stream, 0, 0);
     return make_quote(vnode);
-  } else if (x == '|') {
-    vnode = reader(stream, ')', PARSER_PIPEMODE);
-    if (vnode) {
-      if (iserror(vnode))
-        return vnode;
-      lnode = make_node(vnode);
-      cnode = lnode;
-      while ((vnode = reader(stream, ')', PARSER_TERMMACROMODE))) {
-        if (iserror(vnode)) {
-          unrefexp(lnode);
-          return vnode;
-        }
-        cnode = cnode->next = make_node(vnode);
-      }
-    }
   }
+  /* Note: `|` was previously hooked here as a reader macro that built
+     a wrapped list — it didn't implement Common Lisp's |sym with spaces|
+     and isn't part of the Arc spec (paulgraham.com/arcll1.html doesn't
+     mention it). We reclassified `|` as a normal constituent in
+     char.h so it can be used as a function name (bit-or alias). */
 
   else
     return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
@@ -3225,7 +3215,7 @@ exp_t *modcmd(exp_t *e, env_t *env) {
 
 const char doc_bitand[] = "(bit-and a b) — bitwise AND on two integers. Alias: &.";
 BITOP_AB(bitandcmd, va & vb)
-const char doc_bitor[]  = "(bit-or a b) — bitwise OR on two integers. (No `|` alias: the reader uses | as a macro char.)";
+const char doc_bitor[]  = "(bit-or a b) — bitwise OR on two integers. Alias: |.";
 BITOP_AB(bitorcmd,  va | vb)
 const char doc_bitxor[] = "(bit-xor a b) — bitwise XOR on two integers. Alias: ^.";
 BITOP_AB(bitxorcmd, va ^ vb)
