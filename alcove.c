@@ -6401,13 +6401,110 @@ static int rl_paren_depth(const char *s) {
   return depth;
 }
 
+/* Keywords that get the bold-magenta treatment in the colored
+   redisplay. Kept short on purpose — coloring random user-defined
+   names would be misleading. */
+static const char *alcove_kw[] = {
+  "def","fn","if","do","let","for","while","and","or","not","is","isnt",
+  "no","yes","t","nil","cond","when","unless","quote","with","each","mac",
+  "set","="," return", NULL
+};
+static int alc_is_kw(const char *s, int n) {
+  int i;
+  for (i = 0; alcove_kw[i]; i++) {
+    int kn = (int)strlen(alcove_kw[i]);
+    if (kn == n && strncmp(alcove_kw[i], s, n) == 0) return 1;
+  }
+  return 0;
+}
+static int alc_sym_char(unsigned char c) {
+  /* alcove symbol chars: anything that isn't whitespace, paren, quote,
+     comma, comment-start, or string delimiter. */
+  if (c <= ' ') return 0;
+  if (c == '(' || c == ')' || c == '\'' || c == '`' ||
+      c == ',' || c == ';' || c == '"') return 0;
+  return 1;
+}
+/* Walk `s` of length n and emit ANSI-colored output to `out`. Strings,
+   comments, parens, numbers, and a small set of keywords get colored;
+   everything else passes through. */
+static void alc_print_colored(const char *s, int n, FILE *out) {
+  int i = 0;
+  while (i < n) {
+    unsigned char c = (unsigned char)s[i];
+    if (c == '(' || c == ')') {
+      fprintf(out, "\x1B[33m%c\x1B[39m", c);
+      i++;
+    } else if (c == ';') {
+      fputs("\x1B[90m", out);
+      while (i < n && s[i] != '\n') { fputc(s[i], out); i++; }
+      fputs("\x1B[39m", out);
+    } else if (c == '"') {
+      fputs("\x1B[32m\"", out);
+      i++;
+      while (i < n && s[i] != '"') {
+        if (s[i] == '\\' && i + 1 < n) { fputc(s[i], out); i++; }
+        if (i < n) { fputc(s[i], out); i++; }
+      }
+      if (i < n) { fputc(s[i], out); i++; }   /* closing quote */
+      fputs("\x1B[39m", out);
+    } else if ((c >= '0' && c <= '9') ||
+               (c == '-' && i + 1 < n &&
+                s[i+1] >= '0' && s[i+1] <= '9' &&
+                (i == 0 || !alc_sym_char((unsigned char)s[i-1])))) {
+      fputs("\x1B[36m", out);
+      if (c == '-') { fputc('-', out); i++; }
+      while (i < n && ((s[i] >= '0' && s[i] <= '9') || s[i] == '.')) {
+        fputc(s[i], out); i++;
+      }
+      fputs("\x1B[39m", out);
+    } else if (alc_sym_char(c)) {
+      int start = i;
+      while (i < n && alc_sym_char((unsigned char)s[i])) i++;
+      int len = i - start;
+      if (alc_is_kw(s + start, len))
+        fprintf(out, "\x1B[1;35m%.*s\x1B[22;39m", len, s + start);
+      else
+        fwrite(s + start, 1, len, out);
+    } else {
+      fputc(c, out);
+      i++;
+    }
+  }
+}
+/* Custom readline redisplay: prints prompt + colored line buffer,
+   then walks cursor back to rl_point. Limitations: assumes single
+   physical terminal line (we don't track wrap). For long lines
+   (> 256 chars) we fall back to readline's default redisplay. */
+/* Print the prompt while stripping RL_PROMPT_START/END_IGNORE bytes
+   (\001 \002). Those markers exist for readline's own width math; if
+   we let them through they show up as literal glyphs in the terminal. */
+static void alc_print_prompt_stripped(const char *p, FILE *out) {
+  if (!p) return;
+  for (; *p; p++) if (*p != '\001' && *p != '\002') fputc(*p, out);
+}
+static void alcove_colored_redisplay(void) {
+  if (rl_end > 256) { rl_redisplay(); return; }
+  fputs("\r\x1B[K", rl_outstream);
+  alc_print_prompt_stripped(
+      rl_display_prompt ? rl_display_prompt : rl_prompt, rl_outstream);
+  alc_print_colored(rl_line_buffer, rl_end, rl_outstream);
+  int back = rl_end - rl_point;
+  if (back > 0) fprintf(rl_outstream, "\x1B[%dD", back);
+  fflush(rl_outstream);
+}
+
 /* Read one complete top-level form from the terminal. Continues
    prompting (with a continuation prompt) until paren balance hits 0.
    Returned string is malloc'd. NULL on EOF. */
 static char *rl_read_form(int idx) {
   char prompt[64];
+  /* Wrap escape codes with \001/\002 (RL_PROMPT_START_IGNORE /
+     END_IGNORE) so readline counts visible width correctly. Doesn't
+     affect our custom redisplay (which writes the prompt verbatim)
+     but makes the cursor land in the right column on fallback. */
   snprintf(prompt, sizeof prompt,
-           "\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx);
+           "\001\x1B[34m\002In [\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ", idx);
   char *line = readline(prompt);
   if (!line) return NULL;                    /* Ctrl-D on empty line */
   size_t len = strlen(line);
@@ -6543,6 +6640,13 @@ int main(int argc, char *argv[])
     /* Use space as the only word separator so e.g. (fib|TAB completes
        the symbol "fib" with "(" left of cursor counted as boundary. */
     rl_basic_word_break_characters = " \t\n()'`,;\"";
+    /* Visual matching-paren: when typing ")" the cursor briefly jumps
+       to the matching "(" before settling. Built into readline. */
+    rl_variable_bind("blink-matching-paren", "on");
+    /* Real-time syntax highlighting via custom redisplay function. */
+    rl_redisplay_function = alcove_colored_redisplay;
+    using_history();
+    stifle_history(1000);
   }
 #endif
 

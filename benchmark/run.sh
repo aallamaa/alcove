@@ -46,14 +46,18 @@ done
 
 # summary table
 echo "=== summary ==="
-printf "%-22s %10s %10s %10s %10s %10s\n" benchmark alcove python net_alc net_py "alc/py"
-printf -- '-%.0s' {1..78}; echo
+printf "%-22s %10s %10s %10s %10s %12s\n" benchmark alcove python net_alc net_py "speedup"
+printf -- '-%.0s' {1..80}; echo
 for r in "${ROWS[@]}"; do
   set -- $r
   name=$1; a=$2; p=$3
   net_a=$(( a - STARTUP_ALC )); [ "$net_a" -lt 1 ] && net_a=1
   net_p=$(( p - STARTUP_PY  )); [ "$net_p" -lt 1 ] && net_p=1
-  ratio=$("$PYTHON" -c "print(f'{$net_a/$net_p:.1f}x')")
-  printf "%-22s %7d ms %7d ms %7d ms %7d ms %10s\n" \
-    "$name" "$a" "$p" "$net_a" "$net_p" "$ratio"
+  # speedup = py/alc ; > 1 means alcove faster, < 1 means python faster.
+  speedup=$("$PYTHON" -c "
+r = $net_p / $net_a
+if r >= 1: print(f'{r:.1f}x alcove')
+else:      print(f'{1/r:.1f}x python')")
+  printf "%-22s %7d ms %7d ms %7d ms %7d ms %12s\n" \
+    "$name" "$a" "$p" "$net_a" "$net_p" "$speedup"
 done
