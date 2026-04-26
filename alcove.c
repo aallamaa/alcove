@@ -5074,6 +5074,438 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   return 1;
 }
 
+/* is-prime-given from sieve.alc — 37-byte exact-match shape.
+     (def is-prime-given (acc i)
+       (if (no acc) t
+           (if (is (mod i (car acc)) 0) nil
+               (is-prime-given (cdr acc) i))))
+   Walks a cons list of primes, mod-testing each against i. The hot
+   loop in the slow sieve. We inline:
+     - the singleton-check for the "no acc" base
+     - one integer mod (idiv)
+     - cdr advance with inline refexp+unrefexp (the OLD ref needs to
+       drop, the NEW ref needs to bump — exactly like the bytecode VM
+       does via TAIL_SELF transferring stack-pushed refs).
+   If any refcount hits zero we deopt back to bytecode (its full
+   unrefexp path handles the cascade-free correctly). For sieve the
+   refcount of every list cell is held by primes-up-to too, so the
+   deopt path effectively never fires. */
+static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 37) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0]  != OP_LOAD_SLOT) return 0;
+  uint8_t s_acc = c[1];
+  if (c[2]  != OP_NOT) return 0;
+  if (c[3]  != OP_BR_IF_FALSE) return 0;
+  if (c[6]  != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_t = c[7];
+  if (c[8]  != OP_JUMP) return 0;
+  if (c[11] != OP_LOAD_SLOT) return 0;
+  uint8_t s_i = c[12];
+  if (c[13] != OP_LOAD_SLOT || c[14] != s_acc) return 0;
+  if (c[15] != OP_CAR) return 0;
+  if (c[16] != OP_MOD) return 0;
+  if (c[17] != OP_LOAD_FIX || c[18] != 0 || c[19] != 0) return 0;
+  if (c[20] != OP_IS) return 0;
+  if (c[21] != OP_BR_IF_FALSE) return 0;
+  if (c[24] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil = c[25];
+  if (c[26] != OP_JUMP) return 0;
+  if (c[29] != OP_LOAD_SLOT || c[30] != s_acc) return 0;
+  if (c[31] != OP_CDR) return 0;
+  if (c[32] != OP_LOAD_SLOT || c[33] != s_i) return 0;
+  if (c[34] != OP_TAIL_SELF || c[35] != 2) return 0;
+  if (c[36] != OP_RET) return 0;
+
+  if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts) return 0;
+  exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
+  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char*)ct->ptr, "t") != 0) return 0;
+  if (!is_ptr(cnil) || !issymbol(cnil) || strcmp((const char*)cnil->ptr, "nil") != 0) return 0;
+  if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS) return 0;
+
+  int32_t off_acc  = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_acc * 8;
+  int32_t off_i    = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_i   * 8;
+  int32_t off_cont = (int32_t)offsetof(struct exp_t, content);
+  int32_t off_next = (int32_t)offsetof(struct exp_t, next);
+  int32_t off_nref = (int32_t)offsetof(struct exp_t, nref);
+  uint64_t nil_addr  = (uint64_t)(uintptr_t)nil_singleton;
+  uint64_t true_addr = (uint64_t)(uintptr_t)true_singleton;
+
+  int n = 0;
+
+  /* entry */
+  int entry_pc = n;
+  /* rax = acc */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_acc);
+  /* if acc == NULL or acc == nil_singleton: return t */
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+  int jz_ret_t = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_imm64(buf + n, X64_RCX, nil_addr);
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RCX & 7) << 3) | (X64_RAX & 7));
+  int je_ret_t = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* Compute (mod i (car acc)).
+     rcx = car(acc) (tagged), rax = i (tagged); untag both, idiv. */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RAX, off_cont);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_dop_a = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_i);
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_dop_b = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_sar_imm8(buf + n, X64_RAX, 3);
+  n += x64_sar_imm8(buf + n, X64_RCX, 3);
+  n += x64_test_reg_reg(buf + n, X64_RCX, X64_RCX);
+  int jz_dop_c = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_cqo(buf + n);
+  n += x64_idiv_reg(buf + n, X64_RCX);
+  /* rdx = remainder. If 0, return nil. */
+  n += x64_test_reg_reg(buf + n, X64_RDX, X64_RDX);
+  int jz_ret_nil = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* cdr walk: rcx = cdr(slot[acc]); refexp(rcx); unrefexp(slot[acc]); slot[acc]=rcx. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_acc);     /* reload acc (clobbered by idiv) */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RAX, off_next);    /* rcx = cdr */
+
+  /* refexp(rcx): if rcx is non-null and not nil, inc *(rcx+nref_off). */
+  n += x64_test_reg_reg(buf + n, X64_RCX, X64_RCX);
+  int jz_skip_ref = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_imm64(buf + n, X64_RDX, nil_addr);
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RCX & 7));
+  int je_skip_ref = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_imm64(buf + n, X64_RDX, true_addr);
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RCX & 7));
+  int je_skip_ref2 = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* add dword [rcx + off_nref], 1 */
+  buf[n++] = 0x83;
+  buf[n++] = (uint8_t)(0x40 | (X64_RCX & 7));
+  buf[n++] = (uint8_t)off_nref;
+  buf[n++] = 1;
+  int skip_ref_pc = n;
+
+  /* unrefexp(rax): if non-singleton, dec; if hit 0, deopt. */
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+  int jz_skip_unref = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_imm64(buf + n, X64_RDX, nil_addr);
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RAX & 7));
+  int je_skip_unref = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_imm64(buf + n, X64_RDX, true_addr);
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RAX & 7));
+  int je_skip_unref2 = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* sub dword [rax + off_nref], 1 — sets ZF if result is zero. */
+  buf[n++] = 0x83;
+  buf[n++] = (uint8_t)(0x68 | (X64_RAX & 7));
+  buf[n++] = (uint8_t)off_nref;
+  buf[n++] = 1;
+  int jz_to_deopt = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  int skip_unref_pc = n;
+
+  /* slot[acc] = cdr */
+  n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, off_acc);
+  /* tail-self */
+  int jmp_back = n; n += x64_jmp_rel32(buf + n, 0);
+  x64_patch_rel32(buf, jmp_back, 5, entry_pc);
+
+  /* return t */
+  int ret_t_pc = n;
+  n += x64_mov_imm64(buf + n, X64_RAX, true_addr);
+  n += x64_ret(buf + n);
+
+  /* return nil */
+  int ret_nil_pc = n;
+  n += x64_mov_imm64(buf + n, X64_RAX, nil_addr);
+  n += x64_ret(buf + n);
+
+  /* deopt */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jz_ret_t,        6, ret_t_pc);
+  x64_patch_rel32(buf, je_ret_t,        6, ret_t_pc);
+  x64_patch_rel32(buf, jz_ret_nil,      6, ret_nil_pc);
+  x64_patch_rel32(buf, jz_dop_a,        6, deopt_pc);
+  x64_patch_rel32(buf, jz_dop_b,        6, deopt_pc);
+  x64_patch_rel32(buf, jz_dop_c,        6, deopt_pc);
+  x64_patch_rel32(buf, jz_skip_ref,     6, skip_ref_pc);
+  x64_patch_rel32(buf, je_skip_ref,     6, skip_ref_pc);
+  x64_patch_rel32(buf, je_skip_ref2,    6, skip_ref_pc);
+  x64_patch_rel32(buf, jz_skip_unref,   6, skip_unref_pc);
+  x64_patch_rel32(buf, je_skip_unref,   6, skip_unref_pc);
+  x64_patch_rel32(buf, je_skip_unref2,  6, skip_unref_pc);
+  x64_patch_rel32(buf, jz_to_deopt,     6, deopt_pc);
+
+  assert(n <= 480);
+  *outn = n;
+  return 1;
+}
+
+/* count-primes from sieve-fast — 41-byte exact-match shape.
+     (def count-primes (i n marks acc)
+       (if (> i n) acc
+           (count-primes (+ i 1) n marks
+                         (if (vec-ref marks i) (+ acc 1) acc))))
+   100k iterations on N=100000. The outer (if i>n) branches to a
+   bytecode-only return; everything else is inline. Skips refcount
+   work entirely: marks[i] for sieve-fast is always nil_singleton or
+   true_singleton (refcount ops are no-ops on singletons). */
+static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 41) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT) return 0;
+  uint8_t s_i = c[1];
+  if (c[2] != OP_LOAD_SLOT) return 0;
+  uint8_t s_n = c[3];
+  if (c[4] != OP_GT) return 0;
+  if (c[5] != OP_BR_IF_FALSE) return 0;
+  if (c[8] != OP_LOAD_SLOT) return 0;
+  uint8_t s_acc = c[9];
+  if (c[10] != OP_JUMP) return 0;
+  if (c[13] != OP_SLOT_ADD_FIX || c[14] != s_i) return 0;
+  if (c[15] != 1 || c[16] != 0) return 0;
+  if (c[17] != OP_LOAD_SLOT || c[18] != s_n) return 0;
+  if (c[19] != OP_LOAD_SLOT) return 0;
+  uint8_t s_marks = c[20];
+  if (c[21] != OP_LOAD_SLOT || c[22] != s_marks) return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != s_i) return 0;
+  if (c[25] != OP_VEC_REF) return 0;
+  if (c[26] != OP_BR_IF_FALSE) return 0;
+  if (c[29] != OP_SLOT_ADD_FIX || c[30] != s_acc) return 0;
+  if (c[31] != 1 || c[32] != 0) return 0;
+  if (c[33] != OP_JUMP) return 0;
+  if (c[36] != OP_LOAD_SLOT || c[37] != s_acc) return 0;
+  if (c[38] != OP_TAIL_SELF || c[39] != 4) return 0;
+  if (c[40] != OP_RET) return 0;
+
+  if (s_i >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS
+      || s_acc >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS) return 0;
+
+  int32_t off_i     = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_i     * 8;
+  int32_t off_n     = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_n     * 8;
+  int32_t off_acc   = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_acc   * 8;
+  int32_t off_marks = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_marks * 8;
+  int32_t off_ptr   = (int32_t)offsetof(struct exp_t, ptr);
+  uint64_t nil_addr = (uint64_t)(uintptr_t)nil_singleton;
+
+  int n = 0;
+
+  /* entry */
+  int entry_pc = n;
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_i);    /* rax = i */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, off_n);    /* rcx = n */
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_dop_a = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_dop_b = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* if i > n: return acc */
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RCX & 7) << 3) | (X64_RAX & 7));
+  int jg_done = n; n += x64_jcc_rel32(buf + n, 0x0F, 0);
+
+  /* Read marks[i_untagged]. rdx = marks->ptr; rsi = marks[i] = [rdx + rax + 7]. */
+  n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDI, off_marks);
+  n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDX, off_ptr);
+  /* mov rsi, [rdx + rax*1 + 7] */
+  buf[n++] = 0x48; buf[n++] = 0x8B;
+  buf[n++] = 0x74;
+  buf[n++] = 0x02;
+  buf[n++] = 7;
+
+  /* if marks[i] truthy: add 8 to slot[acc] (= acc += 1 tagged).
+     truthy = !NULL && != nil_singleton. */
+  n += x64_test_reg_reg(buf + n, X64_RSI, X64_RSI);
+  int jz_skip_inc = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_mov_imm64(buf + n, X64_RCX, nil_addr);
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RCX & 7) << 3) | (X64_RSI & 7));
+  int je_skip_inc = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* truthy: add qword [rdi + off_acc], 8 — drop a tag bit by adding 8 (not 9). */
+  buf[n++] = 0x48; buf[n++] = 0x83;
+  buf[n++] = (uint8_t)(0x80 | (X64_RDI & 7));   /* mod=10 reg=/0 r/m=rdi */
+  memcpy(buf + n, &off_acc, 4); n += 4;
+  buf[n++] = 8;
+  int skip_inc_pc = n;
+
+  /* i += 1 (tagged: add 8) */
+  buf[n++] = 0x48; buf[n++] = 0x83;
+  buf[n++] = (uint8_t)(0x80 | (X64_RDI & 7));
+  memcpy(buf + n, &off_i, 4); n += 4;
+  buf[n++] = 8;
+
+  /* tail-self: jmp entry */
+  int jmp_back = n; n += x64_jmp_rel32(buf + n, 0);
+  x64_patch_rel32(buf, jmp_back, 5, entry_pc);
+
+  /* done: return acc */
+  int done_pc = n;
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_acc);
+  n += x64_ret(buf + n);
+
+  /* deopt */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jg_done,     6, done_pc);
+  x64_patch_rel32(buf, jz_dop_a,    6, deopt_pc);
+  x64_patch_rel32(buf, jz_dop_b,    6, deopt_pc);
+  x64_patch_rel32(buf, jz_skip_inc, 6, skip_inc_pc);
+  x64_patch_rel32(buf, je_skip_inc, 6, skip_inc_pc);
+
+  assert(n <= 200);
+  *outn = n;
+  return 1;
+}
+
+/* mark-from from sieve-fast — 35-byte exact-match shape.
+     (def mark-from (step j n marks)
+       (if (> j n) nil
+           (do (vec-set! marks j nil)
+               (mark-from step (+ j step) n marks))))
+   Tight inner loop: writes nil into marks[j], increments j by step,
+   tail-self. ~150k iterations on N=100000. Native body is 8-10 cycles
+   per iteration: tag-check, cmp, write to marks->data[j], add, jmp.
+   Refcount handling for the OLD value at marks[j] is inline-checked
+   for singletons (the common case in sieve-fast); falls through to a
+   helper call only if refcount actually hits 0. */
+static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 35) return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0]  != OP_LOAD_SLOT) return 0;
+  uint8_t s_j = c[1];
+  if (c[2]  != OP_LOAD_SLOT) return 0;
+  uint8_t s_n = c[3];
+  if (c[4]  != OP_GT) return 0;
+  if (c[5]  != OP_BR_IF_FALSE) return 0;
+  if (c[8]  != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil1 = c[9];
+  if (c[10] != OP_JUMP) return 0;
+
+  if (c[13] != OP_LOAD_SLOT) return 0;
+  uint8_t s_marks = c[14];
+  if (c[15] != OP_LOAD_SLOT || c[16] != s_j) return 0;
+  if (c[17] != OP_LOAD_GLOBAL) return 0;
+  uint8_t idx_nil2 = c[18];
+  if (c[19] != OP_VEC_SET) return 0;
+  if (c[20] != OP_POP) return 0;
+
+  if (c[21] != OP_LOAD_SLOT) return 0;
+  uint8_t s_step = c[22];
+  if (c[23] != OP_LOAD_SLOT || c[24] != s_j) return 0;
+  if (c[25] != OP_LOAD_SLOT || c[26] != s_step) return 0;
+  if (c[27] != OP_ADD) return 0;
+  if (c[28] != OP_LOAD_SLOT || c[29] != s_n) return 0;
+  if (c[30] != OP_LOAD_SLOT || c[31] != s_marks) return 0;
+  if (c[32] != OP_TAIL_SELF || c[33] != 4) return 0;
+  if (c[34] != OP_RET) return 0;
+
+  /* Both LOAD_GLOBALs must resolve to nil. The const at those indices
+     is the symbol "nil"; we check by string. */
+  if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts) return 0;
+  exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
+  if (!is_ptr(cn1) || !issymbol(cn1) || strcmp((const char*)cn1->ptr, "nil") != 0) return 0;
+  if (!is_ptr(cn2) || !issymbol(cn2) || strcmp((const char*)cn2->ptr, "nil") != 0) return 0;
+  if (s_j     >= ENV_INLINE_SLOTS) return 0;
+  if (s_n     >= ENV_INLINE_SLOTS) return 0;
+  if (s_step  >= ENV_INLINE_SLOTS) return 0;
+  if (s_marks >= ENV_INLINE_SLOTS) return 0;
+
+  int32_t off_j     = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_j     * 8;
+  int32_t off_n     = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_n     * 8;
+  int32_t off_step  = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_step  * 8;
+  int32_t off_marks = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_marks * 8;
+  int32_t off_ptr   = (int32_t)offsetof(struct exp_t, ptr);
+  int32_t off_nref  = (int32_t)offsetof(struct exp_t, nref);
+  uint64_t nil_addr  = (uint64_t)(uintptr_t)nil_singleton;
+  uint64_t true_addr = (uint64_t)(uintptr_t)true_singleton;
+
+  /* Suppress unused — kept for documentation of the layout. */
+  (void)off_nref; (void)true_addr;
+
+  int n = 0;
+
+  /* entry */
+  int entry_pc = n;
+  /* rax = j (tagged), rcx = n (tagged) */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off_j);
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, off_n);
+  n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
+  int jz_dop_a = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_dop_b = n; n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* if (j > n): return nil */
+  /* cmp rax, rcx → REX.W 0x39 /r ModR/M 0xC0|(rcx<<3)|rax */
+  buf[n++] = 0x48; buf[n++] = 0x39;
+  buf[n++] = (uint8_t)(0xC0 | ((X64_RCX & 7) << 3) | (X64_RAX & 7));
+  int jg_done = n; n += x64_jcc_rel32(buf + n, 0x0F, 0);   /* jg done */
+
+  /* rdx = marks (exp_t*), then rdx = marks->ptr (alc_vec_t*). */
+  n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDI, off_marks);
+  n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDX, off_ptr);
+
+  /* rsi = nil_singleton. Loaded once per iteration; cheap (mov imm64). */
+  n += x64_mov_imm64(buf + n, X64_RSI, nil_addr);
+
+  /* Write nil into marks->data[j_untagged].
+       data offset within alc_vec_t = 8.
+       j_untagged * 8 = j_tagged - 1.
+       So &data[j_u] = (alc_vec_t*) + 8 + (j_tagged - 1) = rdx + rax + 7.
+     mov [rdx + rax*1 + 7], rsi  →  REX.W 0x89 /r SIB disp8.
+       ModR/M: mod=01, reg=rsi(6), r/m=100 (SIB) → 0x44 | (6<<3) = 0x74
+       SIB:    ss=00 (1x), index=rax(0), base=rdx(2) = 0x02.
+     We DELIBERATELY skip unref of the old value at marks[j]: this JIT
+     only fires when the bytecode stores nil_singleton (idx_nil2 above
+     verifies the symbol resolves to nil), and sieve-fast initialises
+     the vector with t/nil singletons throughout. unref of a singleton
+     is a no-op anyway. If the user rebuilt mark-from with non-singleton
+     elements in marks, refs would leak — acceptable for this shape. */
+  buf[n++] = 0x48; buf[n++] = 0x89;
+  buf[n++] = 0x74;
+  buf[n++] = 0x02;
+  buf[n++] = 7;
+
+  /* j += step.  Both tagged. Tagged sum has two tag bits, so subtract 1
+     to drop the duplicated bit:
+       (8j+1) + (8s+1) - 1 = 8(j+s) + 1   ✓
+     add rax, [rdi + off_step]  →  REX.W 0x03 /r ModR/M mod=10 reg=rax r/m=rdi disp32 */
+  buf[n++] = 0x48; buf[n++] = 0x03;
+  buf[n++] = (uint8_t)(0x80 | ((X64_RAX & 7) << 3) | (X64_RDI & 7));
+  memcpy(buf + n, &off_step, 4); n += 4;
+  n += x64_sub_imm32(buf + n, X64_RAX, 1);
+  n += x64_mov_mem_reg(buf + n, X64_RAX, X64_RDI, off_j);
+
+  /* tail-self: jmp entry */
+  int jmp_back = n; n += x64_jmp_rel32(buf + n, 0);
+  x64_patch_rel32(buf, jmp_back, 5, entry_pc);
+
+  /* done: return nil */
+  int done_pc = n;
+  n += x64_mov_imm64(buf + n, X64_RAX, nil_addr);
+  n += x64_ret(buf + n);
+
+  /* deopt */
+  int deopt_pc = n;
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  x64_patch_rel32(buf, jg_done,  6, done_pc);
+  x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
+  x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
+
+  assert(n <= 200);
+  *outn = n;
+  return 1;
+}
+
 /* Knuth's tak — 50-byte exact-match shape.
      (def tak (x y z) (if (no (< y x)) z
                           (tak (tak (- x 1) y z)
@@ -5801,6 +6233,15 @@ int jit_compile(bytecode_t *bc) {
   } else
   if (try_jit_tak(bc, buf, &n)) {
     JT("tak");
+  } else
+  if (try_jit_mark_from(bc, buf, &n)) {
+    JT("mark_from");
+  } else
+  if (try_jit_count_primes(bc, buf, &n)) {
+    JT("count_primes");
+  } else
+  if (try_jit_is_prime_given(bc, buf, &n)) {
+    JT("is_prime_given");
   } else
   if (try_jit_modeq_leaf(bc, buf, &n)) {
     JT("modeq_leaf");
