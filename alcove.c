@@ -252,7 +252,13 @@ inline int unrefexp(exp_t *e) {
     return 1;
   int ret;
   if ((ret = REFCOUNT_DEC(&e->nref)) <= 0) {
-    if (verbose) {
+    /* Skip the verbose "Freeing:" trace for the EOF parse marker.
+       Each form the REPL reads ends with reader() returning this
+       sentinel so the loop knows to stop. Surfacing it as an error
+       in verbose mode is misleading — it's normal end-of-input,
+       not a real failure. */
+    if (verbose &&
+        !(e->type == EXP_ERROR && e->flags == EXP_ERROR_PARSING_EOF)) {
       printf("\x1B[91mFreeing:\x1B[39m ");
       print_node(e);
       printf("\n");
@@ -293,7 +299,8 @@ inline int unrefexp(exp_t *e) {
     } else
       unrefexp(e->content); // check if content type is exp
 
-    if (verbose)
+    if (verbose &&
+        !(e->type == EXP_ERROR && e->flags == EXP_ERROR_PARSING_EOF))
       printf("\x1B[91mFree e:\x1B[39m %p\n", (void *)e);
     /* Push onto the free list instead of free(). next was just
        recursively released above so it's safe to overwrite. */
