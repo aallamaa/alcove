@@ -6922,6 +6922,11 @@ static char *rl_read_form(int idx) {
   snprintf(prompt, sizeof prompt,
            "\001\x1B[34m\002In [\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ", idx);
   char *line = readline(prompt);
+  /* The custom redisplay (alcove_colored_redisplay) leaves the cursor
+     inside the input line — readline's default redisplay would emit a
+     trailing \r\n itself, but our hook doesn't, so the eval result
+     would otherwise appear glued to the input. Emit it ourselves. */
+  putchar('\n');
   if (!line) return NULL;                    /* Ctrl-D on empty line */
   size_t len = strlen(line);
   size_t cap = len + 256;
@@ -6930,6 +6935,7 @@ static char *rl_read_form(int idx) {
   free(line);
   while (rl_paren_depth(acc) > 0) {
     char *more = readline("    ... ");
+    putchar('\n');                           /* same fix for continuation lines */
     if (!more) break;
     size_t need = strlen(acc) + strlen(more) + 2;
     if (need > cap) { cap = need * 2; acc = realloc(acc, cap); }
