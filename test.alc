@@ -314,3 +314,358 @@
 (assert "string read by var, computed idx" (sread ridx)           #\e)
 (def sget (s n) (s n))
 (assert "string read inside def body"      (sget "hello" 1)       #\e)
+
+;; ============================================================
+;; Comprehensive regression suite — added to catch the classes
+;; of bug surfaced by the multi-expert audit. Organized by area
+;; so a failure points to a category, not just a number.
+;; ============================================================
+
+;; ---------- arithmetic: fixnum + float ----------
+(assert "(+) is 0"                    (+)                            0)
+(assert "(*) is 1"                    (*)                            1)
+(assert "(+ a) is a"                  (+ 7)                          7)
+(assert "(- 5) negates"               (- 5)                          -5)
+(assert "(- a b c)"                   (- 10 1 2 3)                   4)
+(assert "(/ a b)"                     (/ 12 3)                       4)
+(assert "(/ a b c)"                   (/ 60 3 5)                     4)
+(assert "mod"                         (mod 10 3)                     1)
+(assert "abs neg"                     (abs -7)                       7)
+(assert "abs pos"                     (abs 7)                        7)
+(assert "max"                         (max 3 1 7 2 5)                7)
+(assert "min"                         (min 3 1 7 2 5)                1)
+(assert "max single"                  (max 9)                        9)
+(assert "min single"                  (min 9)                        9)
+(assert "expt int^int small"          (expt 2 10)                    1024)
+(assert "expt 0^0 = 1"                (expt 0 0)                     1)
+(assert "expt 1^N = 1"                (expt 1 100)                   1)
+(assert "expt N^0 = 1"                (expt 99 0)                    1)
+(assert "** alias"                    (** 3 4)                       81)
+(assert "expt int overflow → float"   (iso (expt 2 80) (** 2 80))    t)
+(assert "sqrt-int"                    (sqrt-int 100)                 10)
+(assert "sqrt-int floor"              (sqrt-int 99)                  9)
+(assert "odd t"                       (odd 3)                        t)
+(assert "odd nil"                     (odd 4)                        nil)
+
+;; ---------- bitwise ----------
+(assert "bit-and"                     (bit-and 12 10)                8)
+(assert "bit-or"                      (bit-or  12 10)                14)
+(assert "bit-xor"                     (bit-xor 12 10)                6)
+(assert "& alias"                     (& 12 10)                      8)
+(assert "| alias"                     (| 12 10)                      14)
+(assert "^ alias"                     (^ 12 10)                      6)
+(assert "~ 0 -> -1"                   (~ 0)                          -1)
+(assert "~ 5"                         (~ 5)                          -6)
+(assert "<< basic"                    (<< 1 8)                       256)
+(assert ">> basic"                    (>> 256 4)                     16)
+(assert ">> sign-preserving"          (>> -8 1)                      -4)
+(assert "<< then >>"                  (>> (<< 7 4) 4)                7)
+(assert "(** 2 16) via shift"         (<< 1 16)                      65536)
+
+;; ---------- comparison chaining (cmpcmd variadic, batch A) ----------
+(assert "< 0-arg vacuous"             (<)                            t)
+(assert "< 1-arg vacuous"             (< 5)                          t)
+(assert "< chained ok"                (< 1 2 3 4 5)                  t)
+(assert "< chained break"             (< 1 2 2 4)                    nil)
+(assert "< chained break late"        (< 1 2 3 2)                    nil)
+(assert "> chained"                   (> 5 4 3 2 1)                  t)
+(assert "<= chained equal ok"         (<= 1 2 2 3)                   t)
+(assert ">= chained equal ok"         (>= 5 4 4 3)                   t)
+(assert "string cmp <"                (< "abc" "abd")                t)
+(assert "char cmp <"                  (< #\a #\b)                    t)
+(assert "char cmp =>"                 (>= #\b #\a)                   t)
+
+;; ---------- equality / identity ----------
+(assert "is symbol"                   (is 'a 'a)                     t)
+(assert "is fixnum"                   (is 5 5)                       t)
+(assert "is char"                     (is #\x #\x)                   t)
+(assert "is mixed types -> nil"       (is 5 'a)                      nil)
+(assert "iso list"                    (iso '(1 2) '(1 2))            t)
+(assert "iso unequal list"            (iso '(1 2) '(1 3))            nil)
+(assert "iso nested"                  (iso '((a) (b c)) '((a) (b c))) t)
+(assert "iso strings"                 (iso "foo" "foo")              t)
+(assert "in match first"              (in 'a 'a 'b 'c)               t)
+(assert "in match middle"             (in 'b 'a 'b 'c)               t)
+(assert "in match none"               (in 'z 'a 'b 'c)               nil)
+(assert "no nil"                      (no nil)                       t)
+(assert "no empty list"               (no (list))                    t)
+(assert "no nonempty"                 (no (list 1))                  nil)
+(assert "no non-empty string"         (no "x")                       nil)
+(assert "no 0 -> t (alcove deviates from arc)" (no 0)                t)
+
+;; ---------- if cond-style ----------
+(assert "if ladder 1st"               (if t 1 t 2 t 3 99)            1)
+(assert "if ladder 2nd"               (if nil 1 t 2 t 3 99)          2)
+(assert "if ladder 3rd"               (if nil 1 nil 2 t 3 99)        3)
+(assert "if ladder fallback"          (if nil 1 nil 2 nil 3 99)      99)
+(assert "if no fallback no match"     (if nil 1 nil 2)               nil)
+
+;; ---------- tail-call awareness (case/when/and/or now LISPCMD_TAIL) ----------
+; alcove case is FLAT pairs Arc-style, not (val expr) clauses
+(def evenc? (n) (case (mod n 2) 0 t nil))
+(def evensum (n acc)
+  (if (< n 1) acc
+      (evensum (- n 1) (if (evenc? n) (+ acc n) acc))))
+(assert "case+if mutual: sum evens 100"  (evensum 100 0)             2550)
+
+(def whenchain (n)
+  (when (> n 0) (whenchain (- n 1))))
+(assert "when tail-rec deep"          (whenchain 1000)               nil)
+
+(def andchain (n)
+  (and (> n 0) (andchain (- n 1))))
+(assert "and tail-rec to nil"         (andchain 1000)                nil)
+
+(def orchain (n acc)
+  (or (is n 0) (orchain (- n 1) (+ acc 1))))
+(assert "or tail-rec returns t"       (orchain 1000 0)               t)
+
+;; ---------- let / with shadowing + tail body ----------
+(assert "let shadow inner"            (let x 10 (let x 20 x))        20)
+(assert "let inner doesn't leak"      (let x 10 (let y 5 (+ x y)))   15)
+(assert "with two bindings"           (with (a 3 b 4) (+ a b))       7)
+(assert "with three bindings"         (with (a 1 b 2 c 3) (+ a b c)) 6)
+(assert "let-in-call binding"         ((fn (x) (let y 1 (+ x y))) 5) 6)
+
+;; ---------- list operations + non-list arg errors ----------
+(assert "length empty"                (length nil)                   0)
+(assert "length 3"                    (length (list 1 2 3))          3)
+(assert "length list w/ nil"          (length (list nil))            1)
+(assert "nth 0"                       (nth 0 (list 'a 'b 'c))        'a)
+(assert "nth 2"                       (nth 2 (list 'a 'b 'c))        'c)
+(assert "nth out-of-range -> nil"     (nth 99 (list 'a 'b 'c))       nil)
+(assert "reverse empty -> nil"        (reverse nil)                  nil)
+(assert "reverse 3"                   (iso (reverse (list 1 2 3))
+                                          (list 3 2 1))              t)
+(assert "append nil nil"              (append nil nil)               nil)
+(assert "append empty cons"           (iso (append nil (list 1))
+                                          (list 1))                  t)
+(assert "append two non-empty"        (iso (append (list 1) (list 2 3))
+                                          (list 1 2 3))              t)
+(assert "append three"                (iso (append (list 1) (list 2) (list 3))
+                                          (list 1 2 3))              t)
+;; Non-list args: must error cleanly (not segfault) — these are the
+;; exact regressions caught in the audit. Use iserror via no.
+(def caught (e) (no (no e)))   ; truthy iff e is non-nil/non-false
+(assert "nth on int → error obj"      (caught (nth 0 5))             t)
+(assert "map on int → error obj"      (caught (map prn 5))           t)
+(assert "filter on int → error obj"   (caught (filter odd 5))        t)
+(assert "reduce on int → error obj"   (caught (reduce + 0 5))        t)
+(assert "any? on int → error obj"     (caught (any? odd 5))          t)
+(assert "all? on int → error obj"     (caught (all? odd 5))          t)
+(assert "append on int → error obj"   (caught (append (list 1) 99))  t)
+(assert "reverse on int → error obj"  (caught (reverse 7))           t)
+
+;; ---------- higher-order ----------
+(def double (x) (* x 2))
+(assert "map basic"                   (iso (map double (list 1 2 3))
+                                          (list 2 4 6))              t)
+(assert "map empty"                   (map double nil)               nil)
+(assert "filter odd"                  (iso (filter odd (list 1 2 3 4 5))
+                                          (list 1 3 5))              t)
+(assert "filter all-pass"             (iso (filter (fn (x) t) (list 1 2))
+                                          (list 1 2))                t)
+(assert "filter all-fail"             (filter (fn (x) nil) (list 1 2)) nil)
+(assert "reduce sum"                  (reduce + 0 (list 1 2 3 4 5))  15)
+(assert "reduce empty"                (reduce + 99 nil)              99)
+(assert "reduce non-arith"            (reduce (fn (a x) (cons x a))
+                                              nil (list 1 2 3))
+                                      '(3 2 1))
+(assert "any? has match"              (any? odd (list 2 4 5 6))      t)
+(assert "any? no match"               (any? odd (list 2 4 6))        nil)
+(assert "any? empty -> nil"           (any? odd nil)                 nil)
+(assert "all? all match"              (all? odd (list 1 3 5))        t)
+(assert "all? one fails"              (all? odd (list 1 3 4))        nil)
+(assert "all? empty -> t"             (all? odd nil)                 t)
+
+;; ---------- vectors ----------
+(= v (vec 5 0))
+(assert "vec len"                     (vec-len v)                    5)
+(assert "vec init"                    (vec-ref v 0)                  0)
+(vec-set! v 2 'x)
+(assert "vec-set! / vec-ref"          (vec-ref v 2)                  'x)
+(assert "vec-set! doesn't touch others" (vec-ref v 1)                0)
+(assert "vec n=0 ok"                  (vec-len (vec 0 nil))          0)
+;; Audit C3: huge n must error, not segfault.
+(assert "vec n too large -> error"    (caught (vec (** 2 50) 0))     t)
+
+;; ---------- predicates ----------
+(assert "number? int"                 (number? 5)                    t)
+(assert "number? float"               (number? 1.5)                  t)
+(assert "number? string"              (number? "5")                  nil)
+(assert "string? str"                 (string? "x")                  t)
+(assert "string? symbol"              (string? 'x)                   nil)
+(assert "symbol? sym"                 (symbol? 'x)                   t)
+(assert "symbol? str"                 (symbol? "x")                  nil)
+(assert "pair? pair"                  (pair? (list 1))               t)
+(assert "pair? nil"                   (pair? nil)                    nil)
+(assert "fn? lambda"                  (fn? (fn (x) x))               t)
+(assert "fn? builtin"                 (fn? +)                        t)
+(assert "fn? not"                     (fn? 5)                        nil)
+
+;; ---------- strings ----------
+(assert "string read literal idx"     ("abcdef" 0)                   #\a)
+(assert "string read idx 5"           ("abcdef" 5)                   #\f)
+(= sread2 "qwerty")
+(assert "string read by var"          (sread2 3)                     #\r)
+(= ridx2 4)
+(assert "string read by computed idx" (sread2 ridx2)                 #\t)
+(= sw "hello")
+(= (sw 0) #\J)
+(assert "string-set literal idx"      sw                             "Jello")
+(= si 4)
+(= (sw si) #\Y)
+(assert "string-set computed idx"     sw                             "JellY")
+;; Out-of-range write should error, not corrupt
+(= sx "abc")
+(assert "string-set OOB -> error"     (caught (= (sx 99) #\Z))       t)
+
+;; ---------- bytecode arity (batch A) ----------
+(def need3 (a b c) (+ a b c))
+(assert "correct arity"               (need3 1 2 3)                  6)
+(assert "too few args -> error"       (caught (need3 1 2))           t)
+(assert "too many args -> error"      (caught (need3 1 2 3 4))       t)
+
+;; ---------- recursion: golden values ----------
+(def recfib (n) (if (< n 2) n (+ (recfib (- n 1)) (recfib (- n 2)))))
+(assert "recfib 10"                   (recfib 10)                    55)
+(assert "recfib 20"                   (recfib 20)                    6765)
+
+(def recfact (n) (if (< n 2) 1 (* n (recfact (- n 1)))))
+(assert "recfact 5"                   (recfact 5)                    120)
+(assert "recfact 10"                  (recfact 10)                   3628800)
+(assert "recfact 12"                  (recfact 12)                   479001600)
+
+(def recack (m n)
+  (if (is m 0) (+ n 1)
+      (if (is n 0) (recack (- m 1) 1)
+          (recack (- m 1) (recack m (- n 1))))))
+(assert "ack(2,3) = 9"                (recack 2 3)                   9)
+(assert "ack(3,3) = 61"               (recack 3 3)                   61)
+(assert "ack(3,5) = 253"              (recack 3 5)                   253)
+
+(def rectak (x y z)
+  (if (no (< y x)) z
+      (rectak (rectak (- x 1) y z)
+              (rectak (- y 1) z x)
+              (rectak (- z 1) x y))))
+(assert "tak(8 4 0) = 1"              (rectak 8 4 0)                 1)
+(assert "tak(6 3 1) = 3"              (rectak 6 3 1)                 3)
+
+;; ---------- JIT same-callee guard (batch B): a fib-shape that calls
+;; a different fn must NOT be silently rewritten as iterative-fib. ----------
+(def helperA (n) (- n 1))
+(def myfib2 (n)
+  (if (< n 2) n
+      (+ (helperA (- n 1)) (helperA (- n 2)))))
+;; helperA(9)+helperA(8) = 8+7 = 15 — NOT fib(10)=55
+; helperA(n-1)+helperA(n-2) = (n-2)+(n-3); 10 -> 8+7=15, 5 -> 3+2=5
+(assert "JIT shape match w/ other callee 10" (myfib2 10)             15)
+(assert "JIT shape match w/ other callee 5"  (myfib2 5)              5)
+
+;; ---------- forget vs unpersist (batch D) ----------
+(= zforget 99)
+(assert "z bound"                     zforget                        99)
+(forget 'zforget)
+(assert "forget unbinds"              (caught zforget)               t)
+(= zkeep 7)
+(persist 'zkeep)
+(assert "ispersistent t"              (ispersistent 'zkeep)          t)
+(unpersist 'zkeep)
+(assert "unpersist clears flag"       (ispersistent 'zkeep)          nil)
+(assert "unpersist doesn't unbind"    zkeep                          7)
+(forget 'zkeep)  ; cleanup
+
+;; ---------- = on different place forms ----------
+(= xs1 (list 1 2 3))
+(= (car xs1) 'A)
+(assert "= (car x) replaces head"     (iso xs1 '(A 2 3))             t)
+(= xs2 (list 1 2 3))
+(= (cdr xs2) (list 99))
+(assert "= (cdr x) replaces tail"     (iso xs2 '(1 99))              t)
+
+;; ---------- macros ----------
+(defmacro my-when (cond body) `(if ,cond ,body nil))
+(assert "macro my-when t"             (my-when t 42)                 42)
+(assert "macro my-when nil"           (my-when nil 42)               nil)
+
+;; ---------- eval / apply ----------
+(assert "eval quoted"                 (eval '(+ 2 3))                5)
+(assert "apply +"                     (apply + (list 1 2 3 4))       10)
+(assert "apply list"                  (iso (apply list (list 1 2 3))
+                                          (list 1 2 3))              t)
+
+;; ---------- mutation across env scopes ----------
+(def counter-mk ()
+  (= cnt 0)
+  (def counter-inc () (= cnt (+ cnt 1)) cnt))
+(counter-mk)
+(counter-inc)
+(counter-inc)
+(counter-inc)
+(assert "global counter via def"      cnt                            3)
+
+;; ---------- doc / help (don't crash, return nil) ----------
+(assert "doc returns nil"             (doc cons)                     nil)
+(assert "doc on quoted"               (doc 'reverse)                 nil)
+(assert "doc on string"               (doc "vec")                    nil)
+(assert "doc on unknown"              (doc never-existed)            nil)
+
+;; ---------- savedb/loaddb path round-trip ----------
+(= rt 1234)
+(persist 'rt)
+(savedb "/tmp/alcove-test-roundtrip.db")
+(forget 'rt)
+(assert "after forget rt is gone"     (caught rt)                    t)
+(loaddb "/tmp/alcove-test-roundtrip.db")
+(assert "loaddb restores rt"          rt                             1234)
+(forget 'rt)
+
+;; ---------- recursion depth (env arena spans many frames) ----------
+(def countdownr (n) (if (< n 1) 'done (countdownr (- n 1))))
+(assert "countdown 1k tail-rec"       (countdownr 1000)              'done)
+(assert "countdown 100k tail-rec"     (countdownr 100000)            'done)
+
+;; ---------- mutual recursion (cross-fn TAIL_CALL) ----------
+(def evenq (n) (if (< n 1) t   (oddq  (- n 1))))
+(def oddq  (n) (if (< n 1) nil (evenq (- n 1))))
+(assert "evenq 10000"                 (evenq 10000)                  t)
+(assert "oddq 10001"                  (oddq 10001)                   t)
+
+;; ---------- character ops ----------
+(assert "char literal"                (is #\A #\A)                   t)
+(assert "char from string"            (is ("foo" 0) #\f)             t)
+
+;; ---------- 0-arg / single-arg edge cases on variadic builtins ----------
+(assert "(list) is nil"               (list)                         nil)
+(assert "(and) is t"                  (and)                          t)
+(assert "(or) is nil"                 (or)                           nil)
+(assert "(do)"                        (do)                           nil)
+
+;; ---------- in-place string mutation persists across calls ----------
+(= mutbuf "hello")
+(def upcase-first (s) (= (s 0) #\H) s)
+(upcase-first mutbuf)
+(assert "mutation persists in buf"    mutbuf                         "Hello")
+
+;; ---------- big random fixnum (close to int61 boundary) doesn't wrap ----------
+(assert "1<<59 fits"                  (<< 1 59)                      576460752303423488)
+
+;; sanity: still here at end?
+(assert "end-of-suite sentinel"       'reached                       'reached)
+
+;; Ticket 6: (s i) inside compiled def bodies — both literal-string
+;; head, var-headed string lookup, and let-wrapped variants.
+(= sread6 "abcdef")
+(def t6_sget1 (n) (sread6 n))
+(assert "ticket6: var-string in def body"   (t6_sget1 2)             #\c)
+(def t6_sget2 (s n) (s n))
+(assert "ticket6: passed-string in def"     (t6_sget2 "hello" 1)     #\e)
+(def t6_sget3 (n) (let _ 1 (sread6 n)))
+(assert "ticket6: var-string in let body"   (t6_sget3 4)             #\e)
+(def t6_lit (n) ("abcdef" n))
+(assert "ticket6: literal string in def"    (t6_lit 3)               #\d)
+(def t6_mix (n)
+  (let a (sread6 n)
+    (let b (sread6 (+ n 1)) a)))
+(assert "ticket6: mixed reads in def"       (t6_mix 0)               #\a)

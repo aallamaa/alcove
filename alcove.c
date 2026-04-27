@@ -4281,15 +4281,17 @@ exp_t *repeatcmd(exp_t *e, env_t *env) {
 
 const char doc_and[] = "(and expr ...) — short-circuit AND. (and) is t. Returns the last truthy or first falsey value.";
 exp_t *andcmd(exp_t *e, env_t *env) {
+  /* (and) → t (vacuous), per doc. The previous loop EVAL'd car(NULL)
+     and ended up returning nil for the empty case. */
   exp_t *cur = cdr(e);
-  exp_t *ret = NULL;
-  do {
-    if (ret)
-      unrefexp(ret);
+  exp_t *ret = TRUE_EXP;
+  while (cur) {
+    if (ret != TRUE_EXP) unrefexp(ret);
     ret = EVAL(car(cur), env);
-    if iserror (ret)
-      goto finish;
-  } while (istrue(ret) && (cur = cdr(cur)));
+    if (iserror(ret)) goto finish;
+    if (!istrue(ret)) goto finish;
+    cur = cdr(cur);
+  }
 finish:
   unrefexp(e);
   return ret;
@@ -4452,7 +4454,7 @@ exp_t *incmd(exp_t *e, env_t *env) {
   return cur;
 }
 
-const char doc_case[] = "(case key (val expr) ... (else expr)) — switch on key. First matching val wins; else clause optional.";
+const char doc_case[] = "(case key v1 e1 v2 e2 ... default) — Arc-style flat pairs (NOT (val expr) clauses). First v that matches key returns its e; trailing odd element is the default.";
 exp_t *casecmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *val = EVAL(cadr(e), env);
@@ -10529,15 +10531,9 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
   exp_t *head = car(form);
   int nargs = 0;
   exp_t *a;
-  /* Refuse to compile (slot args...) shapes — slot may resolve to a
-     string at runtime ((s i) → indexing) or any other non-lambda. The
-     bytecode VM's CALL/TAIL_CALL only handle lambdas, so leaving this
-     to the AST evaluator is the only correct path. Verified via
-     test.alc "string read inside def body". */
-  if (is_ptr(head) && issymbol(head) && find_slot(c, head->ptr) >= 0) {
-    c->failed = 1;
-    return;
-  }
+  /* Slot-headed calls compile fine now that vm_invoke_values has a
+     string-as-callable arm (ticket 6). The earlier blanket refusal
+     was too conservative. */
   int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
                      is_ptr(head) && issymbol(head) &&
                      strcmp(head->ptr, c->self_name) == 0;
@@ -11684,6 +11680,16 @@ l_tail_call: {
   int base = sp - n;
   exp_t *new_fn = stack[base - 1];
 
+  /* String-as-callable: dispatch via vm_invoke_values, which has the
+     indexing arm. Same fallback shape as the !FLAG_COMPILED branch. */
+  if (is_ptr(new_fn) && isstring(new_fn)) {
+    exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
+    sp = base - 1;
+    unrefexp(new_fn);
+    while (sp > 0) unrefexp(POP());
+    if (fn_owned) unrefexp(fn);
+    return ret;
+  }
   if (!is_ptr(new_fn) || !islambda(new_fn)) {
     sp = base - 1;
     unrefexp(new_fn);
@@ -12004,6 +12010,34 @@ l_length: {
    is already guaranteed — skipping the atomic pair is measurable on
    call-heavy benchmarks. */
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
+  /* String-as-callable: (s i) returns the indexed char. The AST
+     evaluator handles this in two places (literal string head and the
+     symbol-lookup path added in ticket 5). The bytecode VM compiles
+     (sym args...) as OP_CALL_GLOBAL → vm_invoke_values, so we need the
+     same arm here or compiled bodies miscompile string-index reads. */
+  if (is_ptr(fn) && isstring(fn)) {
+    int i;
+    if (nargs != 1) {
+      for (i = 0; i < nargs; i++) unrefexp(argv[i]);
+      return error(ERROR_MISSING_PARAMETER, fn, env,
+                   "string-index: expected exactly 1 arg, got %d", nargs);
+    }
+    exp_t *idx = argv[0];
+    if (!isnumber(idx)) {
+      unrefexp(idx);
+      return error(ERROR_NUMBER_EXPECTED, fn, env,
+                   "string-index: arg must be a fixnum");
+    }
+    int64_t i64 = FIX_VAL(idx);
+    int64_t len = (int64_t)strlen(fn->ptr);
+    unrefexp(idx);
+    if (i64 < 0 || i64 >= len) {
+      return error(ERROR_INDEX_OUT_OF_RANGE, fn, env,
+                   "string-index: %lld out of range [0, %lld)",
+                   (long long)i64, (long long)len);
+    }
+    return make_char(*((char *)fn->ptr + i64));
+  }
   if (!is_ptr(fn) || !islambda(fn)) {
     int i;
     for (i = 0; i < nargs; i++)
