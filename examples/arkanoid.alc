@@ -1,0 +1,163 @@
+; arkanoid.alc -- an auto-playing arkanoid simulation in alcove.
+;
+; The board is a single mutable string with one cell per character.
+; Cells are read with (board idx) and written with (= (board idx) ch).
+; Both paths now evaluate the index expression (tickets 1, 5, 6), so a
+; flat string is the natural representation: the source reads as ASCII
+; art, stride is W+1 (the newline is baked into the buffer).
+;
+; The paddle auto-tracks the ball, frames are paced via libc usleep
+; through alcove's FFI, and an ANSI escape redraws each frame in place.
+;
+; Run:  ./alcove --noload arkanoid.alc
+;       (Ctrl-C to quit; --noload skips db.dump on startup.)
+;
+; Glyphs: '#'=wall  'O'=brick  '='=paddle  'o'=ball  ' '=empty
+
+(= W 20) (= H 12)
+(= STRIDE 21)             ; W + the embedded newline at the end of each row
+
+; Initial board. Each row is exactly W chars + a newline. The trailing
+; newline after row 11 keeps the buffer at H*STRIDE = 252 chars.
+(= board "####################
+#OOOO OOOO OOOO OOO#
+# OOOOO OOOO OOOOO #
+#  OOOOOO OOOOOOO  #
+#                  #
+#                  #
+#                  #
+#                  #
+#         o        #
+#                  #
+#       ====       #
+####################
+")
+
+(def at   (x y) (+ x (* y STRIDE)))
+(def setc (x y c) (= (board (at x y)) c))
+(def getc (x y)   (board (at x y)))
+
+; Count remaining bricks by scanning the brick rows
+(= bricks 0)
+(for y 1 3
+  (for x 1 (- W 2)
+    (when (is (getc x y) #\O) (= bricks (+ bricks 1)))))
+
+; Ball + paddle state — must match the literal positions above
+(= bx 10) (= by 8) (= vx 1) (= vy (- 1))
+(= pw 4) (= px 8) (= py 10)
+
+(= score 0) (= lives 3) (= tick 0) (= running 1)
+(= maxticks 220)
+
+; FFI: pause between frames so the animation is watchable
+(= sleep_us (ffi-fn "libc.dylib" "usleep" "int" "int"))
+(= CLEAR "\x1B[2J\x1B[H")
+
+; Color glyphs (ANSI). Each printed cell still occupies 1 column;
+; the escape bytes are zero-width on a real terminal.
+(= BALL   "\x1B[1;93mo\x1B[0m")  ; bright yellow
+(= BRICK  "\x1B[1;95mO\x1B[0m")  ; bright magenta
+(= PADDLE "\x1B[1;96m=\x1B[0m")  ; bright cyan
+(= WALL   "\x1B[90m#\x1B[0m")    ; dim grey
+
+(def render ()
+  ; ANSI clear + redraw header in place
+  (pr CLEAR)
+  (pr "  tick=") (pr tick) (pr "/") (pr maxticks)
+  (pr "  score=") (pr score)
+  (pr "  lives=") (pr lives)
+  (pr "  bricks=") (prn bricks)
+  ; Walk by (x, y) so we never index into the embedded newline cells.
+  (for y 0 (- H 1)
+    (for x 0 (- W 1)
+      (case (getc x y)
+        #\o (pr BALL)
+        #\O (pr BRICK)
+        #\= (pr PADDLE)
+        #\# (pr WALL)
+            (pr " ")))
+    (prn "")))
+
+(render)
+(sleep_us 400000)
+
+(while (and (> running 0) (> lives 0) (< tick maxticks))
+  (do
+    (setc bx by #\ )
+    (= nx (+ bx vx))
+    (= ny (+ by vy))
+    (= cell (getc nx ny))
+
+    (case cell
+      #\  (do (= bx nx) (= by ny))
+      #\= (do
+            (= vy (- vy))
+            (= rel (- nx (+ px (/ pw 2))))
+            (when (< rel 0) (= vx (- 1)))
+            (when (> rel 0) (= vx 1))
+            (when (is (random 4) 0) (= vx (- vx)))
+            (= bx (+ bx vx))
+            (= by (+ by vy)))
+      #\O (do
+            (setc nx ny #\ )
+            (= score (+ score 10))
+            (= bricks (- bricks 1))
+            (= cx (getc (+ bx vx) by))
+            (= cy (getc bx (+ by vy)))
+            (case cx
+              #\O (= vx (- vx))
+                  (case cy
+                    #\O (= vy (- vy))
+                        (do (= vx (- vx)) (= vy (- vy)))))
+            (= bx (+ bx vx))
+            (= by (+ by vy)))
+      #\# (do
+            (= cx (getc (+ bx vx) by))
+            (= cy (getc bx (+ by vy)))
+            (case cx
+              #\# (= vx (- vx))
+              #\= (= vx (- vx))
+                  (case cy
+                    #\# (= vy (- vy))
+                    #\= (= vy (- vy))
+                        (do (= vx (- vx)) (= vy (- vy)))))
+            (= bx (+ bx vx))
+            (= by (+ by vy)))
+          (do
+            (= vx (- vx)) (= vy (- vy))
+            (= bx (+ bx vx)) (= by (+ by vy))))
+
+    (when (< bx 1)         (= bx 1)         (= vx 1))
+    (when (> bx (- W 2))   (= bx (- W 2))   (= vx (- 1)))
+    (when (< by 1)         (= by 1)         (= vy 1))
+
+    (when (>= by (- H 1))
+      (= lives (- lives 1))
+      (= bx (/ W 2)) (= by (- H 4))
+      (= vx 1) (= vy (- 1)))
+
+    (= target (- bx (/ pw 2)))
+    (when (< px target) (= px (+ px 1)))
+    (when (> px target) (= px (- px 1)))
+    (when (< px 1)             (= px 1))
+    (when (> px (- W pw 1))    (= px (- W pw 1)))
+
+    (for x 1 (- W 2) (setc x py #\ ))
+    (for k 0 (- pw 1) (setc (+ px k) py #\=))
+
+    (setc bx by #\o)
+
+    (when (< bricks 1) (= running 0))
+    (= tick (+ tick 1))
+    (render)
+    (sleep_us 60000)))
+
+(prn "")
+(prn "=== GAME OVER ===")
+(pr "final score : ") (prn score)
+(pr "lives left  : ") (prn lives)
+(pr "bricks left : ") (prn bricks)
+(pr "ticks       : ") (prn tick)
+(when (< bricks 1) (prn "YOU WIN!"))
+(when (< lives 1)  (prn "you lose."))
