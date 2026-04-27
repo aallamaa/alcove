@@ -87,7 +87,8 @@ extern const char doc_eval[], doc_apply[];
 extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
 extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
 extern const char doc_pr[], doc_prn[];
-extern const char doc_persist[], doc_forget[], doc_savedb[], doc_loaddb[];
+extern const char doc_persist[], doc_forget[], doc_unpersist[];
+extern const char doc_savedb[], doc_loaddb[];
 extern const char doc_ispersistent[];
 extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
 extern const char doc_time[], doc_exit[];
@@ -106,6 +107,7 @@ exp_t *bitxorcmd(exp_t *e, env_t *env);
 exp_t *bitnotcmd(exp_t *e, env_t *env);
 exp_t *shlcmd(exp_t *e, env_t *env);
 exp_t *shrcmd(exp_t *e, env_t *env);
+exp_t *unpersistcmd(exp_t *e, env_t *env);
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
@@ -201,6 +203,7 @@ lispProc lispProcList[] = {
     /* Persistence */
     LISPCMD("persist",       persistcmd,     doc_persist),
     LISPCMD("forget",        forgetcmd,      doc_forget),
+    LISPCMD("unpersist",     unpersistcmd,   doc_unpersist),
     LISPCMD("savedb",        savedbcmd,      doc_savedb),
     LISPCMD("loaddb",        loaddbcmd,      doc_loaddb),
     LISPCMD("ispersistent",  ispersistentcmd,doc_ispersistent),
@@ -620,6 +623,36 @@ int dump_dict(dict_t *d, FILE *stream) {
   return 1;
 }
 
+/* Single-shot rehash. Doubles ht[0] in place and re-links every chain.
+   Triggered when used >= size — without this every dict (incl. the
+   global env) was permanently capped at 32 buckets, so worst-case
+   chains were O(n/32) strcmps per lookup. The ht[1] machinery in
+   create_dict was reserved for incremental rehash (Redis-style) but
+   never wired; this is the simpler one-shot version. */
+static void dict_rehash(dict_t *d, unsigned int new_size) {
+  if (new_size == 0 || (new_size & (new_size - 1)) != 0) return; /* power of 2 */
+  keyval_t **new_table = memalloc(new_size, sizeof(keyval_t *));
+  if (!new_table) return;  /* OOM: stay at current size, performance only */
+  unsigned int new_mask = new_size - 1;
+  unsigned int j;
+  for (j = 0; j < d->ht[0].size; j++) {
+    keyval_t *k = d->ht[0].table[j];
+    while (k) {
+      keyval_t *next = k->next;
+      unsigned int h = bernstein_hash((unsigned char *)k->key,
+                                      strlen(k->key));
+      unsigned int slot = h & new_mask;
+      k->next = new_table[slot];
+      new_table[slot] = k;
+      k = next;
+    }
+  }
+  free(d->ht[0].table);
+  d->ht[0].table = new_table;
+  d->ht[0].size = new_size;
+  d->ht[0].sizemask = new_mask;
+}
+
 keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val) {
   unsigned int h = bernstein_hash((unsigned char *)key, strlen(key));
   keyval_t *k = NULL;
@@ -655,6 +688,11 @@ keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val) {
 
   if (val) {
     k->val = refexp(val);
+    /* Grow when load factor hits 1.0. Doubling keeps amortized O(1)
+       per insert and avoids the historical 32-bucket cap that turned
+       large global envs into linked-list scans. */
+    if (d->ht[0].used >= d->ht[0].size)
+      dict_rehash(d, d->ht[0].size * 2);
   } else {
     if (k && (strcmp(key, k->key) != 0))
       return NULL;
@@ -2115,15 +2153,39 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   }
 }
 
-const char doc_forget[] = "(forget sym) — undo (persist sym): the binding will not be saved by savedb.";
+/* `forget` and `unpersist` split apart for clarity. The historical
+   `forget` only zeroed the timestamp (= "don't save next savedb") which
+   surprised users who expected the binding to actually vanish. */
+const char doc_forget[] = "(forget sym) — remove sym's binding entirely. After this, sym is unbound. Use (unpersist sym) if you only want to stop saving it.";
 exp_t *forgetcmd(exp_t *e, env_t *env) {
+  exp_t *tmpkey = refexp(cadr(e));
+  if (!issymbol(tmpkey)) {
+    tmpkey = evaluate(tmpkey, env);
+  }
+  unrefexp(e);
+  if iserror (tmpkey)
+    return tmpkey;
+  /* Walk to the global env (where defs and persists live). del_keyval_dict
+     drops the value's ref; bumping global_gen invalidates any stale
+     gcache entries pointing at the now-freed pointer. */
+  env_t *cur = env;
+  while (cur->root) cur = cur->root;
+  if (cur->d) {
+    del_keyval_dict(cur->d, tmpkey->ptr);
+    alcove_global_gen++;
+  }
+  unrefexp(tmpkey);
+  return NIL_EXP;
+}
+
+const char doc_unpersist[] = "(unpersist sym) — clear sym's persistence mark; the binding stays live but won't be written by (savedb).";
+exp_t *unpersistcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
   if (!issymbol(tmpkey)) {
     tmpkey = evaluate(tmpkey, env);
   }
   unrefexp(e);
-  /* to be unrefed tmpkey in case of evaluate */
   if iserror (tmpkey)
     return tmpkey;
   ret = set_keyval_dict_timestamp(env->d, tmpkey->ptr, 0);
