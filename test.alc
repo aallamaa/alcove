@@ -669,3 +669,65 @@
   (let a (sread6 n)
     (let b (sread6 (+ n 1)) a)))
 (assert "ticket6: mixed reads in def"       (t6_mix 0)               #\a)
+
+;; Ticket 7: nested for with multi-form outer body must iterate all
+;; outer values, not just one. Root cause was prcmd returning NULL
+;; (interpreted by forcmd as "missing param"), and forcmd was over-
+;; strict about NULL bodies.
+(= acc7 0)
+(for y 0 2
+  (for x 0 1 (= acc7 (+ acc7 1)))
+  (= acc7 (+ acc7 100)))
+(assert "ticket7: nested for, multi-form outer body" acc7 (+ (* 3 2) (* 3 100)))
+;; Side effects in the outer body fire on EVERY iteration:
+(= log7 (list))
+(for i 1 3
+  (= log7 (cons (list 'in i) log7))
+  (for j 1 2
+    (= log7 (cons (list 'inner i j) log7)))
+  (= log7 (cons (list 'out i) log7)))
+(assert "ticket7: outer body forms after nested for run" (length log7) 12)
+;; for that returns NIL_EXP (via prn) then iterates again
+(= n7 0)
+(for k 1 5 (prn "") (= n7 (+ n7 1)))
+(assert "ticket7: for after a NIL-returning builtin" n7 5)
+
+;; Ticket 8: comments inside a list (def body, do body, etc.) must NOT
+;; drop preceding forms. Root cause was that `;` had no reader handler;
+;; it fell into the "unknown TERMMACRO" error path and the list-builder
+;; bailed out mid-build.
+(= s8a 0)
+(do (= s8a (+ s8a 1)) ; comment
+    (= s8a (+ s8a 10))
+    (= s8a (+ s8a 100)))
+(assert "ticket8: do with mid-list comment" s8a 111)
+(= s8b 0)
+(def f8 ()
+  (= s8b (+ s8b 1))
+  ; comment between body forms
+  (= s8b (+ s8b 10))
+  (= s8b (+ s8b 100)))
+(f8)
+(assert "ticket8: def body with comment" s8b 111)
+(= s8c 0)
+(def f8c ()
+  ; leading comment
+  (= s8c (+ s8c 1)))
+(f8c)
+(assert "ticket8: leading comment in def body" s8c 1)
+(= s8d 0)
+(def f8d ()
+  (let _ 1
+    ; comment inside let body
+    (= s8d (+ s8d 1))))
+(f8d)
+(assert "ticket8: comment inside let inside def" s8d 1)
+
+;; arkanoid-shaped repro — the original reproducible failure
+(def step8 ()
+  (pr "")
+  ; like a render header
+  (pr "")
+  (for i 1 3 (pr "")))
+(step8)
+(assert "ticket8: arkanoid-shaped step" 'ok 'ok)

@@ -1437,6 +1437,16 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
   } else if (x == '\'') {
     vnode = reader(stream, 0, 0);
     return make_quote(vnode);
+  } else if (x == ';') {
+    /* Line comment — skip to EOL or EOF. Without this handler `;` was
+     * a TERMMACRO that returned EXP_ERROR_PARSING_MACROCHAR; the error
+     * worked at top level (the file driver swallowed it before the
+     * next form) but inside a list it bailed out mid-build, dropping
+     * everything before the comment (tickets 7 & 8 root cause). */
+    int c;
+    while ((c = getc(stream)) != EOF && c != '\n')
+      ;
+    return NULL;  /* signal "no form here" — caller's loop continues. */
   }
   /* Note: `|` was previously hooked here as a reader macro that built
      a wrapped list — it didn't implement Common Lisp's |sym with spaces|
@@ -2982,7 +2992,7 @@ exp_t *prcmd(exp_t *e, env_t *env) {
     unrefexp(val);
   }
   unrefexp(e);
-  return NULL;
+  return NIL_EXP;  /* NULL caused forcmd to mistake a clean run as "missing param" */
 }
 
 const char doc_prn[] = "(prn x ...) — like pr, then a newline. Alias: println.";
@@ -4528,19 +4538,20 @@ exp_t *forcmd(exp_t *e, env_t *env) {
       {
         int64_t counter = FIX_VAL(retval);
         int64_t idx = FIX_VAL(lastidx) + 1;
-
         while (counter < idx) {
-          /* Rebind the loop variable to a fresh tagged fixnum. Tagged
-             immediates don't allocate, so this is free. */
+          /* Rebind the loop variable to a fresh tagged fixnum. */
           set_get_keyval_dict(newenv->d, curvar->content->ptr,
                               MAKE_FIX(counter));
           curval = curin;
           while (curval) {
-            if (ret)
-              unrefexp(ret);
+            if (ret) unrefexp(ret);
             ret = EVAL(curval->content, newenv);
-            if iserror (ret)
-              goto error;
+            if (iserror(ret)) goto error;
+            /* NULL is treated as nil — some builtins (historically prn,
+               others may return NULL too) didn't return NIL_EXP. We
+               normalize here so the post-loop "if (!ret)" doesn't
+               misread a clean iteration as "missing parameter". */
+            if (!ret) ret = NIL_EXP;
             curval = curval->next;
           }
           counter++;
