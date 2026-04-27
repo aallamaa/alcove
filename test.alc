@@ -306,3 +306,11 @@
 ; — the assertion infra needs a value; we use the fact that all six errors
 ;   propagate as exp_t* which iso-compares as nil-equal-nil:
 (assert "nth on non-list -> nil-ish"  (no (no (nth 0 5)))            nil)
+
+; Ticket 5: (s i) where s is a variable bound to a string
+(= sread "abcdef")
+(assert "string read by var, literal idx"  (sread 2)              #\c)
+(= ridx 4)
+(assert "string read by var, computed idx" (sread ridx)           #\e)
+(def sget (s n) (s n))
+(assert "string read inside def body"      (sget "hello" 1)       #\e)

@@ -10529,6 +10529,15 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
   exp_t *head = car(form);
   int nargs = 0;
   exp_t *a;
+  /* Refuse to compile (slot args...) shapes — slot may resolve to a
+     string at runtime ((s i) → indexing) or any other non-lambda. The
+     bytecode VM's CALL/TAIL_CALL only handle lambdas, so leaving this
+     to the AST evaluator is the only correct path. Verified via
+     test.alc "string read inside def body". */
+  if (is_ptr(head) && issymbol(head) && find_slot(c, head->ptr) >= 0) {
+    c->failed = 1;
+    return;
+  }
   int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
                      is_ptr(head) && issymbol(head) &&
                      strcmp(head->ptr, c->self_name) == 0;
@@ -12400,6 +12409,32 @@ exp_t *evaluate(exp_t *e, env_t *env) {
           } else if ismacro (tmpexp2) {
             ret = invokemacro(e, tmpexp2, env);
             goto finisht;
+          } else if (isstring(tmpexp2)) {
+            /* (s i) where s is a var bound to a string — same semantics
+               as ("foo" i) on a literal (handled below). Without this
+               branch, the symbol-lookup path returned the bound string
+               whole, ignoring the index argument. */
+            exp_t *idx = EVAL(cadr(e), env);
+            if (iserror(idx)) {
+              unrefexp(tmpexp2);
+              ret = idx;
+              goto finish;
+            }
+            if (isnumber(idx)) {
+              int64_t i = FIX_VAL(idx);
+              if ((i >= 0) && (i < (int64_t)strlen(tmpexp2->ptr))) {
+                ret = make_char(*((char *)tmpexp2->ptr + i));
+              } else {
+                ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                            "Error index out of range");
+              }
+            } else {
+              ret = error(ERROR_NUMBER_EXPECTED, e, env,
+                          "Error number expected");
+            }
+            unrefexp(idx);
+            unrefexp(tmpexp2);
+            goto finish;
           } else if ispair (tmpexp2) {
             ret = tmpexp2;
             goto finisht;
