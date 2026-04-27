@@ -5647,11 +5647,20 @@ void bytecode_free(bytecode_t *bc) {
      - SLOT_ADD_FIX / SLOT_SUB_FIX leaf     →  same as above (fused form)
      - 19-byte self-tail counter loop       →  try_jit_simple_tail_loop
 
-   Shapes handled by amd64 ONLY (arm64 fall-through to bytecode — see
-   TODOs in the arm64 backend). These DO establish a frame and DO call
-   into the runtime via jit_call_global1_{drop,value}:
-     - 26-byte tail loop + inner global call  →  try_jit_tail_loop_with_call
-     - 28-byte two-call recursion (fib shape) →  try_jit_recurse_add_two
+   Both backends are now at parity (commits 83b06be..8b49473): every
+   shape that amd64 has, arm64 has too. The full list (ordered by ncode):
+     - 19-byte simple_tail_loop          countdown
+     - 24-byte recurse_mul_one           fact
+     - 26-byte tail_loop_with_call       generic loop + inner call
+     - 28-byte recurse_add_two           fib (iterative fast path)
+     - 35-byte mark_from                 sieve-fast inner loop
+     - 41-byte count_primes              sieve-fast outer counter
+     - 37-byte is_prime_given            sieve list walk
+     - 48-byte for_loop_inc              forsum
+     - 50-byte tak                       Knuth's tak
+     - 53-byte ackermann                 ack
+     - 71-byte safe_p                    nqueens conflict check
+     - 10-byte modeq_leaf                divides? leaf
 
    Anything else: jit_compile returns 0; the bytecode interpreter
    handles the call.
@@ -5841,18 +5850,36 @@ static uint32_t arm64_cmp_imm(int rn, int imm) {
 }
 /* B (unconditional, PC-relative). off is in INSTRUCTIONS (×4 for bytes),
  * signed. */
+/* Range-check helper: returns 1 if `off_insns` fits a signed `bits`-bit
+   field (i.e., -(1<<(bits-1)) <= off < (1<<(bits-1))). On out-of-range
+   the encoders abort() rather than silently truncate — silently is the
+   class of bug that gave us SIGBUS earlier (commit 6fc3101). Current
+   shapes are <128 instructions so all branches stay well within range;
+   this is defensive armor against future shape additions. */
+static void arm64_check_off(int off_insns, int bits, const char *who) {
+  int lim = 1 << (bits - 1);
+  if (off_insns < -lim || off_insns >= lim) {
+    fprintf(stderr, "alcove jit: %s offset %d out of signed %d-bit range\n",
+            who, off_insns, bits);
+    abort();
+  }
+}
+
 static uint32_t arm64_b(int off_insns) {
+  arm64_check_off(off_insns, 26, "B");
   return 0x14000000u | ((uint32_t)off_insns & 0x3FFFFFFu);
 }
 /* B.cond — off in instructions, signed 19-bit. cond is the 4-bit code:
    GE=10, LT=11, GT=12, LE=13. */
 static uint32_t arm64_b_cond(int cond, int off_insns) {
+  arm64_check_off(off_insns, 19, "B.cond");
   return 0x54000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
          ((uint32_t)cond & 0xfu);
 }
 /* TBZ Xt, #bit, label — branch if bit is zero. off in instructions, signed
  * 14-bit. */
 static uint32_t arm64_tbz(int rt, int bit, int off_insns) {
+  arm64_check_off(off_insns, 14, "TBZ");
   uint32_t b40 = (uint32_t)(bit & 0x1f);
   uint32_t b5 = (bit & 0x20) ? 1u : 0u;
   return 0x36000000u | (b5 << 31) | (b40 << 19) |
@@ -5960,11 +5987,13 @@ static uint32_t arm64_csel(int rd, int rn, int rm, int cond) {
 }
 /* CBZ Xt, label — branch if Xt is zero. off in instructions, 19-bit signed. */
 static uint32_t arm64_cbz(int rt, int off_insns) {
+  arm64_check_off(off_insns, 19, "CBZ");
   return 0xB4000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
          (uint32_t)(rt & 0x1f);
 }
 /* CBNZ Xt, label — branch if Xt is non-zero. */
 static uint32_t arm64_cbnz(int rt, int off_insns) {
+  arm64_check_off(off_insns, 19, "CBNZ");
   return 0xB5000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
          (uint32_t)(rt & 0x1f);
 }
@@ -5996,6 +6025,7 @@ static uint32_t arm64_cmp_reg_w(int rn, int rm) {
 }
 /* CBZ Wt, label — 32-bit variant. */
 static uint32_t arm64_cbz_w(int rt, int off_insns) {
+  arm64_check_off(off_insns, 19, "CBZ.W");
   return 0x34000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
          (uint32_t)(rt & 0x1f);
 }
@@ -7049,10 +7079,9 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
   out[n++] = arm64_movz(0, 0, 0);
   out[n++] = arm64_ret();
 
-  /* CBNZ Xt, label — same format as CBZ, op=1. */
-  uint32_t cbnz_base = 0xB5000000u;
-  out[patch_err]   = cbnz_base |
-                     (((uint32_t)(err_pc - patch_err) & 0x7FFFFu) << 5) | 0u;
+  /* Use the proper helper so the offset gets range-checked instead of
+     silently truncated by the inline mask. */
+  out[patch_err]   = arm64_cbnz(0, err_pc - patch_err);
   out[patch_end]   = arm64_b_cond(inv_cc, end_pc - patch_end);
   out[patch_deopt] = arm64_tbz(1, 0, deopt_pc - patch_deopt);
 
