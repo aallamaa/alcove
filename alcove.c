@@ -13592,6 +13592,56 @@ exp_t *string2blobcmd(exp_t *e, env_t *env) {
    (make_string, set_get_keyval_dict, ...) without exporting them. */
 #include "resp.c"
 
+/* Read every top-level form from `path` and evaluate it in `global`.
+   Returns 1 if the file existed (and we processed it), 0 if missing.
+   Errors mid-file are printed but do not abort the load — same loose
+   policy as the -e flag and the interactive REPL. */
+static int alcove_run_init_file(env_t *global, const char *path) {
+  FILE *fp = fopen(path, "r");
+  if (!fp) return 0;
+  for (;;) {
+    exp_t *e = reader(fp, 0, 0);
+    if (!e) break;
+    if (iserror(e) && e->flags == EXP_ERROR_PARSING_EOF) {
+      unrefexp(e);
+      break;
+    }
+    if (iserror(e)) {
+      print_node(e);
+      printf("\n");
+      unrefexp(e);
+      continue;
+    }
+    exp_t *r = evaluate(e, global);
+    if (r) {
+      if (iserror(r)) {
+        print_node(r);
+        printf("\n");
+      }
+      unrefexp(r);
+    }
+  }
+  fclose(fp);
+  return 1;
+}
+
+/* Try ./.init.alc first (project-local, takes priority); fall back to
+   $HOME/.local/alcove/init.alc (user-global). Stops at the first
+   match — never runs both. Silent on miss; one-line announce on hit. */
+static void alcove_try_init_files(env_t *global) {
+  if (alcove_run_init_file(global, "./.init.alc")) {
+    printf("alcove: loaded ./.init.alc\n");
+    return;
+  }
+  const char *home = getenv("HOME");
+  if (!home) return;
+  char path[1024];
+  int n = snprintf(path, sizeof path, "%s/.local/alcove/init.alc", home);
+  if (n < 0 || (size_t)n >= (int)sizeof path) return;
+  if (alcove_run_init_file(global, path))
+    printf("alcove: loaded %s\n", path);
+}
+
 int main(int argc, char *argv[]) {
   dict_t *dict = create_dict();
   env_t *global = make_env(NULL);
@@ -13662,6 +13712,7 @@ int main(int argc, char *argv[]) {
      handling (last arg = file, prev = -i) still works whether the user
      passes flags first, last, or in the middle. */
   int auto_load = 1;
+  int run_init = 1;
   char *eval_string = NULL;
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
   int resp_combined = 0; /* -R: combined REPL + RESP single-reactor */
@@ -13671,6 +13722,9 @@ int main(int argc, char *argv[]) {
     for (src = 1; src < argc; src++) {
       if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
         auto_load = 0;
+      } else if (strcmp(argv[src], "--no-init") == 0 ||
+                 strcmp(argv[src], "--noinit") == 0) {
+        run_init = 0;
       } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
@@ -13698,12 +13752,15 @@ int main(int argc, char *argv[]) {
   }
 
   /* RESP server short-circuits the rest of main(): no auto-load, no
-     REPL, no file/-e processing. Returns the server's exit code. */
+     REPL, no file/-e processing. The init file still runs so users can
+     pre-populate resp_db (or any other startup hook). Returns the
+     server's exit code. */
   if (resp_mode) {
     int N = sizeof(lispProcList) / sizeof(lispProc);
     /* lispProcList registration is needed downstream by isstring/etc.
        only indirectly — but resp_db lives separately. Skip it. */
     (void)N;
+    if (run_init) alcove_try_init_files(global);
     return resp_serve(resp_port);
   }
 
@@ -13719,6 +13776,7 @@ int main(int argc, char *argv[]) {
         printf("alcove: auto-loaded %d entries from %s\n", loaded,
                alcove_db_path);
     }
+    if (run_init) alcove_try_init_files(global);
     return resp_repl_serve(resp_port, global);
   }
 
@@ -13732,6 +13790,7 @@ int main(int argc, char *argv[]) {
              "skip)\n",
              loaded, alcove_db_path);
   }
+  if (run_init) alcove_try_init_files(global);
 
   if (eval_string) {
     /* Wrap the inline code as a read-only memory stream so the existing
