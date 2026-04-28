@@ -94,6 +94,21 @@ extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
 extern const char doc_time[], doc_exit[];
 extern const char doc_ffifn[];
 extern const char doc_doc[], doc_help[];
+/* Clojure-style containers (EXP_DICT / EXP_LIST / EXP_BLOB). */
+extern const char doc_hashmap[], doc_assocbang[], doc_dissocbang[], doc_get[],
+                  doc_containsp[], doc_keys[], doc_vals[], doc_count[];
+extern const char doc_deque[], doc_pushrightbang[], doc_pushleftbang[],
+                  doc_poprightbang[], doc_popleftbang[],
+                  doc_peekleft[], doc_peekright[];
+extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
+                  doc_blob2string[], doc_string2blob[];
+extern const char doc_vector[];
+/* Redis inspector builtins (only registered, only callable, when the
+   process started under -R; otherwise resp_db is empty and they all
+   return zero/nil/none). Defined below the `#include "resp.c"` line so
+   they can read the resp_db static directly. */
+extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
+                  doc_redis_get[], doc_redis_flush[], doc_redis_port[];
 
 /* Forward decls for cmds defined below the table — every callee must be
    visible at table-init time. The original cmds had a top-level
@@ -108,6 +123,34 @@ exp_t *bitnotcmd(exp_t *e, env_t *env);
 exp_t *shlcmd(exp_t *e, env_t *env);
 exp_t *shrcmd(exp_t *e, env_t *env);
 exp_t *unpersistcmd(exp_t *e, env_t *env);
+/* Clojure-style container cmds — defined below the table. */
+exp_t *hashmapcmd(exp_t *e, env_t *env);
+exp_t *assocbangcmd(exp_t *e, env_t *env);
+exp_t *dissocbangcmd(exp_t *e, env_t *env);
+exp_t *getcmd(exp_t *e, env_t *env);
+exp_t *containspcmd(exp_t *e, env_t *env);
+exp_t *keyscmd(exp_t *e, env_t *env);
+exp_t *valscmd(exp_t *e, env_t *env);
+exp_t *countcmd(exp_t *e, env_t *env);
+exp_t *dequecmd(exp_t *e, env_t *env);
+exp_t *pushrightbangcmd(exp_t *e, env_t *env);
+exp_t *pushleftbangcmd(exp_t *e, env_t *env);
+exp_t *poprightbangcmd(exp_t *e, env_t *env);
+exp_t *popleftbangcmd(exp_t *e, env_t *env);
+exp_t *peekleftcmd(exp_t *e, env_t *env);
+exp_t *peekrightcmd(exp_t *e, env_t *env);
+exp_t *makeblobcmd(exp_t *e, env_t *env);
+exp_t *bloblencmd(exp_t *e, env_t *env);
+exp_t *blobrefcmd(exp_t *e, env_t *env);
+exp_t *blob2stringcmd(exp_t *e, env_t *env);
+exp_t *string2blobcmd(exp_t *e, env_t *env);
+exp_t *vectorcmd(exp_t *e, env_t *env);
+exp_t *rediscountcmd(exp_t *e, env_t *env);
+exp_t *rediskeyscmd(exp_t *e, env_t *env);
+exp_t *redistypecmd(exp_t *e, env_t *env);
+exp_t *redisgetcmd(exp_t *e, env_t *env);
+exp_t *redisflushcmd(exp_t *e, env_t *env);
+exp_t *redisportcmd(exp_t *e, env_t *env);
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
@@ -220,6 +263,40 @@ lispProc lispProcList[] = {
     LISPCMD("help",          helpcmd,        doc_help),
     /* FFI */
     LISPCMD("ffi-fn",        ffifncmd,       doc_ffifn),
+    /* Clojure-style hash-maps (EXP_DICT) */
+    LISPCMD("hash-map",      hashmapcmd,     doc_hashmap),
+    LISPCMD("assoc!",        assocbangcmd,   doc_assocbang),
+    LISPCMD("dissoc!",       dissocbangcmd,  doc_dissocbang),
+    LISPCMD("get",           getcmd,         doc_get),
+    LISPCMD("contains?",     containspcmd,   doc_containsp),
+    LISPCMD("keys",          keyscmd,        doc_keys),
+    LISPCMD("vals",          valscmd,        doc_vals),
+    LISPCMD("count",         countcmd,       doc_count),
+    /* Doubly-linked deques (EXP_LIST) — Redis-list shaped */
+    LISPCMD("deque",         dequecmd,       doc_deque),
+    LISPCMD("push-right!",   pushrightbangcmd, doc_pushrightbang),
+    LISPCMD("push-left!",    pushleftbangcmd,  doc_pushleftbang),
+    LISPCMD("pop-right!",    poprightbangcmd,  doc_poprightbang),
+    LISPCMD("pop-left!",     popleftbangcmd,   doc_popleftbang),
+    LISPCMD("peek-left",     peekleftcmd,    doc_peekleft),
+    LISPCMD("peek-right",    peekrightcmd,   doc_peekright),
+    /* Binary-safe blobs (EXP_BLOB) */
+    LISPCMD("make-blob",     makeblobcmd,    doc_makeblob),
+    LISPCMD("blob-len",      bloblencmd,     doc_bloblen),
+    LISPCMD("blob-ref",      blobrefcmd,     doc_blobref),
+    LISPCMD("blob->string",  blob2stringcmd, doc_blob2string),
+    LISPCMD("string->blob",  string2blobcmd, doc_string2blob),
+    /* Clojure-style varargs vector ctor — populates EXP_VECTOR. Same as #[...]. */
+    LISPCMD("vector",        vectorcmd,      doc_vector),
+    /* Redis inspector commands — only meaningful under -R (combined REPL
+       + RESP). Outside -R, redis-keys/count return empty/0 since the
+       resp_db is never populated. */
+    LISPCMD("redis-count",   rediscountcmd,  doc_redis_count),
+    LISPCMD("redis-keys",    rediskeyscmd,   doc_redis_keys),
+    LISPCMD("redis-type",    redistypecmd,   doc_redis_type),
+    LISPCMD("redis-get",     redisgetcmd,    doc_redis_get),
+    LISPCMD("redis-flush",   redisflushcmd,  doc_redis_flush),
+    LISPCMD("redis-port",    redisportcmd,   doc_redis_port),
 };
 #undef LISPCMD
 #undef LISPCMD_TAIL
@@ -358,6 +435,20 @@ inline int unrefexp(exp_t *e) {
       for (i = 0; i < v->len; i++)
         unrefexp(v->data[i]);
       free(v);
+    } else if (e->type == EXP_BLOB) {
+      free(e->ptr); /* alc_blob_t is a single flex-array alloc */
+    } else if (e->type == EXP_DICT && e->ptr) {
+      destroy_dict((dict_t *)e->ptr); /* unrefs every value internally */
+    } else if (e->type == EXP_LIST && e->ptr) {
+      alc_list_t *l = (alc_list_t *)e->ptr;
+      alc_listnode_t *n = l->head;
+      while (n) {
+        alc_listnode_t *nx = n->next;
+        unrefexp(n->val);
+        free(n);
+        n = nx;
+      }
+      free(l);
     } else if (((e->type >= EXP_NUMBER) && (e->type <= EXP_BOOLEAN)) ||
                (e->type == EXP_INTERNAL)) {
     } else
@@ -927,6 +1018,52 @@ void print_node(exp_t *node) {
       print_node(v->data[i]);
     }
     printf("]");
+  } else if (node->type == EXP_BLOB) {
+    /* Compact summary, like Python `b'...'` but with byte count for big
+       payloads. Avoid dumping arbitrary bytes (may contain NULs/escapes). */
+    alc_blob_t *b = (alc_blob_t *)node->ptr;
+    printf("\x1B[92m#<blob %zu byte%s>\x1B[39m", b ? b->len : 0,
+           (b && b->len == 1) ? "" : "s");
+  } else if (node->type == EXP_DICT) {
+    /* Clojure-style {k v, k v} so the printed form re-reads as the same
+       value. Iteration order is bucket-order, not insertion-order. */
+    dict_t *d = (dict_t *)node->ptr;
+    printf("{");
+    int first = 1;
+    if (d) {
+      unsigned int i;
+      for (i = 0; i < d->ht[0].size; i++) {
+        keyval_t *k = d->ht[0].table[i];
+        while (k) {
+          if (!first)
+            printf(", ");
+          first = 0;
+          if (((char *)k->key)[0] == ':')
+            printf("\x1B[92m%s\x1B[39m", (char *)k->key);
+          else
+            printf("\x1B[92m\"%s\"\x1B[39m", (char *)k->key);
+          printf(" ");
+          print_node(k->val);
+          k = k->next;
+        }
+      }
+    }
+    printf("}");
+  } else if (node->type == EXP_LIST) {
+    alc_list_t *l = (alc_list_t *)node->ptr;
+    printf("(");
+    if (l) {
+      alc_listnode_t *n = l->head;
+      int first = 1;
+      while (n) {
+        if (!first)
+          printf(" ");
+        first = 0;
+        print_node(n->val);
+        n = n->next;
+      }
+    }
+    printf(")");
   } else {
     printf("\x1B[92mtype: %d ptr: %08lx\x1B[39m", node->type,
            (unsigned long)node->ptr);
@@ -972,6 +1109,44 @@ inline exp_t *make_quote(exp_t *node) {
   cur = make_node(cur);
   cur->next = make_node(node);
   return cur;
+}
+
+/* ---------------- Clojure-style container constructors ----------------
+   See alcove.h for the type definitions. Each returns a fresh exp_t with
+   nref=1; unrefexp's free-path knows how to drop them (see line ~365). */
+
+exp_t *make_blob(const char *bytes, size_t len) {
+  exp_t *cur = make_nil();
+  alc_blob_t *b = (alc_blob_t *)memalloc(1, sizeof(alc_blob_t) + len);
+  b->len = len;
+  if (len && bytes)
+    memcpy(b->bytes, bytes, len);
+  cur->type = EXP_BLOB;
+  cur->ptr = b;
+  return cur;
+}
+
+exp_t *make_dict_exp(void) {
+  exp_t *cur = make_nil();
+  cur->type = EXP_DICT;
+  cur->ptr = create_dict();
+  return cur;
+}
+
+exp_t *make_list_exp(void) {
+  exp_t *cur = make_nil();
+  alc_list_t *l = (alc_list_t *)memalloc(1, sizeof(alc_list_t));
+  cur->type = EXP_LIST;
+  cur->ptr = l;
+  return cur;
+}
+
+size_t blob_len(exp_t *e) {
+  return (isblob(e) && e->ptr) ? ((alc_blob_t *)e->ptr)->len : 0;
+}
+
+const char *blob_bytes(exp_t *e) {
+  return (isblob(e) && e->ptr) ? ((alc_blob_t *)e->ptr)->bytes : NULL;
 }
 
 inline exp_t *make_integer(char *str) {
@@ -1434,6 +1609,38 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
         vnode = NULL;
       }
     }
+  } else if (x == '{') {
+    /* Clojure-style hash-map literal: {k v, k v} → (hash-map k v k v ...).
+       Comma is treated as whitespace LOCALLY here only — the reader
+       proper still classifies `,` as a TERMMACRO globally, so we don't
+       silently change comma behavior in other contexts. */
+    lnode = make_node(make_symbol("hash-map", 8));
+    cnode = lnode;
+    for (;;) {
+      int c;
+      /* Eat inter-form whitespace, commas, and line comments. */
+      while ((c = getc(stream)) != EOF) {
+        if (c == ',') continue;
+        if (c < 256 && (ISWHITESPACE & chrmap[c])) continue;
+        if (c == ';') { /* line comment */
+          while ((c = getc(stream)) != EOF && c != '\n')
+            ;
+          continue;
+        }
+        break;
+      }
+      if (c == EOF) {
+        unrefexp(lnode);
+        return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
+                     "End of file in hash-map literal");
+      }
+      if (c == '}') return lnode;
+      ungetc(c, stream);
+      vnode = reader(stream, '}', 0);
+      if (!vnode) return lnode; /* `}` consumed by inner reader */
+      if (iserror(vnode)) { unrefexp(lnode); return vnode; }
+      cnode = cnode->next = make_node(vnode);
+    }
   } else if (x == '\'') {
     vnode = reader(stream, 0, 0);
     return make_quote(vnode);
@@ -1543,6 +1750,22 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
                            "End of file reached while parsing");
 
+          } else if (y == '[') {
+            /* Vector literal: #[1 2 3] → (vector 1 2 3). The plain
+               `[...]` form is reserved for Arc-lambda; we use the `#`
+               prefix (Scheme/EDN convention) so the two don't collide.
+               `vec` is the n-ary allocator, `vector` is the populator. */
+            exp_t *vlnode = make_node(make_symbol("vector", 6));
+            exp_t *vcnode = vlnode;
+            exp_t *vvnode;
+            while ((vvnode = reader(stream, ']', 0))) {
+              if (iserror(vvnode)) {
+                unrefexp(vlnode);
+                return vvnode;
+              }
+              vcnode = vcnode->next = make_node(vvnode);
+            }
+            return vlnode;
           } else
             return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
                          "call to dispatch macro char %c unkown!", y);
@@ -4357,7 +4580,14 @@ int isequal(exp_t *cur1, exp_t *cur2) {
       ret = (strcmp(cur1->ptr, cur2->ptr) == 0);
     else if (iserror(cur1))
       ret = (cur1->s64 == cur2->s64);
-    else
+    else if (isblob(cur1)) {
+      alc_blob_t *a = (alc_blob_t *)cur1->ptr;
+      alc_blob_t *b = (alc_blob_t *)cur2->ptr;
+      ret = (a && b && a->len == b->len &&
+             (a->len == 0 || memcmp(a->bytes, b->bytes, a->len) == 0));
+    } else
+      /* Dict/list: pointer identity. Deep equality would require walking
+         every entry/node and is rarely what Redis-style users want. */
       ret = (cur1 == cur2);
   }
   return ret;
@@ -12895,6 +13125,473 @@ exp_t *helpcmd(exp_t *e, env_t *env) {
   return NIL_EXP;
 }
 
+/* ============================================================
+   Clojure-style builtins for EXP_DICT, EXP_LIST, EXP_BLOB
+   ============================================================
+   Naming: dict ops follow Clojure (assoc!/dissoc!/get/contains?/keys/vals).
+   Deque ops live under their own names (push-left!/pop-left!/...) since
+   Clojure's vector ≠ deque; conj!/peek/pop! act on the right end as in
+   Clojure for symmetry. count is polymorphic (dict/list/vec/string/pair).
+
+   Key encoding: keys hash on their printed text. Keywords (`:a`) hash as
+   ":a"; strings hash as their bytes; numbers as decimal. So `:a` and "a"
+   are distinct keys, matching Clojure semantics. NUL bytes in keys are
+   not supported (dict_t uses strlen) — for binary-safe keys use blob
+   values, not blob keys. */
+
+/* Convert a Lisp value to the canonical key string used by dict_t.
+   Returns a borrowed pointer if the input already has one (symbol,
+   string), else writes into `tmpbuf` (caller-owned) for numeric keys
+   and returns tmpbuf. tmpbuf must hold at least 32 bytes. Returns NULL
+   for unsupported key types. */
+static char *alc_key_to_cstr(exp_t *k, char *tmpbuf) {
+  if (k == NULL) return NULL;
+  if (issymbol(k) || isstring(k)) return (char *)k->ptr;
+  if (isnumber(k)) {
+    snprintf(tmpbuf, 32, "%lld", (long long)FIX_VAL(k));
+    return tmpbuf;
+  }
+  return NULL;
+}
+
+/* Reconstruct a Lisp value from a stored key string. Symbols starting
+   with ':' are keywords; all-digit strings round-trip as fixnums; the
+   rest become EXP_STRING. Used by `keys` and dict-printing. */
+static exp_t *alc_cstr_to_key(const char *k) {
+  if (!k) return NIL_EXP;
+  if (k[0] == ':')
+    return make_symbol((char *)k, strlen(k));
+  /* All-digit (with optional leading '-')? Try parsing as fixnum. */
+  const char *p = (k[0] == '-') ? k + 1 : k;
+  if (*p) {
+    int all_digit = 1;
+    for (const char *q = p; *q; q++) {
+      if (*q < '0' || *q > '9') { all_digit = 0; break; }
+    }
+    if (all_digit) {
+      char buf[32];
+      snprintf(buf, sizeof buf, "%s", k);
+      return make_integer(buf);
+    }
+  }
+  return make_string((char *)k, strlen(k));
+}
+
+/* ---------- hash-map / dict ops ---------- */
+
+const char doc_hashmap[] = "(hash-map [k v ...]) — build an EXP_DICT. Keys: keyword/string/number. Same as {k v, ...}.";
+exp_t *hashmapcmd(exp_t *e, env_t *env) {
+  exp_t *ret = make_dict_exp();
+  dict_t *d = (dict_t *)ret->ptr;
+  exp_t *a = cdr(e);
+  char tmp[32];
+  while (a) {
+    exp_t *kraw = EVAL(car(a), env);
+    if (iserror(kraw)) { unrefexp(ret); unrefexp(e); return kraw; }
+    if (!a->next) {
+      unrefexp(kraw); unrefexp(ret); unrefexp(e);
+      return error(ERROR_MISSING_PARAMETER, NULL, env,
+                   "hash-map: odd number of forms (key without value)");
+    }
+    exp_t *v = EVAL(car(a->next), env);
+    if (iserror(v)) { unrefexp(kraw); unrefexp(ret); unrefexp(e); return v; }
+    char *ks = alc_key_to_cstr(kraw, tmp);
+    if (!ks) {
+      unrefexp(kraw); unrefexp(v); unrefexp(ret); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "hash-map: unsupported key type");
+    }
+    set_get_keyval_dict(d, ks, v);
+    unrefexp(kraw);
+    unrefexp(v);
+    a = a->next->next;
+  }
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_assocbang[] = "(assoc! d k v) — set d[k]=v in place; returns d.";
+exp_t *assocbangcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!isdict(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: first arg must be a hash-map"); }
+  exp_t *k = EVAL(caddr(e), env);
+  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
+  exp_t *v = EVAL(cadddr(e), env);
+  if (iserror(v)) { unrefexp(k); unrefexp(d); unrefexp(e); return v; }
+  char tmp[32];
+  char *ks = alc_key_to_cstr(k, tmp);
+  if (!ks) { unrefexp(k); unrefexp(v); unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"); }
+  set_get_keyval_dict((dict_t *)d->ptr, ks, v);
+  unrefexp(k); unrefexp(v); unrefexp(e);
+  return d;
+}
+
+const char doc_dissocbang[] = "(dissoc! d k) — delete key k from d in place; returns d.";
+exp_t *dissocbangcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!isdict(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "dissoc!: first arg must be a hash-map"); }
+  exp_t *k = EVAL(caddr(e), env);
+  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
+  char tmp[32];
+  char *ks = alc_key_to_cstr(k, tmp);
+  if (ks) del_keyval_dict((dict_t *)d->ptr, ks);
+  unrefexp(k); unrefexp(e);
+  return d;
+}
+
+const char doc_get[] = "(get d k [default]) — fetch d[k]. Works on hash-maps. Returns default (or nil) when missing.";
+exp_t *getcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!isdict(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "get: first arg must be a hash-map"); }
+  exp_t *k = EVAL(caddr(e), env);
+  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
+  char tmp[32];
+  char *ks = alc_key_to_cstr(k, tmp);
+  exp_t *ret = NIL_EXP;
+  if (ks) {
+    keyval_t *kv = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
+    if (kv) ret = refexp(kv->val);
+    else if (cdddr(e)) ret = EVAL(cadddr(e), env);
+  } else if (cdddr(e)) {
+    ret = EVAL(cadddr(e), env);
+  }
+  unrefexp(k); unrefexp(d); unrefexp(e);
+  return ret;
+}
+
+const char doc_containsp[] = "(contains? d k) — t if d has key k, else nil.";
+exp_t *containspcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!isdict(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "contains?: first arg must be a hash-map"); }
+  exp_t *k = EVAL(caddr(e), env);
+  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
+  char tmp[32];
+  char *ks = alc_key_to_cstr(k, tmp);
+  exp_t *ret = NIL_EXP;
+  if (ks && set_get_keyval_dict((dict_t *)d->ptr, ks, NULL))
+    ret = TRUE_EXP;
+  unrefexp(k); unrefexp(d); unrefexp(e);
+  return ret;
+}
+
+const char doc_keys[] = "(keys d) — list of keys in d (order undefined).";
+exp_t *keyscmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!isdict(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "keys: arg must be a hash-map"); }
+  dict_t *dp = (dict_t *)d->ptr;
+  exp_t *ret = NIL_EXP;
+  exp_t *cur = NULL;
+  unsigned int i;
+  for (i = 0; i < dp->ht[0].size; i++) {
+    keyval_t *k = dp->ht[0].table[i];
+    while (k) {
+      exp_t *node = make_node(alc_cstr_to_key((char *)k->key));
+      if (cur) cur = cur->next = node;
+      else { ret = cur = node; }
+      k = k->next;
+    }
+  }
+  unrefexp(d); unrefexp(e);
+  return ret ? ret : NIL_EXP;
+}
+
+const char doc_vals[] = "(vals d) — list of values in d (order matches keys).";
+exp_t *valscmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!isdict(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "vals: arg must be a hash-map"); }
+  dict_t *dp = (dict_t *)d->ptr;
+  exp_t *ret = NIL_EXP;
+  exp_t *cur = NULL;
+  unsigned int i;
+  for (i = 0; i < dp->ht[0].size; i++) {
+    keyval_t *k = dp->ht[0].table[i];
+    while (k) {
+      exp_t *node = make_node(refexp(k->val));
+      if (cur) cur = cur->next = node;
+      else { ret = cur = node; }
+      k = k->next;
+    }
+  }
+  unrefexp(d); unrefexp(e);
+  return ret ? ret : NIL_EXP;
+}
+
+const char doc_count[] = "(count x) — element count for hash-maps, deques, vectors, strings, blobs, and lists.";
+exp_t *countcmd(exp_t *e, env_t *env) {
+  exp_t *x = EVAL(cadr(e), env);
+  if (iserror(x)) { unrefexp(e); return x; }
+  int64_t n = 0;
+  if (isdict(x)) n = (int64_t)((dict_t *)x->ptr)->ht[0].used;
+  else if (islist(x)) n = ((alc_list_t *)x->ptr)->len;
+  else if (isblob(x)) n = (int64_t)((alc_blob_t *)x->ptr)->len;
+  else if (is_ptr(x) && x->type == EXP_VECTOR && x->ptr)
+    n = ((alc_vec_t *)x->ptr)->len;
+  else if (isstring(x)) n = (int64_t)strlen((char *)x->ptr);
+  else if (ispair(x)) {
+    exp_t *p = x;
+    while (p && istrue(p)) { n++; p = p->next; }
+  } else {
+    unrefexp(x); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "count: unsupported type");
+  }
+  unrefexp(x); unrefexp(e);
+  return MAKE_FIX(n);
+}
+
+/* ---------- deque / EXP_LIST ops ---------- */
+
+/* Helper: append node to tail (no refcounting; caller already owns val ref). */
+static void alc_list_push_right(alc_list_t *l, exp_t *val) {
+  alc_listnode_t *n = (alc_listnode_t *)memalloc(1, sizeof(alc_listnode_t));
+  n->val = val;
+  n->prev = l->tail;
+  if (l->tail) l->tail->next = n;
+  else l->head = n;
+  l->tail = n;
+  l->len++;
+}
+
+static void alc_list_push_left(alc_list_t *l, exp_t *val) {
+  alc_listnode_t *n = (alc_listnode_t *)memalloc(1, sizeof(alc_listnode_t));
+  n->val = val;
+  n->next = l->head;
+  if (l->head) l->head->prev = n;
+  else l->tail = n;
+  l->head = n;
+  l->len++;
+}
+
+const char doc_deque[] = "(deque [x ...]) — fresh doubly-linked deque populated with given elements.";
+exp_t *dequecmd(exp_t *e, env_t *env) {
+  exp_t *ret = make_list_exp();
+  alc_list_t *l = (alc_list_t *)ret->ptr;
+  exp_t *a = cdr(e);
+  while (a) {
+    exp_t *v = EVAL(car(a), env);
+    if (iserror(v)) { unrefexp(ret); unrefexp(e); return v; }
+    alc_list_push_right(l, v); /* takes ownership of v */
+    a = a->next;
+  }
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_pushrightbang[] = "(push-right! d x) — RPUSH; append x to right end of deque, returns d.";
+exp_t *pushrightbangcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!islist(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "push-right!: first arg must be a deque"); }
+  exp_t *v = EVAL(caddr(e), env);
+  if (iserror(v)) { unrefexp(d); unrefexp(e); return v; }
+  alc_list_push_right((alc_list_t *)d->ptr, v);
+  unrefexp(e);
+  return d;
+}
+
+const char doc_pushleftbang[] = "(push-left! d x) — LPUSH; prepend x to left end of deque, returns d.";
+exp_t *pushleftbangcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!islist(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "push-left!: first arg must be a deque"); }
+  exp_t *v = EVAL(caddr(e), env);
+  if (iserror(v)) { unrefexp(d); unrefexp(e); return v; }
+  alc_list_push_left((alc_list_t *)d->ptr, v);
+  unrefexp(e);
+  return d;
+}
+
+const char doc_poprightbang[] = "(pop-right! d) — RPOP; remove and return rightmost element, or nil.";
+exp_t *poprightbangcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!islist(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "pop-right!: arg must be a deque"); }
+  alc_list_t *l = (alc_list_t *)d->ptr;
+  exp_t *ret = NIL_EXP;
+  if (l->tail) {
+    alc_listnode_t *n = l->tail;
+    ret = n->val; /* transfer ownership to caller */
+    l->tail = n->prev;
+    if (l->tail) l->tail->next = NULL;
+    else l->head = NULL;
+    l->len--;
+    free(n);
+  }
+  unrefexp(d); unrefexp(e);
+  return ret;
+}
+
+const char doc_popleftbang[] = "(pop-left! d) — LPOP; remove and return leftmost element, or nil.";
+exp_t *popleftbangcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!islist(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "pop-left!: arg must be a deque"); }
+  alc_list_t *l = (alc_list_t *)d->ptr;
+  exp_t *ret = NIL_EXP;
+  if (l->head) {
+    alc_listnode_t *n = l->head;
+    ret = n->val;
+    l->head = n->next;
+    if (l->head) l->head->prev = NULL;
+    else l->tail = NULL;
+    l->len--;
+    free(n);
+  }
+  unrefexp(d); unrefexp(e);
+  return ret;
+}
+
+const char doc_peekleft[] = "(peek-left d) — leftmost element (no mutation), or nil.";
+exp_t *peekleftcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!islist(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "peek-left: arg must be a deque"); }
+  alc_list_t *l = (alc_list_t *)d->ptr;
+  exp_t *ret = (l->head) ? refexp(l->head->val) : NIL_EXP;
+  unrefexp(d); unrefexp(e);
+  return ret;
+}
+
+const char doc_peekright[] = "(peek-right d) — rightmost element (no mutation), or nil.";
+exp_t *peekrightcmd(exp_t *e, env_t *env) {
+  exp_t *d = EVAL(cadr(e), env);
+  if (iserror(d)) { unrefexp(e); return d; }
+  if (!islist(d)) { unrefexp(d); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "peek-right: arg must be a deque"); }
+  alc_list_t *l = (alc_list_t *)d->ptr;
+  exp_t *ret = (l->tail) ? refexp(l->tail->val) : NIL_EXP;
+  unrefexp(d); unrefexp(e);
+  return ret;
+}
+
+/* ---------- blob ops ---------- */
+
+const char doc_makeblob[] = "(make-blob N) — N-byte zero-filled blob; or (make-blob \"...\") to copy a string.";
+exp_t *makeblobcmd(exp_t *e, env_t *env) {
+  exp_t *a = EVAL(cadr(e), env);
+  if (iserror(a)) { unrefexp(e); return a; }
+  exp_t *ret;
+  if (isnumber(a)) {
+    int64_t n = FIX_VAL(a);
+    if (n < 0) {
+      unrefexp(a); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "make-blob: negative length");
+    }
+    ret = make_blob(NULL, (size_t)n);
+  } else if (isstring(a)) {
+    ret = make_blob((const char *)a->ptr, strlen((char *)a->ptr));
+  } else {
+    unrefexp(a); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "make-blob: arg must be a number or string");
+  }
+  unrefexp(a); unrefexp(e);
+  return ret;
+}
+
+const char doc_bloblen[] = "(blob-len b) — byte count of b.";
+exp_t *bloblencmd(exp_t *e, env_t *env) {
+  exp_t *b = EVAL(cadr(e), env);
+  if (iserror(b)) { unrefexp(e); return b; }
+  if (!isblob(b)) { unrefexp(b); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "blob-len: arg must be a blob"); }
+  int64_t n = (int64_t)((alc_blob_t *)b->ptr)->len;
+  unrefexp(b); unrefexp(e);
+  return MAKE_FIX(n);
+}
+
+const char doc_blobref[] = "(blob-ref b i) — byte at index i as fixnum (0..255).";
+exp_t *blobrefcmd(exp_t *e, env_t *env) {
+  exp_t *b = EVAL(cadr(e), env);
+  if (iserror(b)) { unrefexp(e); return b; }
+  if (!isblob(b)) { unrefexp(b); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "blob-ref: first arg must be a blob"); }
+  exp_t *i = EVAL(caddr(e), env);
+  if (iserror(i)) { unrefexp(b); unrefexp(e); return i; }
+  if (!isnumber(i)) { unrefexp(i); unrefexp(b); unrefexp(e);
+    return error(ERROR_NUMBER_EXPECTED, NULL, env, "blob-ref: index must be a number"); }
+  int64_t idx = FIX_VAL(i);
+  alc_blob_t *bb = (alc_blob_t *)b->ptr;
+  if (idx < 0 || (size_t)idx >= bb->len) {
+    unrefexp(i); unrefexp(b); unrefexp(e);
+    return error(ERROR_INDEX_OUT_OF_RANGE, NULL, env, "blob-ref: index %lld out of range", (long long)idx);
+  }
+  int64_t v = (int64_t)(unsigned char)bb->bytes[idx];
+  unrefexp(i); unrefexp(b); unrefexp(e);
+  return MAKE_FIX(v);
+}
+
+const char doc_blob2string[] = "(blob->string b) — copy blob bytes into a fresh string (truncates at first NUL).";
+exp_t *blob2stringcmd(exp_t *e, env_t *env) {
+  exp_t *b = EVAL(cadr(e), env);
+  if (iserror(b)) { unrefexp(e); return b; }
+  if (!isblob(b)) { unrefexp(b); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "blob->string: arg must be a blob"); }
+  alc_blob_t *bb = (alc_blob_t *)b->ptr;
+  exp_t *ret = make_string(bb->bytes, (int)bb->len);
+  unrefexp(b); unrefexp(e);
+  return ret;
+}
+
+const char doc_vector[] = "(vector x ...) — build an EXP_VECTOR populated with the given elements. Same as #[x ...].";
+exp_t *vectorcmd(exp_t *e, env_t *env) {
+  /* Two-pass: count elements (so we can size the vector once), then
+     evaluate-and-store. Cheaper than growing a list intermediary. */
+  long n = 0;
+  for (exp_t *p = cdr(e); p; p = p->next) n++;
+  exp_t *ret = make_vector(n, NIL_EXP);
+  if (!ret) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "vector: alloc failed");
+  }
+  alc_vec_t *vv = (alc_vec_t *)ret->ptr;
+  long i = 0;
+  for (exp_t *p = cdr(e); p; p = p->next, i++) {
+    exp_t *v = EVAL(car(p), env);
+    if (iserror(v)) { unrefexp(ret); unrefexp(e); return v; }
+    /* make_vector pre-filled with NIL (refcount bump per slot); release
+       the placeholder before overwriting. */
+    unrefexp(vv->data[i]);
+    vv->data[i] = v; /* take ownership */
+  }
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_string2blob[] = "(string->blob s) — wrap string bytes in a fresh blob.";
+exp_t *string2blobcmd(exp_t *e, env_t *env) {
+  exp_t *s = EVAL(cadr(e), env);
+  if (iserror(s)) { unrefexp(e); return s; }
+  if (!isstring(s)) { unrefexp(s); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "string->blob: arg must be a string"); }
+  exp_t *ret = make_blob((char *)s->ptr, strlen((char *)s->ptr));
+  unrefexp(s); unrefexp(e);
+  return ret;
+}
+
+/* RESP2 server prototype lives in its own file but is included as
+   part of this single TU so it can use file-static helpers
+   (make_string, set_get_keyval_dict, ...) without exporting them. */
+#include "resp.c"
+
 int main(int argc, char *argv[]) {
   dict_t *dict = create_dict();
   env_t *global = make_env(NULL);
@@ -12959,11 +13656,16 @@ int main(int argc, char *argv[]) {
                            (loaddb) calls — so the file you load from is
                            the same file you save to.
        -e "<code>"         evaluate the string as a script (skips file read)
+       -r [port]           run as a RESP2 (Redis) server on 127.0.0.1.
+                           Default port 6379 if next arg is not an int.
      Flags get filtered out of argv in place so the existing positional
      handling (last arg = file, prev = -i) still works whether the user
      passes flags first, last, or in the middle. */
   int auto_load = 1;
   char *eval_string = NULL;
+  int resp_mode = 0;     /* -r: RESP server only, no REPL */
+  int resp_combined = 0; /* -R: combined REPL + RESP single-reactor */
+  int resp_port = 6379;
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
@@ -12973,11 +13675,51 @@ int main(int argc, char *argv[]) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
         alcove_db_path = argv[++src];   /* session-wide default */
+      } else if (strcmp(argv[src], "-r") == 0 ||
+                 strcmp(argv[src], "-R") == 0) {
+        if (strcmp(argv[src], "-R") == 0) resp_combined = 1;
+        else resp_mode = 1;
+        /* Optional explicit port follows. Only consume if it parses
+           cleanly as a positive int < 65536, otherwise treat next arg
+           as a positional (file/-i). */
+        if (src + 1 < argc) {
+          char *end;
+          long p = strtol(argv[src + 1], &end, 10);
+          if (*end == '\0' && p > 0 && p < 65536) {
+            resp_port = (int)p;
+            src++;
+          }
+        }
       } else {
         argv[dst++] = argv[src];
       }
     }
     argc = dst;
+  }
+
+  /* RESP server short-circuits the rest of main(): no auto-load, no
+     REPL, no file/-e processing. Returns the server's exit code. */
+  if (resp_mode) {
+    int N = sizeof(lispProcList) / sizeof(lispProc);
+    /* lispProcList registration is needed downstream by isstring/etc.
+       only indirectly — but resp_db lives separately. Skip it. */
+    (void)N;
+    return resp_serve(resp_port);
+  }
+
+  /* -R: combined REPL + RESP on a single select() reactor. Both run
+     on this thread; they're mutually exclusive in time, so resp_db
+     and the global env can be shared without locking. The REPL gets
+     redis-keys / redis-get / redis-type / redis-count / redis-flush
+     / redis-port to inspect the live db. */
+  if (resp_combined) {
+    if (auto_load) {
+      int loaded = loaddb_from_file_path(global, alcove_db_path);
+      if (loaded > 0)
+        printf("alcove: auto-loaded %d entries from %s\n", loaded,
+               alcove_db_path);
+    }
+    return resp_repl_serve(resp_port, global);
   }
 
   /* Auto-load persisted bindings from the chosen db path. Silent on

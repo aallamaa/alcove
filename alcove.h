@@ -26,6 +26,12 @@ enum {
      PREVIOUSLY MEM ALLOCATED EXP */
   EXP_TREE,
   EXP_PAIR_CIRCULAR,
+  /* Clojure-flavored mutable containers — appended (not inserted) so existing
+     enum values stay stable for db.dump backward compatibility. Self-evaluating
+     in evaluate(); see isatom() below. */
+  EXP_BLOB, /* binary-safe bytes; ptr → alc_blob_t (flex-array) */
+  EXP_DICT, /* hash-map; ptr → dict_t* (alcove's own dict) */
+  EXP_LIST, /* doubly-linked deque; ptr → alc_list_t (O(1) head & tail) */
 
   /* should always be the last */
   EXP_MAXSIZE
@@ -111,7 +117,17 @@ enum {
 #define ismacro(e) (is_ptr(e) && (e)->type == EXP_MACRO)
 #define iserror(e) (is_ptr(e) && (e)->type == EXP_ERROR)
 #define isffi(e) (is_ptr(e) && (e)->type == EXP_FFI)
-#define isatom(e) (is_imm(e) || (is_ptr(e) && (e)->type <= EXP_VECTOR))
+#define isblob(e) (is_ptr(e) && (e)->type == EXP_BLOB)
+#define isdict(e) (is_ptr(e) && (e)->type == EXP_DICT)
+#define islist(e) (is_ptr(e) && (e)->type == EXP_LIST)
+/* Self-evaluating: tagged immediates, scalar atoms (≤ EXP_VECTOR), and
+   the appended Clojure-style containers (blob/dict/list). The container
+   range is contiguous (BLOB..LIST) so the bounds check stays a single
+   comparison pair instead of three OR'd equalities. */
+#define isatom(e)                                                              \
+  (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
+                               ((e)->type >= EXP_BLOB &&                       \
+                                (e)->type <= EXP_LIST))))
 
 #define car(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->content : NULL)
 #define cdr(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->next : NULL)
@@ -565,6 +581,45 @@ exp_t *evalcmd(exp_t *e, env_t *env);
 exp_t *carcmd(exp_t *e, env_t *env);
 exp_t *cdrcmd(exp_t *e, env_t *env);
 exp_t *listcmd(exp_t *e, env_t *env);
+
+/* ---------------- Clojure-style containers ----------------
+   Three new exp_t types that can be Lisp values AND used by RESP.
+   All three are mutable; mutation ops end in `!` per Scheme/alcove
+   convention even though Clojure proper drops the bang.
+
+   EXP_BLOB — binary-safe byte buffer. Stored as alc_blob_t (flexible
+   array), so size and bytes share one alloc. Differs from EXP_STRING
+   only in NUL-byte safety: EXP_STRING uses strlen everywhere.
+
+   EXP_DICT — wraps alcove's own dict_t*. Keys are strings (printed
+   form of whatever the user passed: keyword `:a` hashes as ":a",
+   string "a" hashes as "a", so the two are distinct keys, matching
+   Clojure semantics).
+
+   EXP_LIST — doubly-linked node chain with head AND tail pointers,
+   so push/pop on either end is O(1). EXP_PAIR is singly-linked; an
+   RPOP on a long pair-list would be O(n). */
+
+typedef struct {
+  size_t len;
+  char bytes[]; /* flex-array: header + payload in one alloc */
+} alc_blob_t;
+
+typedef struct alc_listnode {
+  struct exp_t *val; /* owned ref */
+  struct alc_listnode *prev, *next;
+} alc_listnode_t;
+
+typedef struct {
+  alc_listnode_t *head, *tail;
+  long len;
+} alc_list_t;
+
+exp_t *make_blob(const char *bytes, size_t len);
+exp_t *make_dict_exp(void); /* fresh empty dict_t wrapped in exp_t */
+exp_t *make_list_exp(void); /* fresh empty alc_list_t wrapped in exp_t */
+size_t blob_len(exp_t *e);
+const char *blob_bytes(exp_t *e);
 
 /* Token */
 token_t *tokenize(int v);
