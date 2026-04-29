@@ -255,16 +255,40 @@ static void resp_write_err(resp_client_t *c, const char *s) {
   resp_write(c, "\r\n", 2);
 }
 
+/* Fast unsigned-to-decimal — snprintf was the #1 hotspot under load
+   (~30% of CPU samples vs printf-family). 20 digits covers UINT64_MAX. */
+static int resp_u64_to_ascii(char *out, uint64_t v) {
+  char tmp[20];
+  int i = 0;
+  do { tmp[i++] = '0' + (int)(v % 10); v /= 10; } while (v);
+  for (int j = 0; j < i; j++) out[j] = tmp[i - 1 - j];
+  return i;
+}
+
+static int resp_i64_to_ascii(char *out, int64_t v) {
+  if (v < 0) {
+    out[0] = '-';
+    return 1 + resp_u64_to_ascii(out + 1, (uint64_t)(-(v + 1)) + 1);
+  }
+  return resp_u64_to_ascii(out, (uint64_t)v);
+}
+
 static void resp_write_int(resp_client_t *c, long long v) {
   char buf[32];
-  int n = snprintf(buf, sizeof buf, ":%lld\r\n", v);
-  resp_write(c, buf, n);
+  buf[0] = ':';
+  int n = 1 + resp_i64_to_ascii(buf + 1, (int64_t)v);
+  buf[n++] = '\r';
+  buf[n++] = '\n';
+  resp_write(c, buf, (size_t)n);
 }
 
 static void resp_write_bulk(resp_client_t *c, const char *p, size_t n) {
   char hdr[32];
-  int hn = snprintf(hdr, sizeof hdr, "$%zu\r\n", n);
-  resp_write(c, hdr, hn);
+  hdr[0] = '$';
+  int hn = 1 + resp_u64_to_ascii(hdr + 1, (uint64_t)n);
+  hdr[hn++] = '\r';
+  hdr[hn++] = '\n';
+  resp_write(c, hdr, (size_t)hn);
   resp_write(c, p, n);
   resp_write(c, "\r\n", 2);
 }
@@ -273,8 +297,11 @@ static void resp_write_nil(resp_client_t *c) { resp_write(c, "$-1\r\n", 5); }
 
 static void resp_write_array_hdr(resp_client_t *c, long long n) {
   char hdr[32];
-  int hn = snprintf(hdr, sizeof hdr, "*%lld\r\n", n);
-  resp_write(c, hdr, hn);
+  hdr[0] = '*';
+  int hn = 1 + resp_i64_to_ascii(hdr + 1, (int64_t)n);
+  hdr[hn++] = '\r';
+  hdr[hn++] = '\n';
+  resp_write(c, hdr, (size_t)hn);
 }
 
 static void resp_write_wrongtype(resp_client_t *c) {
@@ -766,7 +793,7 @@ static void resp_apply_incr(resp_client_t *c, const char *key,
   }
   cur += delta;
   char buf[32];
-  int n = snprintf(buf, sizeof buf, "%lld", cur);
+  int n = resp_i64_to_ascii(buf, (int64_t)cur);
   exp_t *new_blob = make_blob(buf, (size_t)n);
   if (kv) {
     /* In-place mutation preserves kv->timestamp (TTL survives INCR). */
