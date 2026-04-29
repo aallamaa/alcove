@@ -51,8 +51,10 @@ struct env_t *g_global_env = NULL;
 
 /* Set by invoke's body loop / ifcmd's selected-branch eval. When true,
    evaluate returns a trampoline marker instead of recursing into
-   invoke, giving us O(1) C stack for tail-recursive code. */
-static int in_tail_position = 0;
+   invoke, giving us O(1) C stack for tail-recursive code. __thread:
+   each evaluator stack belongs to its own thread; the tail flag is
+   strictly call-site reentrant state. */
+static __thread int in_tail_position = 0;
 
 /* Builtin registration. `arity` and `level` are reserved fields (the
    first for future per-call arity checks, the second for sandbox tiers);
@@ -1181,7 +1183,9 @@ size_t dumpsize_t(FILE *stream, size_t *len) {
    the C stack costs ~4MB; well under the typical 8MB stack but blocks
    the trivially-malicious "millions of nested pairs" file. */
 #define ALCOVE_LOAD_MAX_DEPTH 16384
-static int alcove_load_depth = 0;
+/* __thread: depth is caller-local — a worker loading a dump shouldn't
+   trip another worker's guard. */
+static __thread int alcove_load_depth = 0;
 
 exp_t *load_exp_t(FILE *stream) {
   exp_t *resp = make_nil();
