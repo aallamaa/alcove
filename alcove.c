@@ -108,7 +108,8 @@ extern const char doc_vector[];
    return zero/nil/none). Defined below the `#include "resp.c"` line so
    they can read the resp_db static directly. */
 extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
-                  doc_redis_get[], doc_redis_flush[], doc_redis_port[];
+                  doc_redis_get[], doc_redis_flush[], doc_redis_port[],
+                  doc_redis_defcmd[], doc_redis_undefcmd[], doc_redis_cmds[];
 
 /* Forward decls for cmds defined below the table — every callee must be
    visible at table-init time. The original cmds had a top-level
@@ -151,6 +152,9 @@ exp_t *redistypecmd(exp_t *e, env_t *env);
 exp_t *redisgetcmd(exp_t *e, env_t *env);
 exp_t *redisflushcmd(exp_t *e, env_t *env);
 exp_t *redisportcmd(exp_t *e, env_t *env);
+exp_t *rediscmddefcmd(exp_t *e, env_t *env);
+exp_t *rediscmdundefcmd(exp_t *e, env_t *env);
+exp_t *rediscmdscmd(exp_t *e, env_t *env);
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
@@ -297,6 +301,9 @@ lispProc lispProcList[] = {
     LISPCMD("redis-get",     redisgetcmd,    doc_redis_get),
     LISPCMD("redis-flush",   redisflushcmd,  doc_redis_flush),
     LISPCMD("redis-port",    redisportcmd,   doc_redis_port),
+    LISPCMD("redis-defcmd",  rediscmddefcmd, doc_redis_defcmd),
+    LISPCMD("redis-undefcmd",rediscmdundefcmd,doc_redis_undefcmd),
+    LISPCMD("redis-cmds",    rediscmdscmd,   doc_redis_cmds),
 };
 #undef LISPCMD
 #undef LISPCMD_TAIL

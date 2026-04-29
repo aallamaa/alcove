@@ -1478,6 +1478,12 @@ static void cmd_hkeys_hvals_hgetall(resp_client_t *c, char **argv, long *argl,
 
 /* ---------- top-level dispatch ---------- */
 
+/* Forward decl — resp_user_dispatch lives near the bottom of the file
+   alongside the (redis-defcmd ...) builtin, but resp_dispatch (above)
+   needs to call it on the unknown-command path. */
+static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
+                              char **argv, long *argl, int argc);
+
 static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
   if (argc < 1) return;
   const char *cmd = argv[0];
@@ -1550,6 +1556,8 @@ static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
   if (resp_cmd_eq(cmd, clen, "HGETALL"))
     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
+
+  if (resp_user_dispatch(c, cmd, clen, argv, argl, argc)) return;
 
   char buf[256];
   int n = snprintf(buf, sizeof buf, "ERR unknown command '%.*s'", (int)clen,
@@ -2084,4 +2092,202 @@ exp_t *redisportcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
   return MAKE_FIX((int64_t)resp_active_port);
+}
+
+/* ---------- user-defined Redis commands -------------------------------
+   (redis-defcmd "NAME" fn) registers `fn` under uppercase NAME so that
+   `redis-cli NAME ...` invokes it. fn is a 1-arity lambda; its single
+   parameter receives the RESP bulk arguments after the command name as
+   a Lisp pair-list of strings (nil if none). The lambda's return value
+   is encoded back to RESP:
+     nil       → $-1            (null bulk)
+     t         → +OK
+     fixnum    → :N             (integer)
+     string    → $...           (bulk)
+     blob      → $...           (bulk; binary-safe)
+     pair list → *N $... ...    (array, recursive)
+     error     → -ERR <message>
+   Single-reactor invariant: dispatch runs on the same thread that
+   evaluates Lisp, so the dict + env are touched without locking. */
+
+static dict_t *resp_user_commands = NULL;
+static env_t *resp_user_env = NULL;
+
+static void resp_user_upper(const char *src, long len, char *dst, size_t cap) {
+  size_t i;
+  size_t n = (size_t)len < cap - 1 ? (size_t)len : cap - 1;
+  for (i = 0; i < n; i++) {
+    char ch = src[i];
+    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+    dst[i] = ch;
+  }
+  dst[n] = '\0';
+}
+
+static void resp_user_encode(resp_client_t *c, exp_t *v) {
+  if (v == NIL_EXP || v == NULL) {
+    resp_write_nil(c);
+    return;
+  }
+  if (v == TRUE_EXP) {
+    resp_write_simple(c, "OK");
+    return;
+  }
+  if (isnumber(v)) {
+    resp_write_int(c, (long long)FIX_VAL(v));
+    return;
+  }
+  if (iserror(v)) {
+    char buf[512];
+    const char *msg = (v->ptr) ? (const char *)v->ptr : "user command error";
+    int n = snprintf(buf, sizeof buf, "ERR %s", msg);
+    if (n < 0) n = 0;
+    if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+    resp_write(c, "-", 1);
+    resp_write(c, buf, n);
+    resp_write(c, "\r\n", 2);
+    return;
+  }
+  if (isstring(v)) {
+    const char *s = (const char *)v->ptr;
+    resp_write_bulk(c, s, strlen(s));
+    return;
+  }
+  if (isblob(v)) {
+    alc_blob_t *b = (alc_blob_t *)v->ptr;
+    resp_write_bulk(c, b->bytes, b->len);
+    return;
+  }
+  if (ischar(v)) {
+    char ch = (char)FIX_VAL(v);
+    resp_write_bulk(c, &ch, 1);
+    return;
+  }
+  if (ispair(v)) {
+    long n = 0;
+    exp_t *p;
+    for (p = v; ispair(p); p = cdr(p)) n++;
+    resp_write_array_hdr(c, n);
+    for (p = v; ispair(p); p = cdr(p)) resp_user_encode(c, car(p));
+    return;
+  }
+  if (islist(v)) {
+    alc_list_t *l = (alc_list_t *)v->ptr;
+    resp_write_array_hdr(c, l->len);
+    for (alc_listnode_t *n = l->head; n; n = n->next)
+      resp_user_encode(c, n->val);
+    return;
+  }
+  /* Fallback — fold to a printable bulk via the same path print_node uses
+     would require buffering; for now emit the type as a debug hint. */
+  char tag[64];
+  int n = snprintf(tag, sizeof tag, "<unencodable type %d>", v->type);
+  if (n < 0) n = 0;
+  if ((size_t)n >= sizeof tag) n = (int)sizeof tag - 1;
+  resp_write_bulk(c, tag, (size_t)n);
+}
+
+static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
+                              char **argv, long *argl, int argc) {
+  if (!resp_user_commands || resp_user_commands->ht[0].size == 0) return 0;
+  char name[256];
+  resp_user_upper(cmd, clen, name, sizeof name);
+  keyval_t *k = set_get_keyval_dict(resp_user_commands, name, NULL);
+  if (!k || !k->val) return 0;
+  exp_t *fn = k->val;
+
+  /* Marshal RESP bulks as a single Lisp pair-list bound to the lambda's
+     one parameter. So `(def myfn (args) ...)` sees `args` = the list of
+     strings. Empty arg lists pass NIL_EXP. */
+  exp_t *arglist = NIL_EXP, *cur = NULL;
+  int rargc = argc - 1;
+  for (int i = 0; i < rargc; i++) {
+    exp_t *s = make_string(argv[i + 1], (int)argl[i + 1]);
+    exp_t *node = make_node(s);
+    if (cur) cur = cur->next = node;
+    else { arglist = cur = node; }
+  }
+  exp_t *fn_ref = refexp(fn);
+  exp_t *vargv[1] = {arglist};
+  exp_t *ret = vm_invoke_values(fn_ref, 1, vargv, resp_user_env);
+  unrefexp(fn_ref);
+  resp_user_encode(c, ret);
+  if (ret) unrefexp(ret);
+  return 1;
+}
+
+const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of strings (nil if none). Returns t.";
+exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
+  exp_t *nx = EVAL(cadr(e), env);
+  if (iserror(nx)) { unrefexp(e); return nx; }
+  if (!isstring(nx) && !isblob(nx)) {
+    unrefexp(nx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-defcmd: command name must be a string or blob");
+  }
+  exp_t *fx = EVAL(caddr(e), env);
+  if (iserror(fx)) { unrefexp(nx); unrefexp(e); return fx; }
+  if (!islambda(fx)) {
+    unrefexp(nx); unrefexp(fx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-defcmd: second arg must be a lambda");
+  }
+  const char *raw = isstring(nx) ? (char *)nx->ptr
+                                 : ((alc_blob_t *)nx->ptr)->bytes;
+  long rawlen = (long)(isstring(nx) ? strlen(raw)
+                                    : ((alc_blob_t *)nx->ptr)->len);
+  char name[256];
+  resp_user_upper(raw, rawlen, name, sizeof name);
+  if (!resp_user_commands)
+    resp_user_commands = memalloc(1, sizeof(dict_t));
+  resp_user_env = env;
+  set_get_keyval_dict(resp_user_commands, name, fx);
+  unrefexp(nx); unrefexp(fx); unrefexp(e);
+  return TRUE_EXP;
+}
+
+const char doc_redis_undefcmd[] = "(redis-undefcmd \"NAME\") — remove a previously registered Redis command. Returns t if removed, nil if not found.";
+exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
+  exp_t *nx = EVAL(cadr(e), env);
+  if (iserror(nx)) { unrefexp(e); return nx; }
+  if (!isstring(nx) && !isblob(nx)) {
+    unrefexp(nx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-undefcmd: command name must be a string or blob");
+  }
+  const char *raw = isstring(nx) ? (char *)nx->ptr
+                                 : ((alc_blob_t *)nx->ptr)->bytes;
+  long rawlen = (long)(isstring(nx) ? strlen(raw)
+                                    : ((alc_blob_t *)nx->ptr)->len);
+  char name[256];
+  resp_user_upper(raw, rawlen, name, sizeof name);
+  exp_t *ret = NIL_EXP;
+  if (resp_user_commands && resp_user_commands->ht[0].size) {
+    keyval_t *k = set_get_keyval_dict(resp_user_commands, name, NULL);
+    if (k && strcmp(k->key, name) == 0) {
+      del_keyval_dict(resp_user_commands, name);
+      ret = TRUE_EXP;
+    }
+  }
+  unrefexp(nx); unrefexp(e);
+  return ret;
+}
+
+const char doc_redis_cmds[] = "(redis-cmds) — list of currently registered user Redis command names (uppercase).";
+exp_t *rediscmdscmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  exp_t *ret = NIL_EXP, *cur = NULL;
+  if (!resp_user_commands || resp_user_commands->ht[0].size == 0)
+    return NIL_EXP;
+  kvht_t *h = &resp_user_commands->ht[0];
+  for (unsigned long b = 0; b < h->size; b++) {
+    for (keyval_t *k = h->table[b]; k; k = k->next) {
+      exp_t *node = make_node(make_string((char *)k->key,
+                                          (int)strlen((char *)k->key)));
+      if (cur) cur = cur->next = node;
+      else { ret = cur = node; }
+    }
+  }
+  return ret;
 }
