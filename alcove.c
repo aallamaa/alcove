@@ -379,17 +379,19 @@ inline exp_t *refexp(exp_t *e) {
    free-list pop/push is ~3 cycles, ~10x faster. The list re-uses each
    freed exp_t's `next` pointer as the freelist link — safe because
    unrefexp recursively releases the original next before this point.
-   Single-threaded (alcove never threads the interp). */
-static exp_t *exp_freelist = NULL;
+   __thread: per-shard worker, no cross-thread alloc traffic. On a
+   single-threaded run the TLS slot collapses to one backing copy. */
+static __thread exp_t *exp_freelist = NULL;
 
 /* Bump-allocator for fresh exp_t when the free-list is empty. calloc(1,
    sizeof exp_t) is ~50ns per call; chunk-allocating 256 at a time
    amortizes that to ~4ns per exp_t. The chunks themselves are never
    freed — they live for the process lifetime, which matches alcove's
-   model (the interpreter exits and the OS reclaims). */
+   model (the interpreter exits and the OS reclaims). __thread paired
+   with the freelist above so each worker bumps from its own arena. */
 #define EXP_BUMP_CHUNK 256
-static exp_t *exp_bump_next = NULL;
-static int exp_bump_left = 0;
+static __thread exp_t *exp_bump_next = NULL;
+static __thread int exp_bump_left = 0;
 
 /* Iterative over e->next; recurses for e->content and vector/list elements. */
 inline int unrefexp(exp_t *e) {
