@@ -1987,7 +1987,7 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
                pointing at a freed value, then refexp the freed pointer.
                alcove is single-threaded today; this is hardening for the
                documented future-threading goal. */
-            alcove_global_gen++;
+            GEN_BUMP();
             unrefexp(kv->val);
             kv->val = refexp(val);
             unrefexp(keyv);
@@ -2001,7 +2001,7 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
     if (!(env->d))
       env->d = create_dict();
     ret = set_get_keyval_dict(env->d, keyv->ptr, val);
-    alcove_global_gen++;
+    GEN_BUMP();
     unrefexp(keyv);
     return refexp(val);
   } else if (ispair(keyv)) { /*evaluate(keyv,env)=val*/
@@ -2168,7 +2168,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
           env->d = create_dict();
         set_get_keyval_dict(env->d, name->ptr,
                             val); /* return value (the kv) unused */
-        alcove_global_gen++; /* invalidate bytecode global-resolution caches */
+        GEN_BUMP(); /* invalidate bytecode global-resolution caches */
       } else
         val =
             error(EXP_ERROR_BODY_NOT_LIST, e, env, "Error body is not a list");
@@ -2230,7 +2230,7 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
           env->d = create_dict();
         set_get_keyval_dict(env->d, name->ptr,
                             val); /* return value (the kv) unused */
-        alcove_global_gen++;
+        GEN_BUMP();
       }
 
       else
@@ -2377,7 +2377,7 @@ exp_t *forgetcmd(exp_t *e, env_t *env) {
   while (cur->root) cur = cur->root;
   if (cur->d) {
     del_keyval_dict(cur->d, tmpkey->ptr);
-    alcove_global_gen++;
+    GEN_BUMP();
   }
   unrefexp(tmpkey);
   return NIL_EXP;
@@ -2476,7 +2476,7 @@ int loaddb_from_file_path(env_t *env, const char *path) {
     n++;
   }
   fclose(stream);
-  alcove_global_gen++; /* invalidate gcache */
+  GEN_BUMP(); /* invalidate gcache */
   return n;
 }
 

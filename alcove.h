@@ -82,9 +82,17 @@ enum {
 #if ALCOVE_SINGLE_THREADED
 #define REFCOUNT_INC(p) (++(*(p)))
 #define REFCOUNT_DEC(p) (--(*(p)))
+/* alcove_global_gen bumps invalidate every gcache reader: the bump must
+   happen-before any subsequent dict mutation a reader could observe.
+   Mono build: plain ++ is fine (single thread, single happens-before). */
+#define GEN_BUMP() (++alcove_global_gen)
 #else
 #define REFCOUNT_INC(p) __sync_add_and_fetch((p), 1)
 #define REFCOUNT_DEC(p) __sync_sub_and_fetch((p), 1)
+/* Multi-thread build: __sync_add_and_fetch is a full barrier, so any
+   gcache reader on another thread that loads the new gen is guaranteed
+   to see the dict write that follows the bump. */
+#define GEN_BUMP() __sync_add_and_fetch(&alcove_global_gen, 1)
 #endif
 
 enum {
