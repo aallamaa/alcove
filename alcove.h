@@ -431,7 +431,7 @@ unsigned int bernstein_uhash(unsigned char *key, int len);
 keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val);
 exp_t *set_keyval_dict_timestamp(dict_t *d, char *key, int64_t timestamp);
 int64_t get_keyval_dict_timestamp(dict_t *d, char *key);
-void *del_keyval_dict(dict_t *d, char *key);
+int del_keyval_dict(dict_t *d, char *key);
 
 /* lisp */
 exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...);

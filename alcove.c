@@ -700,7 +700,10 @@ int dump_dict(dict_t *d, FILE *stream) {
       while (ckv) {
         pkv = ckv;
         ckv = pkv->next;
-        if (pkv->timestamp) {
+        if (pkv->timestamp > 0) {
+          /* timestamp encoding: 0 = neutral, > 0 = persist mark
+             (gettimeusec() of mark time, only nonzeroness matters here),
+             < 0 = absolute-µs expire-at (RESP TTLs, never persisted). */
           if (verbose) {
             printf("saving %s : ", (char *)pkv->key);
             print_node(pkv->val);
@@ -815,7 +818,8 @@ int64_t get_keyval_dict_timestamp(dict_t *d, char *key) {
   return 0;
 }
 
-void *del_keyval_dict(dict_t *d, char *key) {
+/* Returns 1 if a matching entry was removed, 0 otherwise. */
+int del_keyval_dict(dict_t *d, char *key) {
   unsigned int h = bernstein_hash((unsigned char *)key, strlen(key));
   keyval_t *p = NULL;
   keyval_t *k;
@@ -834,12 +838,11 @@ void *del_keyval_dict(dict_t *d, char *key) {
         else
           d->ht[0].table[h & (d->ht[0].sizemask)] = k->next;
         free(k);
-        return NULL;
-      } else
-        return NULL;
+        return 1;
+      }
     }
   }
-  return NULL;
+  return 0;
 }
 
 // see page 25 concept of "liaison immuable" et liaison "muable"
@@ -2386,7 +2389,9 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
     return tmpkey;
   ret = get_keyval_dict_timestamp(env->d, tmpkey->ptr);
   unrefexp(tmpkey);
-  if (ret) {
+  /* Only positive timestamps are persist marks. Negative values encode
+     RESP TTL (absolute-µs expire-at) and must NOT report as persistent. */
+  if (ret > 0) {
     return TRUE_EXP;
   } else {
     return NIL_EXP;
