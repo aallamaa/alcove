@@ -6091,6 +6091,23 @@ static uint32_t arm64_tbz(int rt, int bit, int off_insns) {
   return 0x36000000u | (b5 << 31) | (b40 << 19) |
          (((uint32_t)off_insns & 0x3FFFu) << 5) | (uint32_t)(rt & 0x1f);
 }
+#if !ALCOVE_SINGLE_THREADED
+/* TBNZ Xt, #bit, label — branch if bit is non-zero. Used by the
+   FLAG_SHARED gate that guards inline JIT refops. */
+static uint32_t arm64_tbnz(int rt, int bit, int off_insns) {
+  arm64_check_off(off_insns, 14, "TBNZ");
+  uint32_t b40 = (uint32_t)(bit & 0x1f);
+  uint32_t b5 = (bit & 0x20) ? 1u : 0u;
+  return 0x37000000u | (b5 << 31) | (b40 << 19) |
+         (((uint32_t)off_insns & 0x3FFFu) << 5) | (uint32_t)(rt & 0x1f);
+}
+/* LDRB Wt, [Xn, #imm] — unsigned byte load (zero-extended). Used to
+   read the low byte of exp_t.flags for the FLAG_SHARED check. */
+static uint32_t arm64_ldrb_imm(int rt, int rn, int byte_offset) {
+  return 0x39400000u | (((uint32_t)byte_offset & 0xFFFu) << 10) |
+         ((uint32_t)(rn & 0x1f) << 5) | (uint32_t)(rt & 0x1f);
+}
+#endif /* !ALCOVE_SINGLE_THREADED */
 /* MOV Xd, Xm  — alias for ORR Xd, XZR, Xm. */
 static uint32_t arm64_mov_reg(int rd, int rm) {
   return 0xAA0003E0u | ((uint32_t)rm << 16) | (uint32_t)rd;
@@ -6792,6 +6809,11 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   int off_nref = (int)offsetof(struct exp_t, nref);
   if (off_acc > 32760 || off_i > 32760 ||
       off_cont > 32760 || off_next > 32760 || off_nref > 16380) return 0;
+#if !ALCOVE_SINGLE_THREADED
+  int off_flags = (int)offsetof(struct exp_t, flags);
+  if (off_flags > 4095) return 0; /* LDRB unsigned-offset limit */
+  int patch_shared_ref = -1, patch_shared_unref = -1;
+#endif
 
   int n = 0;
   int entry_pc = n;
@@ -6825,6 +6847,12 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_skip_ref_b = n; out[n++] = 0;
   out[n++] = arm64_cmp_reg(4, 10);
   int patch_skip_ref_c = n; out[n++] = 0;
+#if !ALCOVE_SINGLE_THREADED
+  /* Deopt to bytecode if the cdr target is FLAG_SHARED — the bytecode
+     interp uses atomic refcount macros, the JIT inlines plain ldr/str. */
+  out[n++] = arm64_ldrb_imm(7, 4, off_flags);
+  patch_shared_ref = n; out[n++] = 0;       /* tbnz w7, #3, deopt */
+#endif
   out[n++] = arm64_ldr_w_imm(6, 4, off_nref);
   out[n++] = arm64_add_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 4, off_nref);
@@ -6835,6 +6863,10 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_skip_unref_b = n; out[n++] = 0;
   out[n++] = arm64_cmp_reg(1, 10);
   int patch_skip_unref_c = n; out[n++] = 0;
+#if !ALCOVE_SINGLE_THREADED
+  out[n++] = arm64_ldrb_imm(7, 1, off_flags);
+  patch_shared_unref = n; out[n++] = 0;     /* tbnz w7, #3, deopt */
+#endif
   out[n++] = arm64_ldr_w_imm(6, 1, off_nref);
   out[n++] = arm64_sub_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 1, off_nref);
@@ -6872,6 +6904,10 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
   out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+#if !ALCOVE_SINGLE_THREADED
+  out[patch_shared_ref]   = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
+  out[patch_shared_unref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_unref);
+#endif
 
   if (n > 96) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
@@ -6958,6 +6994,11 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   int off_nref = (int)offsetof(struct exp_t, nref);
   if (off_c > 32760 || off_qs > 32760 || off_off > 32760 ||
       off_cont > 32760 || off_next > 32760 || off_nref > 16380) return 0;
+#if !ALCOVE_SINGLE_THREADED
+  int off_flags = (int)offsetof(struct exp_t, flags);
+  if (off_flags > 4095) return 0; /* LDRB unsigned-offset limit */
+  int patch_shared_ref = -1, patch_shared_unref = -1;
+#endif
 
   int n = 0;
   int entry_pc = n;
@@ -7006,6 +7047,13 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_skip_ref_b = n; out[n++] = 0;  /* b.eq skip_ref */
   out[n++] = arm64_cmp_reg(5, 10);
   int patch_skip_ref_c = n; out[n++] = 0;  /* b.eq skip_ref */
+#if !ALCOVE_SINGLE_THREADED
+  /* If the target is FLAG_SHARED, deopt to bytecode (which uses atomic
+     refcount macros). Reads the low byte of flags — FLAG_SHARED=8 lives
+     in bit 3, well within the byte. */
+  out[n++] = arm64_ldrb_imm(7, 5, off_flags);
+  patch_shared_ref = n; out[n++] = 0;       /* tbnz w7, #3, deopt */
+#endif
   out[n++] = arm64_ldr_w_imm(6, 5, off_nref);
   out[n++] = arm64_add_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 5, off_nref);
@@ -7017,6 +7065,10 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_skip_unref_b = n; out[n++] = 0;
   out[n++] = arm64_cmp_reg(1, 10);
   int patch_skip_unref_c = n; out[n++] = 0;
+#if !ALCOVE_SINGLE_THREADED
+  out[n++] = arm64_ldrb_imm(7, 1, off_flags);
+  patch_shared_unref = n; out[n++] = 0;     /* tbnz w7, #3, deopt */
+#endif
   out[n++] = arm64_ldr_w_imm(6, 1, off_nref);
   out[n++] = arm64_sub_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 1, off_nref);
@@ -7065,6 +7117,10 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
   out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+#if !ALCOVE_SINGLE_THREADED
+  out[patch_shared_ref]   = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
+  out[patch_shared_unref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_unref);
+#endif
 
   /* Suppress unused-on-some-paths warnings. */
   (void)arm64_cbnz; (void)arm64_cmp_reg_w;
@@ -8867,6 +8923,11 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   int32_t off_nref = (int32_t)offsetof(struct exp_t, nref);
   uint64_t nil_addr = (uint64_t)(uintptr_t)nil_singleton;
   uint64_t true_addr = (uint64_t)(uintptr_t)true_singleton;
+#if !ALCOVE_SINGLE_THREADED
+  int32_t off_flags = (int32_t)offsetof(struct exp_t, flags);
+  if (off_flags > 127) return 0; /* keep disp8 encoding */
+  int jnz_shared_ref = -1, jnz_shared_unref = -1;
+#endif
 
   int n = 0;
 
@@ -8952,6 +9013,16 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RCX & 7));
   int je_skip_ref2 = n;
   n += x64_jcc_rel32(buf + n, 0x04, 0);
+#if !ALCOVE_SINGLE_THREADED
+  /* test byte [rcx + off_flags], FLAG_SHARED — deopt if set so the
+     bytecode interp's atomic refcount macros run instead. */
+  buf[n++] = 0xF6;
+  buf[n++] = (uint8_t)(0x40 | (X64_RCX & 7));
+  buf[n++] = (uint8_t)off_flags;
+  buf[n++] = (uint8_t)FLAG_SHARED;
+  jnz_shared_ref = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0); /* JNZ */
+#endif
   buf[n++] = 0x83;
   buf[n++] = (uint8_t)(0x40 | (X64_RCX & 7));
   buf[n++] = (uint8_t)off_nref;
@@ -8974,6 +9045,14 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RAX & 7));
   int je_skip_unref2 = n;
   n += x64_jcc_rel32(buf + n, 0x04, 0);
+#if !ALCOVE_SINGLE_THREADED
+  buf[n++] = 0xF6;
+  buf[n++] = (uint8_t)(0x40 | (X64_RAX & 7));
+  buf[n++] = (uint8_t)off_flags;
+  buf[n++] = (uint8_t)FLAG_SHARED;
+  jnz_shared_unref = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0); /* JNZ */
+#endif
   buf[n++] = 0x83;
   buf[n++] = (uint8_t)(0x68 | (X64_RAX & 7));
   buf[n++] = (uint8_t)off_nref;
@@ -9027,6 +9106,10 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, je_skip_unref, 6, skip_unref_pc);
   x64_patch_rel32(buf, je_skip_unref2, 6, skip_unref_pc);
   x64_patch_rel32(buf, jz_to_deopt, 6, deopt_pc);
+#if !ALCOVE_SINGLE_THREADED
+  x64_patch_rel32(buf, jnz_shared_ref, 6, deopt_pc);
+  x64_patch_rel32(buf, jnz_shared_unref, 6, deopt_pc);
+#endif
 
   if (n > 480) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;
@@ -9116,6 +9199,11 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   int32_t off_nref = (int32_t)offsetof(struct exp_t, nref);
   uint64_t nil_addr = (uint64_t)(uintptr_t)nil_singleton;
   uint64_t true_addr = (uint64_t)(uintptr_t)true_singleton;
+#if !ALCOVE_SINGLE_THREADED
+  int32_t off_flags = (int32_t)offsetof(struct exp_t, flags);
+  if (off_flags > 127) return 0; /* keep disp8 encoding */
+  int jnz_shared_ref = -1, jnz_shared_unref = -1;
+#endif
 
   int n = 0;
 
@@ -9178,6 +9266,16 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RCX & 7));
   int je_skip_ref2 = n;
   n += x64_jcc_rel32(buf + n, 0x04, 0);
+#if !ALCOVE_SINGLE_THREADED
+  /* test byte [rcx + off_flags], FLAG_SHARED — deopt to bytecode (which
+     uses atomic refcount macros) for any shared exp. */
+  buf[n++] = 0xF6;
+  buf[n++] = (uint8_t)(0x40 | (X64_RCX & 7));
+  buf[n++] = (uint8_t)off_flags;
+  buf[n++] = (uint8_t)FLAG_SHARED;
+  jnz_shared_ref = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0); /* JNZ */
+#endif
   /* add dword [rcx + off_nref], 1 */
   buf[n++] = 0x83;
   buf[n++] = (uint8_t)(0x40 | (X64_RCX & 7));
@@ -9201,6 +9299,14 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   buf[n++] = (uint8_t)(0xC0 | ((X64_RDX & 7) << 3) | (X64_RAX & 7));
   int je_skip_unref2 = n;
   n += x64_jcc_rel32(buf + n, 0x04, 0);
+#if !ALCOVE_SINGLE_THREADED
+  buf[n++] = 0xF6;
+  buf[n++] = (uint8_t)(0x40 | (X64_RAX & 7));
+  buf[n++] = (uint8_t)off_flags;
+  buf[n++] = (uint8_t)FLAG_SHARED;
+  jnz_shared_unref = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0); /* JNZ */
+#endif
   /* sub dword [rax + off_nref], 1 — sets ZF if result is zero. */
   buf[n++] = 0x83;
   buf[n++] = (uint8_t)(0x68 | (X64_RAX & 7));
@@ -9245,6 +9351,10 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, je_skip_unref, 6, skip_unref_pc);
   x64_patch_rel32(buf, je_skip_unref2, 6, skip_unref_pc);
   x64_patch_rel32(buf, jz_to_deopt, 6, deopt_pc);
+#if !ALCOVE_SINGLE_THREADED
+  x64_patch_rel32(buf, jnz_shared_ref, 6, deopt_pc);
+  x64_patch_rel32(buf, jnz_shared_unref, 6, deopt_pc);
+#endif
 
   if (n > 480) return 0;  /* JIT buffer guard (was assert) */
   *outn = n;

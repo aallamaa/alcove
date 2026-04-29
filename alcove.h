@@ -149,6 +149,13 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
 /* Lambda body has been compiled to bytecode. invoke() runs the VM
    dispatch loop instead of the AST walker. e->bc points to a bytecode_t. */
 #define FLAG_COMPILED 4
+/* This exp is reachable from more than one shard (e.g., it lives in the
+   global env, or was promoted-to-shared by a write barrier). The C
+   refcount macros are atomic regardless, but the JIT inlines plain
+   load/add/store on nref for speed — JIT'd code MUST test this bit
+   before any inline refop and deopt to the bytecode interpreter when
+   set, so the atomic macros run instead. Cleared on fresh exps. */
+#define FLAG_SHARED 8
 
 struct bytecode_t;
 
