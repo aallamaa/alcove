@@ -61,7 +61,7 @@ struct env_t *g_global_env = NULL;
    invoke, giving us O(1) C stack for tail-recursive code. __thread:
    each evaluator stack belongs to its own thread; the tail flag is
    strictly call-site reentrant state. */
-static __thread int in_tail_position = 0;
+static ALCOVE_TLS int in_tail_position = 0;
 
 /* Builtin registration. `arity` and `level` are reserved fields (the
    first for future per-call arity checks, the second for sandbox tiers);
@@ -390,7 +390,7 @@ inline exp_t *refexp(exp_t *e) {
    unrefexp recursively releases the original next before this point.
    __thread: per-shard worker, no cross-thread alloc traffic. On a
    single-threaded run the TLS slot collapses to one backing copy. */
-static __thread exp_t *exp_freelist = NULL;
+static ALCOVE_TLS exp_t *exp_freelist = NULL;
 
 /* Bump-allocator for fresh exp_t when the free-list is empty. calloc(1,
    sizeof exp_t) is ~50ns per call; chunk-allocating 256 at a time
@@ -399,8 +399,8 @@ static __thread exp_t *exp_freelist = NULL;
    model (the interpreter exits and the OS reclaims). __thread paired
    with the freelist above so each worker bumps from its own arena. */
 #define EXP_BUMP_CHUNK 256
-static __thread exp_t *exp_bump_next = NULL;
-static __thread int exp_bump_left = 0;
+static ALCOVE_TLS exp_t *exp_bump_next = NULL;
+static ALCOVE_TLS int exp_bump_left = 0;
 
 /* Iterative over e->next; recurses for e->content and vector/list elements. */
 inline int unrefexp(exp_t *e) {
@@ -505,7 +505,7 @@ shard_t main_shard = {
 /* Initial value &main_shard is a constant expression, so the TLS
    initializer is well-formed. Spawned workers overwrite this when they
    start. */
-__thread shard_t *current_shard = &main_shard;
+ALCOVE_TLS shard_t *current_shard = &main_shard;
 
 /* Bumped on every operation that mutates a global binding (def, defmacro,
    persist, forget, savedb, top-level updatebang). The bytecode global-
@@ -1204,7 +1204,7 @@ size_t dumpsize_t(FILE *stream, size_t *len) {
 #define ALCOVE_LOAD_MAX_DEPTH 16384
 /* __thread: depth is caller-local — a worker loading a dump shouldn't
    trip another worker's guard. */
-static __thread int alcove_load_depth = 0;
+static ALCOVE_TLS int alcove_load_depth = 0;
 
 exp_t *load_exp_t(FILE *stream) {
   exp_t *resp = make_nil();

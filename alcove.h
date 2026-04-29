@@ -86,6 +86,8 @@ enum {
    happen-before any subsequent dict mutation a reader could observe.
    Mono build: plain ++ is fine (single thread, single happens-before). */
 #define GEN_BUMP() (++alcove_global_gen)
+/* Mono build doesn't need TLS at all — the macro expands away. */
+#define ALCOVE_TLS
 #else
 #define REFCOUNT_INC(p) __sync_add_and_fetch((p), 1)
 #define REFCOUNT_DEC(p) __sync_sub_and_fetch((p), 1)
@@ -93,6 +95,19 @@ enum {
    gcache reader on another thread that loads the new gen is guaranteed
    to see the dict write that follows the bump. */
 #define GEN_BUMP() __sync_add_and_fetch(&alcove_global_gen, 1)
+/* TLS storage class for hot per-thread variables (exp_freelist, the
+   bump pointers, current_shard, ...). The "initial-exec" model emits
+   a single mrs+ldr on arm64 and a single %fs:offset load on x86_64,
+   avoiding the __tls_get_addr indirect call that the default
+   "global-dynamic" model uses. We can use it because alcove is always
+   built as a single executable (no dlopen of TLS variables from
+   plugins). The "initial-exec" attribute is a clang/gcc extension;
+   wrap it in __has_attribute so older compilers fall back gracefully. */
+#if defined(__has_attribute) && __has_attribute(tls_model)
+#define ALCOVE_TLS __thread __attribute__((tls_model("initial-exec")))
+#else
+#define ALCOVE_TLS __thread
+#endif
 #endif
 
 enum {
@@ -427,7 +442,7 @@ typedef struct shard_t {
   env_t *arena_end; /* arena + ENV_ARENA_SLOTS */
 } shard_t;
 extern shard_t main_shard;
-extern __thread shard_t *current_shard;
+extern ALCOVE_TLS shard_t *current_shard;
 /* Hot loops (make_env / destroy_env) cache `current_shard` once and
    inline the bounds check `env >= sh->arena && env < sh->arena_end` —
    the per-iteration TLS reload was a measurable hit on env-heavy
