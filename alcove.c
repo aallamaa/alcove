@@ -480,9 +480,9 @@ inline int unrefexp(exp_t *e) {
    captured env is an arena slot AND the lambda outlives its caller,
    destroy_env's REFCOUNT_DEC stays > 0 and the bump-pointer rollback
    at line below is SKIPPED — the slot remains live but is no longer
-   on top of env_arena_sp. Subsequent make_env calls hand out arena
-   slots above it; the captured env is never reused. The only cost is
-   that the bump allocator can fragment under heavy closure use.
+   on top of the shard's arena_sp. Subsequent make_env calls hand out
+   arena slots above it; the captured env is never reused. The only
+   cost is that the bump allocator can fragment under heavy closure use.
 
    What is NOT safe: assuming arena slots strictly map to nesting
    depth, or recovering an "earlier" arena slot once it's been ref'd.
@@ -492,10 +492,20 @@ inline int unrefexp(exp_t *e) {
    Falls back to malloc() if the arena ever overflows (deep recursion
    beyond ENV_ARENA_SLOTS). */
 
-#define ENV_ARENA_SLOTS 8192
-static env_t env_arena[ENV_ARENA_SLOTS];
-static env_t *env_arena_sp = env_arena;
-static env_t *const env_arena_end = env_arena + ENV_ARENA_SLOTS;
+/* Storage for the main shard's arena. The shard struct holds pointers
+   into this array; spawning workers later will allocate their own
+   arenas (heap or static-per-worker) and point their shard_t at them.
+   ENV_ARENA_SLOTS is defined alongside shard_t in alcove.h. */
+static env_t main_shard_arena[ENV_ARENA_SLOTS];
+shard_t main_shard = {
+    .arena = main_shard_arena,
+    .arena_sp = main_shard_arena,
+    .arena_end = main_shard_arena + ENV_ARENA_SLOTS,
+};
+/* Initial value &main_shard is a constant expression, so the TLS
+   initializer is well-formed. Spawned workers overwrite this when they
+   start. */
+__thread shard_t *current_shard = &main_shard;
 
 /* Bumped on every operation that mutates a global binding (def, defmacro,
    persist, forget, savedb, top-level updatebang). The bytecode global-
@@ -503,8 +513,6 @@ static env_t *const env_arena_end = env_arena + ENV_ARENA_SLOTS;
    stale entries. Starts at 1 so a fresh gcache_entry{val=NULL,gen=0} is
    trivially stale. */
 uint64_t alcove_global_gen = 1;
-
-#define IS_ARENA_ENV(e) ((e) >= env_arena && (e) < env_arena_end)
 
 inline env_t *ref_env(env_t *env) {
   if (env) {
@@ -521,8 +529,9 @@ inline env_t *make_env(env_t *rootenv) {
      Heap-fallback slots come from memalloc which calloc's. Saves a
      ~128-byte store per call — the biggest per-call cost on fib. */
   env_t *newenv;
-  if (env_arena_sp < env_arena_end) {
-    newenv = env_arena_sp++;
+  shard_t *sh = current_shard;
+  if (sh->arena_sp < sh->arena_end) {
+    newenv = sh->arena_sp++;
   } else {
     newenv = memalloc(1, sizeof(env_t));
   }
@@ -535,7 +544,10 @@ inline void *destroy_env(env_t *env) {
   /* Iterative release — each env holds a ref to its parent via
      make_env/ref_env. Recursing would blow the C stack on deep call chains.
      Also scrubs the fields that would carry stale state into a reused
-     arena slot, so make_env can skip the wholesale memset. */
+     arena slot, so make_env can skip the wholesale memset.
+     Cache the shard pointer once: TLS reads on each loop iteration
+     showed up as a measurable hit on nqueens-vec. */
+  shard_t *sh = current_shard;
   while (env) {
     env_t *parent = env->root;
     if (REFCOUNT_DEC(&env->nref) > 0)
@@ -553,12 +565,12 @@ inline void *destroy_env(env_t *env) {
        fields that would carry stale state into the slot's next tenant,
        so make_env can skip the wholesale memset.
        Heap-fallback envs return to free() — no scrub needed. */
-    if (IS_ARENA_ENV(env)) {
+    if (env >= sh->arena && env < sh->arena_end) {
       env->n_inline = 0;
       env->d = NULL;
       env->callingfnc = NULL;
-      if (env + 1 == env_arena_sp)
-        env_arena_sp = env;
+      if (env + 1 == sh->arena_sp)
+        sh->arena_sp = env;
     } else {
       free(env);
     }

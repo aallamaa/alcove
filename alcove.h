@@ -412,6 +412,29 @@ typedef struct env_t {
   exp_t *inline_vals[ENV_INLINE_SLOTS];
 } env_t;
 
+/* shard_t — bundle of per-worker runtime state. Today there is exactly
+   one shard (`main_shard`); the multithreaded reactor will spawn one
+   shard per worker, each with its own env_arena. Routing make_env /
+   destroy_env through `current_shard` (TLS) keeps allocators thread-
+   local and avoids contention on the bump pointer. Single-threaded
+   builds resolve `current_shard` to the same `main_shard` every time,
+   so the indirection is one extra TLS load per env op — well under
+   noise on the benchmark suite. */
+#define ENV_ARENA_SLOTS 8192
+typedef struct shard_t {
+  env_t *arena;     /* base of arena array (pointer to static storage) */
+  env_t *arena_sp;  /* bump pointer; LIFO rolled back on destroy */
+  env_t *arena_end; /* arena + ENV_ARENA_SLOTS */
+} shard_t;
+extern shard_t main_shard;
+extern __thread shard_t *current_shard;
+/* Hot loops (make_env / destroy_env) cache `current_shard` once and
+   inline the bounds check `env >= sh->arena && env < sh->arena_end` —
+   the per-iteration TLS reload was a measurable hit on env-heavy
+   benchmarks. Cold-path callers can use this macro. */
+#define IS_ARENA_ENV(e) \
+  ((e) >= current_shard->arena && (e) < current_shard->arena_end)
+
 typedef struct lispProc {
   char *name;
   int arity;          /* reserved — not yet enforced. -1 = variadic. */
