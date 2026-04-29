@@ -176,6 +176,20 @@ static void resp_db_evict_expired(void) {
   }
 }
 
+/* Throttled background sweep — called from the reactor's top-of-loop
+   so write-then-never-read TTL'd keys can't pile up unboundedly. The
+   1s interval matches the reactor's select() timeout, so an idle
+   server still ticks the sweep at the same cadence. */
+#define RESP_SWEEP_INTERVAL_US 1000000
+static int64_t resp_last_sweep_us = 0;
+static void resp_db_maybe_sweep(void) {
+  if (!resp_db) return;
+  int64_t now = resp_now_us();
+  if (now - resp_last_sweep_us < RESP_SWEEP_INTERVAL_US) return;
+  resp_last_sweep_us = now;
+  resp_db_evict_expired();
+}
+
 /* ---------- per-key dict helpers (Redis hash internals) ----------
    A Redis hash is an EXP_DICT whose dict_t holds field→EXP_BLOB. */
 
@@ -1418,6 +1432,7 @@ int resp_serve(int port) {
   fflush(stdout);
 
   while (!resp_stop) {
+    resp_db_maybe_sweep();
     fd_set rfds, wfds;
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
@@ -1656,6 +1671,7 @@ int resp_repl_serve(int port, env_t *global) {
   int prompted = 0;
 
   while (!resp_stop) {
+    resp_db_maybe_sweep();
     if (!prompted) {
       printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx + 1);
       fflush(stdout);

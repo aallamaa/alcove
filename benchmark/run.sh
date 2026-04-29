@@ -2,7 +2,7 @@
 # alcove vs python3 micro-benchmarks
 # Usage: ./benchmark/run.sh   (or: make benchmark)
 #
-# Reports best-of-5 wall-clock for each benchmark, plus median-of-20 startup,
+# Reports best-of-15 wall-clock for each benchmark, plus median-of-20 startup,
 # plus a summary table with computed "net" (total minus startup) and slowdown.
 
 set -u
@@ -35,9 +35,9 @@ printf "  python3  %5d ms\n\n" "$STARTUP_PY"
 # the four benchmarks (best of 5)
 declare -a ROWS
 for prog in fib fact forsum countdown ackermann listsum sieve sieve-fast nqueens nqueens-vec tak; do
-  echo "=== $prog (best of 5) ==="
-  A=$(best_of 5 "$ALCOVE"  "$prog.alc")
-  P=$(best_of 5 "$PYTHON"  "$prog.py")
+  echo "=== $prog (best of 15) ==="
+  A=$(best_of 15 "$ALCOVE"  "$prog.alc")
+  P=$(best_of 15 "$PYTHON"  "$prog.py")
   printf "  alcove   %5d ms\n"   "$A"
   printf "  python3  %5d ms\n"   "$P"
   ROWS+=( "$prog $A $P" )

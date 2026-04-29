@@ -20,8 +20,8 @@ cd benchmark
 printf "%-22s %10s %10s %10s %10s\n" benchmark "mt(ms)" "st(ms)" "st/mt" "Δ"
 printf -- '-%.0s' {1..68}; echo
 for prog in fib fact forsum countdown; do
-  MT=$(best_of 5 "$(pwd)/bin/alcove-mt" "$prog.alc")
-  ST=$(best_of 5 "$(pwd)/bin/alcove-st" "$prog.alc")
+  MT=$(best_of 15 "$(pwd)/bin/alcove-mt" "$prog.alc")
+  ST=$(best_of 15 "$(pwd)/bin/alcove-st" "$prog.alc")
   RATIO=$("$PYTHON" -c "print(f'{$ST/$MT:.2f}x')" 2>/dev/null || echo "-")
   DELTA_MS=$((ST - MT))
   DELTA_PCT=$("$PYTHON" -c "print(f'{($ST-$MT)*100/$MT:+.1f}%')" 2>/dev/null || echo "-")
