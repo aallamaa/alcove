@@ -16,3 +16,8 @@ db.dump
 
 # FFI example .so (built from .c on demand).
 ffi-examples/libmylib.so
+
+# MPSC primitive standalone test binaries (Step 2.1).
+mpsc_test
+mpsc_test_tsan
+mpsc_test_tsan.dSYM/

@@ -168,7 +168,20 @@ benchmark-jit: jit-mono
 # Rebuild both variants and compare numbers side-by-side.
 benchmark-compare:
 	@./benchmark/compare.sh
-clean:
-	rm -f alcove
+# MPSC primitive (mpsc.h) torture test — Step 2.1 of the multithreading
+# rollout. Builds standalone, no alcove dependency.
+mpsc-test:
+	$(CC) -O2 -Wall -W -pthread -o mpsc_test mpsc_test.c
+	./mpsc_test
+# Same test under ThreadSanitizer. Catches data races the plain build
+# can hide. Slower (~10x) and needs Apple Clang's libclang_rt or gcc's
+# libtsan installed; skip silently if it can't link.
+mpsc-test-tsan:
+	$(CC) -O1 -g -Wall -W -pthread -fsanitize=thread -o mpsc_test_tsan mpsc_test.c \
+	  && ./mpsc_test_tsan \
+	  || echo "tsan unavailable on this toolchain — skipping"
 
-.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mono benchmark-jit benchmark-compare clean
+clean:
+	rm -f alcove mpsc_test mpsc_test_tsan
+
+.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan clean
