@@ -483,3 +483,100 @@ After (1–5), the codebase compiles to a binary that's still single-shard
 but has zero non-shard global mutable state outside the `g_global_env`
 rwlock + `alcove_global_gen` atomic. That's the precondition for Step 1's
 shard scaffold.
+
+### Step 1 status (2026-04-29)
+
+Punch list above is complete:
+
+| # | What                                            | Commit     |
+| - | ----------------------------------------------- | ---------- |
+| 1 | `exp_freelist` + `exp_bump_*` → `__thread`      | `e44fc5e`  |
+| 2 | `in_tail_position` + `alcove_load_depth` → TLS  | `31e924c`  |
+| 3 | `GEN_BUMP()` macro + atomicize 6 sites          | `4cafcfb`  |
+| 4 | `shard_t { arena, arena_sp, arena_end }`        | `eee0f51`  |
+| 5 | `g_ffi_libs_mtx` mutex around list mutation     | `8d4a76f`  |
+|   | JIT flag-gated deopt for `FLAG_SHARED` exps     | `68fe268`  |
+
+Single-shard binary; mono build is byte-equivalent to pre-Step-1 fast
+paths (TLS storage class collapses to one backing slot; macros expand
+to plain `++`/`--`). Multi-thread build adds one TLS-base load on env
+ops (cached at function entry), six full-barrier increments on
+global-binding mutations, and one mutex around FFI dlopen — all
+contention-free at N=1.
+
+## Step 2 — sharded reactor scaffold
+
+**Goal**: introduce N worker pthreads, each running its own RESP
+reactor on its own shard. N=1 first (main thread becomes shard 0;
+behavior identical to today). Then accept-and-route. Then N>1.
+
+### Snapshot strategy: fork-and-write (BGSAVE-style)
+
+`savedb` today is synchronous: it walks the global dict and writes
+`db.dump`, blocking the only thread. Under the sharded reactor this
+breaks two ways: (a) the writer would have to gather across shards;
+(b) blocking the worker stalls every connection homed on that shard.
+
+**Decision**: adopt Redis's BGSAVE pattern. The coordinator `fork()`s,
+the child gets a COW snapshot of every shard's dict, and the child
+iterates + writes the dump while the parents keeps serving. The
+parent's pre-existing synchronous `(savedb)` becomes the fallback for
+small dumps and tests; the new `(bgsave)` becomes the default for
+production and any `--db` auto-save.
+
+Why this works for our design:
+- Per-shard dicts have no mutex (single-writer invariant) — a COW
+  snapshot is consistent without coordination.
+- The only mutex in the system is `g_ffi_libs_mtx`. The child never
+  calls FFI; even if a worker held that mutex at fork time, the child
+  is unaffected.
+- Refcounts: the child sees post-fork copies; it `unrefexp`s nothing,
+  it only reads. No double-free risk.
+- TLS state: the child inherits only the calling thread, with that
+  thread's freelist + arena. Child doesn't allocate exps either.
+
+Constraints the child must obey:
+- **No Lisp eval, no FFI, no allocator-heavy work.** Only read
+  exp_t/dict_t graphs and write to a file. This is by-construction
+  for the dump format; we just need to keep it that way.
+- **Exit via `_exit(2)`, not `exit(3)`.** Skips atexit hooks and
+  `fclose` on shared FDs the parent still owns.
+- **Write to a tempfile + `rename(2)`** so a partial write never
+  replaces a good dump.
+
+Coordinator side:
+- Parent issues `(bgsave)` → fork. On error, parent reports.
+- Child writes `db.dump.tmp.<pid>` then `rename` and `_exit(0)`.
+- Parent `waitpid(WNOHANG)` in the reactor loop; on success, log; on
+  non-zero exit, log + keep old dump.
+- Concurrent `(bgsave)` calls: parent rejects if child already
+  running. Single in-flight snapshot.
+
+Risks accepted: the brief fork latency proportional to RSS (Linux
+~1ms per GB; macOS slower under recent kernels). At alcove's typical
+sizes (<100MB) the fork itself is sub-millisecond.
+
+### Step 2 punch list
+
+In commit-sized chunks:
+
+1. **MPSC queue primitive.** Header-only, lock-free single-consumer
+   /multi-producer queue (Vyukov's intrusive design). Eventfd-backed
+   wake-up. Stand-alone unit test before any wiring.
+2. **`shard_main` skeleton.** A pthread entrypoint that: binds
+   `current_shard` to its argument; runs the existing `resp_serve`
+   inner loop; pumps its inbox between iterations. N=1: main thread
+   wraps `shard_main(&main_shard)` directly — no new thread spawned
+   yet. Behavior identical.
+3. **Acceptor split.** A separate thread (or the main thread) does
+   `accept()` and routes new fds to shard 0's inbox. Still N=1.
+4. **N=2.** Spawn shards[1]; route by `bernstein_hash(argv[1]) & 1`.
+   Cross-shard routing for keyless commands (PING, FLUSHDB) deferred.
+5. **Cross-shard ops.** Broadcast/aggregate for KEYS, FLUSHDB, DBSIZE.
+   MGET fan-out, gather-respond.
+6. **`(bgsave)`.** Fork-and-write child; parent waitpid loop. Fall
+   back to synchronous `(savedb)` semantics for compat.
+7. **Benchmark gate.** N=4 must be ≥ 3× N=1 on
+   `redis-benchmark -t SET,GET -r 100000 -P 64`. If not, revisit.
+
+Each step is bisectable + benchmarkable on its own.
