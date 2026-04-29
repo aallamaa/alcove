@@ -12227,14 +12227,30 @@ l_sqrt_int: {
   NEXT;
 }
 l_length: {
-  /* (length list) — walk the cons chain, return tagged count.
-     NULL or nil_singleton both count as length 0 (empty list). */
+  /* (length x) — must mirror lengthcmd's semantics or compiled bodies
+     silently miscompile string/vector/blob/list args to 0. NULL and
+     nil_singleton are length 0 (empty list). */
   exp_t *xs = POP();
   int64_t n = 0;
-  exp_t *cur = xs;
-  while (is_ptr(cur) && cur->type == EXP_PAIR && cur != nil_singleton) {
-    n++;
-    cur = cur->next;
+  if (xs == NULL || xs == nil_singleton) {
+    n = 0;
+  } else if (isstring(xs)) {
+    n = xs->ptr ? (int64_t)strlen((char *)xs->ptr) : 0;
+  } else if (ispair(xs)) {
+    exp_t *cur = xs;
+    while (is_ptr(cur) && cur->type == EXP_PAIR) {
+      n++;
+      cur = cur->next;
+    }
+  } else if (is_ptr(xs) && xs->type == EXP_VECTOR && xs->ptr) {
+    n = (int64_t)((alc_vec_t *)xs->ptr)->len;
+  } else if (isblob(xs)) {
+    n = xs->ptr ? (int64_t)((alc_blob_t *)xs->ptr)->len : 0;
+  } else if (islist(xs)) {
+    n = xs->ptr ? (int64_t)((alc_list_t *)xs->ptr)->len : 0;
+  } else {
+    unrefexp(xs);
+    RUNTIME_ERR("length: not a list/string/vector/blob");
   }
   unrefexp(xs);
   PUSH(MAKE_FIX(n));

@@ -431,6 +431,13 @@
 (assert "length empty"                (length nil)                   0)
 (assert "length 3"                    (length (list 1 2 3))          3)
 (assert "length list w/ nil"          (length (list nil))            1)
+;; OP_LENGTH inside a compiled lambda body must mirror lengthcmd —
+;; pre-fix, anything other than a pair-list silently returned 0.
+(def lenof (x) (length x))
+(assert "length string in compiled body"  (lenof "abc")              3)
+(assert "length list in compiled body"    (lenof (list 1 2 3 4))     4)
+(assert "length nil in compiled body"     (lenof nil)                0)
+(assert "length vector in compiled body"  (lenof #[10 20 30])        3)
 (assert "nth 0"                       (nth 0 (list 'a 'b 'c))        'a)
 (assert "nth 2"                       (nth 2 (list 'a 'b 'c))        'c)
 (assert "nth out-of-range -> nil"     (nth 99 (list 'a 'b 'c))       nil)
