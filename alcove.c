@@ -540,25 +540,10 @@ void shard_runtime_destroy(shard_t *sh) {
   sh->runtime_ready = 0;
 }
 
-/* Reactor-side dispatch. Called once per wake. SHARD_MSG_NEW_CLIENT
-   handoff is a stub today — Step 2.3 wires it to resp_clients when
-   the acceptor thread starts producing. For now we just close the fd
-   so a stray producer can't leak it. */
-void shard_drain_inbox(shard_t *sh) {
-  if (sh->runtime_ready != 1) return;
-  for (;;) {
-    mpsc_node_t *n = mpsc_dequeue(&sh->inbox);
-    if (!n) break;
-    shard_msg_t *m = (shard_msg_t *)n;
-    switch (m->kind) {
-      case SHARD_MSG_NEW_CLIENT:
-        /* TODO Step 2.3: hand off to resp accept logic. */
-        if (m->arg.fd >= 0) close(m->arg.fd);
-        break;
-    }
-    free(m);
-  }
-}
+/* shard_drain_inbox lives in resp.c — message handlers need access to
+   resp_client_t / resp_clients, which are defined there. Keeping the
+   dispatcher next to its handlers means adding a new message kind only
+   touches one file. */
 
 /* Bumped on every operation that mutates a global binding (def, defmacro,
    persist, forget, savedb, top-level updatebang). The bytecode global-

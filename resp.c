@@ -1522,6 +1522,86 @@ static int resp_set_nonblock(int fd) {
   return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+#if !ALCOVE_SINGLE_THREADED
+/* ============================================================
+   Acceptor thread + cross-thread inbox dispatch (Step 2.3).
+   ============================================================
+   The acceptor sits in a dedicated pthread, blocking on accept()
+   over the listen socket. For each new connection it allocates a
+   shard_msg_t{SHARD_MSG_NEW_CLIENT, fd}, hands it off via the
+   target shard's mpsc inbox, and signals the shard's wake fd.
+   The reactor (still on main thread today) drains the inbox each
+   wake and splices new clients into resp_clients.
+
+   Why the split: takes the listen socket off the reactor's select
+   set so accept() never competes with client I/O for the
+   single-threaded reactor's attention. Step 2.4 will hash the new
+   fd to one of N shards instead of always handing to shard 0. */
+
+typedef struct {
+  int srv_fd;
+  shard_t *target; /* shard whose inbox/wake we publish to (always
+                      &main_shard while N=1) */
+} acceptor_ctx_t;
+
+static void *acceptor_main(void *vp) {
+  acceptor_ctx_t *ctx = vp;
+  for (;;) {
+    struct sockaddr_in peer;
+    socklen_t plen = sizeof peer;
+    int cfd = accept(ctx->srv_fd, (struct sockaddr *)&peer, &plen);
+    if (cfd < 0) {
+      if (errno == EINTR) continue;
+      /* EBADF / EINVAL / ENOTSOCK = listen fd was closed during
+         shutdown. ECONNABORTED is what macOS returns when
+         shutdown(srv, SHUT_RDWR) raced ahead of close() during
+         orderly teardown. All four mean "we're done"; anything else
+         is a real problem we surface and bail. */
+      if (errno == EBADF || errno == EINVAL ||
+          errno == ENOTSOCK || errno == ECONNABORTED) break;
+      perror("acceptor: accept");
+      break;
+    }
+    resp_set_nonblock(cfd);
+    shard_msg_t *m = calloc(1, sizeof *m);
+    if (!m) { close(cfd); continue; }
+    m->kind = SHARD_MSG_NEW_CLIENT;
+    m->arg.fd = cfd;
+    mpsc_enqueue(&ctx->target->inbox, &m->node);
+    alc_wake_signal(&ctx->target->wake);
+  }
+  return NULL;
+}
+
+/* Reactor-side dispatch. Called from inside the select loop after
+   the wake fd reads ready. Runs on the reactor thread, so direct
+   resp_clients mutation is safe. */
+void shard_drain_inbox(shard_t *sh) {
+  if (sh->runtime_ready != 1) return;
+  for (;;) {
+    mpsc_node_t *n = mpsc_dequeue(&sh->inbox);
+    if (!n) break;
+    shard_msg_t *m = (shard_msg_t *)n;
+    switch (m->kind) {
+      case SHARD_MSG_NEW_CLIENT: {
+        int cfd = m->arg.fd;
+        if (cfd < 0) break;
+        resp_client_t *cl = calloc(1, sizeof *cl);
+        if (!cl) { close(cfd); break; }
+        cl->fd = cfd;
+        cl->rcap = RESP_RBUF_INIT;
+        cl->rbuf = malloc(cl->rcap);
+        if (!cl->rbuf) { close(cfd); free(cl); break; }
+        cl->next = resp_clients;
+        resp_clients = cl;
+        break;
+      }
+    }
+    free(m);
+  }
+}
+#endif /* !ALCOVE_SINGLE_THREADED */
+
 /* Public entry — blocks until SIGINT/SIGTERM, then returns a process
    exit code. Called from main() when -r is on the command line. */
 int resp_serve(int port) {
@@ -1556,7 +1636,9 @@ int resp_serve(int port) {
     close(srv);
     return 1;
   }
-  resp_set_nonblock(srv);
+  /* srv stays BLOCKING — the acceptor thread blocks on accept(), the
+     reactor never touches it. Closing srv on shutdown unblocks the
+     accept() call (returns EBADF) so the acceptor can exit. */
   resp_active_port = port;
   resp_cmd_table_init();
 
@@ -1567,25 +1649,37 @@ int resp_serve(int port) {
   printf("alcove RESP2 server listening on 127.0.0.1:%d\n", port);
   fflush(stdout);
 
-  /* Per-shard wake fd lets producers from other threads (acceptor in
-     Step 2.3, peer shards in Step 2.5) unblock select() between
-     iterations. Negative when the runtime didn't initialize — degrade
-     to a single-thread reactor in that case. */
+  /* Per-shard wake fd lets producers from other threads (acceptor,
+     peer shards in Step 2.5) unblock select() between iterations.
+     Required: without it the reactor can't see new clients, since
+     accept() now lives on the acceptor thread. */
   int wakefd = current_shard->runtime_ready == 1
                    ? alc_wake_fd(&current_shard->wake)
                    : -1;
+  if (wakefd < 0) {
+    fprintf(stderr,
+            "alcove: shard runtime not ready — cannot start acceptor\n");
+    close(srv);
+    return 1;
+  }
+
+  /* Spawn acceptor. Today everyone hands off to main_shard; Step 2.4
+     replaces this with a per-connection hash → shards[i] dispatch. */
+  acceptor_ctx_t actx = {.srv_fd = srv, .target = &main_shard};
+  pthread_t accept_th;
+  if (pthread_create(&accept_th, NULL, acceptor_main, &actx) != 0) {
+    perror("pthread_create acceptor");
+    close(srv);
+    return 1;
+  }
 
   while (!resp_stop) {
     resp_db_maybe_sweep();
     fd_set rfds, wfds;
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
-    int maxfd = srv;
-    FD_SET(srv, &rfds);
-    if (wakefd >= 0) {
-      FD_SET(wakefd, &rfds);
-      if (wakefd > maxfd) maxfd = wakefd;
-    }
+    int maxfd = wakefd;
+    FD_SET(wakefd, &rfds);
     for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
       FD_SET(cl->fd, &rfds);
       if (cl->wlen > cl->whead) FD_SET(cl->fd, &wfds);
@@ -1599,24 +1693,9 @@ int resp_serve(int port) {
       break;
     }
 
-    if (wakefd >= 0 && FD_ISSET(wakefd, &rfds)) {
+    if (FD_ISSET(wakefd, &rfds)) {
       alc_wake_drain(&current_shard->wake);
       shard_drain_inbox(current_shard);
-    }
-
-    if (FD_ISSET(srv, &rfds)) {
-      struct sockaddr_in peer;
-      socklen_t plen = sizeof peer;
-      int cfd = accept(srv, (struct sockaddr *)&peer, &plen);
-      if (cfd >= 0) {
-        resp_set_nonblock(cfd);
-        resp_client_t *cl = calloc(1, sizeof *cl);
-        cl->fd = cfd;
-        cl->rcap = RESP_RBUF_INIT;
-        cl->rbuf = malloc(cl->rcap);
-        cl->next = resp_clients;
-        resp_clients = cl;
-      }
     }
 
     resp_client_t *cur = resp_clients;
@@ -1657,7 +1736,16 @@ int resp_serve(int port) {
   }
 
   printf("\nalcove: shutting down RESP server\n");
+  /* Closing srv unblocks the acceptor's accept() with EBADF, which
+     is its exit signal. shutdown() before close() makes this work
+     reliably across BSDs where close-during-accept is fuzzier. */
+  shutdown(srv, SHUT_RDWR);
   close(srv);
+  pthread_join(accept_th, NULL);
+  /* Drain any final in-flight handoffs the acceptor enqueued before
+     it noticed shutdown — those are real client fds we'd otherwise
+     leak. shard_drain_inbox handles them the same as live wakes. */
+  shard_drain_inbox(current_shard);
   resp_active_port = 0;
   while (resp_clients) {
     resp_client_t *next = resp_clients->next;
