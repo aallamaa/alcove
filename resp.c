@@ -1567,6 +1567,14 @@ int resp_serve(int port) {
   printf("alcove RESP2 server listening on 127.0.0.1:%d\n", port);
   fflush(stdout);
 
+  /* Per-shard wake fd lets producers from other threads (acceptor in
+     Step 2.3, peer shards in Step 2.5) unblock select() between
+     iterations. Negative when the runtime didn't initialize — degrade
+     to a single-thread reactor in that case. */
+  int wakefd = current_shard->runtime_ready == 1
+                   ? alc_wake_fd(&current_shard->wake)
+                   : -1;
+
   while (!resp_stop) {
     resp_db_maybe_sweep();
     fd_set rfds, wfds;
@@ -1574,6 +1582,10 @@ int resp_serve(int port) {
     FD_ZERO(&wfds);
     int maxfd = srv;
     FD_SET(srv, &rfds);
+    if (wakefd >= 0) {
+      FD_SET(wakefd, &rfds);
+      if (wakefd > maxfd) maxfd = wakefd;
+    }
     for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
       FD_SET(cl->fd, &rfds);
       if (cl->wlen > cl->whead) FD_SET(cl->fd, &wfds);
@@ -1585,6 +1597,11 @@ int resp_serve(int port) {
       if (errno == EINTR) continue;
       perror("select");
       break;
+    }
+
+    if (wakefd >= 0 && FD_ISSET(wakefd, &rfds)) {
+      alc_wake_drain(&current_shard->wake);
+      shard_drain_inbox(current_shard);
     }
 
     if (FD_ISSET(srv, &rfds)) {

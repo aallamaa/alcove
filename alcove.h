@@ -3,6 +3,7 @@
 
 #include "char.h"
 #include <stdint.h>
+#include "mpsc.h"
 /* Structure definition */
 
 enum {
@@ -440,9 +441,41 @@ typedef struct shard_t {
   env_t *arena;     /* base of arena array (pointer to static storage) */
   env_t *arena_sp;  /* bump pointer; LIFO rolled back on destroy */
   env_t *arena_end; /* arena + ENV_ARENA_SLOTS */
+  /* Cross-thread inbox: producers (other shards / acceptor) enqueue
+     shard_msg_t; the reactor drains on each wake. Initialized by
+     shard_runtime_init, torn down by shard_runtime_destroy. The wake
+     fd is added to the reactor's select() set so any producer signal
+     unblocks it in time for the next drain. */
+  mpsc_queue_t inbox;
+  alc_wake_t wake;
+  int runtime_ready; /* 0 until shard_runtime_init succeeds; -1 on failure */
 } shard_t;
 extern shard_t main_shard;
 extern ALCOVE_TLS shard_t *current_shard;
+
+/* Cross-shard message envelope. Embeds mpsc_node_t as the first field
+   so mpsc_dequeue's pointer cast lands on the outer struct. Variants
+   grow as Step 2.3+ wires up acceptor handoff, broadcasts, etc. */
+typedef enum {
+  SHARD_MSG_NEW_CLIENT = 1, /* arg.fd: accepted socket; consumer takes ownership */
+} shard_msg_kind_t;
+
+typedef struct shard_msg {
+  mpsc_node_t node; /* MUST be first — see mpsc_dequeue */
+  shard_msg_kind_t kind;
+  union {
+    int fd;
+  } arg;
+} shard_msg_t;
+
+/* Lifecycle. shard_main is the future pthread entrypoint; today the
+   main thread calls it directly with &main_shard for N=1. */
+int shard_runtime_init(shard_t *sh);
+void shard_runtime_destroy(shard_t *sh);
+int shard_main(shard_t *sh, int port);
+/* Reactor-side: called from the select() loop after wake fd reads ready.
+   Drains the inbox and dispatches every message. */
+void shard_drain_inbox(shard_t *sh);
 /* Hot loops (make_env / destroy_env) cache `current_shard` once and
    inline the bounds check `env >= sh->arena && env < sh->arena_end` —
    the per-iteration TLS reload was a measurable hit on env-heavy

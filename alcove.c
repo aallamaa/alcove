@@ -507,6 +507,59 @@ shard_t main_shard = {
    start. */
 ALCOVE_TLS shard_t *current_shard = &main_shard;
 
+/* Bring the inbox queue and wake fd online. Idempotent: re-calling on
+   an already-initialized shard is a no-op. Returns 0 on success, -1 on
+   failure (errno set by alc_wake_init). The reactor must call this
+   before entering its select() loop. */
+int shard_runtime_init(shard_t *sh) {
+  if (sh->runtime_ready == 1) return 0;
+  mpsc_init(&sh->inbox);
+  if (alc_wake_init(&sh->wake) < 0) {
+    sh->runtime_ready = -1;
+    return -1;
+  }
+  sh->runtime_ready = 1;
+  return 0;
+}
+
+/* Tear down inbox/wake. Caller is responsible for ensuring no producer
+   will signal after this returns — Step 2.3+ will join the acceptor
+   thread before this point. */
+void shard_runtime_destroy(shard_t *sh) {
+  if (sh->runtime_ready != 1) return;
+  /* Inbox is intrusive and lock-free: drain and free any orphaned
+     messages so we don't leak. Producers should already be quiesced. */
+  for (;;) {
+    mpsc_node_t *n = mpsc_dequeue(&sh->inbox);
+    if (!n) break;
+    shard_msg_t *m = (shard_msg_t *)n;
+    if (m->kind == SHARD_MSG_NEW_CLIENT && m->arg.fd >= 0) close(m->arg.fd);
+    free(m);
+  }
+  alc_wake_destroy(&sh->wake);
+  sh->runtime_ready = 0;
+}
+
+/* Reactor-side dispatch. Called once per wake. SHARD_MSG_NEW_CLIENT
+   handoff is a stub today — Step 2.3 wires it to resp_clients when
+   the acceptor thread starts producing. For now we just close the fd
+   so a stray producer can't leak it. */
+void shard_drain_inbox(shard_t *sh) {
+  if (sh->runtime_ready != 1) return;
+  for (;;) {
+    mpsc_node_t *n = mpsc_dequeue(&sh->inbox);
+    if (!n) break;
+    shard_msg_t *m = (shard_msg_t *)n;
+    switch (m->kind) {
+      case SHARD_MSG_NEW_CLIENT:
+        /* TODO Step 2.3: hand off to resp accept logic. */
+        if (m->arg.fd >= 0) close(m->arg.fd);
+        break;
+    }
+    free(m);
+  }
+}
+
 /* Bumped on every operation that mutates a global binding (def, defmacro,
    persist, forget, savedb, top-level updatebang). The bytecode global-
    resolution cache compares this against its own per-slot gen to detect
@@ -13715,6 +13768,25 @@ exp_t *string2blobcmd(exp_t *e, env_t *env) {
    (make_string, set_get_keyval_dict, ...) without exporting them. */
 #include "resp.c"
 
+/* shard_main — the future pthread entrypoint for a worker shard. For
+   N=1 (today) the main thread invokes it with &main_shard, behavior
+   identical to a direct resp_serve(port) call: same select() loop,
+   same client list. The skeleton wires the per-shard inbox and wake
+   fd through shard_runtime_init/destroy so Step 2.3 (acceptor split)
+   only has to start producing — no further reactor surgery. */
+int shard_main(shard_t *sh, int port) {
+  current_shard = sh;
+  if (shard_runtime_init(sh) < 0) {
+    fprintf(stderr, "alcove: shard_runtime_init failed: %s\n",
+            strerror(errno));
+    /* Fall through anyway — resp_serve detects runtime_ready != 1
+       and runs in single-thread degraded mode (no inbox). */
+  }
+  int rc = resp_serve(port);
+  shard_runtime_destroy(sh);
+  return rc;
+}
+
 /* Read every top-level form from `path` and evaluate it in `global`.
    Returns 1 if the file existed (and we processed it), 0 if missing.
    Errors mid-file are printed but do not abort the load — same loose
@@ -13884,7 +13956,7 @@ int main(int argc, char *argv[]) {
        only indirectly — but resp_db lives separately. Skip it. */
     (void)N;
     if (run_init) alcove_try_init_files(global);
-    return resp_serve(resp_port);
+    return shard_main(&main_shard, resp_port);
   }
 
   /* -R: combined REPL + RESP on a single select() reactor. Both run
