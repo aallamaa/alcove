@@ -70,7 +70,9 @@ typedef struct resp_client {
   char *rbuf;
   size_t rlen, rcap;
   char *wbuf;
-  size_t wlen, wcap;
+  /* wbuf is a window [whead, wlen) — appends advance wlen, drains
+     advance whead. Invariant: whead <= wlen <= wcap. */
+  size_t whead, wlen, wcap;
   struct resp_client *next;
 } resp_client_t;
 
@@ -230,13 +232,39 @@ static void resp_client_unlink(resp_client_t *c) {
 
 static void resp_write(resp_client_t *c, const char *p, size_t n) {
   if (c->wlen + n > c->wcap) {
-    size_t cap = c->wcap ? c->wcap : 256;
-    while (cap < c->wlen + n) cap *= 2;
-    c->wbuf = realloc(c->wbuf, cap);
-    c->wcap = cap;
+    /* Slide the live window down before paying for a realloc. Only
+       firing when steady-state drains have fallen behind. */
+    if (c->whead > 0) {
+      size_t live = c->wlen - c->whead;
+      memmove(c->wbuf, c->wbuf + c->whead, live);
+      c->wlen = live;
+      c->whead = 0;
+    }
+    if (c->wlen + n > c->wcap) {
+      size_t cap = c->wcap ? c->wcap : 256;
+      while (cap < c->wlen + n) cap *= 2;
+      c->wbuf = realloc(c->wbuf, cap);
+      c->wcap = cap;
+    }
   }
   memcpy(c->wbuf + c->wlen, p, n);
   c->wlen += n;
+}
+
+/* Drain a window's worth of pending output. Returns 1 to signal the
+   caller to drop the client (write returned a non-EAGAIN error), 0
+   otherwise. */
+static inline int resp_client_drain_write(resp_client_t *c) {
+  size_t live = c->wlen - c->whead;
+  ssize_t n = write(c->fd, c->wbuf + c->whead, live);
+  if (n < 0) return (errno != EAGAIN && errno != EWOULDBLOCK);
+  if ((size_t)n == live) {
+    c->whead = 0;
+    c->wlen = 0;
+  } else {
+    c->whead += (size_t)n;
+  }
+  return 0;
 }
 
 static void resp_write_str(resp_client_t *c, const char *s) {
@@ -1303,78 +1331,158 @@ static void cmd_hkeys_hvals_hgetall(resp_client_t *c, char **argv, long *argl,
 static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
                               char **argv, long *argl, int argc);
 
+/* FNV-1a + linear probe over a 64-bucket table. Commands that share a
+   handler (e.g. FLUSHDB/FLUSHALL) differ only by `kind`, decoded by a
+   switch in resp_dispatch. */
+typedef enum {
+  HK_PING = 1, HK_ECHO, HK_QUIT, HK_COMMAND, HK_SELECT, HK_DBSIZE,
+  HK_FLUSHDB, HK_KEYS, HK_TYPE, HK_DEL, HK_EXISTS,
+  HK_EXPIRE_S, HK_EXPIRE_MS, HK_TTL_S, HK_TTL_MS, HK_PERSIST,
+  HK_GET, HK_SET, HK_STRLEN,
+  HK_INCR, HK_DECR, HK_INCRBY, HK_DECRBY, HK_APPEND,
+  HK_LPUSH, HK_RPUSH, HK_LPOP, HK_RPOP, HK_LLEN, HK_LINDEX, HK_LRANGE,
+  HK_HSET, HK_HGET, HK_HDEL, HK_HEXISTS, HK_HLEN,
+  HK_HKEYS, HK_HVALS, HK_HGETALL,
+} resp_kind_t;
+
+#define RESP_CMD_TABLE_BITS 6           /* 64 buckets, load = 41/64 = 0.64 */
+#define RESP_CMD_TABLE_SIZE (1u << RESP_CMD_TABLE_BITS)
+#define RESP_CMD_TABLE_MASK (RESP_CMD_TABLE_SIZE - 1)
+#define RESP_CMD_NAMEMAX 12
+
+typedef struct {
+  unsigned char namelen;
+  unsigned char kind;
+  char name[RESP_CMD_NAMEMAX];        /* uppercase, NOT NUL-terminated */
+} resp_cmd_t;
+
+static resp_cmd_t resp_cmd_table[RESP_CMD_TABLE_SIZE];
+
+static const struct { const char *name; resp_kind_t kind; } resp_cmd_seed[] = {
+  {"PING",     HK_PING},      {"ECHO",     HK_ECHO},
+  {"QUIT",     HK_QUIT},      {"COMMAND",  HK_COMMAND},
+  {"SELECT",   HK_SELECT},    {"DBSIZE",   HK_DBSIZE},
+  {"FLUSHDB",  HK_FLUSHDB},   {"FLUSHALL", HK_FLUSHDB},
+  {"KEYS",     HK_KEYS},      {"TYPE",     HK_TYPE},
+  {"DEL",      HK_DEL},       {"UNLINK",   HK_DEL},
+  {"EXISTS",   HK_EXISTS},    {"EXPIRE",   HK_EXPIRE_S},
+  {"PEXPIRE",  HK_EXPIRE_MS}, {"TTL",      HK_TTL_S},
+  {"PTTL",     HK_TTL_MS},    {"PERSIST",  HK_PERSIST},
+  {"GET",      HK_GET},       {"SET",      HK_SET},
+  {"STRLEN",   HK_STRLEN},    {"INCR",     HK_INCR},
+  {"DECR",     HK_DECR},      {"INCRBY",   HK_INCRBY},
+  {"DECRBY",   HK_DECRBY},    {"APPEND",   HK_APPEND},
+  {"LPUSH",    HK_LPUSH},     {"RPUSH",    HK_RPUSH},
+  {"LPOP",     HK_LPOP},      {"RPOP",     HK_RPOP},
+  {"LLEN",     HK_LLEN},      {"LINDEX",   HK_LINDEX},
+  {"LRANGE",   HK_LRANGE},    {"HSET",     HK_HSET},
+  {"HGET",     HK_HGET},      {"HDEL",     HK_HDEL},
+  {"HEXISTS",  HK_HEXISTS},   {"HLEN",     HK_HLEN},
+  {"HKEYS",    HK_HKEYS},     {"HVALS",    HK_HVALS},
+  {"HGETALL",  HK_HGETALL},
+};
+
+static void resp_cmd_table_init(void) {
+  for (size_t s = 0; s < sizeof resp_cmd_seed / sizeof *resp_cmd_seed; s++) {
+    const char *name = resp_cmd_seed[s].name;
+    long len = (long)strlen(name);
+    uint32_t h = 2166136261u;
+    for (long j = 0; j < len; j++) {
+      h ^= (unsigned char)name[j];
+      h *= 16777619u;
+    }
+    uint32_t i = h & RESP_CMD_TABLE_MASK;
+    for (uint32_t probes = 0; probes < RESP_CMD_TABLE_SIZE; probes++) {
+      if (resp_cmd_table[i].kind == 0) {
+        resp_cmd_table[i].namelen = (unsigned char)len;
+        resp_cmd_table[i].kind = (unsigned char)resp_cmd_seed[s].kind;
+        memcpy(resp_cmd_table[i].name, name, len);
+        break;
+      }
+      i = (i + 1) & RESP_CMD_TABLE_MASK;
+      if (probes + 1 == RESP_CMD_TABLE_SIZE) {
+        fprintf(stderr, "resp_cmd_table: overflow inserting %s\n", name);
+        abort();
+      }
+    }
+  }
+}
+
+/* Returns the kind for a built-in command, or 0 if not found. */
+static int resp_cmd_lookup(const char *cmd, long clen) {
+  if (clen <= 0 || clen > RESP_CMD_NAMEMAX) return 0;
+  /* Single pass: case-fold into up[] and hash simultaneously. */
+  char up[RESP_CMD_NAMEMAX];
+  uint32_t h = 2166136261u;
+  for (long i = 0; i < clen; i++) {
+    char a = cmd[i];
+    if (a >= 'a' && a <= 'z') a -= 32;
+    up[i] = a;
+    h ^= (unsigned char)a;
+    h *= 16777619u;
+  }
+  uint32_t i = h & RESP_CMD_TABLE_MASK;
+  for (uint32_t probes = 0; probes < RESP_CMD_TABLE_SIZE; probes++) {
+    const resp_cmd_t *e = &resp_cmd_table[i];
+    if (e->kind == 0) return 0;
+    if (e->namelen == clen && memcmp(e->name, up, clen) == 0)
+      return e->kind;
+    i = (i + 1) & RESP_CMD_TABLE_MASK;
+  }
+  return 0;
+}
+
 static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
   if (argc < 1) return;
   const char *cmd = argv[0];
   long clen = argl[0];
+  int kind = resp_cmd_lookup(cmd, clen);
 
-  if (resp_cmd_eq(cmd, clen, "PING")) return cmd_ping(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "ECHO")) return cmd_echo(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "QUIT")) return cmd_quit(c);
-  if (resp_cmd_eq(cmd, clen, "COMMAND")) {
+  switch (kind) {
+  case HK_PING:    return cmd_ping(c, argv, argl, argc);
+  case HK_ECHO:    return cmd_echo(c, argv, argl, argc);
+  case HK_QUIT:    return cmd_quit(c);
+  case HK_COMMAND:
     /* redis-cli sends `COMMAND DOCS` on connect to build help. An
        empty array satisfies it. */
     resp_write_array_hdr(c, 0);
     return;
+  case HK_SELECT:    return cmd_select(c, argv, argl, argc);
+  case HK_DBSIZE:    return cmd_dbsize(c);
+  case HK_FLUSHDB:   return cmd_flushdb(c);
+  case HK_KEYS:      return cmd_keys_star(c, argv, argl, argc);
+  case HK_TYPE:      return cmd_type(c, argv, argl, argc);
+  case HK_DEL:       return cmd_del(c, argv, argl, argc);
+  case HK_EXISTS:    return cmd_exists(c, argv, argl, argc);
+  case HK_EXPIRE_S:  return cmd_expire(c, argv, argl, argc, 0);
+  case HK_EXPIRE_MS: return cmd_expire(c, argv, argl, argc, 1);
+  case HK_TTL_S:     return cmd_ttl(c, argv, argl, argc, 0);
+  case HK_TTL_MS:    return cmd_ttl(c, argv, argl, argc, 1);
+  case HK_PERSIST:   return cmd_persist(c, argv, argl, argc);
+  case HK_GET:       return cmd_get(c, argv, argl, argc);
+  case HK_SET:       return cmd_set(c, argv, argl, argc);
+  case HK_STRLEN:    return cmd_strlen(c, argv, argl, argc);
+  case HK_INCR:      return cmd_incr_decr(c, argv, argl, argc, +1);
+  case HK_DECR:      return cmd_incr_decr(c, argv, argl, argc, -1);
+  case HK_INCRBY:    return cmd_incrby_decrby(c, argv, argl, argc, +1);
+  case HK_DECRBY:    return cmd_incrby_decrby(c, argv, argl, argc, -1);
+  case HK_APPEND:    return cmd_append(c, argv, argl, argc);
+  case HK_LPUSH:     return cmd_lpush_rpush(c, argv, argl, argc, 1);
+  case HK_RPUSH:     return cmd_lpush_rpush(c, argv, argl, argc, 0);
+  case HK_LPOP:      return cmd_lpop_rpop(c, argv, argl, argc, 1);
+  case HK_RPOP:      return cmd_lpop_rpop(c, argv, argl, argc, 0);
+  case HK_LLEN:      return cmd_llen(c, argv, argl, argc);
+  case HK_LINDEX:    return cmd_lindex(c, argv, argl, argc);
+  case HK_LRANGE:    return cmd_lrange(c, argv, argl, argc);
+  case HK_HSET:      return cmd_hset(c, argv, argl, argc);
+  case HK_HGET:      return cmd_hget(c, argv, argl, argc);
+  case HK_HDEL:      return cmd_hdel(c, argv, argl, argc);
+  case HK_HEXISTS:   return cmd_hexists(c, argv, argl, argc);
+  case HK_HLEN:      return cmd_hlen(c, argv, argl, argc);
+  case HK_HKEYS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 0);
+  case HK_HVALS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
+  case HK_HGETALL:   return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
   }
-  if (resp_cmd_eq(cmd, clen, "SELECT")) return cmd_select(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "DBSIZE")) return cmd_dbsize(c);
-  if (resp_cmd_eq(cmd, clen, "FLUSHDB") ||
-      resp_cmd_eq(cmd, clen, "FLUSHALL"))
-    return cmd_flushdb(c);
-  if (resp_cmd_eq(cmd, clen, "KEYS")) return cmd_keys_star(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "TYPE")) return cmd_type(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "DEL") || resp_cmd_eq(cmd, clen, "UNLINK"))
-    return cmd_del(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "EXISTS")) return cmd_exists(c, argv, argl, argc);
-
-  if (resp_cmd_eq(cmd, clen, "EXPIRE"))
-    return cmd_expire(c, argv, argl, argc, 0);
-  if (resp_cmd_eq(cmd, clen, "PEXPIRE"))
-    return cmd_expire(c, argv, argl, argc, 1);
-  if (resp_cmd_eq(cmd, clen, "TTL")) return cmd_ttl(c, argv, argl, argc, 0);
-  if (resp_cmd_eq(cmd, clen, "PTTL")) return cmd_ttl(c, argv, argl, argc, 1);
-  if (resp_cmd_eq(cmd, clen, "PERSIST"))
-    return cmd_persist(c, argv, argl, argc);
-
-  if (resp_cmd_eq(cmd, clen, "GET")) return cmd_get(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "SET")) return cmd_set(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "STRLEN")) return cmd_strlen(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "INCR"))
-    return cmd_incr_decr(c, argv, argl, argc, +1);
-  if (resp_cmd_eq(cmd, clen, "DECR"))
-    return cmd_incr_decr(c, argv, argl, argc, -1);
-  if (resp_cmd_eq(cmd, clen, "INCRBY"))
-    return cmd_incrby_decrby(c, argv, argl, argc, +1);
-  if (resp_cmd_eq(cmd, clen, "DECRBY"))
-    return cmd_incrby_decrby(c, argv, argl, argc, -1);
-  if (resp_cmd_eq(cmd, clen, "APPEND"))
-    return cmd_append(c, argv, argl, argc);
-
-  if (resp_cmd_eq(cmd, clen, "LPUSH"))
-    return cmd_lpush_rpush(c, argv, argl, argc, 1);
-  if (resp_cmd_eq(cmd, clen, "RPUSH"))
-    return cmd_lpush_rpush(c, argv, argl, argc, 0);
-  if (resp_cmd_eq(cmd, clen, "LPOP"))
-    return cmd_lpop_rpop(c, argv, argl, argc, 1);
-  if (resp_cmd_eq(cmd, clen, "RPOP"))
-    return cmd_lpop_rpop(c, argv, argl, argc, 0);
-  if (resp_cmd_eq(cmd, clen, "LLEN")) return cmd_llen(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "LINDEX")) return cmd_lindex(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "LRANGE")) return cmd_lrange(c, argv, argl, argc);
-
-  if (resp_cmd_eq(cmd, clen, "HSET")) return cmd_hset(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "HGET")) return cmd_hget(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "HDEL")) return cmd_hdel(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "HEXISTS"))
-    return cmd_hexists(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "HLEN")) return cmd_hlen(c, argv, argl, argc);
-  if (resp_cmd_eq(cmd, clen, "HKEYS"))
-    return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 0);
-  if (resp_cmd_eq(cmd, clen, "HVALS"))
-    return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
-  if (resp_cmd_eq(cmd, clen, "HGETALL"))
-    return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
 
   if (resp_user_dispatch(c, cmd, clen, argv, argl, argc)) return;
 
@@ -1450,6 +1558,7 @@ int resp_serve(int port) {
   }
   resp_set_nonblock(srv);
   resp_active_port = port;
+  resp_cmd_table_init();
 
   signal(SIGPIPE, SIG_IGN);
   signal(SIGINT, resp_sigint);
@@ -1467,7 +1576,7 @@ int resp_serve(int port) {
     FD_SET(srv, &rfds);
     for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
       FD_SET(cl->fd, &rfds);
-      if (cl->wlen > 0) FD_SET(cl->fd, &wfds);
+      if (cl->wlen > cl->whead) FD_SET(cl->fd, &wfds);
       if (cl->fd > maxfd) maxfd = cl->fd;
     }
     struct timeval tv = {1, 0};
@@ -1522,17 +1631,8 @@ int resp_serve(int port) {
         }
       }
 
-      if (!drop && FD_ISSET(cur->fd, &wfds) && cur->wlen > 0) {
-        ssize_t n = write(cur->fd, cur->wbuf, cur->wlen);
-        if (n < 0) {
-          if (errno != EAGAIN && errno != EWOULDBLOCK) drop = 1;
-        } else if ((size_t)n == cur->wlen) {
-          cur->wlen = 0;
-        } else {
-          memmove(cur->wbuf, cur->wbuf + n, cur->wlen - (size_t)n);
-          cur->wlen -= (size_t)n;
-        }
-      }
+      if (!drop && FD_ISSET(cur->fd, &wfds) && cur->wlen > cur->whead)
+        drop = resp_client_drain_write(cur);
 
       if (drop) resp_client_unlink(cur);
       cur = next;
@@ -1572,7 +1672,6 @@ int resp_serve(int port) {
    Single-reactor mode works in both threaded and single-threaded
    builds since there's literally one thread; no atomics needed. */
 extern int toeval;
-extern int verbose;
 
 /* Drain a single complete top-level form from `acc`/`*plen`. Returns
    the byte count consumed (incl. trailing whitespace) or 0 if no
@@ -1680,6 +1779,7 @@ int resp_repl_serve(int port, env_t *global) {
   resp_set_nonblock(srv);
   resp_set_nonblock(0); /* stdin */
   resp_active_port = port;
+  resp_cmd_table_init();
 
   signal(SIGPIPE, SIG_IGN);
   signal(SIGINT, resp_sigint);
@@ -1714,7 +1814,7 @@ int resp_repl_serve(int port, env_t *global) {
     if (0 > maxfd) maxfd = 0;
     for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
       FD_SET(cl->fd, &rfds);
-      if (cl->wlen > 0) FD_SET(cl->fd, &wfds);
+      if (cl->wlen > cl->whead) FD_SET(cl->fd, &wfds);
       if (cl->fd > maxfd) maxfd = cl->fd;
     }
     struct timeval tv = {1, 0};
@@ -1803,17 +1903,8 @@ int resp_repl_serve(int port, env_t *global) {
         }
       }
 
-      if (!drop && FD_ISSET(cur->fd, &wfds) && cur->wlen > 0) {
-        ssize_t n = write(cur->fd, cur->wbuf, cur->wlen);
-        if (n < 0) {
-          if (errno != EAGAIN && errno != EWOULDBLOCK) drop = 1;
-        } else if ((size_t)n == cur->wlen) {
-          cur->wlen = 0;
-        } else {
-          memmove(cur->wbuf, cur->wbuf + n, cur->wlen - (size_t)n);
-          cur->wlen -= (size_t)n;
-        }
-      }
+      if (!drop && FD_ISSET(cur->fd, &wfds) && cur->wlen > cur->whead)
+        drop = resp_client_drain_write(cur);
 
       if (drop) resp_client_unlink(cur);
       cur = next;

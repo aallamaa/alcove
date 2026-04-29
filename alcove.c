@@ -38,7 +38,6 @@
 #include "alcove.h"
 
 int toeval = 1;
-int verbose = 00;
 dict_t *reserved_symbol = NULL;
 exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
 
@@ -68,7 +67,7 @@ static int in_tail_position = 0;
 /* Forward declarations for doc strings defined alongside each cmd
    function. Each is `static const char doc_<symbolname>[]` so a future
    reader can grep `doc_+` to land directly on the help text + the body. */
-extern const char doc_verbose[], doc_quote[], doc_if[], doc_do[];
+extern const char doc_quote[], doc_if[], doc_do[];
 extern const char doc_when[], doc_while[], doc_repeat[];
 extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
 extern const char doc_let[], doc_with[];
@@ -158,7 +157,6 @@ exp_t *rediscmdscmd(exp_t *e, env_t *env);
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
-    LISPCMD("verbose",       verbosecmd,     doc_verbose),
     LISPCMD("quote",         quotecmd,       doc_quote),
     LISPCMD_TAIL("if",       ifcmd,          doc_if),
     LISPCMD_TAIL("do",       docmd,          doc_do),
@@ -393,24 +391,16 @@ static exp_t *exp_freelist = NULL;
 static exp_t *exp_bump_next = NULL;
 static int exp_bump_left = 0;
 
+/* Iterative over e->next; recurses for e->content and vector/list elements. */
 inline int unrefexp(exp_t *e) {
-  if (!is_ptr(e))
-    return 0;
-  if (e == nil_singleton || e == true_singleton)
-    return 1;
   int ret;
-  if ((ret = REFCOUNT_DEC(&e->nref)) <= 0) {
-    /* Skip the verbose "Freeing:" trace for the EOF parse marker.
-       Each form the REPL reads ends with reader() returning this
-       sentinel so the loop knows to stop. Surfacing it as an error
-       in verbose mode is misleading — it's normal end-of-input,
-       not a real failure. */
-    if (verbose &&
-        !(e->type == EXP_ERROR && e->flags == EXP_ERROR_PARSING_EOF)) {
-      printf("\x1B[91mFreeing:\x1B[39m ");
-      print_node(e);
-      printf("\n");
-    };
+  while (1) {
+    if (!is_ptr(e))
+      return 0;
+    if (e == nil_singleton || e == true_singleton)
+      return 1;
+    if ((ret = REFCOUNT_DEC(&e->nref)) > 0)
+      return ret;
     /* meta holds a strdup'd name for LAMBDA/MACRO, or a borrowed
        resolved-exp_t* pointer for cached SYMBOL lookups. Only free()
        in the former case — the cached pointer is borrowed. */
@@ -428,8 +418,7 @@ inline int unrefexp(exp_t *e) {
       destroy_env((env_t *)e->next->bc);
       e->next->bc = NULL;
     }
-    if (e->next)
-      unrefexp(e->next);
+    exp_t *next = e->next;
     if ((e->type == EXP_SYMBOL) || (e->type == EXP_STRING) ||
         (e->type == EXP_ERROR))
       free(e->ptr);
@@ -459,24 +448,12 @@ inline int unrefexp(exp_t *e) {
     } else if (((e->type >= EXP_NUMBER) && (e->type <= EXP_BOOLEAN)) ||
                (e->type == EXP_INTERNAL)) {
     } else
-      unrefexp(e->content); // check if content type is exp
+      unrefexp(e->content);
 
-    if (verbose &&
-        !(e->type == EXP_ERROR && e->flags == EXP_ERROR_PARSING_EOF))
-      printf("\x1B[91mFree e:\x1B[39m %p\n", (void *)e);
-    /* Push onto the free list instead of free(). next was just
-       recursively released above so it's safe to overwrite. */
     e->next = exp_freelist;
     exp_freelist = e;
-
-    return 0;
-  };
-  if (verbose) {
-    printf("\x1B[91mUnref (%d): ", e->nref);
-    print_node(e);
-    printf("\x1B[39m\n");
-  };
-  return ret;
+    e = next;
+  }
 }
 
 /* env management*/
@@ -692,8 +669,6 @@ int dump_dict(dict_t *d, FILE *stream) {
   keyval_t *ckv;
   keyval_t *pkv;
   unsigned int i, j;
-  if (verbose)
-    printf("Dumping dict %p\n", (void *)d);
   for (i = 0; i < 2; i++) {
     for (j = 0; j < d->ht[i].size; j++) {
       ckv = d->ht[i].table[j];
@@ -704,10 +679,6 @@ int dump_dict(dict_t *d, FILE *stream) {
           /* timestamp encoding: 0 = neutral, > 0 = persist mark
              (gettimeusec() of mark time, only nonzeroness matters here),
              < 0 = absolute-µs expire-at (RESP TTLs, never persisted). */
-          if (verbose) {
-            printf("saving %s : ", (char *)pkv->key);
-            print_node(pkv->val);
-          }
           if (!__DUMPABLE__(pkv->val)) {
             fprintf(stderr,
                     "savedb: skipping %s — type %d has no dump fn registered\n",
@@ -946,8 +917,7 @@ void print_node(exp_t *node) {
   }
   /* Tagged immediates — handle before any ->field access. */
   if (isnumber(node)) {
-    printf("\x1B[92m%s%lld\x1B[39m", verbose ? "_num:" : "",
-           (long long)FIX_VAL(node));
+    printf("\x1B[92m%lld\x1B[39m", (long long)FIX_VAL(node));
     return;
   }
   if (ischar(node)) {
@@ -993,12 +963,6 @@ void print_node(exp_t *node) {
              (long)node);
     else
       printf("\x1B[92m#<procedure@%08lx>\x1B[39m", (long)node);
-    if (verbose) {
-      printf("\theader:");
-      print_node(node->content);
-      printf("\tbody:");
-      print_node(node->next);
-    }
     /*  if (node->content) print_node(node->content);
         printf(")");*/
   } else if (node->type == EXP_MACRO) {
@@ -1012,12 +976,11 @@ void print_node(exp_t *node) {
   }
 
   else if (node->type == EXP_SYMBOL)
-    printf("\x1B[92m%s%s\x1B[39m", verbose ? "_sym:" : "", (char *)node->ptr);
+    printf("\x1B[92m%s\x1B[39m", (char *)node->ptr);
   else if (node->type == EXP_STRING)
-    printf("\x1B[92m%s\"%s\"\x1B[39m", verbose ? "_str:" : "",
-           (char *)node->ptr);
+    printf("\x1B[92m\"%s\"\x1B[39m", (char *)node->ptr);
   else if (node->type == EXP_FLOAT)
-    printf("\x1B[92m%s%lf\x1B[39m", verbose ? "_flo:" : "", node->f);
+    printf("\x1B[92m%lf\x1B[39m", node->f);
   else if (node->type == EXP_VECTOR) {
     alc_vec_t *v = (alc_vec_t *)node->ptr;
     printf("#[");
@@ -2278,15 +2241,6 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-const char doc_verbose[] = "(verbose) — toggle the global verbose flag (debug-print every evaluation).";
-exp_t *verbosecmd(exp_t *e, env_t *env) {
-  if (verbose ^= 1)
-    printf("verbose on\n");
-  else
-    printf("verbose off\n");
-  unrefexp(e);
-  return NULL;
-}
 const char doc_quote[] = "(quote x) — return x without evaluating it. Reader shorthand: 'x.";
 exp_t *quotecmd(exp_t *e, env_t *env) {
   exp_t *ret = refexp(cadr(e));
@@ -4983,10 +4937,7 @@ static void inspect_value(exp_t *v) {
   }
 }
 
-/* (inspect val) — evaluates val, prints type info + type-specific details.
-   Also called directly from the REPL's verbose mode at the bottom of the
-   file (passing the already-evaluated result), which is why the display
-   logic lives in inspect_value above rather than inline here. */
+/* (inspect val) — evaluates val, prints type info + type-specific details. */
 const char doc_inspect[] = "(inspect x) — print internal representation: type, refcount, and (for lambdas) compile/JIT status.";
 exp_t *inspectcmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
@@ -12416,11 +12367,6 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
   refexp(fn);
 
 tailrec:
-  if (verbose) {
-    printf("invoke:");
-    print_node(e);
-    printf("\n");
-  }
   {
     exp_t *body = fn->next->content;
     /* Closure: if fn captured an env at creation, use it as the new
@@ -12599,11 +12545,6 @@ exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
      fn-> next-> content =body*/
   exp_t *ret;
   ret = expandmacro(e, fn, env);
-  if (verbose) {
-    printf("\n expanded macro");
-    print_node(ret);
-    printf("\n");
-  }
   unrefexp(e);
   if (ret && iserror(ret))
     return ret;
@@ -13934,10 +13875,6 @@ int main(int argc, char *argv[]) {
         else
           unrefexp(stre);
         if (strf) {
-          if (verbose) {
-            printf("\x1B[35mstrf:%p\x1B[39m\n", (void *)strf);
-            inspect_value(strf);
-          }
           printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
           print_node(strf);
           unrefexp(strf);
@@ -13976,12 +13913,6 @@ int main(int argc, char *argv[]) {
         printf("\n");
       goto endcleanly;
     }
-    if (verbose) {
-      if (stre)
-        printf("\x1B[35mstre:%p\x1B[39m\n", (void *)stre);
-      print_node(stre);
-      printf("\n");
-    }
     if (issymbol(stre) &&
         (strcmp(stre->ptr, "quit") == 0 || strcmp(stre->ptr, "exit") == 0)) {
       unrefexp(stre);
@@ -13998,10 +13929,6 @@ int main(int argc, char *argv[]) {
       unrefexp(stre);
     if (!evaluatingfile) {
       if (strf) {
-        if (verbose) {
-          printf("\x1B[35mstrf:%p\x1B[39m\n", (void *)strf);
-          inspect_value(strf); /* borrow, no ref churn */
-        }
         printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
         print_node(strf);
       } else
