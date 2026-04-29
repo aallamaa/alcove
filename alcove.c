@@ -37,6 +37,13 @@
 // #include <jemalloc/jemalloc.h>
 #include "alcove.h"
 
+/* Multi-threaded build needs pthread for the FFI cache mutex (and future
+   shard primitives). Header guards make this benign next to the
+   macOS+JIT include above. */
+#if !ALCOVE_SINGLE_THREADED
+#include <pthread.h>
+#endif
+
 int toeval = 1;
 dict_t *reserved_symbol = NULL;
 exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
@@ -3274,7 +3281,19 @@ static int alc_ffi_typeof(const char *name, alc_ffi_tag_t *tag,
 
 /* Process-wide cache of dlopen handles keyed by lib name. dlopen with
    the same name on Linux returns the same handle anyway, but caching
-   avoids re-resolving on each (ffi-fn) call. */
+   avoids re-resolving on each (ffi-fn) call. The mutex serializes the
+   list mutation under multi-thread builds; it is held across dlopen
+   itself so a concurrent caller never observes a half-linked entry,
+   and to avoid duplicate inserts under a TOCTOU race. dlopen is rare
+   (one-time per lib name), so the contention cost is negligible. */
+#if !ALCOVE_SINGLE_THREADED
+static pthread_mutex_t g_ffi_libs_mtx = PTHREAD_MUTEX_INITIALIZER;
+#define FFI_LIBS_LOCK()   pthread_mutex_lock(&g_ffi_libs_mtx)
+#define FFI_LIBS_UNLOCK() pthread_mutex_unlock(&g_ffi_libs_mtx)
+#else
+#define FFI_LIBS_LOCK()   ((void)0)
+#define FFI_LIBS_UNLOCK() ((void)0)
+#endif
 static struct ffi_lib_cache {
   char *name;
   void *h;
@@ -3282,21 +3301,28 @@ static struct ffi_lib_cache {
 } *g_ffi_libs = NULL;
 static void *alc_ffi_dlopen(const char *name) {
   struct ffi_lib_cache *c;
+  FFI_LIBS_LOCK();
   for (c = g_ffi_libs; c; c = c->next)
-    if (!strcmp(c->name, name))
-      return c->h;
+    if (!strcmp(c->name, name)) {
+      void *h = c->h;
+      FFI_LIBS_UNLOCK();
+      return h;
+    }
   /* RTLD_LOCAL keeps the lib's symbols out of the global namespace —
      reduces accidental shadowing if multiple libs export the same
      name. RTLD_NOW resolves all symbols at load so dlsym failures
      surface promptly. */
   void *h = dlopen(name, RTLD_NOW | RTLD_LOCAL);
-  if (!h)
+  if (!h) {
+    FFI_LIBS_UNLOCK();
     return NULL;
+  }
   c = (struct ffi_lib_cache *)memalloc(1, sizeof(*c));
   c->name = strdup(name);
   c->h = h;
   c->next = g_ffi_libs;
   g_ffi_libs = c;
+  FFI_LIBS_UNLOCK();
   return h;
 }
 
