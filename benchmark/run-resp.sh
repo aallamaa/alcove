@@ -13,6 +13,7 @@
 
 set -e
 cd "$(dirname "$0")/.."
+. ./benchmark/lib.sh
 
 if ! command -v redis-benchmark >/dev/null; then
   echo "redis-benchmark not found (brew install redis / apt install redis-tools)"
@@ -28,20 +29,14 @@ N="${RESP_N:-100000}"
 PIPELINE="${RESP_PIPELINE:-1}"
 CLIENTS_LIST="${RESP_CLIENTS:-1 10 50 100 200 500}"
 
-# Kill any stragglers on this port from a previous aborted run.
-lsof -ti :$PORT >/dev/null 2>&1 && lsof -ti :$PORT | xargs kill -9 2>/dev/null || true
+reap_port "$PORT"
 
 LOG="$(mktemp -t alcove-resp.XXXXXX.log)"
 ./alcove -r "$PORT" >"$LOG" 2>&1 &
 SRV=$!
 trap 'kill -INT $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -f "$LOG"' EXIT
 
-# Wait for "listening on" log line — gives the acceptor time to bind.
-for _ in $(seq 1 50); do
-  grep -q "listening on" "$LOG" && break
-  sleep 0.05
-done
-if ! grep -q "listening on" "$LOG"; then
+if ! wait_listening "$LOG"; then
   echo "alcove failed to start; log:"; cat "$LOG"; exit 1
 fi
 

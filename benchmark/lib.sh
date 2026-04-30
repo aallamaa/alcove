@@ -1,7 +1,22 @@
-# Shared benchmark helpers. Sourced by run.sh and compare.sh.
-# Expects PYTHON to be set (or defaults to python3).
+# Shared benchmark helpers. Sourced by run.sh, compare.sh, run-resp.sh,
+# and test-reuseport.sh. Expects PYTHON to be set (or defaults to python3).
 
 : "${PYTHON:=python3}"
+
+# Kill any process holding $1 (port). One pipeline, no TOCTOU race.
+reap_port() {
+  lsof -ti :"$1" 2>/dev/null | xargs kill -9 2>/dev/null || true
+}
+
+# Poll $2 (log file) for "listening on" up to ~2.5s. Returns 0 if seen.
+wait_listening() {
+  local log="$1" tries="${2:-50}"
+  for _ in $(seq 1 "$tries"); do
+    grep -q "listening on" "$log" && return 0
+    sleep 0.05
+  done
+  return 1
+}
 
 # wall-clock in milliseconds since epoch
 now_ms() { "$PYTHON" -c 'import time; print(int(time.time()*1000))'; }

@@ -453,29 +453,11 @@ typedef struct shard_t {
 extern shard_t main_shard;
 extern ALCOVE_TLS shard_t *current_shard;
 
-/* Cross-shard message envelope. Embeds mpsc_node_t as the first field
-   so mpsc_dequeue's pointer cast lands on the outer struct. Variants
-   grow as Step 2.3+ wires up acceptor handoff, broadcasts, etc. */
-typedef enum {
-  SHARD_MSG_NEW_CLIENT = 1, /* arg.fd: accepted socket; consumer takes ownership */
-} shard_msg_kind_t;
-
-typedef struct shard_msg {
-  mpsc_node_t node; /* MUST be first — see mpsc_dequeue */
-  shard_msg_kind_t kind;
-  union {
-    int fd;
-  } arg;
-} shard_msg_t;
-
 /* Lifecycle. shard_main is the future pthread entrypoint; today the
    main thread calls it directly with &main_shard for N=1. */
 int shard_runtime_init(shard_t *sh);
 void shard_runtime_destroy(shard_t *sh);
 int shard_main(shard_t *sh, int port);
-/* Reactor-side: called from the select() loop after wake fd reads ready.
-   Drains the inbox and dispatches every message. */
-void shard_drain_inbox(shard_t *sh);
 /* Hot loops (make_env / destroy_env) cache `current_shard` once and
    inline the bounds check `env >= sh->arena && env < sh->arena_end` —
    the per-iteration TLS reload was a measurable hit on env-heavy

@@ -22,7 +22,9 @@ with throughput that scales sublinearly but materially with N (target:
 implement (fork N workers, accept on the same port). Zero atomics. But
 no shared keyspace: `SET foo 1` on worker 0 isn't visible to worker 1
 without an external store. The whole point of an embedded RESP server
-is shared in-process state. Rejected.
+is shared in-process state. Rejected. *(Note: Path B does still use
+`SO_REUSEPORT` — but for thread-level accept fan-out across N reactors
+inside one process, not for fork-based shared-nothing workers.)*
 
 **Path C — full lock-free dict (Cliff Click NBHT, hazard pointers).**
 Highest payoff on contended single keys. But our values are refcounted
@@ -44,29 +46,29 @@ refcounts within a shard. Cross-shard ops use a serialized fallback.
 
 ## Architecture
 
+Updated 2026-04-30: dedicated acceptor pthread removed. Each reactor
+calls `bind()` directly with `SO_REUSEPORT`; the kernel hands each
+incoming connection to exactly one reactor (Linux: flow-hashed; macOS:
+weaker fairness). No user-space dispatcher, no inbox-handoff per
+connection.
+
 ```
-                    ┌─────────────────────────────────────┐
-  client TCP ──────►│  acceptor thread (1)                │
-                    │  - listens on 127.0.0.1:6379        │
-                    │  - hands cfd to a "router"          │
-                    └─────────────────────────────────────┘
-                                    │
-                            (per-connection
-                             read of first cmd
-                             to decide shard)
-                                    ▼
-        ┌─────────────────┬─────────────────┬─────────────────┐
-        │  shard 0        │  shard 1        │  shard N-1      │
-        │  ┌──────────┐   │  ┌──────────┐   │  ┌──────────┐   │
-        │  │ reactor  │   │  │ reactor  │   │  │ reactor  │   │
-        │  │  loop    │   │  │  loop    │   │  │  loop    │   │
-        │  ├──────────┤   │  ├──────────┤   │  ├──────────┤   │
-        │  │ dict_t * │   │  │ dict_t * │   │  │ dict_t * │   │
-        │  │ exp_t*…  │   │  │ exp_t*…  │   │  │ exp_t*…  │   │
-        │  │ env_t  * │   │  │ env_t  * │   │  │ env_t  * │   │
-        │  └──────────┘   │  └──────────┘   │  └──────────┘   │
-        │  pthread_t      │  pthread_t      │  pthread_t      │
-        └─────────────────┴─────────────────┴─────────────────┘
+                    127.0.0.1:6379  (SO_REUSEPORT)
+                    │       │            │
+        ┌───────────┴┬──────┴──────┬─────┴───────────┐
+        │  shard 0   │  shard 1    │  shard N-1      │
+        │  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+        │  │ reactor  │  │ reactor  │  │ reactor  │  │
+        │  │  loop    │  │  loop    │  │  loop    │  │
+        │  │ + accept │  │ + accept │  │ + accept │  │
+        │  ├──────────┤  ├──────────┤  ├──────────┤  │
+        │  │ dict_t * │  │ dict_t * │  │ dict_t * │  │
+        │  │ exp_t*…  │  │ exp_t*…  │  │ exp_t*…  │  │
+        │  │ env_t  * │  │ env_t  * │  │ env_t  * │  │
+        │  └──────────┘  └──────────┘  └──────────┘  │
+        │  pthread_t     pthread_t     pthread_t     │
+        │  + mpsc inbox + wake fd (cross-shard ops)  │
+        └────────────────────────────────────────────┘
 ```
 
 Each shard is a separate pthread running a copy of `resp_serve`'s
@@ -130,14 +132,14 @@ exception, see below).
 
 ## Connection lifecycle
 
-1. Acceptor thread accepts, reads the first complete RESP command,
-   parses it, looks at `argv[1]` if any.
-2. Acceptor enqueues `(client_fd, parsed_cmd)` into `shards[shard_of(key)].inbox`.
-3. Target shard's reactor picks it up, takes ownership of the fd, adds
-   to its `clients` list.
-4. Subsequent commands from that fd are read by the target shard's
-   reactor — but a command with a **different key** may need to hop
-   shards (see "Per-command vs per-connection pinning").
+1. Each reactor binds the listen socket with `SO_REUSEPORT` and accepts
+   directly inside its select() loop. The kernel routes each new
+   connection to exactly one reactor.
+2. The accepting reactor is the connection's **home reactor**: it owns
+   the read buffer, the write buffer, and the socket lifecycle.
+3. Subsequent commands from that fd are read by the home reactor — but
+   a command with a **different key** may need to hop shards (see
+   "Per-command vs per-connection pinning").
 
 ### Per-command vs per-connection pinning
 
@@ -558,25 +560,63 @@ sizes (<100MB) the fork itself is sub-millisecond.
 
 ### Step 2 punch list
 
-In commit-sized chunks:
+In commit-sized chunks. Each step is bisectable + benchmarkable on its own.
 
-1. **MPSC queue primitive.** Header-only, lock-free single-consumer
-   /multi-producer queue (Vyukov's intrusive design). Eventfd-backed
-   wake-up. Stand-alone unit test before any wiring.
-2. **`shard_main` skeleton.** A pthread entrypoint that: binds
-   `current_shard` to its argument; runs the existing `resp_serve`
-   inner loop; pumps its inbox between iterations. N=1: main thread
-   wraps `shard_main(&main_shard)` directly — no new thread spawned
-   yet. Behavior identical.
-3. **Acceptor split.** A separate thread (or the main thread) does
-   `accept()` and routes new fds to shard 0's inbox. Still N=1.
-4. **N=2.** Spawn shards[1]; route by `bernstein_hash(argv[1]) & 1`.
-   Cross-shard routing for keyless commands (PING, FLUSHDB) deferred.
-5. **Cross-shard ops.** Broadcast/aggregate for KEYS, FLUSHDB, DBSIZE.
-   MGET fan-out, gather-respond.
-6. **`(bgsave)`.** Fork-and-write child; parent waitpid loop. Fall
-   back to synchronous `(savedb)` semantics for compat.
-7. **Benchmark gate.** N=4 must be ≥ 3× N=1 on
-   `redis-benchmark -t SET,GET -r 100000 -P 64`. If not, revisit.
+- **2.1 — MPSC queue primitive.** Header-only, lock-free single-
+  consumer/multi-producer queue (Vyukov's intrusive design). Eventfd
+  on Linux, pipe-pair on macOS, for select()-able wake-up. Stand-alone
+  unit test before any wiring.
+- **2.2 — `shard_main` skeleton.** A pthread entrypoint that: binds
+  `current_shard` to its argument; runs the existing `resp_serve`
+  inner loop; pumps its inbox between iterations. N=1: main thread
+  wraps `shard_main(&main_shard)` directly — no new thread spawned
+  yet. Behavior identical.
+- **2.3 — Acceptor split** *(superseded — see 2.4-pre).* Originally
+  planned as a dedicated pthread blocking on `accept()` and routing
+  new fds to shard 0's inbox via a `SHARD_MSG_NEW_CLIENT` envelope.
+  Landed and worked, but the user-space dispatcher turned out
+  redundant given the kernel's `SO_REUSEPORT` flow-hashing. Replaced
+  in 2.4-pre.
+- **2.4-pre — `SO_REUSEPORT` pivot.** Drop the acceptor pthread and
+  the typed envelope. Each reactor calls `bind()` with `SO_REUSEPORT`
+  and accepts directly inside its select() loop. At N=1 equivalent
+  to a plain bind; at N>1 the foundation for 2.4. Smoke test in
+  `benchmark/test-reuseport.sh`.
+- **2.4 — N reactors.** Spawn one shard pthread per CPU thread
+  (default `min(num_cores, 16)`, override via `-r-shards`). On Linux
+  pin each with `pthread_setaffinity_np`; on macOS the affinity is
+  a hint at best. Route at command-dispatch time by
+  `bernstein_hash(argv[1]) & (N-1)` to the owner shard. The home
+  reactor still owns the socket; cross-shard work goes through the
+  per-shard inbox.
+- **2.5 — Cross-shard ops.** Broadcast/aggregate for KEYS, FLUSHDB,
+  DBSIZE. MGET fan-out, gather-respond. First real producer for the
+  inbox dispatcher.
+- **2.6 — `(bgsave)`.** Fork-and-write child; parent waitpid loop.
+  Fall back to synchronous `(savedb)` semantics for compat.
+- **2.7 — Benchmark gate.** N=4 must be ≥ 3× N=1 on
+  `redis-benchmark -t SET,GET -r 100000 -P 64`. If not, revisit.
 
-Each step is bisectable + benchmarkable on its own.
+### Step 2 status (2026-04-30)
+
+| #   | What                                                | Commit    |
+| --- | --------------------------------------------------- | --------- |
+| 2.1 | MPSC primitive + cross-thread wake shim             | `b75b7cf` |
+| 2.2 | `shard_main` skeleton + per-shard inbox/wake        | `1d961ed` |
+| 2.3 | Acceptor pthread + inbox-driven new-client handoff  | `e10b688` |
+| 2.4-pre | `SO_REUSEPORT` pivot — acceptor pthread removed | *uncommitted* |
+
+After 2.4-pre, single-binary behavior at N=1 is unchanged (the kernel
+routes the only listener it has). The per-shard inbox + wake fd stay
+wired but currently have no producer; they're the substrate Step 2.6
+(cross-shard ops) will plug into. The `SHARD_MSG_NEW_CLIENT` envelope
+that 2.3 introduced was deleted — the Step 2.4-N path no longer needs
+a typed handoff for new connections.
+
+Microbenchmark, single shard, MacBook Pro M-series, loopback, P=16:
+- c=50 ........ ~1.45M SET/sec, ~1.6M GET/sec
+- c=200 ....... ~1.5M SET/sec, ~1.5M GET/sec
+
+These are unchanged from the pre-acceptor baseline, confirming the
+SO_REUSEPORT pivot is performance-neutral at N=1. The Step 2.5
+benchmark gate will measure N>1.

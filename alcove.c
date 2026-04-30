@@ -523,27 +523,16 @@ int shard_runtime_init(shard_t *sh) {
 }
 
 /* Tear down inbox/wake. Caller is responsible for ensuring no producer
-   will signal after this returns — Step 2.3+ will join the acceptor
-   thread before this point. */
+   will signal after this returns. */
 void shard_runtime_destroy(shard_t *sh) {
   if (sh->runtime_ready != 1) return;
-  /* Inbox is intrusive and lock-free: drain and free any orphaned
-     messages so we don't leak. Producers should already be quiesced. */
-  for (;;) {
-    mpsc_node_t *n = mpsc_dequeue(&sh->inbox);
-    if (!n) break;
-    shard_msg_t *m = (shard_msg_t *)n;
-    if (m->kind == SHARD_MSG_NEW_CLIENT && m->arg.fd >= 0) close(m->arg.fd);
-    free(m);
-  }
+  /* Drain any leftover nodes so we don't leak. No producer exists today;
+     any node here is a bug. When Step 2.5 lands, variant-specific
+     cleanup (close fds, dec refcounts) belongs at the producer side. */
+  for (mpsc_node_t *n; (n = mpsc_dequeue(&sh->inbox)); ) free(n);
   alc_wake_destroy(&sh->wake);
   sh->runtime_ready = 0;
 }
-
-/* shard_drain_inbox lives in resp.c — message handlers need access to
-   resp_client_t / resp_clients, which are defined there. Keeping the
-   dispatcher next to its handlers means adding a new message kind only
-   touches one file. */
 
 /* Bumped on every operation that mutates a global binding (def, defmacro,
    persist, forget, savedb, top-level updatebang). The bytecode global-
