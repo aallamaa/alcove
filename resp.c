@@ -1641,9 +1641,9 @@ int resp_serve(int port) {
       break;
     }
 
-    /* Drain the wake fd if signalled. No inbox dispatcher today —
-       Step 2.5 (cross-shard ops) will reintroduce one; until then the
-       wake just lets a future producer interrupt the 1s select tick. */
+    /* Drain the wake fd if signalled. TODO(step-2.5): when cross-shard
+       ops add a real inbox producer, also drain sh->inbox here and
+       dispatch each message before resuming client I/O. */
     if (wakefd >= 0 && FD_ISSET(wakefd, &rfds)) alc_wake_drain(&sh->wake);
 
     if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv);

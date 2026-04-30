@@ -529,7 +529,9 @@ void shard_runtime_destroy(shard_t *sh) {
   /* Drain any leftover nodes so we don't leak. No producer exists today;
      any node here is a bug. When Step 2.5 lands, variant-specific
      cleanup (close fds, dec refcounts) belongs at the producer side. */
-  for (mpsc_node_t *n; (n = mpsc_dequeue(&sh->inbox)); ) free(n);
+  int leaked = 0;
+  for (mpsc_node_t *n; (n = mpsc_dequeue(&sh->inbox)); ) { free(n); leaked++; }
+  assert(leaked == 0 && "stray inbox nodes — producer didn't quiesce");
   alc_wake_destroy(&sh->wake);
   sh->runtime_ready = 0;
 }
