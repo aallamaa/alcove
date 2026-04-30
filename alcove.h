@@ -441,14 +441,18 @@ typedef struct shard_t {
   env_t *arena;     /* base of arena array (pointer to static storage) */
   env_t *arena_sp;  /* bump pointer; LIFO rolled back on destroy */
   env_t *arena_end; /* arena + ENV_ARENA_SLOTS */
-  /* Cross-thread inbox: producers (other shards / acceptor) enqueue
-     shard_msg_t; the reactor drains on each wake. Initialized by
-     shard_runtime_init, torn down by shard_runtime_destroy. The wake
-     fd is added to the reactor's select() set so any producer signal
-     unblocks it in time for the next drain. */
+  /* Cross-thread inbox: peer shards enqueue messages, this shard's
+     reactor drains on each wake. No producer exists today; Step 2.5
+     (cross-shard ops) wires up the first one. Initialized by
+     shard_runtime_init, torn down by shard_runtime_destroy. */
   mpsc_queue_t inbox;
   alc_wake_t wake;
   int runtime_ready; /* 0 until shard_runtime_init succeeds; -1 on failure */
+  /* Per-shard RESP keyspace. Currently only main_shard.db is used (N=1);
+     Step 2.4 routes by `bernstein_hash(key) & (N-1)` so each key lives
+     on exactly one shard. Lazily allocated on first SET. */
+  dict_t *db;
+  int64_t db_last_sweep_us; /* TTL eviction sweep gate */
 } shard_t;
 extern shard_t main_shard;
 extern ALCOVE_TLS shard_t *current_shard;

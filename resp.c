@@ -82,7 +82,12 @@ typedef struct resp_client {
 } resp_client_t;
 
 static resp_client_t *resp_clients = NULL;
-static dict_t *resp_db = NULL; /* lazily created on first SET */
+/* Per-shard keyspace + TTL sweep gate, accessed via current_shard. The
+   macros keep the existing call sites (`resp_db`, `resp_last_sweep_us`)
+   readable while routing every reference through the TLS shard. Step 2.4
+   replaces lookups with `shard_for_key(k)->db` once routing is wired. */
+#define resp_db (current_shard->db)
+#define resp_last_sweep_us (current_shard->db_last_sweep_us)
 static volatile sig_atomic_t resp_stop = 0;
 /* Set by resp_serve / resp_repl_serve once bind succeeds; read by the
    (redis-port) builtin so REPL code can discover the listening port
@@ -188,7 +193,6 @@ static void resp_db_evict_expired(void) {
    1s interval matches the reactor's select() timeout, so an idle
    server still ticks the sweep at the same cadence. */
 #define RESP_SWEEP_INTERVAL_US 1000000
-static int64_t resp_last_sweep_us = 0;
 static void resp_db_maybe_sweep(void) {
   if (!resp_db) return;
   int64_t now = resp_now_us();
