@@ -1503,83 +1503,6 @@ static void resp_accept_drain(int srv) {
   }
 }
 
-/* Forward decl — definition follows below. */
-static inline int resp_client_handle_io(resp_client_t *cur,
-                                        fd_set *rfds, fd_set *wfds);
-
-/* Bind/listen/nonblock on 127.0.0.1:port, returning the listen fd or -1.
-   Always sets SO_REUSEADDR + SO_REUSEPORT (the latter is harmless for
-   the single-binder REPL path; multi-reactor needs it). */
-static int resp_listen(int port) {
-  int srv = socket(AF_INET, SOCK_STREAM, 0);
-  if (srv < 0) { perror("socket"); return -1; }
-  int yes = 1;
-  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-#ifdef SO_REUSEPORT
-  (void)setsockopt(srv, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof yes);
-#endif
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof addr);
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = htons(port);
-  if (bind(srv, (struct sockaddr *)&addr, sizeof addr) < 0) {
-    fprintf(stderr, "alcove: bind 127.0.0.1:%d failed: %s\n", port,
-            strerror(errno));
-    close(srv); return -1;
-  }
-  if (listen(srv, RESP_LISTEN_BACKLOG) < 0) {
-    perror("listen"); close(srv); return -1;
-  }
-  /* Non-blocking so a select() false-positive can't stall the loop. */
-  resp_set_nonblock(srv);
-  return srv;
-}
-
-/* Common fdset build: rfds gets srv + extra_rfd (if >= 0) + every
-   client; wfds gets clients with pending output. Returns maxfd for
-   select(). extra_rfd is the per-reactor wake fd (resp_serve) or
-   stdin (resp_repl_serve). */
-static inline int resp_build_fdset(int srv, int extra_rfd,
-                                   fd_set *rfds, fd_set *wfds) {
-  FD_ZERO(rfds);
-  FD_ZERO(wfds);
-  int maxfd = srv;
-  FD_SET(srv, rfds);
-  if (extra_rfd >= 0) {
-    FD_SET(extra_rfd, rfds);
-    if (extra_rfd > maxfd) maxfd = extra_rfd;
-  }
-  for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
-    FD_SET(cl->fd, rfds);
-    if (cl->wlen > cl->whead) FD_SET(cl->fd, wfds);
-    if (cl->fd > maxfd) maxfd = cl->fd;
-  }
-  return maxfd;
-}
-
-/* Walk the per-reactor client list, dispatching IO and unlinking
-   anyone the handler asks to drop. Tolerates unlink mid-walk via
-   the saved next pointer. */
-static inline void resp_drive_clients(fd_set *rfds, fd_set *wfds) {
-  resp_client_t *cur = resp_clients;
-  while (cur) {
-    resp_client_t *next = cur->next;
-    if (resp_client_handle_io(cur, rfds, wfds))
-      resp_client_unlink(cur);
-    cur = next;
-  }
-}
-
-/* Free every client on this reactor — shutdown path only. */
-static inline void resp_clients_free_all(void) {
-  while (resp_clients) {
-    resp_client_t *next = resp_clients->next;
-    resp_client_free(resp_clients);
-    resp_clients = next;
-  }
-}
-
 /* Per-client IO step: slide-and-grow rbuf, read, dispatch, opportunistic
    flush, then drain wbuf if select said writeable. Returns 1 if the
    client should be dropped (EOF, hard error, or buffer ceiling hit).
@@ -1631,6 +1554,88 @@ static inline int resp_client_handle_io(resp_client_t *cur,
   return drop;
 }
 
+/* Bind/listen/nonblock on 127.0.0.1:port, returning the listen fd or -1.
+   Always sets SO_REUSEPORT — Linux hashes flows across N reactors that
+   bind the same port; macOS picks whichever wakes first (weaker
+   fairness). At N=1 it's a no-op, so harmless on the single-binder
+   REPL path. */
+static int resp_listen(int port) {
+  int srv = socket(AF_INET, SOCK_STREAM, 0);
+  if (srv < 0) { perror("socket"); return -1; }
+  int yes = 1;
+  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+#ifdef SO_REUSEPORT
+  (void)setsockopt(srv, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof yes);
+#endif
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof addr);
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(port);
+  if (bind(srv, (struct sockaddr *)&addr, sizeof addr) < 0) {
+    fprintf(stderr, "alcove: bind 127.0.0.1:%d failed: %s\n", port,
+            strerror(errno));
+    close(srv); return -1;
+  }
+  if (listen(srv, RESP_LISTEN_BACKLOG) < 0) {
+    perror("listen"); close(srv); return -1;
+  }
+  /* Non-blocking so a select() false-positive can't stall the loop. */
+  resp_set_nonblock(srv);
+  return srv;
+}
+
+/* Standard reactor signal disposition: ignore SIGPIPE (write() returns
+   EPIPE instead of killing us), trip resp_stop on SIGINT/SIGTERM. */
+static void resp_install_signals(void) {
+  signal(SIGPIPE, SIG_IGN);
+  signal(SIGINT, resp_sigint);
+  signal(SIGTERM, resp_sigint);
+}
+
+/* Common fdset build: rfds gets srv + extra_rfd (if >= 0) + every
+   client; wfds gets clients with pending output. Returns maxfd for
+   select(). extra_rfd is an optional second readable fd, or -1 to skip. */
+static inline int resp_build_fdset(int srv, int extra_rfd,
+                                   fd_set *rfds, fd_set *wfds) {
+  FD_ZERO(rfds);
+  FD_ZERO(wfds);
+  int maxfd = srv;
+  FD_SET(srv, rfds);
+  if (extra_rfd >= 0) {
+    FD_SET(extra_rfd, rfds);
+    if (extra_rfd > maxfd) maxfd = extra_rfd;
+  }
+  for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
+    FD_SET(cl->fd, rfds);
+    if (cl->wlen > cl->whead) FD_SET(cl->fd, wfds);
+    if (cl->fd > maxfd) maxfd = cl->fd;
+  }
+  return maxfd;
+}
+
+/* Walk the per-reactor client list, dispatching IO and unlinking
+   anyone the handler asks to drop. Tolerates unlink mid-walk via
+   the saved next pointer. */
+static inline void resp_drive_clients(fd_set *rfds, fd_set *wfds) {
+  resp_client_t *cur = resp_clients;
+  while (cur) {
+    resp_client_t *next = cur->next;
+    if (resp_client_handle_io(cur, rfds, wfds))
+      resp_client_unlink(cur);
+    cur = next;
+  }
+}
+
+/* Free every client on this reactor — shutdown path only. */
+static inline void resp_clients_free_all(void) {
+  while (resp_clients) {
+    resp_client_t *next = resp_clients->next;
+    resp_client_free(resp_clients);
+    resp_clients = next;
+  }
+}
+
 /* Public entry — blocks until SIGINT/SIGTERM, then returns a process
    exit code. Called from main() when -r is on the command line. */
 int resp_serve(int port) {
@@ -1645,10 +1650,7 @@ int resp_serve(int port) {
   if (srv < 0) return 1;
   resp_active_port = port;
   resp_cmd_table_init();
-
-  signal(SIGPIPE, SIG_IGN);
-  signal(SIGINT, resp_sigint);
-  signal(SIGTERM, resp_sigint);
+  resp_install_signals();
 
   printf("alcove RESP2 server listening on 127.0.0.1:%d\n", port);
   fflush(stdout);
@@ -1808,10 +1810,7 @@ int resp_repl_serve(int port, env_t *global) {
   resp_set_nonblock(0); /* stdin */
   resp_active_port = port;
   resp_cmd_table_init();
-
-  signal(SIGPIPE, SIG_IGN);
-  signal(SIGINT, resp_sigint);
-  signal(SIGTERM, resp_sigint);
+  resp_install_signals();
 
   printf("alcove combined REPL + RESP2 listening on 127.0.0.1:%d\n", port);
   printf("(use redis-cli to talk RESP, or call (redis-keys), (redis-get k), "
