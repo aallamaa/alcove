@@ -448,10 +448,13 @@ typedef struct shard_t {
   mpsc_queue_t inbox;
   alc_wake_t wake;
   int runtime_ready; /* 0 until shard_runtime_init succeeds; -1 on failure */
-  /* Per-shard RESP keyspace. Currently only main_shard.db is used (N=1);
-     Step 2.4 routes by `bernstein_hash(key) & (N-1)` so each key lives
-     on exactly one shard. Lazily allocated on first SET. */
-  dict_t *db;
+  /* RESP keyspace — lock-free open-addressed hash with atomic exp_t *
+     slots. Today every shard's `kv` field points to the same global
+     `g_resp_kv` (created lazily in resp.c on first SET); all reactors
+     share one keyspace and rely on CAS + epoch reclamation to stay
+     correct under concurrency. The pointer lives on shard_t to keep
+     the eventual partitioning option open without touching call sites. */
+  struct lfkv *kv;
   int64_t db_last_sweep_us; /* TTL eviction sweep gate */
 } shard_t;
 extern shard_t main_shard;

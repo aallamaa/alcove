@@ -81,12 +81,20 @@ typedef struct resp_client {
   struct resp_client *next;
 } resp_client_t;
 
-static resp_client_t *resp_clients = NULL;
-/* Per-shard keyspace + TTL sweep gate, accessed via current_shard. The
-   macros keep the existing call sites (`resp_db`, `resp_last_sweep_us`)
-   readable while routing every reference through the TLS shard. Step 2.4
-   replaces lookups with `shard_for_key(k)->db` once routing is wired. */
-#define resp_db (current_shard->db)
+/* Per-reactor client list. Each reactor owns its own clients (acquired
+   via accept on its own SO_REUSEPORT socket); never touched by peers. */
+static ALCOVE_TLS resp_client_t *resp_clients = NULL;
+/* Global lock-free keyspace shared by every reactor. Lazy-allocated on
+   first SET via resp_kv_ensure(). Each shard_t.kv points at this same
+   `g_resp_kv` so the existing `current_shard->kv` access pattern stays
+   uniform; the indirection lets us swap per-shard partitioning in later
+   without touching call sites. */
+static lfkv_t *g_resp_kv = NULL;
+/* Default slot count — power of 2. 2^20 = 1M slots ≈ 8MB pointer table.
+   Sized to comfortably hold redis-benchmark's `-r 1000000` random-key
+   load at <60% fill factor. Tune via RESP_KV_SLOTS env var if needed. */
+#define RESP_KV_DEFAULT_SLOTS (1u << 20)
+#define resp_kv (current_shard->kv)
 #define resp_last_sweep_us (current_shard->db_last_sweep_us)
 static volatile sig_atomic_t resp_stop = 0;
 /* Set by resp_serve / resp_repl_serve once bind succeeds; read by the
@@ -100,92 +108,90 @@ static void resp_sigint(int sig) {
 }
 
 /* ---------- storage helpers ----------
-   Thin wrappers over alcove's dict_t. TTL is sign-encoded on
-   keyval_t->timestamp: 0 = no TTL, < 0 = absolute-µs expire-at. */
+   Thin wrappers over the lock-free keyspace (lfkv.h). The lfkv table
+   stores `exp_t *` slots directly with per-slot atomic expiry; no
+   sign-encoding, no per-keyval allocation on overwrite. */
 
 static int64_t resp_now_us(void) { return gettimeusec(); }
 
+/* Inner-hash counter — Redis hashes still use dict_t for field storage
+   (the outer key→hash slot is the lock-free part). */
 static unsigned long dict_count(dict_t *d) {
   return d ? d->ht[0].used + d->ht[1].used : 0;
 }
 
-/* TTL accessors — keep the sign-encoding hidden. */
-static inline int kv_has_ttl(keyval_t *k) { return k->timestamp < 0; }
-static inline int kv_is_expired(keyval_t *k, int64_t now) {
-  return k->timestamp < 0 && (-k->timestamp) <= now;
-}
-static inline int64_t kv_ttl_remaining_us(keyval_t *k, int64_t now) {
-  return (-k->timestamp) - now;
-}
-static inline void kv_set_expire_us(keyval_t *k, int64_t expire_at_us) {
-  k->timestamp = -expire_at_us;
-}
-static inline void kv_clear_ttl(keyval_t *k) { k->timestamp = 0; }
-
-static void resp_db_ensure(void) {
-  if (!resp_db) resp_db = create_dict();
-}
-
-static keyval_t *resp_db_find(const char *key) {
-  return resp_db ? set_get_keyval_dict(resp_db, (char *)key, NULL) : NULL;
-}
-
-/* Lookup with lazy TTL eviction. Returns NULL if missing or expired. */
-static keyval_t *resp_db_lookup(const char *key) {
-  keyval_t *k = resp_db_find(key);
-  if (!k) return NULL;
-  if (kv_is_expired(k, resp_now_us())) {
-    del_keyval_dict(resp_db, (char *)key);
-    return NULL;
+/* Lazy-create the global lfkv on first write. Concurrent first-callers
+   race via CAS on `g_resp_kv`; losers free their stillborn table. */
+static void resp_kv_ensure(void) {
+  if (atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                           memory_order_acquire)) {
+    /* Mirror the global into the TLS shard pointer once per shard. */
+    if (!current_shard->kv) current_shard->kv = g_resp_kv;
+    return;
   }
-  return k;
+  size_t slots = RESP_KV_DEFAULT_SLOTS;
+  const char *env = getenv("RESP_KV_SLOTS");
+  if (env) {
+    char *e;
+    unsigned long v = strtoul(env, &e, 10);
+    if (*e == '\0' && v && (v & (v - 1)) == 0) slots = v;
+  }
+  lfkv_t *fresh = lfkv_new(slots);
+  if (!fresh) return;
+  lfkv_t *expected = NULL;
+  if (!atomic_compare_exchange_strong_explicit(
+          (_Atomic(lfkv_t *) *)&g_resp_kv, &expected, fresh,
+          memory_order_release, memory_order_acquire)) {
+    lfkv_destroy(fresh); /* lost race */
+  }
+  current_shard->kv = g_resp_kv;
 }
 
-/* SET-style write: replaces value, clears any prior TTL.
-   `val` ownership transfers in — set_get_keyval_dict takes its own ref
-   via refexp, then we drop the caller's ref. */
-static keyval_t *resp_db_set(const char *key, exp_t *val) {
-  resp_db_ensure();
-  keyval_t *k = set_get_keyval_dict(resp_db, (char *)key, val);
-  if (k) kv_clear_ttl(k);
-  unrefexp(val);
-  return k;
+/* Lookup: returns refexp-bumped value or NULL. Caller MUST unrefexp.
+   Lazy expiry handled inside lfkv_get. */
+static inline exp_t *resp_kv_lookup(const char *key, size_t klen) {
+  return resp_kv ? lfkv_get(resp_kv, key, klen) : NULL;
 }
 
-static int resp_db_del(const char *key) {
-  return resp_db ? del_keyval_dict(resp_db, (char *)key) : 0;
+/* SET-style write: consumes the caller's `val` ref, clears prior TTL. */
+static inline void resp_kv_set(const char *key, size_t klen, exp_t *val) {
+  resp_kv_ensure();
+  if (lfkv_set(resp_kv, key, klen, val) < 0) {
+    /* Table full — best-effort: drop the value. */
+    unrefexp(val);
+  }
 }
 
-static void resp_db_clear(void) {
-  if (!resp_db) return;
-  destroy_dict(resp_db);
-  resp_db = NULL;
+static inline int resp_kv_del(const char *key, size_t klen) {
+  return resp_kv ? lfkv_del(resp_kv, key, klen) : 0;
+}
+
+/* FLUSHDB: tombstone every live slot, retire all values. Slot records
+   stay allocated until process exit (keys recycle on re-insert). */
+static inline void resp_kv_clear(void) {
+  if (resp_kv) lfkv_clear(resp_kv);
+}
+
+/* TTL helpers — preserve API names of the old keyval_t-based wrappers
+   so handlers stay close to their original shape. */
+static inline int64_t resp_kv_get_expiry(const char *key, size_t klen) {
+  if (!resp_kv) return -1;
+  return lfkv_get_expiry(resp_kv, key, klen);
+}
+static inline int resp_kv_set_expiry(const char *key, size_t klen,
+                                     int64_t expire_at_us) {
+  if (!resp_kv) return 0;
+  return lfkv_set_expiry(resp_kv, key, klen, expire_at_us);
+}
+
+static inline size_t resp_kv_count(void) {
+  return resp_kv ? lfkv_count(resp_kv) : 0;
 }
 
 /* Evict every expired entry in one pass. KEYS * + count-exact paths
    call this so the array header matches the emitted count. */
-static void resp_db_evict_expired(void) {
-  if (!resp_db) return;
-  int64_t now = resp_now_us();
-  for (int hi = 0; hi < 2; hi++) {
-    kvht_t *h = &resp_db->ht[hi];
-    for (unsigned long b = 0; b < h->size; b++) {
-      keyval_t **pp = &h->table[b];
-      while (*pp) {
-        keyval_t *kv = *pp;
-        if (kv_is_expired(kv, now)) {
-          char *k = (char *)kv->key;
-          *pp = kv->next;
-          unrefexp(kv->val);
-          free(k);
-          free(kv);
-          h->used--;
-        } else {
-          pp = &kv->next;
-        }
-      }
-    }
-  }
+static inline void resp_kv_evict_expired(void) {
+  if (resp_kv) (void)lfkv_evict_expired(resp_kv);
 }
 
 /* Throttled background sweep — called from the reactor's top-of-loop
@@ -193,12 +199,12 @@ static void resp_db_evict_expired(void) {
    1s interval matches the reactor's select() timeout, so an idle
    server still ticks the sweep at the same cadence. */
 #define RESP_SWEEP_INTERVAL_US 1000000
-static void resp_db_maybe_sweep(void) {
-  if (!resp_db) return;
+static void resp_kv_maybe_sweep(void) {
+  if (!resp_kv) return;
   int64_t now = resp_now_us();
   if (now - resp_last_sweep_us < RESP_SWEEP_INTERVAL_US) return;
   resp_last_sweep_us = now;
-  resp_db_evict_expired();
+  resp_kv_evict_expired();
 }
 
 /* ---------- per-key dict helpers (Redis hash internals) ----------
@@ -538,12 +544,54 @@ static void cmd_select(resp_client_t *c, char **argv, long *argl, int argc) {
 }
 
 static void cmd_dbsize(resp_client_t *c) {
-  resp_write_int(c, (long long)dict_count(resp_db));
+  resp_write_int(c, (long long)resp_kv_count());
 }
 
 static void cmd_flushdb(resp_client_t *c) {
-  resp_db_clear();
+  resp_kv_clear();
   resp_write_simple(c, "OK");
+}
+
+/* Snapshot one (key,klen) per live entry into a heap-allocated array.
+   Used by KEYS * and the redis-keys/redis-foreach REPL builtins so the
+   emit phase doesn't see partial mutations from concurrent reactors.
+   Returns -1 on alloc failure. */
+typedef struct {
+  char *bytes; /* one alloc; entries point into here */
+  size_t blen, bcap;
+  size_t *off;  /* per-entry start offset into `bytes` */
+  size_t *len;  /* per-entry key length */
+  size_t n, ncap;
+} resp_keys_snap_t;
+
+static int resp_keys_snap_cb(const char *k, size_t klen, exp_t *v,
+                             int64_t exp_us, void *ctx) {
+  (void)v; (void)exp_us;
+  resp_keys_snap_t *s = ctx;
+  if (s->n == s->ncap) {
+    size_t nc = s->ncap ? s->ncap * 2 : 64;
+    size_t *no = realloc(s->off, nc * sizeof *no);
+    size_t *nl = realloc(s->len, nc * sizeof *nl);
+    if (!no || !nl) { free(no); free(nl); return -1; }
+    s->off = no; s->len = nl; s->ncap = nc;
+  }
+  if (s->blen + klen > s->bcap) {
+    size_t nc = s->bcap ? s->bcap * 2 : 4096;
+    while (nc < s->blen + klen) nc *= 2;
+    char *nb = realloc(s->bytes, nc);
+    if (!nb) return -1;
+    s->bytes = nb; s->bcap = nc;
+  }
+  s->off[s->n] = s->blen;
+  s->len[s->n] = klen;
+  memcpy(s->bytes + s->blen, k, klen);
+  s->blen += klen;
+  s->n++;
+  return 0;
+}
+
+static void resp_keys_snap_free(resp_keys_snap_t *s) {
+  free(s->bytes); free(s->off); free(s->len);
 }
 
 static void cmd_keys_star(resp_client_t *c, char **argv, long *argl,
@@ -553,17 +601,14 @@ static void cmd_keys_star(resp_client_t *c, char **argv, long *argl,
     resp_write_err(c, "ERR alcove RESP server only supports KEYS *");
     return;
   }
-  /* Lazy-expire pass first, then count + emit. The header count must
-     exactly match the number of bulks we emit. */
-  resp_db_evict_expired();
-  resp_write_array_hdr(c, (long long)dict_count(resp_db));
-  if (!resp_db) return;
-  for (int hi = 0; hi < 2; hi++) {
-    kvht_t *h = &resp_db->ht[hi];
-    for (unsigned long b = 0; b < h->size; b++)
-      for (keyval_t *kv = h->table[b]; kv; kv = kv->next)
-        resp_write_bulk(c, (char *)kv->key, strlen((char *)kv->key));
-  }
+  if (!resp_kv) { resp_write_array_hdr(c, 0); return; }
+  resp_kv_evict_expired();
+  resp_keys_snap_t s = {0};
+  lfkv_foreach(resp_kv, resp_keys_snap_cb, &s);
+  resp_write_array_hdr(c, (long long)s.n);
+  for (size_t i = 0; i < s.n; i++)
+    resp_write_bulk(c, s.bytes + s.off[i], s.len[i]);
+  resp_keys_snap_free(&s);
 }
 
 static const char *resp_type_name(exp_t *v) {
@@ -576,29 +621,19 @@ static const char *resp_type_name(exp_t *v) {
 
 static void cmd_type(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_simple(c, "none");
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  resp_write_simple(c, kv ? resp_type_name(kv->val) : "none");
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_simple(c, "none"); return; }
+  resp_write_simple(c, resp_type_name(v));
+  unrefexp(v);
 }
 
 static void cmd_del(resp_client_t *c, char **argv, long *argl, int argc) {
   ARG_AT_LEAST(2);
   long long deleted = 0;
   for (int a = 1; a < argc; a++) {
-    char *k = resp_dup_key(argv[a], argl[a]);
-    if (!k) continue;
-    /* lookup first to honour lazy expiry (an expired key shouldn't
-       count as a successful delete) */
-    if (resp_db_lookup(k)) {
-      resp_db_del(k);
-      deleted++;
-    }
-    free(k);
+    /* lfkv_del returns 1 if a live value was tombstoned. Lazy-expiry
+       still kicks in via lfkv_get if needed; for DEL we just attempt. */
+    if (resp_kv_del(argv[a], (size_t)argl[a])) deleted++;
   }
   resp_write_int(c, deleted);
 }
@@ -607,10 +642,8 @@ static void cmd_exists(resp_client_t *c, char **argv, long *argl, int argc) {
   ARG_AT_LEAST(2);
   long long present = 0;
   for (int a = 1; a < argc; a++) {
-    char *k = resp_dup_key(argv[a], argl[a]);
-    if (!k) continue;
-    if (resp_db_lookup(k)) present++;
-    free(k);
+    exp_t *v = resp_kv_lookup(argv[a], (size_t)argl[a]);
+    if (v) { present++; unrefexp(v); }
   }
   resp_write_int(c, present);
 }
@@ -625,28 +658,16 @@ static void cmd_expire(resp_client_t *c, char **argv, long *argl, int argc,
     resp_write_err(c, "ERR value is not an integer or out of range");
     return;
   }
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    free(k);
-    resp_write_int(c, 0);
-    return;
-  }
-  /* Negative TTL == immediate delete (Redis semantics). */
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  /* Negative/zero TTL == immediate delete (Redis semantics). */
   if (delta <= 0) {
-    resp_db_del(k);
-    free(k);
-    resp_write_int(c, 1);
+    int hit = resp_kv_del(k, klen);
+    resp_write_int(c, hit);
     return;
   }
   int64_t deadline = resp_now_us() + delta * (millis ? 1000LL : 1000000LL);
-  kv_set_expire_us(kv, deadline);
-  free(k);
-  resp_write_int(c, 1);
+  resp_write_int(c, resp_kv_set_expiry(k, klen, deadline));
 }
 
 /* TTL key | PTTL key. Returns:
@@ -656,44 +677,22 @@ static void cmd_expire(resp_client_t *c, char **argv, long *argl, int argc,
 static void cmd_ttl(resp_client_t *c, char **argv, long *argl, int argc,
                     int millis) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, -2);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    free(k);
-    resp_write_int(c, -2);
-    return;
-  }
-  if (!kv_has_ttl(kv)) {
-    free(k);
-    resp_write_int(c, -1);
-    return;
-  }
-  int64_t left = kv_ttl_remaining_us(kv, resp_now_us());
+  int64_t exp = resp_kv_get_expiry(argv[1], (size_t)argl[1]);
+  if (exp < 0) { resp_write_int(c, -2); return; }
+  if (exp == 0) { resp_write_int(c, -1); return; }
+  int64_t left = exp - resp_now_us();
   if (left < 0) left = 0;
-  free(k);
   resp_write_int(c, millis ? (long long)(left / 1000)
                            : (long long)(left / 1000000));
 }
 
 static void cmd_persist(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv || !kv_has_ttl(kv)) {
-    free(k);
-    resp_write_int(c, 0);
-    return;
-  }
-  kv_clear_ttl(kv);
-  free(k);
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  int64_t exp = resp_kv_get_expiry(k, klen);
+  if (exp <= 0) { resp_write_int(c, 0); return; } /* absent or no TTL */
+  resp_kv_set_expiry(k, klen, 0);
   resp_write_int(c, 1);
 }
 
@@ -732,140 +731,113 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
     resp_write_err(c, "ERR syntax error");
     return;
   }
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_err(c, "ERR keys with embedded NUL not supported");
-    return;
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  exp_t *fresh = make_blob(argv[2], (size_t)argl[2]);
+  resp_kv_ensure();
+  if (nx || xx) {
+    int ok = nx ? lfkv_set_nx(resp_kv, k, klen, fresh)
+                : lfkv_set_xx(resp_kv, k, klen, fresh);
+    if (!ok) { unrefexp(fresh); resp_write_nil(c); return; }
+  } else {
+    resp_kv_set(k, klen, fresh); /* always consumes the ref */
   }
-  keyval_t *exist = resp_db_lookup(k);
-  if (nx && exist) {
-    free(k);
-    resp_write_nil(c);
-    return;
-  }
-  if (xx && !exist) {
-    free(k);
-    resp_write_nil(c);
-    return;
-  }
-  keyval_t *kv = resp_db_set(k, make_blob(argv[2], (size_t)argl[2]));
-  if (expire_us && kv) kv_set_expire_us(kv, resp_now_us() + expire_us);
-  free(k);
+  if (expire_us)
+    resp_kv_set_expiry(k, klen, resp_now_us() + expire_us);
   resp_write_simple(c, "OK");
 }
 
 static void cmd_get(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_nil(c);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_nil(c);
-    return;
-  }
-  if (!isblob(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  alc_blob_t *b = (alc_blob_t *)kv->val->ptr;
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_nil(c); return; }
+  if (!isblob(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  alc_blob_t *b = (alc_blob_t *)v->ptr;
   resp_write_bulk(c, b->bytes, b->len);
+  unrefexp(v);
 }
 
 static void cmd_strlen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_int(c, 0);
-    return;
-  }
-  if (!isblob(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  resp_write_int(c, (long long)blob_len(kv->val));
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_int(c, 0); return; }
+  if (!isblob(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  resp_write_int(c, (long long)blob_len(v));
+  unrefexp(v);
 }
 
-/* Shared core for INCR/DECR/INCRBY/DECRBY. Caller owns `key`. Mutates
-   kv->val in place to preserve any existing TTL across the operation. */
-static void resp_apply_incr(resp_client_t *c, const char *key,
+/* Shared core for INCR/DECR/INCRBY/DECRBY. CAS-loop on the value slot
+   so concurrent reactors can't lose updates; lfkv_cas preserves TTL
+   (does not touch the slot's expiry_us). */
+static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
                             long long delta) {
-  keyval_t *kv = resp_db_lookup(key);
-  long long cur = 0;
-  if (kv) {
-    if (!isblob(kv->val)) {
-      resp_write_wrongtype(c);
+  resp_kv_ensure();
+  for (;;) {
+    exp_t *cur_v = resp_kv_lookup(key, klen);
+    long long cur = 0;
+    if (cur_v) {
+      if (!isblob(cur_v)) {
+        unrefexp(cur_v);
+        resp_write_wrongtype(c);
+        return;
+      }
+      alc_blob_t *b = (alc_blob_t *)cur_v->ptr;
+      if (b->len == 0 || b->len > 30) {
+        unrefexp(cur_v);
+        resp_write_err(c, "ERR value is not an integer or out of range");
+        return;
+      }
+      char buf[32];
+      memcpy(buf, b->bytes, b->len);
+      buf[b->len] = '\0';
+      char *end;
+      errno = 0;
+      cur = strtoll(buf, &end, 10);
+      if (*end != '\0' || errno) {
+        unrefexp(cur_v);
+        resp_write_err(c, "ERR value is not an integer or out of range");
+        return;
+      }
+    }
+    if ((delta > 0 && cur > LLONG_MAX - delta) ||
+        (delta < 0 && cur < LLONG_MIN - delta)) {
+      if (cur_v) unrefexp(cur_v);
+      resp_write_err(c, "ERR increment or decrement would overflow");
       return;
     }
-    alc_blob_t *b = (alc_blob_t *)kv->val->ptr;
-    if (b->len == 0 || b->len > 30) {
-      resp_write_err(c, "ERR value is not an integer or out of range");
-      return;
-    }
+    long long next = cur + delta;
     char buf[32];
-    memcpy(buf, b->bytes, b->len);
-    buf[b->len] = '\0';
-    char *end;
-    errno = 0;
-    cur = strtoll(buf, &end, 10);
-    if (*end != '\0' || errno) {
-      resp_write_err(c, "ERR value is not an integer or out of range");
-      return;
+    int n = resp_i64_to_ascii(buf, (int64_t)next);
+    exp_t *new_blob = make_blob(buf, (size_t)n);
+    int ok;
+    if (cur_v) {
+      /* CAS preserves TTL. cur_v has 1 caller-bumped ref; on success
+         lfkv_cas retires the slot's old (== cur_v) ref. We still need
+         to drop our bumped ref afterwards. */
+      ok = lfkv_cas(resp_kv, key, klen, cur_v, new_blob);
+      unrefexp(cur_v);
+      if (!ok) { unrefexp(new_blob); continue; }
+    } else {
+      ok = lfkv_set_nx(resp_kv, key, klen, new_blob);
+      if (!ok) { unrefexp(new_blob); continue; }
     }
-  }
-  /* Signed-overflow guard before the addition itself wraps. */
-  if ((delta > 0 && cur > LLONG_MAX - delta) ||
-      (delta < 0 && cur < LLONG_MIN - delta)) {
-    resp_write_err(c, "ERR increment or decrement would overflow");
+    resp_write_int(c, next);
     return;
   }
-  cur += delta;
-  char buf[32];
-  int n = resp_i64_to_ascii(buf, (int64_t)cur);
-  exp_t *new_blob = make_blob(buf, (size_t)n);
-  if (kv) {
-    /* In-place mutation preserves kv->timestamp (TTL survives INCR). */
-    unrefexp(kv->val);
-    kv->val = new_blob;
-  } else {
-    resp_db_set(key, new_blob);
-  }
-  resp_write_int(c, cur);
 }
 
 /* INCR / DECR — one-step ±1. */
 static void cmd_incr_decr(resp_client_t *c, char **argv, long *argl, int argc,
                           int sign) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_err(c, "ERR keys with embedded NUL not supported");
-    return;
-  }
-  resp_apply_incr(c, k, sign);
-  free(k);
+  resp_apply_incr(c, argv[1], (size_t)argl[1], sign);
 }
 
 /* INCRBY / DECRBY — caller-supplied integer delta in argv[2]. */
 static void cmd_incrby_decrby(resp_client_t *c, char **argv, long *argl,
                               int argc, int sign) {
   ARGN(3);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_err(c, "ERR keys with embedded NUL not supported");
-    return;
-  }
   if (argl[2] == 0 || argl[2] > 20) {
-    free(k);
     resp_write_err(c, "ERR value is not an integer or out of range");
     return;
   }
@@ -876,170 +848,153 @@ static void cmd_incrby_decrby(resp_client_t *c, char **argv, long *argl,
   errno = 0;
   long long delta = strtoll(dbuf, &end, 10);
   if (*end != '\0' || errno) {
-    free(k);
     resp_write_err(c, "ERR value is not an integer or out of range");
     return;
   }
   if (sign < 0) {
-    /* DECRBY: negate. LLONG_MIN has no positive counterpart. */
     if (delta == LLONG_MIN) {
-      free(k);
       resp_write_err(c, "ERR value is not an integer or out of range");
       return;
     }
     delta = -delta;
   }
-  resp_apply_incr(c, k, delta);
-  free(k);
+  resp_apply_incr(c, argv[1], (size_t)argl[1], delta);
 }
 
 /* APPEND key value — append to an existing string, or create the key
-   holding `value` if missing. Returns the new length. In-place mutation
-   on the existing path preserves TTL. */
+   holding `value` if missing. Returns the new length. CAS-loops to
+   handle concurrent writers; lfkv_cas preserves TTL. */
 static void cmd_append(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_err(c, "ERR keys with embedded NUL not supported");
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    resp_db_set(k, make_blob(argv[2], (size_t)argl[2]));
-    free(k);
-    resp_write_int(c, (long long)argl[2]);
-    return;
-  }
-  if (!isblob(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
-  alc_blob_t *old = (alc_blob_t *)kv->val->ptr;
-  size_t old_n = old->len;
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
   size_t add = (size_t)argl[2];
-  size_t new_n = old_n + add;
-  /* Allocate a fresh blob (flex-array, single alloc) and copy.
-     Cheaper than realloc'ing the existing one because alc_blob_t is
-     header+payload in one allocation — there's no detachable payload. */
-  exp_t *fresh = make_blob(NULL, new_n);
-  alc_blob_t *nb = (alc_blob_t *)fresh->ptr;
-  if (old_n) memcpy(nb->bytes, old->bytes, old_n);
-  if (add) memcpy(nb->bytes + old_n, argv[2], add);
-  unrefexp(kv->val);
-  kv->val = fresh; /* make_blob gave it 1 ref */
-  free(k);
-  resp_write_int(c, (long long)new_n);
+  resp_kv_ensure();
+  for (;;) {
+    exp_t *cur_v = resp_kv_lookup(k, klen);
+    if (!cur_v) {
+      exp_t *fresh = make_blob(argv[2], add);
+      if (lfkv_set_nx(resp_kv, k, klen, fresh)) {
+        resp_write_int(c, (long long)add);
+        return;
+      }
+      unrefexp(fresh);
+      continue; /* someone else inserted — retry as append-existing */
+    }
+    if (!isblob(cur_v)) {
+      unrefexp(cur_v);
+      resp_write_wrongtype(c);
+      return;
+    }
+    alc_blob_t *old = (alc_blob_t *)cur_v->ptr;
+    size_t old_n = old->len;
+    size_t new_n = old_n + add;
+    exp_t *fresh = make_blob(NULL, new_n);
+    alc_blob_t *nb = (alc_blob_t *)fresh->ptr;
+    if (old_n) memcpy(nb->bytes, old->bytes, old_n);
+    if (add) memcpy(nb->bytes + old_n, argv[2], add);
+    int ok = lfkv_cas(resp_kv, k, klen, cur_v, fresh);
+    unrefexp(cur_v);
+    if (!ok) { unrefexp(fresh); continue; }
+    resp_write_int(c, (long long)new_n);
+    return;
+  }
 }
 
-/* ---------- list commands ---------- */
+/* ---------- list commands ----------
+   Mutations are copy-on-write: clone the list, modify the copy, then
+   lfkv_cas-swap. O(N) per op but simple and lock-free. Reads grab a
+   refexp-bumped exp_t and read directly. */
 
-/* Returns the entry's alc_list_t, creating one if missing. NULL means
-   wrongtype (existing key is not a list). */
-static alc_list_t *resp_get_or_create_list(const char *key, int create) {
-  keyval_t *kv = resp_db_lookup(key);
-  if (kv) {
-    if (!islist(kv->val)) return NULL;
-    return (alc_list_t *)kv->val->ptr;
-  }
-  if (!create) return NULL;
-  kv = resp_db_set(key, make_list_exp());
-  return (alc_list_t *)kv->val->ptr;
+/* Deep-copy a list into a brand-new EXP_LIST. Bumps each value's ref. */
+static exp_t *resp_list_clone(alc_list_t *src) {
+  exp_t *dst_exp = make_list_exp();
+  alc_list_t *dst = (alc_list_t *)dst_exp->ptr;
+  for (alc_listnode_t *nd = src->head; nd; nd = nd->next)
+    alc_list_push_right(dst, refexp(nd->val));
+  return dst_exp;
 }
 
 static void cmd_lpush_rpush(resp_client_t *c, char **argv, long *argl,
                             int argc, int left) {
   ARG_AT_LEAST(3);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_err(c, "ERR keys with embedded NUL not supported");
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  resp_kv_ensure();
+  for (;;) {
+    exp_t *cur = resp_kv_lookup(k, klen);
+    if (cur && !islist(cur)) {
+      unrefexp(cur);
+      resp_write_wrongtype(c);
+      return;
+    }
+    exp_t *fresh = cur ? resp_list_clone((alc_list_t *)cur->ptr)
+                       : make_list_exp();
+    alc_list_t *l = (alc_list_t *)fresh->ptr;
+    for (int i = 2; i < argc; i++) {
+      exp_t *nv = make_blob(argv[i], (size_t)argl[i]);
+      if (left) alc_list_push_left(l, nv);
+      else      alc_list_push_right(l, nv);
+    }
+    int ok = cur ? lfkv_cas(resp_kv, k, klen, cur, fresh)
+                 : lfkv_set_nx(resp_kv, k, klen, fresh);
+    if (cur) unrefexp(cur);
+    if (!ok) { unrefexp(fresh); continue; }
+    resp_write_int(c, (long long)l->len);
     return;
   }
-  /* Type-check existing key BEFORE creating, so wrongtype doesn't
-     leave a stray empty list behind. */
-  keyval_t *kv = resp_db_lookup(k);
-  if (kv && !islist(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
-  alc_list_t *l = resp_get_or_create_list(k, 1);
-  for (int i = 2; i < argc; i++) {
-    exp_t *node_val = make_blob(argv[i], (size_t)argl[i]);
-    if (left) alc_list_push_left(l, node_val);
-    else      alc_list_push_right(l, node_val);
-  }
-  long long len = l->len;
-  free(k);
-  resp_write_int(c, len);
 }
 
 static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
                           int left) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_nil(c);
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  for (;;) {
+    exp_t *cur = resp_kv_lookup(k, klen);
+    if (!cur) { resp_write_nil(c); return; }
+    if (!islist(cur)) { unrefexp(cur); resp_write_wrongtype(c); return; }
+    alc_list_t *src = (alc_list_t *)cur->ptr;
+    if (src->len == 0) { unrefexp(cur); resp_write_nil(c); return; }
+    /* Capture the popped value's bytes BEFORE the swap so an evicted
+       blob can't get freed under us. */
+    alc_listnode_t *target = left ? src->head : src->tail;
+    alc_blob_t *tb = (alc_blob_t *)target->val->ptr;
+    size_t blen = tb->len;
+    char *bcopy = malloc(blen);
+    if (blen) memcpy(bcopy, tb->bytes, blen);
+    int ok;
+    if (src->len == 1) {
+      /* Last element — just delete the key (Redis container rule). */
+      ok = lfkv_cas(resp_kv, k, klen, cur, NULL);
+    } else {
+      exp_t *fresh = make_list_exp();
+      alc_list_t *dst = (alc_list_t *)fresh->ptr;
+      alc_listnode_t *start = left ? src->head->next : src->head;
+      alc_listnode_t *stop  = left ? NULL : src->tail; /* exclusive of tail when right */
+      for (alc_listnode_t *nd = start; nd; nd = nd->next) {
+        if (!left && nd == src->tail) break;
+        alc_list_push_right(dst, refexp(nd->val));
+      }
+      (void)stop;
+      ok = lfkv_cas(resp_kv, k, klen, cur, fresh);
+      if (!ok) { unrefexp(fresh); }
+    }
+    unrefexp(cur);
+    if (!ok) { free(bcopy); continue; }
+    resp_write_bulk(c, bcopy, blen);
+    free(bcopy);
     return;
   }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    free(k);
-    resp_write_nil(c);
-    return;
-  }
-  if (!islist(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
-  alc_list_t *l = (alc_list_t *)kv->val->ptr;
-  if (l->len == 0) {
-    free(k);
-    resp_write_nil(c);
-    return;
-  }
-  alc_listnode_t *nd = left ? l->head : l->tail;
-  if (left) {
-    l->head = nd->next;
-    if (l->head) l->head->prev = NULL;
-    else l->tail = NULL;
-  } else {
-    l->tail = nd->prev;
-    if (l->tail) l->tail->next = NULL;
-    else l->head = NULL;
-  }
-  l->len--;
-  /* nd->val is an EXP_BLOB owned by the node; emit before dropping the
-     ref so the bytes don't get reaped under us. */
-  alc_blob_t *b = (alc_blob_t *)nd->val->ptr;
-  resp_write_bulk(c, b->bytes, b->len);
-  unrefexp(nd->val);
-  free(nd);
-  /* Empty list is deleted (Redis semantics — keys never hold
-     empty containers). */
-  if (l->len == 0) resp_db_del(k);
-  free(k);
 }
 
 static void cmd_llen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_int(c, 0);
-    return;
-  }
-  if (!islist(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  resp_write_int(c, (long long)((alc_list_t *)kv->val->ptr)->len);
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_int(c, 0); return; }
+  if (!islist(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  resp_write_int(c, (long long)((alc_list_t *)v->ptr)->len);
+  unrefexp(v);
 }
 
 static void cmd_lindex(resp_client_t *c, char **argv, long *argl, int argc) {
@@ -1049,28 +1004,12 @@ static void cmd_lindex(resp_client_t *c, char **argv, long *argl, int argc) {
     resp_write_err(c, "ERR value is not an integer or out of range");
     return;
   }
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_nil(c);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_nil(c);
-    return;
-  }
-  if (!islist(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  alc_list_t *l = (alc_list_t *)kv->val->ptr;
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_nil(c); return; }
+  if (!islist(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  alc_list_t *l = (alc_list_t *)v->ptr;
   long ni = resp_norm_index((long)idx, l->len);
-  if (ni < 0) {
-    resp_write_nil(c);
-    return;
-  }
-  /* Walk from whichever end is closer. */
+  if (ni < 0) { unrefexp(v); resp_write_nil(c); return; }
   alc_listnode_t *nd;
   if (ni < l->len / 2) {
     nd = l->head;
@@ -1081,6 +1020,7 @@ static void cmd_lindex(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   alc_blob_t *b = (alc_blob_t *)nd->val->ptr;
   resp_write_bulk(c, b->bytes, b->len);
+  unrefexp(v);
 }
 
 static void cmd_lrange(resp_client_t *c, char **argv, long *argl, int argc) {
@@ -1091,30 +1031,17 @@ static void cmd_lrange(resp_client_t *c, char **argv, long *argl, int argc) {
     resp_write_err(c, "ERR value is not an integer or out of range");
     return;
   }
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_array_hdr(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_array_hdr(c, 0);
-    return;
-  }
-  if (!islist(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  alc_list_t *l = (alc_list_t *)kv->val->ptr;
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_array_hdr(c, 0); return; }
+  if (!islist(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  alc_list_t *l = (alc_list_t *)v->ptr;
   long len = l->len;
-  /* Redis LRANGE: negative indices count from end; out-of-range
-     start/stop get clamped. Empty range is empty array, not error. */
   if (start < 0) start += len;
   if (stop < 0) stop += len;
   if (start < 0) start = 0;
   if (stop >= len) stop = len - 1;
   if (start > stop || start >= len) {
+    unrefexp(v);
     resp_write_array_hdr(c, 0);
     return;
   }
@@ -1125,169 +1052,136 @@ static void cmd_lrange(resp_client_t *c, char **argv, long *argl, int argc) {
     alc_blob_t *b = (alc_blob_t *)nd->val->ptr;
     resp_write_bulk(c, b->bytes, b->len);
   }
+  unrefexp(v);
 }
 
 /* ---------- hash commands ----------
-   A Redis hash is an EXP_DICT whose dict_t holds field→EXP_BLOB. */
+   A Redis hash is an EXP_DICT whose dict_t holds field→EXP_BLOB.
+   Mutations (HSET/HDEL) clone the dict_t, modify the clone, then
+   lfkv_cas-swap the EXP_DICT slot. Reads grab a refexp-bumped exp_t
+   and walk it directly. */
 
-static dict_t *resp_get_or_create_hash(const char *key, int create) {
-  keyval_t *kv = resp_db_lookup(key);
-  if (kv) {
-    if (!isdict(kv->val)) return NULL;
-    return (dict_t *)kv->val->ptr;
+/* Deep-copy a dict_t into a fresh EXP_DICT. Each value's ref bumps
+   (set_get_keyval_dict refexps internally), so src and dst both own
+   independent refs. */
+static exp_t *resp_dict_clone(dict_t *src) {
+  exp_t *dst_exp = make_dict_exp();
+  dict_t *dst = (dict_t *)dst_exp->ptr;
+  for (int hi = 0; hi < 2; hi++) {
+    kvht_t *h = &src->ht[hi];
+    for (unsigned long b = 0; b < h->size; b++)
+      for (keyval_t *kv = h->table[b]; kv; kv = kv->next)
+        set_get_keyval_dict(dst, (char *)kv->key, kv->val);
   }
-  if (!create) return NULL;
-  kv = resp_db_set(key, make_dict_exp());
-  return (dict_t *)kv->val->ptr;
+  return dst_exp;
 }
 
 /* HSET key field value [field value ...] — returns count of NEW
-   fields created (not updated). */
+   fields created (not updated). COW: clone, write, CAS-swap. */
 static void cmd_hset(resp_client_t *c, char **argv, long *argl, int argc) {
   ARG_AT_LEAST(4);
   if ((argc - 2) % 2 != 0) {
     resp_write_err(c, "ERR wrong number of arguments for 'hset'");
     return;
   }
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_err(c, "ERR keys with embedded NUL not supported");
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  resp_kv_ensure();
+  for (;;) {
+    exp_t *cur = resp_kv_lookup(k, klen);
+    if (cur && !isdict(cur)) {
+      unrefexp(cur);
+      resp_write_wrongtype(c);
+      return;
+    }
+    exp_t *fresh = cur ? resp_dict_clone((dict_t *)cur->ptr)
+                       : make_dict_exp();
+    dict_t *h = (dict_t *)fresh->ptr;
+    long long created = 0;
+    for (int i = 2; i + 1 < argc; i += 2) {
+      char *fk = resp_dup_key(argv[i], argl[i]);
+      if (!fk) continue;
+      exp_t *fv = make_blob(argv[i + 1], (size_t)argl[i + 1]);
+      created += resp_dict_field_set(h, fk, fv);
+      free(fk);
+    }
+    int ok = cur ? lfkv_cas(resp_kv, k, klen, cur, fresh)
+                 : lfkv_set_nx(resp_kv, k, klen, fresh);
+    if (cur) unrefexp(cur);
+    if (!ok) { unrefexp(fresh); continue; }
+    resp_write_int(c, created);
     return;
   }
-  keyval_t *kv = resp_db_lookup(k);
-  if (kv && !isdict(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
-  dict_t *h = resp_get_or_create_hash(k, 1);
-  long long created = 0;
-  for (int i = 2; i + 1 < argc; i += 2) {
-    char *fk = resp_dup_key(argv[i], argl[i]);
-    if (!fk) continue; /* silently skip NUL field names */
-    exp_t *fv = make_blob(argv[i + 1], (size_t)argl[i + 1]);
-    created += resp_dict_field_set(h, fk, fv);
-    free(fk);
-  }
-  free(k);
-  resp_write_int(c, created);
 }
 
 static void cmd_hget(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_nil(c);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    free(k);
-    resp_write_nil(c);
-    return;
-  }
-  if (!isdict(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_nil(c); return; }
+  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
   char *fk = resp_dup_key(argv[2], argl[2]);
-  if (!fk) {
-    free(k);
-    resp_write_nil(c);
-    return;
-  }
-  exp_t *fv = resp_dict_field_get((dict_t *)kv->val->ptr, fk);
-  free(k);
+  if (!fk) { unrefexp(v); resp_write_nil(c); return; }
+  exp_t *fv = resp_dict_field_get((dict_t *)v->ptr, fk);
   free(fk);
-  if (!fv) {
-    resp_write_nil(c);
-    return;
-  }
+  if (!fv) { unrefexp(v); resp_write_nil(c); return; }
   alc_blob_t *b = (alc_blob_t *)fv->ptr;
   resp_write_bulk(c, b->bytes, b->len);
+  unrefexp(v);
 }
 
 static void cmd_hdel(resp_client_t *c, char **argv, long *argl, int argc) {
   ARG_AT_LEAST(3);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
+  const char *k = argv[1];
+  size_t klen = (size_t)argl[1];
+  for (;;) {
+    exp_t *cur = resp_kv_lookup(k, klen);
+    if (!cur) { resp_write_int(c, 0); return; }
+    if (!isdict(cur)) { unrefexp(cur); resp_write_wrongtype(c); return; }
+    exp_t *fresh = resp_dict_clone((dict_t *)cur->ptr);
+    dict_t *h = (dict_t *)fresh->ptr;
+    long long deleted = 0;
+    for (int i = 2; i < argc; i++) {
+      char *fk = resp_dup_key(argv[i], argl[i]);
+      if (!fk) continue;
+      deleted += resp_dict_field_del(h, fk);
+      free(fk);
+    }
+    int became_empty = (dict_count(h) == 0);
+    int ok;
+    if (became_empty) {
+      unrefexp(fresh); /* not needed — drop the empty container */
+      ok = lfkv_cas(resp_kv, k, klen, cur, NULL);
+    } else {
+      ok = lfkv_cas(resp_kv, k, klen, cur, fresh);
+      if (!ok) unrefexp(fresh);
+    }
+    unrefexp(cur);
+    if (!ok) continue;
+    resp_write_int(c, deleted);
     return;
   }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    free(k);
-    resp_write_int(c, 0);
-    return;
-  }
-  if (!isdict(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
-  dict_t *h = (dict_t *)kv->val->ptr;
-  long long deleted = 0;
-  for (int i = 2; i < argc; i++) {
-    char *fk = resp_dup_key(argv[i], argl[i]);
-    if (!fk) continue;
-    deleted += resp_dict_field_del(h, fk);
-    free(fk);
-  }
-  /* Drop the key if the hash became empty (Redis container rule). */
-  if (dict_count(h) == 0) resp_db_del(k);
-  free(k);
-  resp_write_int(c, deleted);
 }
 
 static void cmd_hexists(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  if (!kv) {
-    free(k);
-    resp_write_int(c, 0);
-    return;
-  }
-  if (!isdict(kv->val)) {
-    free(k);
-    resp_write_wrongtype(c);
-    return;
-  }
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_int(c, 0); return; }
+  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
   char *fk = resp_dup_key(argv[2], argl[2]);
-  if (!fk) {
-    free(k);
-    resp_write_int(c, 0);
-    return;
-  }
-  exp_t *fv = resp_dict_field_get((dict_t *)kv->val->ptr, fk);
-  free(k);
+  if (!fk) { unrefexp(v); resp_write_int(c, 0); return; }
+  exp_t *fv = resp_dict_field_get((dict_t *)v->ptr, fk);
   free(fk);
   resp_write_int(c, fv ? 1 : 0);
+  unrefexp(v);
 }
 
 static void cmd_hlen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_int(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_int(c, 0);
-    return;
-  }
-  if (!isdict(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  resp_write_int(c, (long long)dict_count((dict_t *)kv->val->ptr));
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_int(c, 0); return; }
+  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  resp_write_int(c, (long long)dict_count((dict_t *)v->ptr));
+  unrefexp(v);
 }
 
 /* Shared walker for HKEYS / HVALS / HGETALL — emit keys, vals, or
@@ -1314,22 +1208,11 @@ static void hash_emit(resp_client_t *c, dict_t *h, int keys, int vals) {
 static void cmd_hkeys_hvals_hgetall(resp_client_t *c, char **argv, long *argl,
                                     int argc, int keys, int vals) {
   ARGN(2);
-  char *k = resp_dup_key(argv[1], argl[1]);
-  if (!k) {
-    resp_write_array_hdr(c, 0);
-    return;
-  }
-  keyval_t *kv = resp_db_lookup(k);
-  free(k);
-  if (!kv) {
-    resp_write_array_hdr(c, 0);
-    return;
-  }
-  if (!isdict(kv->val)) {
-    resp_write_wrongtype(c);
-    return;
-  }
-  hash_emit(c, (dict_t *)kv->val->ptr, keys, vals);
+  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  if (!v) { resp_write_array_hdr(c, 0); return; }
+  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  hash_emit(c, (dict_t *)v->ptr, keys, vals);
+  unrefexp(v);
 }
 
 /* ---------- top-level dispatch ---------- */
@@ -1391,7 +1274,12 @@ static const struct { const char *name; resp_kind_t kind; } resp_cmd_seed[] = {
   {"HGETALL",  HK_HGETALL},
 };
 
-static void resp_cmd_table_init(void) {
+/* The seed→table build is one-shot for the whole process; calling it
+   per-reactor would re-probe an already-populated bucket array and
+   overflow on the second pass. Gate with pthread_once so multi-reactor
+   startup is safe. */
+static pthread_once_t resp_cmd_table_once = PTHREAD_ONCE_INIT;
+static void resp_cmd_table_init_inner(void) {
   for (size_t s = 0; s < sizeof resp_cmd_seed / sizeof *resp_cmd_seed; s++) {
     const char *name = resp_cmd_seed[s].name;
     long len = (long)strlen(name);
@@ -1415,6 +1303,10 @@ static void resp_cmd_table_init(void) {
       }
     }
   }
+}
+
+static void resp_cmd_table_init(void) {
+  pthread_once(&resp_cmd_table_once, resp_cmd_table_init_inner);
 }
 
 /* Returns the kind for a built-in command, or 0 if not found. */
@@ -1621,8 +1513,15 @@ int resp_serve(int port) {
   shard_t *sh = current_shard;
   int wakefd = sh->runtime_ready == 1 ? alc_wake_fd(&sh->wake) : -1;
 
+  /* Reactor must register with the epoch system so lock-free retire
+     lists know about us. epoch_tick at the top of each select() iter
+     publishes our quiescent point — between iterations no command is
+     mid-flight, so any pointer we loaded is stale. */
+  epoch_register();
+
   while (!resp_stop) {
-    resp_db_maybe_sweep();
+    epoch_tick();
+    resp_kv_maybe_sweep();
     fd_set rfds, wfds;
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
@@ -1697,7 +1596,10 @@ int resp_serve(int port) {
     resp_client_free(resp_clients);
     resp_clients = next;
   }
-  resp_db_clear();
+  /* Clear values then drain retire list so valgrind sees no leaks.
+     Don't lfkv_destroy here — peer reactors may still hold pointers. */
+  resp_kv_clear();
+  epoch_drain_all();
   return 0;
 #endif
 }
@@ -1847,8 +1749,10 @@ int resp_repl_serve(int port, env_t *global) {
   int idx = 0;
   int prompted = 0;
 
+  epoch_register();
   while (!resp_stop) {
-    resp_db_maybe_sweep();
+    epoch_tick();
+    resp_kv_maybe_sweep();
     if (!prompted) {
       printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx + 1);
       fflush(stdout);
@@ -1955,45 +1859,49 @@ int resp_repl_serve(int port, env_t *global) {
     resp_client_free(resp_clients);
     resp_clients = next;
   }
-  resp_db_clear();
+  resp_kv_clear();
+  epoch_drain_all();
   free(acc);
   return 0;
 }
 
 /* ============================================================
-   Redis inspector builtins — read resp_db from REPL (-R only).
+   Redis inspector builtins — read resp_kv from REPL (-R only).
    ============================================================
-   Single-reactor invariant: these run on the same thread that owns
-   resp_db, so no locking is needed. Outside -R mode, resp_db is
-   zero-initialised → keys=nil, count=0, get/type=nil/"none". */
+   These run on whichever reactor evaluates Lisp, but resp_kv is the
+   global lock-free table so it's safe regardless. Outside -R mode,
+   resp_kv is NULL → keys=nil, count=0, get/type=nil/"none". */
 
 const char doc_redis_count[] = "(redis-count) — number of keys in the running RESP server's db.";
 exp_t *rediscountcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
-  return MAKE_FIX((int64_t)dict_count(resp_db));
+  return MAKE_FIX((int64_t)resp_kv_count());
+}
+
+/* Iteration ctx for rediskeyscmd — accumulates a Lisp list. */
+typedef struct {
+  exp_t *head, *tail;
+} resp_keys_lisp_ctx_t;
+
+static int resp_keys_lisp_cb(const char *k, size_t klen, exp_t *v,
+                             int64_t exp_us, void *ctx) {
+  (void)v; (void)exp_us;
+  resp_keys_lisp_ctx_t *s = ctx;
+  exp_t *node = make_node(make_string((char *)k, (int)klen));
+  if (s->tail) s->tail = s->tail->next = node;
+  else         s->head = s->tail = node;
+  return 0;
 }
 
 const char doc_redis_keys[] = "(redis-keys) — list of all keys (as strings) in the RESP db. Skips expired entries.";
 exp_t *rediskeyscmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
-  if (!resp_db) return NIL_EXP;
-  exp_t *ret = NIL_EXP, *cur = NULL;
-  int64_t now = resp_now_us();
-  for (int hi = 0; hi < 2; hi++) {
-    kvht_t *h = &resp_db->ht[hi];
-    for (unsigned long b = 0; b < h->size; b++) {
-      for (keyval_t *kv = h->table[b]; kv; kv = kv->next) {
-        if (kv_is_expired(kv, now)) continue;
-        const char *ks = (const char *)kv->key;
-        exp_t *node = make_node(make_string((char *)ks, (int)strlen(ks)));
-        if (cur) cur = cur->next = node;
-        else { ret = cur = node; }
-      }
-    }
-  }
-  return ret ? ret : NIL_EXP;
+  if (!resp_kv) return NIL_EXP;
+  resp_keys_lisp_ctx_t ctx = {NULL, NULL};
+  lfkv_foreach(resp_kv, resp_keys_lisp_cb, &ctx);
+  return ctx.head ? ctx.head : NIL_EXP;
 }
 
 const char doc_redis_type[] = "(redis-type k) — RESP type of key k as a string: \"string\", \"list\", \"hash\", or \"none\".";
@@ -2005,10 +1913,13 @@ exp_t *redistypecmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-type: key must be a string or blob");
   }
-  const char *ks = isstring(kx) ? (char *)kx->ptr : ((alc_blob_t *)kx->ptr)->bytes;
-  keyval_t *kv = resp_db_lookup(ks);
-  const char *tn = kv ? resp_type_name(kv->val) : "none";
+  const char *ks; size_t klen;
+  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
+  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  exp_t *v = resp_kv_lookup(ks, klen);
+  const char *tn = v ? resp_type_name(v) : "none";
   exp_t *ret = make_string((char *)tn, (int)strlen(tn));
+  if (v) unrefexp(v);
   unrefexp(kx); unrefexp(e);
   return ret;
 }
@@ -2022,13 +1933,16 @@ exp_t *redisgetcmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-get: key must be a string or blob");
   }
-  const char *ks = isstring(kx) ? (char *)kx->ptr : ((alc_blob_t *)kx->ptr)->bytes;
-  keyval_t *kv = resp_db_lookup(ks);
+  const char *ks; size_t klen;
+  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
+  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  exp_t *v = resp_kv_lookup(ks, klen);
   exp_t *ret = NIL_EXP;
-  if (kv && isblob(kv->val)) {
-    alc_blob_t *bl = (alc_blob_t *)kv->val->ptr;
+  if (v && isblob(v)) {
+    alc_blob_t *bl = (alc_blob_t *)v->ptr;
     ret = make_blob(bl->bytes, bl->len);
   }
+  if (v) unrefexp(v);
   unrefexp(kx); unrefexp(e);
   return ret;
 }
@@ -2037,7 +1951,7 @@ const char doc_redis_flush[] = "(redis-flush) — remove every key from the RESP
 exp_t *redisflushcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
-  resp_db_clear();
+  resp_kv_clear();
   return TRUE_EXP;
 }
 

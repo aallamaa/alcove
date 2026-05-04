@@ -13739,6 +13739,14 @@ exp_t *string2blobcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+/* Epoch-based reclamation for the lock-free keyspace (LF-1). Included
+   here so it can see ALCOVE_TLS and any other build-time toggles. */
+#include "epoch.c"
+
+/* Lock-free keyspace (LF-2). Backs the RESP store with an open-addressed
+   table of atomic exp_t * slots. Reclamation via epoch.h. */
+#include "lfkv.c"
+
 /* RESP2 server prototype lives in its own file but is included as
    part of this single TU so it can use file-static helpers
    (make_string, set_get_keyval_dict, ...) without exporting them. */
@@ -13760,6 +13768,96 @@ int shard_main(shard_t *sh, int port) {
   }
   int rc = resp_serve(port);
   shard_runtime_destroy(sh);
+  return rc;
+}
+
+/* ---------- multi-reactor entry (Step LF-7) ----------
+   Spawns N reactor threads that all share the same global lock-free
+   keyspace (g_resp_kv) and bind the same port via SO_REUSEPORT. Each
+   thread gets its own shard_t (its own arena, inbox, wake fd, client
+   list), registers with the epoch system, and runs an independent
+   select() loop. The kernel hashes incoming connections across the
+   N listening sockets; each connection thereafter is owned by a
+   single reactor for its lifetime — no cross-thread fd sharing. */
+
+typedef struct shard_thread_arg {
+  shard_t *sh;
+  int port;
+  int rc;
+} shard_thread_arg_t;
+
+static void *shard_thread_entry(void *p) {
+  shard_thread_arg_t *a = p;
+  a->rc = shard_main(a->sh, a->port);
+  return NULL;
+}
+
+int respN_serve(int port, int nthreads) {
+  if (nthreads <= 1) return shard_main(&main_shard, port);
+  if (nthreads > EPOCH_MAX_THREADS) {
+    fprintf(stderr, "alcove: clamping --threads %d to EPOCH_MAX_THREADS=%d\n",
+            nthreads, EPOCH_MAX_THREADS);
+    nthreads = EPOCH_MAX_THREADS;
+  }
+  /* Allocate N-1 extra shards (shard 0 is main_shard). Each gets its
+     own heap arena so make_env doesn't race on the bump pointer. */
+  shard_t **shards = calloc((size_t)nthreads, sizeof *shards);
+  shard_thread_arg_t *args = calloc((size_t)nthreads, sizeof *args);
+  pthread_t *tids = calloc((size_t)nthreads, sizeof *tids);
+  if (!shards || !args || !tids) {
+    fprintf(stderr, "alcove: OOM allocating reactor scaffolding\n");
+    free(shards); free(args); free(tids);
+    return 1;
+  }
+  shards[0] = &main_shard;
+  for (int i = 1; i < nthreads; i++) {
+    shard_t *sh = calloc(1, sizeof *sh);
+    env_t *arena = calloc(ENV_ARENA_SLOTS, sizeof *arena);
+    if (!sh || !arena) {
+      fprintf(stderr, "alcove: OOM allocating shard %d\n", i);
+      free(sh); free(arena);
+      /* Tear down any already-spawned threads. */
+      for (int j = 1; j < i; j++) {
+        pthread_cancel(tids[j]);
+        pthread_join(tids[j], NULL);
+        free(shards[j]->arena);
+        free(shards[j]);
+      }
+      free(shards); free(args); free(tids);
+      return 1;
+    }
+    sh->arena = arena;
+    sh->arena_sp = arena;
+    sh->arena_end = arena + ENV_ARENA_SLOTS;
+    shards[i] = sh;
+  }
+  /* Spawn workers 1..N-1; main thread runs worker 0. */
+  printf("alcove: spawning %d reactor threads on port %d\n", nthreads, port);
+  fflush(stdout);
+  for (int i = 1; i < nthreads; i++) {
+    args[i].sh = shards[i];
+    args[i].port = port;
+    if (pthread_create(&tids[i], NULL, shard_thread_entry, &args[i]) != 0) {
+      fprintf(stderr, "alcove: pthread_create failed for shard %d: %s\n",
+              i, strerror(errno));
+      /* Continue with fewer threads rather than abort — but mark
+         this slot as not-launched so we don't try to join it. */
+      tids[i] = 0;
+    }
+  }
+  args[0].sh = &main_shard;
+  args[0].port = port;
+  args[0].rc = shard_main(&main_shard, port);
+  /* Once main returns (SIGINT was observed), wait for peers to drain. */
+  for (int i = 1; i < nthreads; i++) {
+    if (tids[i]) pthread_join(tids[i], NULL);
+  }
+  for (int i = 1; i < nthreads; i++) {
+    free(shards[i]->arena);
+    free(shards[i]);
+  }
+  int rc = args[0].rc;
+  free(shards); free(args); free(tids);
   return rc;
 }
 
@@ -13888,6 +13986,7 @@ int main(int argc, char *argv[]) {
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
   int resp_combined = 0; /* -R: combined REPL + RESP single-reactor */
   int resp_port = 6379;
+  int resp_threads = 1;  /* --threads N: number of reactor threads (-r only) */
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
@@ -13900,6 +13999,17 @@ int main(int argc, char *argv[]) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
         alcove_db_path = argv[++src];   /* session-wide default */
+      } else if ((strcmp(argv[src], "--threads") == 0 ||
+                  strcmp(argv[src], "-t") == 0) && src + 1 < argc) {
+        char *end;
+        long n = strtol(argv[++src], &end, 10);
+        if (*end == '\0' && n >= 1 && n <= EPOCH_MAX_THREADS) {
+          resp_threads = (int)n;
+        } else {
+          fprintf(stderr, "alcove: --threads must be 1..%d\n",
+                  EPOCH_MAX_THREADS);
+          return 1;
+        }
       } else if (strcmp(argv[src], "-r") == 0 ||
                  strcmp(argv[src], "-R") == 0) {
         if (strcmp(argv[src], "-R") == 0) resp_combined = 1;
@@ -13932,7 +14042,11 @@ int main(int argc, char *argv[]) {
        only indirectly — but resp_db lives separately. Skip it. */
     (void)N;
     if (run_init) alcove_try_init_files(global);
-    return shard_main(&main_shard, resp_port);
+    int rc = respN_serve(resp_port, resp_threads);
+    /* Release the unused top-level dict we created above so leak
+       checkers see a clean exit. The non-RESP path frees it later. */
+    destroy_dict(dict);
+    return rc;
   }
 
   /* -R: combined REPL + RESP on a single select() reactor. Both run
