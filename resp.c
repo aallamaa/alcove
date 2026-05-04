@@ -1636,6 +1636,18 @@ static inline void resp_clients_free_all(void) {
   }
 }
 
+/* Reactor teardown: close listen socket, free per-reactor client
+   list, then clear the keyspace and drain the epoch retire list so
+   valgrind/leaks see no live allocations. Don't lfkv_destroy here —
+   peer reactors may still hold pointers into the same kv. */
+static inline void resp_reactor_teardown(int srv) {
+  close(srv);
+  resp_active_port = 0;
+  resp_clients_free_all();
+  resp_kv_clear();
+  epoch_drain_all();
+}
+
 /* Public entry — blocks until SIGINT/SIGTERM, then returns a process
    exit code. Called from main() when -r is on the command line. */
 int resp_serve(int port) {
@@ -1691,13 +1703,7 @@ int resp_serve(int port) {
   }
 
   printf("\nalcove: shutting down RESP server\n");
-  close(srv);
-  resp_active_port = 0;
-  resp_clients_free_all();
-  /* Clear values then drain retire list so valgrind sees no leaks.
-     Don't lfkv_destroy here — peer reactors may still hold pointers. */
-  resp_kv_clear();
-  epoch_drain_all();
+  resp_reactor_teardown(srv);
   return 0;
 #endif
 }
@@ -1885,11 +1891,7 @@ int resp_repl_serve(int port, env_t *global) {
   }
 
   printf("\nalcove: shutting down combined REPL + RESP\n");
-  close(srv);
-  resp_active_port = 0;
-  resp_clients_free_all();
-  resp_kv_clear();
-  epoch_drain_all();
+  resp_reactor_teardown(srv);
   free(acc);
   return 0;
 }
