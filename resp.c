@@ -83,6 +83,14 @@ typedef struct resp_client {
   /* wbuf is a window [whead, wlen) — appends advance wlen, drains
      advance whead. Invariant: whead <= wlen <= wcap. */
   size_t whead, wlen, wcap;
+  /* argv/argl pool — reused across every parsed command on this
+     connection. Grows monotonically up to the largest argc the client
+     has ever sent (cap stored in argv_cap). Pre-pool, every command
+     paid 2× malloc + 2× free; under pipelining at P=16 that was 64
+     heap ops per syscall. */
+  char **argv_pool;
+  long *argl_pool;
+  int argv_cap;
   struct resp_client *next;
 } resp_client_t;
 
@@ -240,6 +248,8 @@ static void resp_client_free(resp_client_t *c) {
   if (c->fd >= 0) close(c->fd);
   free(c->rbuf);
   free(c->wbuf);
+  free(c->argv_pool);
+  free(c->argl_pool);
   free(c);
 }
 
@@ -357,14 +367,33 @@ static void resp_write_wrongtype(resp_client_t *c) {
       "WRONGTYPE Operation against a key holding the wrong kind of value");
 }
 
+/* Grow the per-client argv/argl pool to fit `n` slots. Pool is sticky
+   across commands — only realloc when a command exceeds the previous
+   high-water mark. Returns 0 on success, -1 on alloc failure. */
+static int resp_argv_pool_reserve(resp_client_t *c, int n) {
+  if (n <= c->argv_cap) return 0;
+  int cap = c->argv_cap ? c->argv_cap : 8;
+  while (cap < n) cap *= 2;
+  char **nv = realloc(c->argv_pool, sizeof(char *) * (size_t)cap);
+  if (!nv) return -1;
+  c->argv_pool = nv;
+  long *nl = realloc(c->argl_pool, sizeof(long) * (size_t)cap);
+  if (!nl) return -1;
+  c->argl_pool = nl;
+  c->argv_cap = cap;
+  return 0;
+}
+
 /* ---------- RESP frame parser ----------
    Returns:
      >0 = bytes consumed, argv/argl/argc filled (pointers alias rbuf,
-          valid only until next read; dispatch must finish first)
+          valid only until next read; dispatch must finish first.
+          argv/argl are owned by the client pool — caller must not free)
       0 = need more data
      <0 = protocol error (caller drops the client) */
-static int resp_parse_one(char *buf, size_t len, char ***argv_out,
-                          long **argl_out, int *argc_out) {
+static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
+                          char ***argv_out, long **argl_out,
+                          int *argc_out) {
   if (len == 0) return 0;
   /* Inline command form: any non-`*` first byte means a bare-text line
      like `PING\r\n` or `SET foo bar\n`. redis-benchmark's PING_INLINE
@@ -388,8 +417,9 @@ static int resp_parse_one(char *buf, size_t len, char ***argv_out,
     }
     if (n == 0) return (int)(end + 1);
 
-    char **argv = malloc(sizeof(char *) * n);
-    long *argl = malloc(sizeof(long) * n);
+    if (resp_argv_pool_reserve(c, (int)n) < 0) return -1;
+    char **argv = c->argv_pool;
+    long *argl = c->argl_pool;
     long ai = 0;
     p = 0;
     while (p < line_end && ai < n) {
@@ -420,25 +450,26 @@ static int resp_parse_one(char *buf, size_t len, char ***argv_out,
   i += 2;
   if (n <= 0) return -1;
 
-  char **argv = malloc(sizeof(char *) * n);
-  long *argl = malloc(sizeof(long) * n);
+  if (resp_argv_pool_reserve(c, (int)n) < 0) return -1;
+  char **argv = c->argv_pool;
+  long *argl = c->argl_pool;
 
   for (long a = 0; a < n; a++) {
-    if (i >= len) goto need_more;
-    if (buf[i] != '$') goto bad;
+    if (i >= len) return 0;
+    if (buf[i] != '$') return -1;
     i++;
     long blen = 0;
     while (i < len && buf[i] != '\r') {
-      if (buf[i] < '0' || buf[i] > '9') goto bad;
+      if (buf[i] < '0' || buf[i] > '9') return -1;
       blen = blen * 10 + (buf[i] - '0');
-      if (blen > RESP_MAX_BULK) goto bad;
+      if (blen > RESP_MAX_BULK) return -1;
       i++;
     }
-    if (i + 1 >= len) goto need_more;
-    if (buf[i] != '\r' || buf[i + 1] != '\n') goto bad;
+    if (i + 1 >= len) return 0;
+    if (buf[i] != '\r' || buf[i + 1] != '\n') return -1;
     i += 2;
-    if (i + (size_t)blen + 2 > len) goto need_more;
-    if (buf[i + blen] != '\r' || buf[i + blen + 1] != '\n') goto bad;
+    if (i + (size_t)blen + 2 > len) return 0;
+    if (buf[i + blen] != '\r' || buf[i + blen + 1] != '\n') return -1;
     argv[a] = buf + i;
     argl[a] = blen;
     i += blen + 2;
@@ -448,15 +479,6 @@ static int resp_parse_one(char *buf, size_t len, char ***argv_out,
   *argl_out = argl;
   *argc_out = (int)n;
   return (int)i;
-
-need_more:
-  free(argv);
-  free(argl);
-  return 0;
-bad:
-  free(argv);
-  free(argl);
-  return -1;
 }
 
 /* ---------- arg helpers ---------- */
@@ -1407,7 +1429,8 @@ static void resp_process_input(resp_client_t *c) {
     char **argv = NULL;
     long *argl = NULL;
     int argc = 0;
-    int consumed = resp_parse_one(c->rbuf + c->rhead, c->rlen - c->rhead,
+    int consumed = resp_parse_one(c, c->rbuf + c->rhead,
+                                  c->rlen - c->rhead,
                                   &argv, &argl, &argc);
     if (consumed == 0) break;
     if (consumed < 0) {
@@ -1416,8 +1439,8 @@ static void resp_process_input(resp_client_t *c) {
       return;
     }
     resp_dispatch(c, argv, argl, argc);
-    free(argv);
-    free(argl);
+    /* argv/argl belong to c->argv_pool — reused on the next iteration,
+       freed only at client teardown. */
     c->rhead += (size_t)consumed;
   }
   /* Cheap reset when the window is fully consumed — the common case
