@@ -1,18 +1,29 @@
 # Build artifacts (the default `make` target produces ./alcove).
 alcove
 
-# Cross-compile / benchmark A-B comparison binaries.
+# Cross-compile / benchmark A-B comparison binaries (alcove.jemalloc,
+# alcove.dbg, alcove.asan, alcove-prestep23, alcove.tip, …).
 alcove.*
+alcove-*
 !alcove.c
 !alcove.h
+
+# Debug-symbol bundles produced by macOS dsymutil for any of the above.
+*.dSYM/
 
 # Editor / OS crud.
 *.o
 *.swp
 .DS_Store
+# Emacs lockfiles + autosaves (#name#, .#name).
+\#*\#
+.\#*
 
 # Per-run persistence artifact (savedb writes ./db.dump in CWD).
 db.dump
+# Other ad-hoc REPL persistence + auto-loaded init scratch.
+*.db
+.init.alc
 
 # FFI example .so (built from .c on demand).
 ffi-examples/libmylib.so
@@ -20,4 +31,9 @@ ffi-examples/libmylib.so
 # MPSC primitive standalone test binaries (Step 2.1).
 mpsc_test
 mpsc_test_tsan
-mpsc_test_tsan.dSYM/
+
+# Built benchmark binaries (./benchmark/run.sh produces these).
+benchmark/bin/
+
+# Local prototype scratch (superseded by lfkv.{c,h}).
+lockfree-bench/
