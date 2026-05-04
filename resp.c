@@ -1576,6 +1576,14 @@ int resp_serve(int port) {
           } else {
             cur->rlen += (size_t)n;
             resp_process_input(cur);
+            /* beforeSleep-style opportunistic flush: dispatch just
+               appended replies to wbuf, and the socket we read from is
+               almost certainly writeable. Draining now skips the extra
+               select() round-trip — the win compounds under pipelining
+               (P=16 → 16 replies flushed in one syscall instead of two
+               event-loop turns). */
+            if (cur->wlen > cur->whead)
+              drop = resp_client_drain_write(cur);
           }
         }
       }
@@ -1839,6 +1847,8 @@ int resp_repl_serve(int port, env_t *global) {
           } else {
             cur->rlen += (size_t)n;
             resp_process_input(cur);
+            if (cur->wlen > cur->whead)
+              drop = resp_client_drain_write(cur);
           }
         }
       }
