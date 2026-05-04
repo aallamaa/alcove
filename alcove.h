@@ -500,7 +500,6 @@ exp_t *set_return_point(env_t *env);
 dict_t *create_dict();
 int destroy_dict(dict_t *d);
 int dump_dict(dict_t *d, FILE *stream);
-static void init_kvht(kvht_t *kvht);
 unsigned int bernstein_hash(unsigned char *key, int len);
 unsigned int bernstein_uhash(unsigned char *key, int len);
 keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val);
@@ -707,11 +706,6 @@ void tokenappend(token_t *token, char *src, int len);
 /* Parser */
 
 #define PARSER_KEEPWHITESPACE 1
-/* PARSER_PIPEMODE was the bitflag for the | reader macro that built
-   wrapped lists; the macro itself was removed (commit 3e81194) so | can
-   serve as bit-or. The flag is preserved as a no-op slot for ABI
-   stability — nothing should set it. */
-#define PARSER_PIPEMODE 2  /* unused, retained as no-op */
 #define PARSER_TERMMACROMODE 4
 
 #endif /* ALCOVE_H */

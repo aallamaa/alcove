@@ -1117,17 +1117,9 @@ inline exp_t *make_string(char *str, int length) {
 inline exp_t *make_symbol(char *str, int length) {
   exp_t *cur = make_fromstr(str, length);
   cur->type = EXP_SYMBOL;
-  //  printf("SYM %s\n",(char*)cur->ptr);
   return cur;
 }
 
-/* OLD
-   exp_t *make_quote(exp_t *node){
-   exp_t *cur=NIL_EXP;
-   cur->type=EXP_QUOTE;
-   cur->content=refexp(node);
-   return cur;
-   }*/
 
 inline exp_t *make_quote(exp_t *node) {
   exp_t *cur = make_symbol("quote", strlen("quote"));
@@ -1806,7 +1798,6 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         continue;
     } else if (ISSINGLEESCAPE & chrmap[x]) { // step 5
       if ((y = getc(stream)) != EOF) {
-        /* PARSER_PIPEMODE branch removed — see alcove.h flag comment. */
         if ((ret = escapereader(stream, &token, y)))
           return ret;
       } else
@@ -1845,7 +1836,6 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             continue;
           } else if (ISSINGLEESCAPE & chrmap[y]) {
             if ((z = getc(stream)) != EOF) {
-              /* PARSER_PIPEMODE branch removed; flag is now no-op. */
               if ((ret = escapereader(stream, &token, z)))
                 return ret;
             } else {
@@ -1900,8 +1890,6 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
               if ((ret = escapereader(stream, &token, z)))
                 return ret;
             }
-            //{ tokenadd(token,z); continue;} // should we use escapereader here
-            //?? to be checked
             else {
               freetoken(token);
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
@@ -2236,7 +2224,6 @@ exp_t *expandmacrocmd(exp_t *e, env_t *env) {
   exp_t *tmpexp2;
 
   tmpexp = car(cadr(cadr(e)));
-  // if (tmpexp && ispair(tmpexp)) tmpexp=evaluate(tmpexp,env);
   if (tmpexp)
     if (issymbol(tmpexp))
       if ((tmpexp2 = lookup(refexp(tmpexp), env)))
@@ -11628,8 +11615,6 @@ int compile_lambda(exp_t *fn) {
   return 1;
 }
 
-static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
-
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
@@ -14121,21 +14106,7 @@ int main(int argc, char *argv[]) {
 #endif
 
   exp_t *stre = NULL;
-  // make_string(strdict,strlen(strdict));
   exp_t *strf = NULL;
-  // make_string(strdict,strlen(strdict));
-  /*  set_get_keyval_dict(dict,"TOTO",stre);
-      kv=set_get_keyval_dict(dict,"TATA",NULL);
-      if (kv) printf("TATA TEST NOT OK\n");
-      else printf("TATA TEST OK\n");
-      kv=set_get_keyval_dict(dict,"TOTO",NULL);
-      if (kv->val == stre) printf("TOTO TEST OK\n");
-      else printf("TOTO TEST NOTOK\n");
-      kv=set_get_keyval_dict(dict,"TOTO",strf);
-      if (kv->val == strf) printf("STRF TEST OK\n");
-      else printf("STRF TEST NOTOK\n");
-      del_keyval_dict(dict,"TOTO");*/
-  // unrefexp(stre);
 
 #ifdef ALCOVE_READLINE
   if (rl_active) {
