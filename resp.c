@@ -785,9 +785,6 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
 
 static void cmd_get(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  /* Borrowed pointer — value memcpy'd into wbuf before we yield, so
-     epoch retention is sufficient. Saves 2 atomics per GET vs the
-     refexp/unrefexp round-trip lfkv_get pays for. */
   exp_t *v = resp_kv_peek(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_nil(c); return; }
   if (!isblob(v)) { resp_write_wrongtype(c); return; }
@@ -1475,6 +1472,16 @@ static resp_client_t *resp_client_new(int cfd) {
   cl->rcap = RESP_RBUF_INIT;
   cl->rbuf = malloc(cl->rcap);
   if (!cl->rbuf) { close(cfd); free(cl); return NULL; }
+  /* Pre-size the argv pool so the first command on a fresh connection
+     skips the lazy realloc(NULL,…) hop. 8 covers SET k v / HSET h f v /
+     etc.; growth still kicks in for wider commands. */
+  cl->argv_cap = 8;
+  cl->argv_pool = malloc(sizeof(char *) * cl->argv_cap);
+  cl->argl_pool = malloc(sizeof(long) * cl->argv_cap);
+  if (!cl->argv_pool || !cl->argl_pool) {
+    free(cl->argv_pool); free(cl->argl_pool); free(cl->rbuf);
+    close(cfd); free(cl); return NULL;
+  }
   cl->next = resp_clients;
   resp_clients = cl;
   return cl;
@@ -1494,6 +1501,56 @@ static void resp_accept_drain(int srv) {
     }
     (void)resp_client_new(cfd);
   }
+}
+
+/* Per-client IO step: slide-and-grow rbuf, read, dispatch, opportunistic
+   flush, then drain wbuf if select said writeable. Returns 1 if the
+   client should be dropped (EOF, hard error, or buffer ceiling hit).
+   Both reactor loops (resp_serve and the combined REPL+RESP loop) call
+   this — keeps the read/flush/write logic in one place. */
+static int resp_client_handle_io(resp_client_t *cur,
+                                 fd_set *rfds, fd_set *wfds) {
+  int drop = 0;
+  if (FD_ISSET(cur->fd, rfds)) {
+    /* Slide before grow: reclaiming a parsed prefix is far cheaper
+       than doubling the buffer. */
+    if (cur->rlen + 4096 > cur->rcap && cur->rhead > 0) {
+      size_t live = cur->rlen - cur->rhead;
+      memmove(cur->rbuf, cur->rbuf + cur->rhead, live);
+      cur->rlen = live;
+      cur->rhead = 0;
+    }
+    if (cur->rlen + 4096 > cur->rcap) {
+      if (cur->rcap >= RESP_RBUF_MAX) drop = 1;
+      else {
+        size_t cap = cur->rcap * 2;
+        if (cap > RESP_RBUF_MAX) cap = RESP_RBUF_MAX;
+        cur->rbuf = realloc(cur->rbuf, cap);
+        cur->rcap = cap;
+      }
+    }
+    if (!drop) {
+      ssize_t n = read(cur->fd, cur->rbuf + cur->rlen,
+                       cur->rcap - cur->rlen);
+      if (n == 0) drop = 1;
+      else if (n < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) drop = 1;
+      } else {
+        cur->rlen += (size_t)n;
+        resp_process_input(cur);
+        /* beforeSleep-style opportunistic flush: dispatched replies
+           sit in wbuf, and the socket we read from is almost
+           certainly writeable. Draining now skips the next select()
+           round-trip — compounds under pipelining (P=16 → 16 replies
+           flushed in one syscall instead of two event-loop turns). */
+        if (cur->wlen > cur->whead)
+          drop = resp_client_drain_write(cur);
+      }
+    }
+  }
+  if (!drop && FD_ISSET(cur->fd, wfds) && cur->wlen > cur->whead)
+    drop = resp_client_drain_write(cur);
+  return drop;
 }
 
 /* Public entry — blocks until SIGINT/SIGTERM, then returns a process
@@ -1595,52 +1652,8 @@ int resp_serve(int port) {
     resp_client_t *cur = resp_clients;
     while (cur) {
       resp_client_t *next = cur->next;
-      int drop = 0;
-
-      if (FD_ISSET(cur->fd, &rfds)) {
-        /* Slide before grow: if there's a parsed-but-unreclaimed prefix,
-           reclaiming it is far cheaper than doubling the buffer. */
-        if (cur->rlen + 4096 > cur->rcap && cur->rhead > 0) {
-          size_t live = cur->rlen - cur->rhead;
-          memmove(cur->rbuf, cur->rbuf + cur->rhead, live);
-          cur->rlen = live;
-          cur->rhead = 0;
-        }
-        if (cur->rlen + 4096 > cur->rcap) {
-          if (cur->rcap >= RESP_RBUF_MAX) {
-            drop = 1;
-          } else {
-            size_t cap = cur->rcap * 2;
-            if (cap > RESP_RBUF_MAX) cap = RESP_RBUF_MAX;
-            cur->rbuf = realloc(cur->rbuf, cap);
-            cur->rcap = cap;
-          }
-        }
-        if (!drop) {
-          ssize_t n = read(cur->fd, cur->rbuf + cur->rlen,
-                           cur->rcap - cur->rlen);
-          if (n == 0) drop = 1;
-          else if (n < 0) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) drop = 1;
-          } else {
-            cur->rlen += (size_t)n;
-            resp_process_input(cur);
-            /* beforeSleep-style opportunistic flush: dispatch just
-               appended replies to wbuf, and the socket we read from is
-               almost certainly writeable. Draining now skips the extra
-               select() round-trip — the win compounds under pipelining
-               (P=16 → 16 replies flushed in one syscall instead of two
-               event-loop turns). */
-            if (cur->wlen > cur->whead)
-              drop = resp_client_drain_write(cur);
-          }
-        }
-      }
-
-      if (!drop && FD_ISSET(cur->fd, &wfds) && cur->wlen > cur->whead)
-        drop = resp_client_drain_write(cur);
-
-      if (drop) resp_client_unlink(cur);
+      if (resp_client_handle_io(cur, &rfds, &wfds))
+        resp_client_unlink(cur);
       cur = next;
     }
   }
@@ -1875,43 +1888,8 @@ int resp_repl_serve(int port, env_t *global) {
     resp_client_t *cur = resp_clients;
     while (cur) {
       resp_client_t *next = cur->next;
-      int drop = 0;
-
-      if (FD_ISSET(cur->fd, &rfds)) {
-        if (cur->rlen + 4096 > cur->rcap && cur->rhead > 0) {
-          size_t live = cur->rlen - cur->rhead;
-          memmove(cur->rbuf, cur->rbuf + cur->rhead, live);
-          cur->rlen = live;
-          cur->rhead = 0;
-        }
-        if (cur->rlen + 4096 > cur->rcap) {
-          if (cur->rcap >= RESP_RBUF_MAX) drop = 1;
-          else {
-            size_t cap = cur->rcap * 2;
-            if (cap > RESP_RBUF_MAX) cap = RESP_RBUF_MAX;
-            cur->rbuf = realloc(cur->rbuf, cap);
-            cur->rcap = cap;
-          }
-        }
-        if (!drop) {
-          ssize_t n = read(cur->fd, cur->rbuf + cur->rlen,
-                           cur->rcap - cur->rlen);
-          if (n == 0) drop = 1;
-          else if (n < 0) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) drop = 1;
-          } else {
-            cur->rlen += (size_t)n;
-            resp_process_input(cur);
-            if (cur->wlen > cur->whead)
-              drop = resp_client_drain_write(cur);
-          }
-        }
-      }
-
-      if (!drop && FD_ISSET(cur->fd, &wfds) && cur->wlen > cur->whead)
-        drop = resp_client_drain_write(cur);
-
-      if (drop) resp_client_unlink(cur);
+      if (resp_client_handle_io(cur, &rfds, &wfds))
+        resp_client_unlink(cur);
       cur = next;
     }
   }
