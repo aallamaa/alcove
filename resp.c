@@ -51,6 +51,7 @@
 #define RESP_MAX_ARGS 1048576
 #define RESP_TABLE_INIT 64
 #define RESP_HASH_INIT 8
+#define RESP_ARGV_POOL_INIT 8 /* covers SET k v, HSET h f v, etc. */
 
 /* ---------- value model ----------
    The top-level keyspace is alcove's own dict_t (chained, bernstein_hash,
@@ -381,7 +382,7 @@ static void resp_write_wrongtype(resp_client_t *c) {
    high-water mark. Returns 0 on success, -1 on alloc failure. */
 static int resp_argv_pool_reserve(resp_client_t *c, int n) {
   if (n <= c->argv_cap) return 0;
-  int cap = c->argv_cap ? c->argv_cap : 8;
+  int cap = c->argv_cap ? c->argv_cap : RESP_ARGV_POOL_INIT;
   while (cap < n) cap *= 2;
   char **nv = realloc(c->argv_pool, sizeof(char *) * (size_t)cap);
   if (!nv) return -1;
@@ -1471,16 +1472,15 @@ static resp_client_t *resp_client_new(int cfd) {
   cl->fd = cfd;
   cl->rcap = RESP_RBUF_INIT;
   cl->rbuf = malloc(cl->rcap);
-  if (!cl->rbuf) { close(cfd); free(cl); return NULL; }
   /* Pre-size the argv pool so the first command on a fresh connection
-     skips the lazy realloc(NULL,…) hop. 8 covers SET k v / HSET h f v /
-     etc.; growth still kicks in for wider commands. */
-  cl->argv_cap = 8;
+     skips the lazy realloc(NULL,…) hop; growth still kicks in for
+     wider commands via resp_argv_pool_reserve. */
+  cl->argv_cap = RESP_ARGV_POOL_INIT;
   cl->argv_pool = malloc(sizeof(char *) * cl->argv_cap);
   cl->argl_pool = malloc(sizeof(long) * cl->argv_cap);
-  if (!cl->argv_pool || !cl->argl_pool) {
-    free(cl->argv_pool); free(cl->argl_pool); free(cl->rbuf);
-    close(cfd); free(cl); return NULL;
+  if (!cl->rbuf || !cl->argv_pool || !cl->argl_pool) {
+    resp_client_free(cl);
+    return NULL;
   }
   cl->next = resp_clients;
   resp_clients = cl;
@@ -1507,9 +1507,10 @@ static void resp_accept_drain(int srv) {
    flush, then drain wbuf if select said writeable. Returns 1 if the
    client should be dropped (EOF, hard error, or buffer ceiling hit).
    Both reactor loops (resp_serve and the combined REPL+RESP loop) call
-   this — keeps the read/flush/write logic in one place. */
-static int resp_client_handle_io(resp_client_t *cur,
-                                 fd_set *rfds, fd_set *wfds) {
+   this — keeps the read/flush/write logic in one place. Inline so the
+   per-iteration call cost stays at zero in the hot loop. */
+static inline int resp_client_handle_io(resp_client_t *cur,
+                                        fd_set *rfds, fd_set *wfds) {
   int drop = 0;
   if (FD_ISSET(cur->fd, rfds)) {
     /* Slide before grow: reclaiming a parsed prefix is far cheaper
