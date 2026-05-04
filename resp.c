@@ -73,7 +73,12 @@
 typedef struct resp_client {
   int fd;
   char *rbuf;
-  size_t rlen, rcap;
+  /* rbuf is a window [rhead, rlen) — reads append at rlen, parser
+     advances rhead. Slides down to rhead=0 lazily (when rcap - rlen
+     drops below the slide threshold), so a 16-cmd pipeline costs one
+     amortised memmove instead of 16 per-command shifts. Invariant:
+     rhead <= rlen <= rcap. */
+  size_t rhead, rlen, rcap;
   char *wbuf;
   /* wbuf is a window [whead, wlen) — appends advance wlen, drains
      advance whead. Invariant: whead <= wlen <= wcap. */
@@ -1402,8 +1407,9 @@ static void resp_process_input(resp_client_t *c) {
     char **argv = NULL;
     long *argl = NULL;
     int argc = 0;
-    int consumed = resp_parse_one(c->rbuf, c->rlen, &argv, &argl, &argc);
-    if (consumed == 0) return;
+    int consumed = resp_parse_one(c->rbuf + c->rhead, c->rlen - c->rhead,
+                                  &argv, &argl, &argc);
+    if (consumed == 0) break;
     if (consumed < 0) {
       resp_write_err(c, "ERR Protocol error");
       shutdown(c->fd, SHUT_RD);
@@ -1412,9 +1418,11 @@ static void resp_process_input(resp_client_t *c) {
     resp_dispatch(c, argv, argl, argc);
     free(argv);
     free(argl);
-    memmove(c->rbuf, c->rbuf + consumed, c->rlen - consumed);
-    c->rlen -= consumed;
+    c->rhead += (size_t)consumed;
   }
+  /* Cheap reset when the window is fully consumed — the common case
+     after a pipelined burst. Skips the next slide-down memmove. */
+  if (c->rhead == c->rlen) c->rhead = c->rlen = 0;
 }
 
 static int resp_set_nonblock(int fd) {
@@ -1557,6 +1565,14 @@ int resp_serve(int port) {
       int drop = 0;
 
       if (FD_ISSET(cur->fd, &rfds)) {
+        /* Slide before grow: if there's a parsed-but-unreclaimed prefix,
+           reclaiming it is far cheaper than doubling the buffer. */
+        if (cur->rlen + 4096 > cur->rcap && cur->rhead > 0) {
+          size_t live = cur->rlen - cur->rhead;
+          memmove(cur->rbuf, cur->rbuf + cur->rhead, live);
+          cur->rlen = live;
+          cur->rhead = 0;
+        }
         if (cur->rlen + 4096 > cur->rcap) {
           if (cur->rcap >= RESP_RBUF_MAX) {
             drop = 1;
@@ -1829,6 +1845,12 @@ int resp_repl_serve(int port, env_t *global) {
       int drop = 0;
 
       if (FD_ISSET(cur->fd, &rfds)) {
+        if (cur->rlen + 4096 > cur->rcap && cur->rhead > 0) {
+          size_t live = cur->rlen - cur->rhead;
+          memmove(cur->rbuf, cur->rbuf + cur->rhead, live);
+          cur->rlen = live;
+          cur->rhead = 0;
+        }
         if (cur->rlen + 4096 > cur->rcap) {
           if (cur->rcap >= RESP_RBUF_MAX) drop = 1;
           else {
