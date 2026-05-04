@@ -166,6 +166,15 @@ static inline exp_t *resp_kv_lookup(const char *key, size_t klen) {
   return resp_kv ? lfkv_get(resp_kv, key, klen) : NULL;
 }
 
+/* Borrowed-pointer lookup — no refcount bump. Pointer valid only
+   for the rest of this reactor turn (until the next epoch_tick).
+   Use only on synchronous read paths that copy the value to wbuf
+   and return; never on paths that escape to the Lisp evaluator or
+   schedule async work. */
+static inline exp_t *resp_kv_peek(const char *key, size_t klen) {
+  return resp_kv ? lfkv_peek(resp_kv, key, klen) : NULL;
+}
+
 /* SET-style write: consumes the caller's `val` ref, clears prior TTL. */
 static inline void resp_kv_set(const char *key, size_t klen, exp_t *val) {
   resp_kv_ensure();
@@ -776,21 +785,22 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
 
 static void cmd_get(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  /* Borrowed pointer — value memcpy'd into wbuf before we yield, so
+     epoch retention is sufficient. Saves 2 atomics per GET vs the
+     refexp/unrefexp round-trip lfkv_get pays for. */
+  exp_t *v = resp_kv_peek(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_nil(c); return; }
-  if (!isblob(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  if (!isblob(v)) { resp_write_wrongtype(c); return; }
   alc_blob_t *b = (alc_blob_t *)v->ptr;
   resp_write_bulk(c, b->bytes, b->len);
-  unrefexp(v);
 }
 
 static void cmd_strlen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
+  exp_t *v = resp_kv_peek(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_int(c, 0); return; }
-  if (!isblob(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  if (!isblob(v)) { resp_write_wrongtype(c); return; }
   resp_write_int(c, (long long)blob_len(v));
-  unrefexp(v);
 }
 
 /* Shared core for INCR/DECR/INCRBY/DECRBY. CAS-loop on the value slot

@@ -72,6 +72,18 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, struct exp_t *val);
  * expired. Caller must unrefexp when done. */
 struct exp_t *lfkv_get(lfkv_t *kv, const char *k, size_t klen);
 
+/* Peek: borrowed pointer (no refcount bump). Valid only until the
+ * caller's next epoch_tick — i.e., within a single reactor turn. Use
+ * for synchronous read-only paths (cmd_get, cmd_strlen, the lookup
+ * leg of CAS-loops) where the value never escapes the current event-
+ * loop iteration. Saves two atomic ops per call vs lfkv_get.
+ *
+ * Safety: epoch_retire queues frees but won't run them until ALL
+ * registered reactors have ticked past the retire epoch, so the
+ * borrowed pointer stays alive for the rest of this iteration even
+ * if a peer SETs over the slot mid-call. */
+struct exp_t *lfkv_peek(lfkv_t *kv, const char *k, size_t klen);
+
 /* Del: returns 1 if a value was removed, 0 if absent. Retires old. */
 int lfkv_del(lfkv_t *kv, const char *k, size_t klen);
 

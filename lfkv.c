@@ -195,6 +195,28 @@ exp_t *lfkv_get(lfkv_t *kv, const char *k, size_t klen) {
   return refexp(v);
 }
 
+/* Borrowed-pointer variant. Skips the refexp/unrefexp pair on the read
+   path. See lfkv.h for the safety contract. */
+exp_t *lfkv_peek(lfkv_t *kv, const char *k, size_t klen) {
+  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
+  size_t i, tomb;
+  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  if (!s) return NULL;
+  exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
+  if (!v) return NULL;
+  if (slot_is_expired(s)) {
+    if (atomic_compare_exchange_strong_explicit(
+            &s->val, &v, (exp_t *)NULL,
+            memory_order_release, memory_order_acquire)) {
+      atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
+      atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
+      epoch_retire(v, unrefexp_void);
+    }
+    return NULL;
+  }
+  return v;
+}
+
 int lfkv_del(lfkv_t *kv, const char *k, size_t klen) {
   uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
   size_t i, tomb;
