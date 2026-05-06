@@ -77,96 +77,7 @@ static ALCOVE_TLS int in_tail_position = 0;
 #define LISPCMD(name, fn, doc) {name, -1, 0, 0, doc, fn}
 #define LISPCMD_TAIL(name, fn, doc) {name, -1, FLAG_TAIL_AWARE, 0, doc, fn}
 
-/* Forward declarations for doc strings defined alongside each cmd
-   function. Each is `static const char doc_<symbolname>[]` so a future
-   reader can grep `doc_+` to land directly on the help text + the body. */
-extern const char doc_quote[], doc_if[], doc_do[];
-extern const char doc_when[], doc_while[], doc_repeat[];
-extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
-extern const char doc_let[], doc_with[];
-extern const char doc_eq[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
-extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
-extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
-extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
-extern const char doc_bitand[], doc_bitor[], doc_bitxor[], doc_bitnot[];
-extern const char doc_shl[], doc_shr[];
-extern const char doc_sqrt[], doc_sqrtint[], doc_exp[], doc_expt[], doc_random[];
-extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
-extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
-extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
-extern const char doc_def[], doc_fn[], doc_defmacro[], doc_macroexpand[];
-extern const char doc_eval[], doc_apply[];
-extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
-extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
-extern const char doc_pr[], doc_prn[];
-extern const char doc_persist[], doc_forget[], doc_unpersist[];
-extern const char doc_savedb[], doc_loaddb[];
-extern const char doc_ispersistent[];
-extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
-extern const char doc_time[], doc_exit[];
-extern const char doc_ffifn[];
-extern const char doc_doc[], doc_help[];
-/* Clojure-style containers (EXP_DICT / EXP_LIST / EXP_BLOB). */
-extern const char doc_hashmap[], doc_assocbang[], doc_dissocbang[], doc_get[],
-                  doc_containsp[], doc_keys[], doc_vals[], doc_count[];
-extern const char doc_deque[], doc_pushrightbang[], doc_pushleftbang[],
-                  doc_poprightbang[], doc_popleftbang[],
-                  doc_peekleft[], doc_peekright[];
-extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
-                  doc_blob2string[], doc_string2blob[];
-extern const char doc_vector[];
-/* Redis inspector builtins (only registered, only callable, when the
-   process started under -R; otherwise resp_db is empty and they all
-   return zero/nil/none). Defined below the `#include "resp.c"` line so
-   they can read the resp_db static directly. */
-extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
-                  doc_redis_get[], doc_redis_flush[], doc_redis_port[],
-                  doc_redis_defcmd[], doc_redis_undefcmd[], doc_redis_cmds[];
-
-/* Forward decls for cmds defined below the table — every callee must be
-   visible at table-init time. The original cmds had a top-level
-   #pragma-style sweep (functions all sit in alcove.c above this point);
-   newer additions land below and need explicit decls. */
-exp_t *doccmd(exp_t *e, env_t *env);
-exp_t *helpcmd(exp_t *e, env_t *env);
-exp_t *bitandcmd(exp_t *e, env_t *env);
-exp_t *bitorcmd(exp_t *e, env_t *env);
-exp_t *bitxorcmd(exp_t *e, env_t *env);
-exp_t *bitnotcmd(exp_t *e, env_t *env);
-exp_t *shlcmd(exp_t *e, env_t *env);
-exp_t *shrcmd(exp_t *e, env_t *env);
-exp_t *unpersistcmd(exp_t *e, env_t *env);
-/* Clojure-style container cmds — defined below the table. */
-exp_t *hashmapcmd(exp_t *e, env_t *env);
-exp_t *assocbangcmd(exp_t *e, env_t *env);
-exp_t *dissocbangcmd(exp_t *e, env_t *env);
-exp_t *getcmd(exp_t *e, env_t *env);
-exp_t *containspcmd(exp_t *e, env_t *env);
-exp_t *keyscmd(exp_t *e, env_t *env);
-exp_t *valscmd(exp_t *e, env_t *env);
-exp_t *countcmd(exp_t *e, env_t *env);
-exp_t *dequecmd(exp_t *e, env_t *env);
-exp_t *pushrightbangcmd(exp_t *e, env_t *env);
-exp_t *pushleftbangcmd(exp_t *e, env_t *env);
-exp_t *poprightbangcmd(exp_t *e, env_t *env);
-exp_t *popleftbangcmd(exp_t *e, env_t *env);
-exp_t *peekleftcmd(exp_t *e, env_t *env);
-exp_t *peekrightcmd(exp_t *e, env_t *env);
-exp_t *makeblobcmd(exp_t *e, env_t *env);
-exp_t *bloblencmd(exp_t *e, env_t *env);
-exp_t *blobrefcmd(exp_t *e, env_t *env);
-exp_t *blob2stringcmd(exp_t *e, env_t *env);
-exp_t *string2blobcmd(exp_t *e, env_t *env);
-exp_t *vectorcmd(exp_t *e, env_t *env);
-exp_t *rediscountcmd(exp_t *e, env_t *env);
-exp_t *rediskeyscmd(exp_t *e, env_t *env);
-exp_t *redistypecmd(exp_t *e, env_t *env);
-exp_t *redisgetcmd(exp_t *e, env_t *env);
-exp_t *redisflushcmd(exp_t *e, env_t *env);
-exp_t *redisportcmd(exp_t *e, env_t *env);
-exp_t *rediscmddefcmd(exp_t *e, env_t *env);
-exp_t *rediscmdundefcmd(exp_t *e, env_t *env);
-exp_t *rediscmdscmd(exp_t *e, env_t *env);
+#include "builtins.h"
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
@@ -3013,7 +2924,6 @@ MATH_CMD(minuscmd, 0, -=, 1, 0)
 const char doc_div[] = "(/ a b ...) — divide a by the rest. Integer division if all args are ints; otherwise float.";
 MATH_CMD(dividecmd, 0, /=, 0, 1)
 
-#undef MATH_CMD
 
 const char doc_sqrt[] = "(sqrt x) — float square root. See sqrt-int for the integer version.";
 exp_t *sqrtcmd(exp_t *e, env_t *env) {
@@ -3919,7 +3829,6 @@ MINMAX_CMD(maxcmd, 0, "max")
 const char doc_min[] = "(min x ...) — smallest of the args.";
 MINMAX_CMD(mincmd, 1, "min")
 
-#undef MINMAX_CMD
 
 /* (length x) — list length, string length, or 0 for nil. */
 const char doc_length[] = "(length x) — element count of a list/string/vector.";
@@ -4730,46 +4639,10 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
 }
 
 const char doc_is[] = "(is a b) — pointer/value identity (eq?). Same fixnum or same heap object.";
-exp_t *iscmd(exp_t *e, env_t *env) {
-  exp_t *ret = NULL;
-  exp_t *cur1 = EVAL(cadr(e), env);
-  if iserror (cur1) {
-    unrefexp(e);
-    return cur1;
-  }
-  exp_t *cur2 = EVAL(caddr(e), env);
-  if iserror (cur2) {
-    unrefexp(cur1);
-    unrefexp(e);
-    return cur2;
-  }
-  unrefexp(e);
-  ret = (isequal(cur1, cur2) ? TRUE_EXP : NIL_EXP);
-  unrefexp(cur1);
-  unrefexp(cur2);
-  return ret;
-}
+EQUALITY_CMD(iscmd, isequal)
 
 const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into pairs/strings/vectors.";
-exp_t *isocmd(exp_t *e, env_t *env) {
-  exp_t *ret = NULL;
-  exp_t *cur1 = EVAL(cadr(e), env);
-  if iserror (cur1) {
-    unrefexp(e);
-    return cur1;
-  }
-  exp_t *cur2 = EVAL(caddr(e), env);
-  if iserror (cur2) {
-    unrefexp(cur1);
-    unrefexp(e);
-    return cur2;
-  }
-  unrefexp(e);
-  ret = (isoequal(cur1, cur2) ? TRUE_EXP : NIL_EXP);
-  unrefexp(cur1);
-  unrefexp(cur2);
-  return ret;
-}
+EQUALITY_CMD(isocmd, isoequal)
 
 const char doc_in[] = "(in val a b c ...) — t if (is val) matches any of the rest.";
 exp_t *incmd(exp_t *e, env_t *env) {
@@ -5530,27 +5403,10 @@ exp_t *conscmd(exp_t *e, env_t *env) {
 }
 
 const char doc_cdr[] = "(cdr xs) — tail of a pair / rest of a list.";
-exp_t *cdrcmd(exp_t *e, env_t *env) {
-  exp_t *tmpexp = EVAL(cadr(e), env);
-  exp_t *tmpexp2 = tmpexp;
-  unrefexp(e);
-  if (!iserror(tmpexp)) {
-    tmpexp = refexp(cdr(tmpexp2));
-    unrefexp(tmpexp2);
-  }
-  return tmpexp;
-}
+PAIR_PART_CMD(cdrcmd, cdr)
 
 const char doc_car[] = "(car xs) — head of a pair / first element of a list.";
-exp_t *carcmd(exp_t *e, env_t *env) {
-  exp_t *tmpexp = EVAL(cadr(e), env);
-  exp_t *tmpexp2 = tmpexp;
-  if (!iserror(tmpexp)) {
-    tmpexp = refexp(car(tmpexp2));
-    unrefexp(tmpexp2);
-  }
-  return tmpexp;
-}
+PAIR_PART_CMD(carcmd, car)
 
 const char doc_list[] = "(list x ...) — construct a list of all args. (list) is nil.";
 exp_t *listcmd(exp_t *e, env_t *env) {
@@ -10843,22 +10699,6 @@ int jit_compile(bytecode_t *bc) {
 
 #endif /* ALCOVE_JIT */
 
-typedef struct compiler_t {
-  uint8_t *code;
-  int ncode;
-  int code_cap;
-  exp_t **consts;
-  int nconsts;
-  int consts_cap;
-  /* slot_names[0..nparams) = lambda params; slot_names[nparams..nslots)
-     = let/with-bound names. Scope-managed as a stack. */
-  char *slot_names[ENV_INLINE_SLOTS];
-  int nparams;
-  int nslots;            /* current total: nparams + active let/with bindings */
-  int nlet_depth;        /* >0 disables OP_TAIL_SELF (keys/slots mismatch) */
-  const char *self_name; /* for self-tail-call detection; NULL in anon fn */
-  int failed;
-} compiler_t;
 
 static void emit_u8(compiler_t *c, uint8_t b) {
   if (c->failed)
@@ -13430,15 +13270,6 @@ exp_t *hashmapcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-#define DICT_KV_SETUP(err_name) \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!isdict(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": first arg must be a hash-map"); } \
-  exp_t *k = EVAL(caddr(e), env); \
-  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; } \
-  char tmp[32]; \
-  char *ks = alc_key_to_cstr(k, tmp);
 
 const char doc_assocbang[] = "(assoc! d k v) — set d[k]=v in place; returns d.";
 exp_t *assocbangcmd(exp_t *e, env_t *env) {
@@ -13485,28 +13316,6 @@ exp_t *containspcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-#define DICT_ITER_CMD(name, err_name, node_val) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!isdict(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a hash-map"); } \
-  dict_t *dp = (dict_t *)d->ptr; \
-  exp_t *ret = NIL_EXP; \
-  exp_t *cur = NULL; \
-  unsigned int i; \
-  for (i = 0; i < dp->ht[0].size; i++) { \
-    keyval_t *k = dp->ht[0].table[i]; \
-    while (k) { \
-      exp_t *node = make_node(node_val); \
-      if (cur) cur = cur->next = node; \
-      else { ret = cur = node; } \
-      k = k->next; \
-    } \
-  } \
-  unrefexp(d); unrefexp(e); \
-  return ret ? ret : NIL_EXP; \
-}
 
 const char doc_keys[] = "(keys d) — list of keys in d (order undefined).";
 DICT_ITER_CMD(keyscmd, "keys", alc_cstr_to_key((char *)k->key))
@@ -13514,7 +13323,6 @@ DICT_ITER_CMD(keyscmd, "keys", alc_cstr_to_key((char *)k->key))
 const char doc_vals[] = "(vals d) — list of values in d (order matches keys).";
 DICT_ITER_CMD(valscmd, "vals", refexp(k->val))
 
-#undef DICT_ITER_CMD
 
 const char doc_count[] = "(count x) — element count for hash-maps, deques, vectors, strings, blobs, and lists.";
 exp_t *countcmd(exp_t *e, env_t *env) {
@@ -13641,9 +13449,6 @@ DEQUE_PEEK_CMD(peekleftcmd, "peek-left", head)
 const char doc_peekright[] = "(peek-right d) — rightmost element (no mutation), or nil.";
 DEQUE_PEEK_CMD(peekrightcmd, "peek-right", tail)
 
-#undef DEQUE_PUSH_CMD
-#undef DEQUE_POP_CMD
-#undef DEQUE_PEEK_CMD
 
 /* ---------- blob ops ---------- */
 
@@ -13669,17 +13474,6 @@ exp_t *makeblobcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-#define UNARY_TYPE_CMD(name, err_str, TYPE_CHECK, PTR_TYPE, RET_EXPR) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *obj = EVAL(cadr(e), env); \
-  if (iserror(obj)) { unrefexp(e); return obj; } \
-  if (!(TYPE_CHECK(obj))) { unrefexp(obj); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_str); } \
-  PTR_TYPE *val_ptr = (PTR_TYPE *)obj->ptr; \
-  exp_t *ret = (RET_EXPR); \
-  unrefexp(obj); unrefexp(e); \
-  return ret; \
-}
 
 const char doc_bloblen[] = "(blob-len b) — byte count of b.";
 UNARY_TYPE_CMD(bloblencmd, "blob-len: arg must be a blob", isblob, alc_blob_t, MAKE_FIX((int64_t)val_ptr->len))
@@ -13737,8 +13531,6 @@ exp_t *vectorcmd(exp_t *e, env_t *env) {
 const char doc_string2blob[] = "(string->blob s) — wrap string bytes in a fresh blob.";
 UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring, char, make_blob(val_ptr, strlen(val_ptr)))
 
-#undef UNARY_TYPE_CMD
-#undef DICT_KV_SETUP
 
 /* Epoch-based reclamation for the lock-free keyspace (LF-1). Included
    here so it can see ALCOVE_TLS and any other build-time toggles. */

@@ -708,4 +708,24 @@ void tokenappend(token_t *token, char *src, int len);
 #define PARSER_KEEPWHITESPACE 1
 #define PARSER_TERMMACROMODE 4
 
+
+/* --- Extracted from alcove.c --- */
+struct compiler_env;
+typedef struct compiler_t {
+  uint8_t *code;
+  int ncode;
+  int code_cap;
+  exp_t **consts;
+  int nconsts;
+  int consts_cap;
+  /* slot_names[0..nparams) = lambda params; slot_names[nparams..nslots)
+     = let/with-bound names. Scope-managed as a stack. */
+  char *slot_names[ENV_INLINE_SLOTS];
+  int nparams;
+  int nslots;            /* current total: nparams + active let/with bindings */
+  int nlet_depth;        /* >0 disables OP_TAIL_SELF (keys/slots mismatch) */
+  const char *self_name; /* for self-tail-call detection; NULL in anon fn */
+  int failed;
+} compiler_t;
+
 #endif /* ALCOVE_H */
