@@ -231,52 +231,91 @@ lispProc lispProcList[] = {
 #undef LISPCMD
 #undef LISPCMD_TAIL
 
-
 /* ---------------- Argument Evaluation & Cleanup Macros ----------------
    Built-in commands frequently evaluate 1-4 arguments sequentially, checking
    for errors and managing unrefexp cascades. These macros reduce boilerplate.
    All assume `e` and `env` are in scope (the standard command signature). */
 
-#define EVAL_ARG_1(v1) \
-  exp_t *v1 = NULL; \
-  if (e->next) { \
-    v1 = EVAL(e->next->content, env); \
-    if (iserror(v1)) { unrefexp(e); return v1; } \
+#define EVAL_ARG_1(v1)                                                         \
+  exp_t *v1 = NULL;                                                            \
+  if (e->next) {                                                               \
+    v1 = EVAL(e->next->content, env);                                          \
+    if (iserror(v1)) {                                                         \
+      unrefexp(e);                                                             \
+      return v1;                                                               \
+    }                                                                          \
   }
 
-#define EVAL_ARG_2(v1, v2) \
-  EVAL_ARG_1(v1) \
-  exp_t *v2 = NULL; \
-  if (e->next && e->next->next) { \
-    v2 = EVAL(e->next->next->content, env); \
-    if (iserror(v2)) { unrefexp(v1); unrefexp(e); return v2; } \
+#define EVAL_ARG_2(v1, v2)                                                     \
+  EVAL_ARG_1(v1)                                                               \
+  exp_t *v2 = NULL;                                                            \
+  if (e->next && e->next->next) {                                              \
+    v2 = EVAL(e->next->next->content, env);                                    \
+    if (iserror(v2)) {                                                         \
+      unrefexp(v1);                                                            \
+      unrefexp(e);                                                             \
+      return v2;                                                               \
+    }                                                                          \
   }
 
-#define EVAL_ARG_3(v1, v2, v3) \
-  EVAL_ARG_2(v1, v2) \
-  exp_t *v3 = NULL; \
-  if (e->next && e->next->next && e->next->next->next) { \
-    v3 = EVAL(e->next->next->next->content, env); \
-    if (iserror(v3)) { unrefexp(v1); unrefexp(v2); unrefexp(e); return v3; } \
+#define EVAL_ARG_3(v1, v2, v3)                                                 \
+  EVAL_ARG_2(v1, v2)                                                           \
+  exp_t *v3 = NULL;                                                            \
+  if (e->next && e->next->next && e->next->next->next) {                       \
+    v3 = EVAL(e->next->next->next->content, env);                              \
+    if (iserror(v3)) {                                                         \
+      unrefexp(v1);                                                            \
+      unrefexp(v2);                                                            \
+      unrefexp(e);                                                             \
+      return v3;                                                               \
+    }                                                                          \
   }
 
-#define EVAL_ARG_4(v1, v2, v3, v4) \
-  EVAL_ARG_3(v1, v2, v3) \
-  exp_t *v4 = NULL; \
-  if (e->next && e->next->next && e->next->next->next && e->next->next->next->next) { \
-    v4 = EVAL(e->next->next->next->next->content, env); \
-    if (iserror(v4)) { unrefexp(v1); unrefexp(v2); unrefexp(v3); unrefexp(e); return v4; } \
+#define EVAL_ARG_4(v1, v2, v3, v4)                                             \
+  EVAL_ARG_3(v1, v2, v3)                                                       \
+  exp_t *v4 = NULL;                                                            \
+  if (e->next && e->next->next && e->next->next->next &&                       \
+      e->next->next->next->next) {                                             \
+    v4 = EVAL(e->next->next->next->next->content, env);                        \
+    if (iserror(v4)) {                                                         \
+      unrefexp(v1);                                                            \
+      unrefexp(v2);                                                            \
+      unrefexp(v3);                                                            \
+      unrefexp(e);                                                             \
+      return v4;                                                               \
+    }                                                                          \
   }
 
-#define CLEAN_RETURN_1(v1, ret) \
-  do { unrefexp(v1); unrefexp(e); return (ret); } while(0)
-#define CLEAN_RETURN_2(v1, v2, ret) \
-  do { unrefexp(v1); unrefexp(v2); unrefexp(e); return (ret); } while(0)
-#define CLEAN_RETURN_3(v1, v2, v3, ret) \
-  do { unrefexp(v1); unrefexp(v2); unrefexp(v3); unrefexp(e); return (ret); } while(0)
-#define CLEAN_RETURN_4(v1, v2, v3, v4, ret) \
-  do { unrefexp(v1); unrefexp(v2); unrefexp(v3); unrefexp(v4); unrefexp(e); return (ret); } while(0)
-
+#define CLEAN_RETURN_1(v1, ret)                                                \
+  do {                                                                         \
+    unrefexp(v1);                                                              \
+    unrefexp(e);                                                               \
+    return (ret);                                                              \
+  } while (0)
+#define CLEAN_RETURN_2(v1, v2, ret)                                            \
+  do {                                                                         \
+    unrefexp(v1);                                                              \
+    unrefexp(v2);                                                              \
+    unrefexp(e);                                                               \
+    return (ret);                                                              \
+  } while (0)
+#define CLEAN_RETURN_3(v1, v2, v3, ret)                                        \
+  do {                                                                         \
+    unrefexp(v1);                                                              \
+    unrefexp(v2);                                                              \
+    unrefexp(v3);                                                              \
+    unrefexp(e);                                                               \
+    return (ret);                                                              \
+  } while (0)
+#define CLEAN_RETURN_4(v1, v2, v3, v4, ret)                                    \
+  do {                                                                         \
+    unrefexp(v1);                                                              \
+    unrefexp(v2);                                                              \
+    unrefexp(v3);                                                              \
+    unrefexp(v4);                                                              \
+    unrefexp(e);                                                               \
+    return (ret);                                                              \
+  } while (0)
 
 int64_t gettimeusec() {
   struct timeval tv;
@@ -330,16 +369,19 @@ ownership or call unrefexp.
 */
 
 void *memalloc(size_t count, size_t size) {
-  return calloc(count, size);
-  // ERROR MANAGEMENT TO BE ADDDED
+  void *ptr = calloc(count, size);
+  if (!ptr) {
+    fprintf(stderr, "Fatal error: Out of memory\n");
+    exit(1);
+  }
+  return ptr;
 }
 
 inline exp_t *refexp(exp_t *e) {
   /* Tagged immediates (fixnum, char) and canonical singletons (nil, t)
      are immortal — skip the refcount traffic. */
-  if (is_immortal(e))
-    return e;
-  REFCOUNT_INC(&e->nref);
+  if (!(is_immortal(e)))
+    REFCOUNT_INC(&e->nref);
   return e;
 }
 
@@ -1058,6 +1100,33 @@ void print_node(exp_t *node) {
   return;
 }
 
+exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
+  char *ptr = realloc(token->data, final_length + 1);
+  if (!ptr) {
+    fprintf(stderr, "Fatal error: Out of memory\n");
+    exit(1);
+  }
+  if (offset > 0)
+    memmove(ptr, ptr + offset, final_length);
+  ptr[final_length] = '\0';
+  free(token);
+  MAKE_TYPED(cur, EXP_STRING, ptr);
+  return cur;
+}
+
+exp_t *make_symbol_from_token(token_t *token) {
+  int final_length = token->size;
+  char *ptr = realloc(token->data, final_length + 1);
+  if (!ptr) {
+    fprintf(stderr, "Fatal error: Out of memory\n");
+    exit(1);
+  }
+  ptr[final_length] = '\0';
+  free(token);
+  MAKE_TYPED(cur, EXP_SYMBOL, ptr);
+  return cur;
+}
+
 inline char *alloc_str(char *str, int length) {
   char *ptr = memalloc(length + 1, sizeof(char));
   memcpy(ptr, str, length);
@@ -1067,7 +1136,6 @@ inline char *alloc_str(char *str, int length) {
 
 inline exp_t *make_string(char *str, int length) {
   MAKE_TYPED(cur, EXP_STRING, alloc_str(str, length));
-  //  printf("STR %s\n",(char*)cur->ptr);
   return cur;
 }
 
@@ -1088,28 +1156,22 @@ inline exp_t *make_quote(exp_t *node) {
    nref=1; unrefexp's free-path knows how to drop them (see line ~365). */
 
 exp_t *make_blob(const char *bytes, size_t len) {
-  exp_t *cur = make_nil();
   alc_blob_t *b = (alc_blob_t *)memalloc(1, sizeof(alc_blob_t) + len);
   b->len = len;
   if (len && bytes)
     memcpy(b->bytes, bytes, len);
-  cur->type = EXP_BLOB;
-  cur->ptr = b;
+  MAKE_TYPED(cur, EXP_BLOB, b);
   return cur;
 }
 
 exp_t *make_dict_exp(void) {
-  exp_t *cur = make_nil();
-  cur->type = EXP_DICT;
-  cur->ptr = create_dict();
+  MAKE_TYPED(cur, EXP_DICT, create_dict());
   return cur;
 }
 
 exp_t *make_list_exp(void) {
-  exp_t *cur = make_nil();
   alc_list_t *l = (alc_list_t *)memalloc(1, sizeof(alc_list_t));
-  cur->type = EXP_LIST;
-  cur->ptr = l;
+  MAKE_TYPED(cur, EXP_LIST, l);
   return cur;
 }
 
@@ -1547,17 +1609,18 @@ exp_t *load_macro(exp_t *e, FILE *stream) {
    exp of type EXP_VECTOR can exist, so registering nothing here is
    correct (savedb's __DUMPABLE__ check will warn if one ever appears). */
 
-exp_t *make_atom(char *str, int length) {
+exp_t *make_atom_from_token(token_t *token) {
+  char *str = token->data;
+  int length = token->size;
   // Generate an atom from a string during parsing
   //  TEST -> 0: + or - in front, 1: digit after first + or -, 2: E mantissa,
   //  3:+ or - sign, 4: digit of mantissa
   int test = 0;
   int dot = 0;
-  int len = length;
   char v;
   char *stro = str;
   if (str[0] == '\"')
-    return make_string(str + 1, length - 2);
+    return make_string_from_token(token, 1, length - 2);
   while (length--) {
     v = (char)*(str++);
     if ((v == '+') || (v == '-')) {
@@ -1596,16 +1659,20 @@ exp_t *make_atom(char *str, int length) {
 
   if (length != -1) {
     // not an integer then must be a symbol
-    return make_symbol(stro, len);
+    return make_symbol_from_token(token);
   } else {
     if (test == 1)
-      return make_symbol(stro, len);
-    else if ((test == 3) && !dot)
-      return make_integer(stro);
-    else if ((test == 31) || (test == 3))
-      return make_float(stro);
-    else
-      return make_symbol(stro, len);
+      return make_symbol_from_token(token);
+    else if ((test == 3) && !dot) {
+      exp_t *ret = make_integer(stro);
+      freetoken(token);
+      return ret;
+    } else if ((test == 31) || (test == 3)) {
+      exp_t *ret = make_float(stro);
+      freetoken(token);
+      return ret;
+    } else
+      return make_symbol_from_token(token);
   }
 }
 
@@ -1925,8 +1992,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
                            "End of file reached while parsing");
             }
           } else if (ISMULTIPLEESCAPE & chrmap[y]) {
-            ret = make_string(token->data, token->size);
-            freetoken(token);
+            ret = make_string_from_token(token, 0, token->size);
             return ret;
             /*escape=0;pushtoken=1;*/
           } else
@@ -1941,8 +2007,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
     }
     if (pushtoken) {
       // TOKEN AND STUFF TO BE FREED
-      ret = make_atom(token->data, token->size);
-      freetoken(token);
+      ret = make_atom_from_token(token);
       token = NULL;
       return ret;
     } else
@@ -3191,12 +3256,16 @@ exp_t *vecrefcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(vexp, iexp);
 
   if (!isvector(vexp) || !isnumber(iexp))
-    CLEAN_RETURN_2(vexp, iexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args"));
+    CLEAN_RETURN_2(
+        vexp, iexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args"));
 
   alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
   if (i < 0 || i >= v->len)
-    CLEAN_RETURN_2(vexp, iexp, error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-ref: index out of range"));
+    CLEAN_RETURN_2(
+        vexp, iexp,
+        error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-ref: index out of range"));
 
   exp_t *ret = refexp(v->data[i]);
   CLEAN_RETURN_2(vexp, iexp, ret);
@@ -3208,19 +3277,25 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(vexp, iexp, valexp);
 
   if (!isvector(vexp) || !isnumber(iexp))
-    CLEAN_RETURN_3(vexp, iexp, valexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args"));
+    CLEAN_RETURN_3(
+        vexp, iexp, valexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args"));
 
   alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
   if (i < 0 || i >= v->len)
-    CLEAN_RETURN_3(vexp, iexp, valexp, error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-set!: index out of range"));
+    CLEAN_RETURN_3(vexp, iexp, valexp,
+                   error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                         "vec-set!: index out of range"));
 
   /* Replace the slot — drop old ref, install new (transfer valexp's). */
   unrefexp(v->data[i]);
   v->data[i] = valexp; /* ownership transferred */
-  
+
   exp_t *ret = refexp(v->data[i]); /* return the value, like (= ...) */
-  CLEAN_RETURN_2(vexp, iexp, ret); /* valexp is already owned by vector slot, don't clean it! */
+  CLEAN_RETURN_2(
+      vexp, iexp,
+      ret); /* valexp is already owned by vector slot, don't clean it! */
 }
 
 const char doc_veclen[] = "(vec-len v) — number of cells in vector v.";
@@ -4036,8 +4111,9 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
          the tag bits of a tagged immediate. Same fix pattern as
          appendcmd / reversecmd. nil/empty list is a clean miss. */
       if (b && b != NIL_EXP && !ispair(b)) {
-        CLEAN_RETURN_2(a, b, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                     "nth: second argument is not a list"));
+        CLEAN_RETURN_2(a, b,
+                       error(ERROR_ILLEGAL_VALUE, NULL, env,
+                             "nth: second argument is not a list"));
       }
       int64_t idx = FIX_VAL(a);
       exp_t *cur = b;
@@ -4194,10 +4270,9 @@ exp_t *randomcmd(exp_t *e, env_t *env) {
     unrefexp(a);
   }
   unrefexp(e);
-  if (n <= 0)
-    return MAKE_FIX(0);
   return MAKE_FIX(
-      (int64_t)((double)rand() / ((double)RAND_MAX + 1) * (double)n));
+      n <= 0 ? 0
+             : (int64_t)((double)rand() / ((double)RAND_MAX + 1) * (double)n));
 }
 
 /* (map fn list) — non-destructive; returns a new list of (fn x) values. */
@@ -4207,10 +4282,13 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   EVAL_ARG_2(fn, xs);
   if (!fn || !xs)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)"));
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
-    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "map: second argument is not a list"));
-  
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "map: second argument is not a list"));
+
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
@@ -4241,10 +4319,13 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   EVAL_ARG_2(fn, xs);
   if (!fn || !xs)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)"));
+    CLEAN_RETURN_2(
+        fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
-    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "filter: second argument is not a list"));
-  
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "filter: second argument is not a list"));
+
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
@@ -4277,9 +4358,13 @@ const char doc_reduce[] = "(reduce fn init xs) — left fold: (fn (fn (fn init "
 exp_t *reducecmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(fn, acc, xs);
   if (!fn || !acc || !xs)
-    CLEAN_RETURN_3(fn, acc, xs, error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)"));
+    CLEAN_RETURN_3(
+        fn, acc, xs,
+        error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
-    CLEAN_RETURN_3(fn, acc, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "reduce: third argument is not a list"));
+    CLEAN_RETURN_3(fn, acc, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "reduce: third argument is not a list"));
 
   /* Fast path: detect a simple 6-byte binary-arithmetic lambda
      (fn (a b) (op a b)) — bytecode is LOAD_SLOT 0, LOAD_SLOT 1, OP, RET.
@@ -4318,7 +4403,8 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
            and resume fast-path on the next element. */
         exp_t *argv[2] = {acc, refexp(x)};
         acc = vm_invoke_values(fn, 2, argv, env);
-        if (acc && iserror(acc)) CLEAN_RETURN_2(fn, xs, acc);
+        if (acc && iserror(acc))
+          CLEAN_RETURN_2(fn, xs, acc);
         if (!acc)
           acc = NIL_EXP;
       }
@@ -4328,7 +4414,8 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     while (ispair(cur) && cur->content) {
       exp_t *argv[2] = {acc, refexp(cur->content)};
       acc = vm_invoke_values(fn, 2, argv, env);
-      if (acc && iserror(acc)) CLEAN_RETURN_2(fn, xs, acc);
+      if (acc && iserror(acc))
+        CLEAN_RETURN_2(fn, xs, acc);
       if (!acc)
         acc = NIL_EXP;
       cur = cur->next;
@@ -4346,15 +4433,19 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
   exp_t *ret = NIL_EXP;
   EVAL_ARG_2(fn, xs);
   if (!fn || !xs)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(any? pred list)"));
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(any? pred list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
-    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "any?: second argument is not a list"));
-  
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "any?: second argument is not a list"));
+
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
-    if (res && iserror(res)) CLEAN_RETURN_2(fn, xs, res);
+    if (res && iserror(res))
+      CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
     if (res)
       unrefexp(res);
@@ -4374,15 +4465,19 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
   exp_t *ret = TRUE_EXP;
   EVAL_ARG_2(fn, xs);
   if (!fn || !xs)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(all? pred list)"));
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(all? pred list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
-    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "all?: second argument is not a list"));
-  
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "all?: second argument is not a list"));
+
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
-    if (res && iserror(res)) CLEAN_RETURN_2(fn, xs, res);
+    if (res && iserror(res))
+      CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
     if (res)
       unrefexp(res);
@@ -5457,7 +5552,8 @@ exp_t *conscmd(exp_t *e, env_t *env) {
   if (istrue(b))
     ret->next = b;
   else {
-    if (b) unrefexp(b);
+    if (b)
+      unrefexp(b);
     ret->next = NULL;
   }
   unrefexp(e);
@@ -6976,8 +7072,7 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
   if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
     return 0;
-  if (!issymbol(cnil) ||
-      strcmp((const char *)cnil->ptr, "nil") != 0)
+  if (!issymbol(cnil) || strcmp((const char *)cnil->ptr, "nil") != 0)
     return 0;
   if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
     return 0;
@@ -7220,8 +7315,7 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
     if (idx >= bc->nconsts)
       return 0;
     exp_t *cn = bc->consts[idx];
-    if (!issymbol(cn) ||
-        strcmp((const char *)cn->ptr, "nil") != 0)
+    if (!issymbol(cn) || strcmp((const char *)cn->ptr, "nil") != 0)
       return 0;
   }
   if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
@@ -7458,11 +7552,9 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
     return 0;
   exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!issymbol(cn1) ||
-      strcmp((const char *)cn1->ptr, "nil") != 0)
+  if (!issymbol(cn1) || strcmp((const char *)cn1->ptr, "nil") != 0)
     return 0;
-  if (!issymbol(cn2) ||
-      strcmp((const char *)cn2->ptr, "nil") != 0)
+  if (!issymbol(cn2) || strcmp((const char *)cn2->ptr, "nil") != 0)
     return 0;
 
   if (s_j >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
@@ -7766,8 +7858,7 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
     return 0;
   exp_t *ka = bc->consts[idx_a], *kb = bc->consts[idx_b],
         *kc = bc->consts[idx_c];
-  if (!issymbol(ka) || !issymbol(kb) ||
-      !issymbol(kc))
+  if (!issymbol(ka) || !issymbol(kb) || !issymbol(kc))
     return 0;
   if (strcmp((const char *)ka->ptr, bc->self_name) != 0 ||
       strcmp((const char *)kb->ptr, bc->self_name) != 0 ||
@@ -9375,8 +9466,7 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
     if (idx >= bc->nconsts)
       return 0;
     exp_t *cn = bc->consts[idx];
-    if (!issymbol(cn) ||
-        strcmp((const char *)cn->ptr, "nil") != 0)
+    if (!issymbol(cn) || strcmp((const char *)cn->ptr, "nil") != 0)
       return 0;
   }
   if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
@@ -9656,8 +9746,7 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
   if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
     return 0;
-  if (!issymbol(cnil) ||
-      strcmp((const char *)cnil->ptr, "nil") != 0)
+  if (!issymbol(cnil) || strcmp((const char *)cnil->ptr, "nil") != 0)
     return 0;
   if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
     return 0;
@@ -10061,11 +10150,9 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
     return 0;
   exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!issymbol(cn1) ||
-      strcmp((const char *)cn1->ptr, "nil") != 0)
+  if (!issymbol(cn1) || strcmp((const char *)cn1->ptr, "nil") != 0)
     return 0;
-  if (!issymbol(cn2) ||
-      strcmp((const char *)cn2->ptr, "nil") != 0)
+  if (!issymbol(cn2) || strcmp((const char *)cn2->ptr, "nil") != 0)
     return 0;
   if (s_j >= ENV_INLINE_SLOTS)
     return 0;
@@ -10257,8 +10344,7 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *ca = bc->consts[idx_a];
   exp_t *cb = bc->consts[idx_b];
   exp_t *cc = bc->consts[idx_c];
-  if (!issymbol(ca) || !issymbol(cb) ||
-      !issymbol(cc))
+  if (!issymbol(ca) || !issymbol(cb) || !issymbol(cc))
     return 0;
   if (strcmp((const char *)ca->ptr, (const char *)cb->ptr) != 0)
     return 0;
@@ -13791,10 +13877,13 @@ const char doc_assocbang[] = "(assoc! d k v) — set d[k]=v in place; returns d.
 exp_t *assocbangcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("assoc!")
   exp_t *v = EVAL(cadddr(e), env);
-  if (iserror(v)) CLEAN_RETURN_2(k, d, v);
-  
+  if (iserror(v))
+    CLEAN_RETURN_2(k, d, v);
+
   if (!ks)
-    CLEAN_RETURN_3(k, d, v, error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"));
+    CLEAN_RETURN_3(
+        k, d, v,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"));
 
   set_get_keyval_dict((dict_t *)d->ptr, ks, v);
   CLEAN_RETURN_2(k, v, d);
