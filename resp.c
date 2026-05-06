@@ -761,9 +761,109 @@ static void cmd_ttl(resp_client_t *c, char **argv, long *argl, int argc,
                            : (long long)(left / 1000000));
 }
 
+/* ---------- background save (BGSAVE) ----------
+   fork() + child runs the same unified writer. Lock-free keyspace +
+   COW give the child a frozen snapshot for free; parent keeps serving
+   writes while the child walks the snapshot. Atomic-rename swaps the
+   live dump file only after the child exits clean. */
+
+/* 0  = idle. >0 = child PID currently writing. The temp/dst paths are
+   allocated when the fork starts and freed by whichever reactor reaps
+   the child. */
+static _Atomic int resp_bgsave_pid = 0;
+static char *resp_bgsave_tmp = NULL;
+static char *resp_bgsave_dst = NULL;
+
+/* Reactor-side poll: called once per select() iteration. Cheap when no
+   save is in flight (single atomic load + branch). When the child has
+   exited, atomically rename(tmp, dst) on success or unlink(tmp) on
+   failure, then clear the sentinel so the next BGSAVE can fire. Any
+   reactor may run this — waitpid() returns the pid to exactly one
+   caller, so there's no race even if N reactors poll concurrently. */
+static void resp_bgsave_poll(void) {
+  int pid = atomic_load_explicit(&resp_bgsave_pid, memory_order_acquire);
+  if (pid <= 0) return;
+  int status;
+  pid_t r = waitpid(pid, &status, WNOHANG);
+  if (r == 0) return;          /* still running */
+  if (r < 0) {
+    if (errno == ECHILD) {
+      /* Another reactor reaped first; clear our view if we still see
+         the same pid. */
+      atomic_compare_exchange_strong(&resp_bgsave_pid, &pid, 0);
+    }
+    return;
+  }
+  /* We won the reap. Commit or roll back. */
+  int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  if (ok && resp_bgsave_tmp && resp_bgsave_dst) {
+    if (rename(resp_bgsave_tmp, resp_bgsave_dst) != 0) {
+      fprintf(stderr, "BGSAVE: rename(%s, %s) failed: %s\n",
+              resp_bgsave_tmp, resp_bgsave_dst, strerror(errno));
+      unlink(resp_bgsave_tmp);
+    }
+  } else {
+    fprintf(stderr, "BGSAVE: child failed (status=%d)\n", status);
+    if (resp_bgsave_tmp) unlink(resp_bgsave_tmp);
+  }
+  free(resp_bgsave_tmp); resp_bgsave_tmp = NULL;
+  free(resp_bgsave_dst); resp_bgsave_dst = NULL;
+  atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
+}
+
+static void cmd_bgsave(resp_client_t *c, char **argv, long *argl, int argc) {
+  (void)argv; (void)argl;
+  ARGN(1);
+  /* Reject overlapping BGSAVE: only one at a time. */
+  int expected = 0;
+  if (!atomic_compare_exchange_strong_explicit(
+          &resp_bgsave_pid, &expected, -1, /* -1 = "fork in progress" */
+          memory_order_acq_rel, memory_order_acquire)) {
+    resp_write_err(c, "ERR Background save already in progress");
+    return;
+  }
+  const char *path = alcove_db_path;
+  size_t plen = strlen(path);
+  char *tmp = malloc(plen + 5);
+  char *dst = malloc(plen + 1);
+  if (!tmp || !dst) {
+    free(tmp); free(dst);
+    atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
+    resp_write_err(c, "ERR BGSAVE: out of memory");
+    return;
+  }
+  memcpy(tmp, path, plen); memcpy(tmp + plen, ".tmp", 5);
+  memcpy(dst, path, plen + 1);
+
+  fflush(NULL); /* flush parent's stdio before fork so child's writes
+                   don't carry duplicated buffers. */
+  pid_t pid = fork();
+  if (pid < 0) {
+    free(tmp); free(dst);
+    atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
+    resp_write_err(c, "ERR BGSAVE: fork failed");
+    return;
+  }
+  if (pid == 0) {
+    /* Child: COW gives us a frozen view of the parent's heap. Walk
+       g_resp_kv (and the env, if reachable) and write the dump. */
+    FILE *stream = fopen(tmp, "w");
+    if (!stream) _exit(1);
+    int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
+    if (ok) { fflush(stream); fsync(fileno(stream)); }
+    fclose(stream);
+    if (!ok) { unlink(tmp); _exit(2); }
+    _exit(0);
+  }
+  /* Parent: stash the paths and pid for the reactor poll to pick up. */
+  resp_bgsave_tmp = tmp;
+  resp_bgsave_dst = dst;
+  atomic_store_explicit(&resp_bgsave_pid, pid, memory_order_release);
+  resp_write_simple(c, "Background saving started");
+}
+
 /* SAVE — synchronous unified dump. Blocks the reactor for the duration
-   of the walk + fsync. For non-blocking persistence, BGSAVE will land
-   in the next commit (fork + child runs the same writer). */
+   of the walk + fsync. Use BGSAVE for a non-blocking fork-based save. */
 static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
   (void)argv; (void)argl;
   ARGN(1);
@@ -1360,7 +1460,7 @@ typedef enum {
   HK_LPUSH, HK_RPUSH, HK_LPOP, HK_RPOP, HK_LLEN, HK_LINDEX, HK_LRANGE,
   HK_HSET, HK_HGET, HK_HDEL, HK_HEXISTS, HK_HLEN,
   HK_HKEYS, HK_HVALS, HK_HGETALL,
-  HK_SAVE,
+  HK_SAVE, HK_BGSAVE,
 } resp_kind_t;
 
 #define RESP_CMD_TABLE_BITS 6           /* 64 buckets, load = 41/64 = 0.64 */
@@ -1398,6 +1498,7 @@ static const struct { const char *name; resp_kind_t kind; } resp_cmd_seed[] = {
   {"HEXISTS",  HK_HEXISTS},   {"HLEN",     HK_HLEN},
   {"HKEYS",    HK_HKEYS},     {"HVALS",    HK_HVALS},
   {"HGETALL",  HK_HGETALL},   {"SAVE",     HK_SAVE},
+  {"BGSAVE",   HK_BGSAVE},
 };
 
 /* The seed→table build is one-shot for the whole process; calling it
@@ -1510,6 +1611,7 @@ static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
   case HK_HVALS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
   case HK_HGETALL:   return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
   case HK_SAVE:      return cmd_save(c, argv, argl, argc);
+  case HK_BGSAVE:    return cmd_bgsave(c, argv, argl, argc);
   }
 
   if (resp_user_dispatch(c, cmd, clen, argv, argl, argc)) return;
@@ -1774,6 +1876,7 @@ int resp_serve(int port) {
   while (!resp_stop) {
     epoch_tick();
     resp_kv_maybe_sweep();
+    resp_bgsave_poll();
     fd_set rfds, wfds;
     int maxfd = resp_build_fdset(srv, wakefd, &rfds, &wfds);
     struct timeval tv = {1, 0};
@@ -1926,6 +2029,7 @@ int resp_repl_serve(int port, env_t *global) {
   while (!resp_stop) {
     epoch_tick();
     resp_kv_maybe_sweep();
+    resp_bgsave_poll();
     if (!prompted) {
       printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx + 1);
       fflush(stdout);
