@@ -8,6 +8,12 @@
 epoch_thread_t epoch_threads[EPOCH_MAX_THREADS];
 _Atomic uint64_t epoch_global = 1; /* 0 reserved for "unregistered" */
 _Atomic int epoch_nthreads = 0;
+
+static inline void epoch_update_quiescent(int idx) {
+  uint64_t g = atomic_load_explicit(&epoch_global, memory_order_acquire);
+  atomic_store_explicit(&epoch_threads[idx].quiescent, g, memory_order_release);
+}
+
 ALCOVE_TLS int epoch_my_idx = -1;
 
 int epoch_register(void) {
@@ -21,9 +27,7 @@ int epoch_register(void) {
   epoch_my_idx = idx;
   /* Seed quiescent to current global so gc doesn't immediately consider
      this thread's "view" to be from epoch 0. */
-  uint64_t g = atomic_load_explicit(&epoch_global, memory_order_acquire);
-  atomic_store_explicit(&epoch_threads[idx].quiescent, g,
-                        memory_order_release);
+  epoch_update_quiescent(idx);
   epoch_threads[idx].retire_head = NULL;
   epoch_threads[idx].retire_count = 0;
   return idx;
@@ -44,9 +48,7 @@ static uint64_t epoch_min_quiescent(void) {
 
 void epoch_tick(void) {
   if (epoch_my_idx < 0) return;
-  uint64_t g = atomic_load_explicit(&epoch_global, memory_order_acquire);
-  atomic_store_explicit(&epoch_threads[epoch_my_idx].quiescent, g,
-                        memory_order_release);
+  epoch_update_quiescent(epoch_my_idx);
   if (epoch_threads[epoch_my_idx].retire_count >= EPOCH_GC_THRESHOLD)
     epoch_gc();
 }

@@ -2923,259 +2923,97 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
   return TRUE_EXP;
 }
 
-const char doc_plus[] = "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
-exp_t *pluscmd(exp_t *e, env_t *env) {
-  int64_t sum_i = 0;
-  expfloat sum_f = 0;
-  int saw_float = 0;
-  exp_t *c = cdr(e);
-  exp_t *v;
-  exp_t *v1 = NULL;
-  exp_t *ret = NULL;
-  do {
-    if (c && (v1 = refexp(c->content))) {
-      if ispair (v1)
-        v = evaluate(v1, env);
-      else if issymbol (v1)
-        v = evaluate(v1, env);
-      else
-        v = v1;
-      if iserror (v) {
-        ret = v;
-        goto finish;
-      }
-      if (saw_float) {
-        if (isnumber(v))
-          sum_f += FIX_VAL(v);
-        else if (isfloat(v))
-          sum_f += v->f;
-        else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      } else {
-        if (isnumber(v))
-          sum_i += FIX_VAL(v);
-        else if (isfloat(v)) {
-          sum_f = v->f + sum_i;
-          sum_i = 0;
-          saw_float = 1;
-        } else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      }
-      unrefexp(v);
-    }
-  } while (c && (c = c->next));
-  ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i);
-finish:
-  unrefexp(e);
-  return ret;
+#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV) \
+exp_t *name(exp_t *e, env_t *env) { \
+  int64_t sum_i = (init_i); \
+  expfloat sum_f = (init_i); \
+  int saw_float = 0; \
+  exp_t *c = cdr(e); \
+  exp_t *v = NULL; \
+  int i = 0; \
+  exp_t *ret = NULL; \
+  do { \
+    if (c) { \
+      i++; \
+      v = EVAL(c->content, env); \
+      if (iserror(v)) { \
+        unrefexp(e); \
+        return v; \
+      } \
+      if ((IS_DIV) && i > 1) { \
+        if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) { \
+          ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0"); \
+          unrefexp(v); \
+          goto finish; \
+        } \
+      } \
+      if (saw_float) { \
+        if (isnumber(v)) { \
+          sum_f OP FIX_VAL(v); \
+        } else if (isfloat(v)) { \
+          sum_f OP v->f; \
+        } else { \
+          ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation"); \
+          unrefexp(v); \
+          goto finish; \
+        } \
+      } else { \
+        if (isnumber(v)) { \
+          if (i > 1 || (init_i) != 0) { \
+            sum_i OP FIX_VAL(v); \
+          } else { \
+            sum_i = FIX_VAL(v); \
+          } \
+        } else if (isfloat(v)) { \
+          if (i > 1 || (init_i) != 0) { \
+            sum_f = sum_i; sum_f OP v->f; \
+          } else { \
+            sum_f = v->f; \
+          } \
+          sum_i = 0; \
+          saw_float = 1; \
+        } else { \
+          ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation"); \
+          unrefexp(v); \
+          goto finish; \
+        } \
+      } \
+      unrefexp(v); \
+    } \
+  } while (c && (c = c->next)); \
+  if (i == 1) { \
+    if (IS_SUB) { \
+      if (saw_float) sum_f = -sum_f; \
+      else sum_i = -sum_i; \
+    } else if (IS_DIV) { \
+      if (saw_float) { \
+        if (sum_f == 0) { ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0"); goto finish; } \
+        sum_f = 1 / sum_f; \
+      } else { \
+        if (sum_i == 0) { ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0"); goto finish; } \
+        sum_i = 1 / sum_i; \
+      } \
+    } \
+  } \
+  ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i); \
+finish: \
+  unrefexp(e); \
+  return ret; \
 }
+
+const char doc_plus[] = "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
+MATH_CMD(pluscmd, 0, +=, 0, 0)
 
 const char doc_mul[] = "(* x ...) — product of all args. (*) is 1.";
-exp_t *multiplycmd(exp_t *e, env_t *env) {
-  int64_t sum_i = 1;
-  expfloat sum_f = 1;
-  int saw_float = 0;
-  int saw_int = 0;
-  exp_t *c = cdr(e);
-  exp_t *v;
-  exp_t *v1 = NULL;
-  exp_t *ret = NULL;
-
-  do {
-    if (c && (v1 = refexp(c->content))) {
-      if ispair (v1)
-        v = evaluate(v1, env);
-      else if issymbol (v1)
-        v = evaluate(v1, env);
-      else
-        v = v1;
-      if iserror (v) {
-        ret = v;
-        goto finish;
-      }
-      if (saw_float) {
-        if (isnumber(v))
-          sum_f *= FIX_VAL(v);
-        else if (isfloat(v))
-          sum_f *= v->f;
-        else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      } else {
-        if (isnumber(v)) {
-          sum_i = saw_int ? sum_i * FIX_VAL(v) : FIX_VAL(v);
-          saw_int = 1;
-        } else if (isfloat(v)) {
-          sum_f = saw_int ? v->f * sum_i : v->f;
-          sum_i = 1;
-          saw_float = 1;
-        } else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      }
-      unrefexp(v);
-    }
-  } while (c && (c = c->next));
-  ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i);
-finish:
-  unrefexp(e);
-  return ret;
-}
+MATH_CMD(multiplycmd, 1, *=, 0, 0)
 
 const char doc_minus[] = "(- a) negates; (- a b c ...) subtracts the rest from a.";
-exp_t *minuscmd(exp_t *e, env_t *env) {
-  int64_t sum_i = 0;
-  expfloat sum_f = 0;
-  int saw_float = 0;
-  exp_t *c = cdr(e);
-  exp_t *v;
-  exp_t *v1 = NULL;
-  int i = 0;
-  exp_t *ret = NULL;
-
-  do {
-    if (c && (v1 = refexp(c->content))) {
-      i++;
-      if ispair (v1)
-        v = evaluate(v1, env);
-      else if issymbol (v1)
-        v = evaluate(v1, env);
-      else
-        v = v1;
-      if iserror (v) {
-        unrefexp(e);
-        return v;
-      }
-      if (saw_float) {
-        if (isnumber(v))
-          sum_f -= FIX_VAL(v);
-        else if (isfloat(v))
-          sum_f -= v->f;
-        else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      } else {
-        if (isnumber(v)) {
-          if (i > 1)
-            sum_i -= FIX_VAL(v);
-          else
-            sum_i = FIX_VAL(v);
-        } else if (isfloat(v)) {
-          sum_f = (i > 1) ? sum_i - v->f : v->f;
-          sum_i = 0;
-          saw_float = 1;
-        } else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      }
-      unrefexp(v);
-    }
-  } while (c && (c = c->next));
-  if (i == 1) {
-    if (saw_float)
-      sum_f = -sum_f;
-    else
-      sum_i = -sum_i;
-  }
-  ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i);
-finish:
-  unrefexp(e);
-  return ret;
-}
+MATH_CMD(minuscmd, 0, -=, 1, 0)
 
 const char doc_div[] = "(/ a b ...) — divide a by the rest. Integer division if all args are ints; otherwise float.";
-exp_t *dividecmd(exp_t *e, env_t *env) {
-  int64_t sum_i = 0;
-  expfloat sum_f = 0;
-  int saw_float = 0;
-  exp_t *c = cdr(e);
-  exp_t *v;
-  exp_t *v1 = NULL;
-  int i = 0;
-  exp_t *ret = NULL;
+MATH_CMD(dividecmd, 0, /=, 0, 1)
 
-  do {
-    if (c && (v1 = refexp(c->content))) {
-      i++;
-      if ispair (v1)
-        v = evaluate(v1, env);
-      else if issymbol (v1)
-        v = evaluate(v1, env);
-      else
-        v = v1;
-      if iserror (v) {
-        unrefexp(e);
-        return v;
-      }
-      if (i > 1) {
-        if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) {
-          ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");
-          goto finish;
-        }
-      }
-      if (saw_float) {
-        if (isnumber(v))
-          sum_f /= FIX_VAL(v);
-        else if (isfloat(v))
-          sum_f /= v->f;
-        else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      } else {
-        if (isnumber(v)) {
-          if (i > 1)
-            sum_i /= FIX_VAL(v);
-          else
-            sum_i = FIX_VAL(v);
-        } else if (isfloat(v)) {
-          sum_f = (i > 1) ? sum_i / v->f : v->f;
-          sum_i = 0;
-          saw_float = 1;
-        } else {
-          ret =
-              error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-          goto finish;
-        }
-      }
-      unrefexp(v);
-    }
-  } while (c && (c = c->next));
-  if (i == 1) {
-    if (saw_float) {
-      if (sum_f == 0) {
-        ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");
-        goto finish;
-      }
-      sum_f = 1 / sum_f;
-    } else {
-      if (sum_i == 0) {
-        ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");
-        goto finish;
-      }
-      sum_i = 1 / sum_i;
-    }
-  }
-  ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i);
-finish:
-  unrefexp(e);
-  return ret;
-}
+#undef MATH_CMD
 
 const char doc_sqrt[] = "(sqrt x) — float square root. See sqrt-int for the integer version.";
 exp_t *sqrtcmd(exp_t *e, env_t *env) {
@@ -4047,83 +3885,41 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
 }
 
 /* (max a b ...) — variadic; at least one arg required. */
-const char doc_max[] = "(max x ...) — largest of the args.";
-exp_t *maxcmd(exp_t *e, env_t *env) {
-  exp_t *cur = e->next;
-  if (!cur) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(max ...)");
-  }
-  exp_t *best = EVAL(cur->content, env);
-  if (iserror(best)) {
-    unrefexp(e);
-    return best;
-  }
-  cur = cur->next;
-  while (cur) {
-    exp_t *v = EVAL(cur->content, env);
-    if (iserror(v)) {
-      unrefexp(best);
-      unrefexp(e);
-      return v;
-    }
-    int err;
-    int lt = alc_numlt(best, v, &err);
-    if (err) {
-      unrefexp(best);
-      unrefexp(v);
-      unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, e, env, "max: non-numeric");
-    }
-    if (lt) {
-      unrefexp(best);
-      best = v;
-    } else
-      unrefexp(v);
-    cur = cur->next;
-  }
-  unrefexp(e);
-  return best;
+#define MINMAX_CMD(name, is_lt, err_name) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *cur = e->next; \
+  if (!cur) { \
+    unrefexp(e); \
+    return error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)"); \
+  } \
+  exp_t *best = EVAL(cur->content, env); \
+  if (iserror(best)) { unrefexp(e); return best; } \
+  cur = cur->next; \
+  while (cur) { \
+    exp_t *v = EVAL(cur->content, env); \
+    if (iserror(v)) { unrefexp(best); unrefexp(e); return v; } \
+    int err; \
+    int lt = (is_lt) ? alc_numlt(v, best, &err) : alc_numlt(best, v, &err); \
+    if (err) { \
+      unrefexp(best); unrefexp(v); unrefexp(e); \
+      return error(ERROR_ILLEGAL_VALUE, e, env, err_name ": non-numeric"); \
+    } \
+    if (lt) { unrefexp(best); best = v; } \
+    else unrefexp(v); \
+    cur = cur->next; \
+  } \
+  unrefexp(e); \
+  return best; \
 }
+
+const char doc_max[] = "(max x ...) — largest of the args.";
+MINMAX_CMD(maxcmd, 0, "max")
+
 /* (min a b ...) */
 const char doc_min[] = "(min x ...) — smallest of the args.";
-exp_t *mincmd(exp_t *e, env_t *env) {
-  exp_t *cur = e->next;
-  if (!cur) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(min ...)");
-  }
-  exp_t *best = EVAL(cur->content, env);
-  if (iserror(best)) {
-    unrefexp(e);
-    return best;
-  }
-  cur = cur->next;
-  while (cur) {
-    exp_t *v = EVAL(cur->content, env);
-    if (iserror(v)) {
-      unrefexp(best);
-      unrefexp(e);
-      return v;
-    }
-    int err;
-    int lt = alc_numlt(v, best, &err);
-    if (err) {
-      unrefexp(best);
-      unrefexp(v);
-      unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, e, env, "min: non-numeric");
-    }
-    if (lt) {
-      unrefexp(best);
-      best = v;
-    } else
-      unrefexp(v);
-    cur = cur->next;
-  }
-  unrefexp(e);
-  return best;
-}
+MINMAX_CMD(mincmd, 1, "min")
+
+#undef MINMAX_CMD
 
 /* (length x) — list length, string length, or 0 for nil. */
 const char doc_length[] = "(length x) — element count of a list/string/vector.";
@@ -13634,18 +13430,21 @@ exp_t *hashmapcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+#define DICT_KV_SETUP(err_name) \
+  exp_t *d = EVAL(cadr(e), env); \
+  if (iserror(d)) { unrefexp(e); return d; } \
+  if (!isdict(d)) { unrefexp(d); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": first arg must be a hash-map"); } \
+  exp_t *k = EVAL(caddr(e), env); \
+  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; } \
+  char tmp[32]; \
+  char *ks = alc_key_to_cstr(k, tmp);
+
 const char doc_assocbang[] = "(assoc! d k v) — set d[k]=v in place; returns d.";
 exp_t *assocbangcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!isdict(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: first arg must be a hash-map"); }
-  exp_t *k = EVAL(caddr(e), env);
-  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
+  DICT_KV_SETUP("assoc!")
   exp_t *v = EVAL(cadddr(e), env);
   if (iserror(v)) { unrefexp(k); unrefexp(d); unrefexp(e); return v; }
-  char tmp[32];
-  char *ks = alc_key_to_cstr(k, tmp);
   if (!ks) { unrefexp(k); unrefexp(v); unrefexp(d); unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"); }
   set_get_keyval_dict((dict_t *)d->ptr, ks, v);
@@ -13655,14 +13454,7 @@ exp_t *assocbangcmd(exp_t *e, env_t *env) {
 
 const char doc_dissocbang[] = "(dissoc! d k) — delete key k from d in place; returns d.";
 exp_t *dissocbangcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!isdict(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "dissoc!: first arg must be a hash-map"); }
-  exp_t *k = EVAL(caddr(e), env);
-  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
-  char tmp[32];
-  char *ks = alc_key_to_cstr(k, tmp);
+  DICT_KV_SETUP("dissoc!")
   if (ks) del_keyval_dict((dict_t *)d->ptr, ks);
   unrefexp(k); unrefexp(e);
   return d;
@@ -13670,14 +13462,7 @@ exp_t *dissocbangcmd(exp_t *e, env_t *env) {
 
 const char doc_get[] = "(get d k [default]) — fetch d[k]. Works on hash-maps. Returns default (or nil) when missing.";
 exp_t *getcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!isdict(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "get: first arg must be a hash-map"); }
-  exp_t *k = EVAL(caddr(e), env);
-  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
-  char tmp[32];
-  char *ks = alc_key_to_cstr(k, tmp);
+  DICT_KV_SETUP("get")
   exp_t *ret = NIL_EXP;
   if (ks) {
     keyval_t *kv = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
@@ -13692,14 +13477,7 @@ exp_t *getcmd(exp_t *e, env_t *env) {
 
 const char doc_containsp[] = "(contains? d k) — t if d has key k, else nil.";
 exp_t *containspcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!isdict(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "contains?: first arg must be a hash-map"); }
-  exp_t *k = EVAL(caddr(e), env);
-  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; }
-  char tmp[32];
-  char *ks = alc_key_to_cstr(k, tmp);
+  DICT_KV_SETUP("contains?")
   exp_t *ret = NIL_EXP;
   if (ks && set_get_keyval_dict((dict_t *)d->ptr, ks, NULL))
     ret = TRUE_EXP;
@@ -13707,51 +13485,36 @@ exp_t *containspcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_keys[] = "(keys d) — list of keys in d (order undefined).";
-exp_t *keyscmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!isdict(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "keys: arg must be a hash-map"); }
-  dict_t *dp = (dict_t *)d->ptr;
-  exp_t *ret = NIL_EXP;
-  exp_t *cur = NULL;
-  unsigned int i;
-  for (i = 0; i < dp->ht[0].size; i++) {
-    keyval_t *k = dp->ht[0].table[i];
-    while (k) {
-      exp_t *node = make_node(alc_cstr_to_key((char *)k->key));
-      if (cur) cur = cur->next = node;
-      else { ret = cur = node; }
-      k = k->next;
-    }
-  }
-  unrefexp(d); unrefexp(e);
-  return ret ? ret : NIL_EXP;
+#define DICT_ITER_CMD(name, err_name, node_val) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *d = EVAL(cadr(e), env); \
+  if (iserror(d)) { unrefexp(e); return d; } \
+  if (!isdict(d)) { unrefexp(d); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a hash-map"); } \
+  dict_t *dp = (dict_t *)d->ptr; \
+  exp_t *ret = NIL_EXP; \
+  exp_t *cur = NULL; \
+  unsigned int i; \
+  for (i = 0; i < dp->ht[0].size; i++) { \
+    keyval_t *k = dp->ht[0].table[i]; \
+    while (k) { \
+      exp_t *node = make_node(node_val); \
+      if (cur) cur = cur->next = node; \
+      else { ret = cur = node; } \
+      k = k->next; \
+    } \
+  } \
+  unrefexp(d); unrefexp(e); \
+  return ret ? ret : NIL_EXP; \
 }
 
+const char doc_keys[] = "(keys d) — list of keys in d (order undefined).";
+DICT_ITER_CMD(keyscmd, "keys", alc_cstr_to_key((char *)k->key))
+
 const char doc_vals[] = "(vals d) — list of values in d (order matches keys).";
-exp_t *valscmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!isdict(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "vals: arg must be a hash-map"); }
-  dict_t *dp = (dict_t *)d->ptr;
-  exp_t *ret = NIL_EXP;
-  exp_t *cur = NULL;
-  unsigned int i;
-  for (i = 0; i < dp->ht[0].size; i++) {
-    keyval_t *k = dp->ht[0].table[i];
-    while (k) {
-      exp_t *node = make_node(refexp(k->val));
-      if (cur) cur = cur->next = node;
-      else { ret = cur = node; }
-      k = k->next;
-    }
-  }
-  unrefexp(d); unrefexp(e);
-  return ret ? ret : NIL_EXP;
-}
+DICT_ITER_CMD(valscmd, "vals", refexp(k->val))
+
+#undef DICT_ITER_CMD
 
 const char doc_count[] = "(count x) — element count for hash-maps, deques, vectors, strings, blobs, and lists.";
 exp_t *countcmd(exp_t *e, env_t *env) {
@@ -13814,97 +13577,73 @@ exp_t *dequecmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_pushrightbang[] = "(push-right! d x) — RPUSH; append x to right end of deque, returns d.";
-exp_t *pushrightbangcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!islist(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "push-right!: first arg must be a deque"); }
-  exp_t *v = EVAL(caddr(e), env);
-  if (iserror(v)) { unrefexp(d); unrefexp(e); return v; }
-  alc_list_push_right((alc_list_t *)d->ptr, v);
-  unrefexp(e);
-  return d;
+#define DEQUE_PUSH_CMD(name, err_name, push_fn) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *d = EVAL(cadr(e), env); \
+  if (iserror(d)) { unrefexp(e); return d; } \
+  if (!islist(d)) { unrefexp(d); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": first arg must be a deque"); } \
+  exp_t *v = EVAL(caddr(e), env); \
+  if (iserror(v)) { unrefexp(d); unrefexp(e); return v; } \
+  push_fn((alc_list_t *)d->ptr, v); \
+  unrefexp(e); \
+  return d; \
 }
+
+#define DEQUE_POP_CMD(name, err_name, HEAD, TAIL, NEXT, PREV) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *d = EVAL(cadr(e), env); \
+  if (iserror(d)) { unrefexp(e); return d; } \
+  if (!islist(d)) { unrefexp(d); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a deque"); } \
+  alc_list_t *l = (alc_list_t *)d->ptr; \
+  exp_t *ret = NIL_EXP; \
+  if (l->HEAD) { \
+    alc_listnode_t *n = l->HEAD; \
+    ret = n->val; \
+    l->HEAD = n->NEXT; \
+    if (l->HEAD) l->HEAD->PREV = NULL; \
+    else l->TAIL = NULL; \
+    l->len--; \
+    free(n); \
+  } \
+  unrefexp(d); unrefexp(e); \
+  return ret; \
+}
+
+#define DEQUE_PEEK_CMD(name, err_name, HEAD) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *d = EVAL(cadr(e), env); \
+  if (iserror(d)) { unrefexp(e); return d; } \
+  if (!islist(d)) { unrefexp(d); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a deque"); } \
+  alc_list_t *l = (alc_list_t *)d->ptr; \
+  exp_t *ret = (l->HEAD) ? refexp(l->HEAD->val) : NIL_EXP; \
+  unrefexp(d); unrefexp(e); \
+  return ret; \
+}
+
+const char doc_pushrightbang[] = "(push-right! d x) — RPUSH; append x to right end of deque, returns d.";
+DEQUE_PUSH_CMD(pushrightbangcmd, "push-right!", alc_list_push_right)
 
 const char doc_pushleftbang[] = "(push-left! d x) — LPUSH; prepend x to left end of deque, returns d.";
-exp_t *pushleftbangcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!islist(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "push-left!: first arg must be a deque"); }
-  exp_t *v = EVAL(caddr(e), env);
-  if (iserror(v)) { unrefexp(d); unrefexp(e); return v; }
-  alc_list_push_left((alc_list_t *)d->ptr, v);
-  unrefexp(e);
-  return d;
-}
+DEQUE_PUSH_CMD(pushleftbangcmd, "push-left!", alc_list_push_left)
 
 const char doc_poprightbang[] = "(pop-right! d) — RPOP; remove and return rightmost element, or nil.";
-exp_t *poprightbangcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!islist(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "pop-right!: arg must be a deque"); }
-  alc_list_t *l = (alc_list_t *)d->ptr;
-  exp_t *ret = NIL_EXP;
-  if (l->tail) {
-    alc_listnode_t *n = l->tail;
-    ret = n->val; /* transfer ownership to caller */
-    l->tail = n->prev;
-    if (l->tail) l->tail->next = NULL;
-    else l->head = NULL;
-    l->len--;
-    free(n);
-  }
-  unrefexp(d); unrefexp(e);
-  return ret;
-}
+DEQUE_POP_CMD(poprightbangcmd, "pop-right!", tail, head, prev, next)
 
 const char doc_popleftbang[] = "(pop-left! d) — LPOP; remove and return leftmost element, or nil.";
-exp_t *popleftbangcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!islist(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "pop-left!: arg must be a deque"); }
-  alc_list_t *l = (alc_list_t *)d->ptr;
-  exp_t *ret = NIL_EXP;
-  if (l->head) {
-    alc_listnode_t *n = l->head;
-    ret = n->val;
-    l->head = n->next;
-    if (l->head) l->head->prev = NULL;
-    else l->tail = NULL;
-    l->len--;
-    free(n);
-  }
-  unrefexp(d); unrefexp(e);
-  return ret;
-}
+DEQUE_POP_CMD(popleftbangcmd, "pop-left!", head, tail, next, prev)
 
 const char doc_peekleft[] = "(peek-left d) — leftmost element (no mutation), or nil.";
-exp_t *peekleftcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!islist(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "peek-left: arg must be a deque"); }
-  alc_list_t *l = (alc_list_t *)d->ptr;
-  exp_t *ret = (l->head) ? refexp(l->head->val) : NIL_EXP;
-  unrefexp(d); unrefexp(e);
-  return ret;
-}
+DEQUE_PEEK_CMD(peekleftcmd, "peek-left", head)
 
 const char doc_peekright[] = "(peek-right d) — rightmost element (no mutation), or nil.";
-exp_t *peekrightcmd(exp_t *e, env_t *env) {
-  exp_t *d = EVAL(cadr(e), env);
-  if (iserror(d)) { unrefexp(e); return d; }
-  if (!islist(d)) { unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "peek-right: arg must be a deque"); }
-  alc_list_t *l = (alc_list_t *)d->ptr;
-  exp_t *ret = (l->tail) ? refexp(l->tail->val) : NIL_EXP;
-  unrefexp(d); unrefexp(e);
-  return ret;
-}
+DEQUE_PEEK_CMD(peekrightcmd, "peek-right", tail)
+
+#undef DEQUE_PUSH_CMD
+#undef DEQUE_POP_CMD
+#undef DEQUE_PEEK_CMD
 
 /* ---------- blob ops ---------- */
 
@@ -13930,16 +13669,20 @@ exp_t *makeblobcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_bloblen[] = "(blob-len b) — byte count of b.";
-exp_t *bloblencmd(exp_t *e, env_t *env) {
-  exp_t *b = EVAL(cadr(e), env);
-  if (iserror(b)) { unrefexp(e); return b; }
-  if (!isblob(b)) { unrefexp(b); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "blob-len: arg must be a blob"); }
-  int64_t n = (int64_t)((alc_blob_t *)b->ptr)->len;
-  unrefexp(b); unrefexp(e);
-  return MAKE_FIX(n);
+#define UNARY_TYPE_CMD(name, err_str, TYPE_CHECK, PTR_TYPE, RET_EXPR) \
+exp_t *name(exp_t *e, env_t *env) { \
+  exp_t *obj = EVAL(cadr(e), env); \
+  if (iserror(obj)) { unrefexp(e); return obj; } \
+  if (!(TYPE_CHECK(obj))) { unrefexp(obj); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_str); } \
+  PTR_TYPE *val_ptr = (PTR_TYPE *)obj->ptr; \
+  exp_t *ret = (RET_EXPR); \
+  unrefexp(obj); unrefexp(e); \
+  return ret; \
 }
+
+const char doc_bloblen[] = "(blob-len b) — byte count of b.";
+UNARY_TYPE_CMD(bloblencmd, "blob-len: arg must be a blob", isblob, alc_blob_t, MAKE_FIX((int64_t)val_ptr->len))
 
 const char doc_blobref[] = "(blob-ref b i) — byte at index i as fixnum (0..255).";
 exp_t *blobrefcmd(exp_t *e, env_t *env) {
@@ -13963,16 +13706,7 @@ exp_t *blobrefcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_blob2string[] = "(blob->string b) — copy blob bytes into a fresh string (truncates at first NUL).";
-exp_t *blob2stringcmd(exp_t *e, env_t *env) {
-  exp_t *b = EVAL(cadr(e), env);
-  if (iserror(b)) { unrefexp(e); return b; }
-  if (!isblob(b)) { unrefexp(b); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "blob->string: arg must be a blob"); }
-  alc_blob_t *bb = (alc_blob_t *)b->ptr;
-  exp_t *ret = make_string(bb->bytes, (int)bb->len);
-  unrefexp(b); unrefexp(e);
-  return ret;
-}
+UNARY_TYPE_CMD(blob2stringcmd, "blob->string: arg must be a blob", isblob, alc_blob_t, make_string(val_ptr->bytes, (int)val_ptr->len))
 
 const char doc_vector[] = "(vector x ...) — build an EXP_VECTOR populated with the given elements. Same as #[x ...].";
 exp_t *vectorcmd(exp_t *e, env_t *env) {
@@ -14001,15 +13735,10 @@ exp_t *vectorcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_string2blob[] = "(string->blob s) — wrap string bytes in a fresh blob.";
-exp_t *string2blobcmd(exp_t *e, env_t *env) {
-  exp_t *s = EVAL(cadr(e), env);
-  if (iserror(s)) { unrefexp(e); return s; }
-  if (!isstring(s)) { unrefexp(s); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "string->blob: arg must be a string"); }
-  exp_t *ret = make_blob((char *)s->ptr, strlen((char *)s->ptr));
-  unrefexp(s); unrefexp(e);
-  return ret;
-}
+UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring, char, make_blob(val_ptr, strlen(val_ptr)))
+
+#undef UNARY_TYPE_CMD
+#undef DICT_KV_SETUP
 
 /* Epoch-based reclamation for the lock-free keyspace (LF-1). Included
    here so it can see ALCOVE_TLS and any other build-time toggles. */

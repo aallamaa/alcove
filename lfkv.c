@@ -10,6 +10,40 @@
  * takes exp_t *; wrap to (void)(void *). */
 static void unrefexp_void(void *p) { unrefexp((exp_t *)p); }
 
+#define LFKV_PROBE(kv, k, klen, h, i, tomb, s) \
+  uint32_t h = bernstein_hash((unsigned char *)(k), (int)(klen)); \
+  size_t i, tomb; \
+  lfslot_t *s = probe((kv), h, (k), (klen), &i, &tomb)
+
+static inline int slot_retire_val(lfkv_t *kv, lfslot_t *s, exp_t **expected_v) {
+  if (atomic_compare_exchange_strong_explicit(
+          &s->val, expected_v, (exp_t *)NULL,
+          memory_order_release, memory_order_acquire)) {
+    atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
+    atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
+    epoch_retire(*expected_v, unrefexp_void);
+    return 1;
+  }
+  return 0;
+}
+
+static inline void slot_replace_val(lfkv_t *kv, lfslot_t *s, exp_t *new_val) {
+  for (;;) {
+    exp_t *old = atomic_load_explicit(&s->val, memory_order_acquire);
+    if (atomic_compare_exchange_strong_explicit(
+            &s->val, &old, new_val,
+            memory_order_release, memory_order_acquire)) {
+      atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
+      if (old == NULL)
+        atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
+      else
+        epoch_retire(old, unrefexp_void);
+      return;
+    }
+  }
+}
+
+
 lfkv_t *lfkv_new(size_t nslots) {
   if (nslots == 0 || (nslots & (nslots - 1)) != 0) return NULL;
   lfkv_t *kv = calloc(1, sizeof *kv);
@@ -77,29 +111,12 @@ static int slot_is_expired(lfslot_t *s) {
 }
 
 int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
 
   if (s) {
     /* Found existing slot for this key. CAS-swap the value. */
-    for (;;) {
-      exp_t *old = atomic_load_explicit(&s->val, memory_order_acquire);
-      if (atomic_compare_exchange_strong_explicit(
-              &s->val, &old, val,
-              memory_order_release, memory_order_acquire)) {
-        /* Clear any old expiry — SET overwrites without preserving TTL,
-           matching Redis SET semantics for the basic form. */
-        atomic_store_explicit(&s->expiry_us, (int64_t)0,
-                              memory_order_release);
-        if (old == NULL)
-          atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
-        else
-          epoch_retire(old, unrefexp_void);
-        return 0;
-      }
-      /* Lost CAS — retry. */
-    }
+    slot_replace_val(kv, s, val);
+    return 0;
   }
 
   /* Key not present. Allocate a new slot record. */
@@ -121,20 +138,8 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     if (expected && slot_key_eq(expected, h, k, klen)) {
       free(fresh);
       /* Swap into the now-existing slot. */
-      for (;;) {
-        exp_t *old = atomic_load_explicit(&expected->val, memory_order_acquire);
-        if (atomic_compare_exchange_strong_explicit(
-                &expected->val, &old, val,
-                memory_order_release, memory_order_acquire)) {
-          atomic_store_explicit(&expected->expiry_us, (int64_t)0,
-                                memory_order_release);
-          if (old == NULL)
-            atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
-          else
-            epoch_retire(old, unrefexp_void);
-          return 0;
-        }
-      }
+      slot_replace_val(kv, expected, val);
+      return 0;
     }
     /* Different occupant — continue probe. */
     i = (i + 1) & kv->mask;
@@ -144,20 +149,8 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
       if (s2 == NULL) goto try_claim;
       if (slot_key_eq(s2, h, k, klen)) {
         free(fresh);
-        for (;;) {
-          exp_t *old = atomic_load_explicit(&s2->val, memory_order_acquire);
-          if (atomic_compare_exchange_strong_explicit(
-                  &s2->val, &old, val,
-                  memory_order_release, memory_order_acquire)) {
-            atomic_store_explicit(&s2->expiry_us, (int64_t)0,
-                                  memory_order_release);
-            if (old == NULL)
-              atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
-            else
-              epoch_retire(old, unrefexp_void);
-            return 0;
-          }
-        }
+        slot_replace_val(kv, s2, val);
+        return 0;
       }
     }
     free(fresh);
@@ -168,22 +161,14 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
 }
 
 exp_t *lfkv_get(lfkv_t *kv, const char *k, size_t klen) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return NULL;
   exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
   if (!v) return NULL;
   if (slot_is_expired(s)) {
     /* Lazy eviction: CAS-swap to NULL. Multiple readers may race here;
        only one wins and retires `v`. */
-    if (atomic_compare_exchange_strong_explicit(
-            &s->val, &v, (exp_t *)NULL,
-            memory_order_release, memory_order_acquire)) {
-      atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
-      atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
-      epoch_retire(v, unrefexp_void);
-    }
+    slot_retire_val(kv, s, &v);
     return NULL;
   }
   /* Bump refcount before returning so caller can outlive the next
@@ -198,41 +183,24 @@ exp_t *lfkv_get(lfkv_t *kv, const char *k, size_t klen) {
 /* Borrowed-pointer variant. Skips the refexp/unrefexp pair on the read
    path. See lfkv.h for the safety contract. */
 exp_t *lfkv_peek(lfkv_t *kv, const char *k, size_t klen) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return NULL;
   exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
   if (!v) return NULL;
   if (slot_is_expired(s)) {
-    if (atomic_compare_exchange_strong_explicit(
-            &s->val, &v, (exp_t *)NULL,
-            memory_order_release, memory_order_acquire)) {
-      atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
-      atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
-      epoch_retire(v, unrefexp_void);
-    }
+    slot_retire_val(kv, s, &v);
     return NULL;
   }
   return v;
 }
 
 int lfkv_del(lfkv_t *kv, const char *k, size_t klen) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return 0;
   for (;;) {
     exp_t *old = atomic_load_explicit(&s->val, memory_order_acquire);
     if (old == NULL) return 0;
-    if (atomic_compare_exchange_strong_explicit(
-            &s->val, &old, (exp_t *)NULL,
-            memory_order_release, memory_order_acquire)) {
-      atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
-      atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
-      epoch_retire(old, unrefexp_void);
-      return 1;
-    }
+    if (slot_retire_val(kv, s, &old)) return 1;
   }
 }
 
@@ -241,9 +209,7 @@ size_t lfkv_count(lfkv_t *kv) {
 }
 
 int lfkv_set_expiry(lfkv_t *kv, const char *k, size_t klen, int64_t ts_us) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return 0;
   exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
   if (!v) return 0;
@@ -252,9 +218,7 @@ int lfkv_set_expiry(lfkv_t *kv, const char *k, size_t klen, int64_t ts_us) {
 }
 
 int64_t lfkv_get_expiry(lfkv_t *kv, const char *k, size_t klen) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return -1;
   exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
   if (!v) return -1;
@@ -278,9 +242,7 @@ static int slot_install_if_null(lfkv_t *kv, lfslot_t *s, exp_t *val) {
 }
 
 int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
 
   if (s) {
     /* Slot exists. If val == NULL (tombstone), try to install. Else 0. */
@@ -327,9 +289,7 @@ int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
 }
 
 int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return 0;
   for (;;) {
     exp_t *old = atomic_load_explicit(&s->val, memory_order_acquire);
@@ -346,9 +306,7 @@ int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
 
 int lfkv_cas(lfkv_t *kv, const char *k, size_t klen,
              exp_t *expected, exp_t *new_val) {
-  uint32_t h = bernstein_hash((unsigned char *)k, (int)klen);
-  size_t i, tomb;
-  lfslot_t *s = probe(kv, h, k, klen, &i, &tomb);
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return 0;
   exp_t *cur = expected;
   if (atomic_compare_exchange_strong_explicit(
@@ -388,12 +346,7 @@ size_t lfkv_evict_expired(lfkv_t *kv) {
     if (exp == 0 || now < exp) continue;
     exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
     if (!v) continue;
-    if (atomic_compare_exchange_strong_explicit(
-            &s->val, &v, (exp_t *)NULL,
-            memory_order_release, memory_order_acquire)) {
-      atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
-      atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
-      epoch_retire(v, unrefexp_void);
+    if (slot_retire_val(kv, s, &v)) {
       evicted++;
     }
   }
@@ -407,14 +360,7 @@ void lfkv_clear(lfkv_t *kv) {
     for (;;) {
       exp_t *v = atomic_load_explicit(&s->val, memory_order_acquire);
       if (!v) break;
-      if (atomic_compare_exchange_strong_explicit(
-              &s->val, &v, (exp_t *)NULL,
-              memory_order_release, memory_order_acquire)) {
-        atomic_store_explicit(&s->expiry_us, (int64_t)0, memory_order_release);
-        atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
-        epoch_retire(v, unrefexp_void);
-        break;
-      }
+      if (slot_retire_val(kv, s, &v)) break;
     }
   }
 }
