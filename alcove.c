@@ -368,12 +368,15 @@ ownership or call unrefexp.
 
 */
 
+void graceful_shutdown(const char *msg) {
+  fprintf(stderr, "%s\n", msg);
+  /* TODO: Trigger any graceful shutdown hooks here later */
+  exit(1);
+}
+
 void *memalloc(size_t count, size_t size) {
   void *ptr = calloc(count, size);
-  if (!ptr) {
-    fprintf(stderr, "Fatal error: Out of memory\n");
-    exit(1);
-  }
+  if (!ptr) graceful_shutdown("Fatal error: Out of memory");
   return ptr;
 }
 
@@ -1102,10 +1105,7 @@ void print_node(exp_t *node) {
 
 exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
   char *ptr = realloc(token->data, final_length + 1);
-  if (!ptr) {
-    fprintf(stderr, "Fatal error: Out of memory\n");
-    exit(1);
-  }
+  if (!ptr) graceful_shutdown("Fatal error: Out of memory");
   if (offset > 0)
     memmove(ptr, ptr + offset, final_length);
   ptr[final_length] = '\0';
@@ -1117,10 +1117,7 @@ exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
 exp_t *make_symbol_from_token(token_t *token) {
   int final_length = token->size;
   char *ptr = realloc(token->data, final_length + 1);
-  if (!ptr) {
-    fprintf(stderr, "Fatal error: Out of memory\n");
-    exit(1);
-  }
+  if (!ptr) graceful_shutdown("Fatal error: Out of memory");
   ptr[final_length] = '\0';
   free(token);
   MAKE_TYPED(cur, EXP_SYMBOL, ptr);
