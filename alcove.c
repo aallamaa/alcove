@@ -81,151 +81,152 @@ static ALCOVE_TLS int in_tail_position = 0;
 
 lispProc lispProcList[] = {
     /* Special forms / control flow */
-    LISPCMD("quote",         quotecmd,       doc_quote),
-    LISPCMD_TAIL("if",       ifcmd,          doc_if),
-    LISPCMD_TAIL("do",       docmd,          doc_do),
-    LISPCMD_TAIL("when",     whencmd,        doc_when),
-    LISPCMD("while",         whilecmd,       doc_while),
-    LISPCMD("repeat",        repeatcmd,      doc_repeat),
-    LISPCMD_TAIL("and",      andcmd,         doc_and),
-    LISPCMD_TAIL("or",       orcmd,          doc_or),
-    LISPCMD_TAIL("case",     casecmd,        doc_case),
-    LISPCMD("for",           forcmd,         doc_for),
-    LISPCMD("each",          eachcmd,        doc_each),
-    LISPCMD("let",           letcmd,         doc_let),
-    LISPCMD("with",          withcmd,        doc_with),
+    LISPCMD("quote", quotecmd, doc_quote),
+    LISPCMD_TAIL("if", ifcmd, doc_if),
+    LISPCMD_TAIL("do", docmd, doc_do),
+    LISPCMD_TAIL("when", whencmd, doc_when),
+    LISPCMD("while", whilecmd, doc_while),
+    LISPCMD("repeat", repeatcmd, doc_repeat),
+    LISPCMD_TAIL("and", andcmd, doc_and),
+    LISPCMD_TAIL("or", orcmd, doc_or),
+    LISPCMD_TAIL("case", casecmd, doc_case),
+    LISPCMD("for", forcmd, doc_for),
+    LISPCMD("each", eachcmd, doc_each),
+    LISPCMD("let", letcmd, doc_let),
+    LISPCMD("with", withcmd, doc_with),
     /* Comparison / equality */
-    LISPCMD("=",             equalcmd,       doc_eq),
-    LISPCMD("<",             cmpcmd,         doc_lt),
-    LISPCMD(">",             cmpcmd,         doc_gt),
-    LISPCMD("<=",            cmpcmd,         doc_le),
-    LISPCMD(">=",            cmpcmd,         doc_ge),
-    LISPCMD("is",            iscmd,          doc_is),
-    LISPCMD("iso",           isocmd,         doc_iso),
-    LISPCMD("in",            incmd,          doc_in),
-    LISPCMD("no",            nocmd,          doc_no),
+    LISPCMD("=", equalcmd, doc_eq),
+    LISPCMD("<", cmpcmd, doc_lt),
+    LISPCMD(">", cmpcmd, doc_gt),
+    LISPCMD("<=", cmpcmd, doc_le),
+    LISPCMD(">=", cmpcmd, doc_ge),
+    LISPCMD("is", iscmd, doc_is),
+    LISPCMD("iso", isocmd, doc_iso),
+    LISPCMD("in", incmd, doc_in),
+    LISPCMD("no", nocmd, doc_no),
     /* Arithmetic */
-    LISPCMD("+",             pluscmd,        doc_plus),
-    LISPCMD("*",             multiplycmd,    doc_mul),
-    LISPCMD("-",             minuscmd,       doc_minus),
-    LISPCMD("/",             dividecmd,      doc_div),
-    LISPCMD("mod",           modcmd,         doc_mod),
-    LISPCMD("abs",           abscmd,         doc_abs),
-    LISPCMD("max",           maxcmd,         doc_max),
-    LISPCMD("min",           mincmd,         doc_min),
-    LISPCMD("odd",           oddcmd,         doc_odd),
-    LISPCMD("sqrt",          sqrtcmd,        doc_sqrt),
-    LISPCMD("sqrt-int",      sqrtintcmd,     doc_sqrtint),
-    LISPCMD("exp",           expcmd,         doc_exp),
-    LISPCMD("expt",          exptcmd,        doc_expt),
-    LISPCMD("**",            exptcmd,        doc_expt),    /* Python-ish alias */
-    LISPCMD("random",        randomcmd,      doc_random),
+    LISPCMD("+", pluscmd, doc_plus),
+    LISPCMD("*", multiplycmd, doc_mul),
+    LISPCMD("-", minuscmd, doc_minus),
+    LISPCMD("/", dividecmd, doc_div),
+    LISPCMD("mod", modcmd, doc_mod),
+    LISPCMD("abs", abscmd, doc_abs),
+    LISPCMD("max", maxcmd, doc_max),
+    LISPCMD("min", mincmd, doc_min),
+    LISPCMD("odd", oddcmd, doc_odd),
+    LISPCMD("sqrt", sqrtcmd, doc_sqrt),
+    LISPCMD("sqrt-int", sqrtintcmd, doc_sqrtint),
+    LISPCMD("exp", expcmd, doc_exp),
+    LISPCMD("expt", exptcmd, doc_expt),
+    LISPCMD("**", exptcmd, doc_expt), /* Python-ish alias */
+    LISPCMD("random", randomcmd, doc_random),
     /* Bitwise — int-only. C-style spelling + Lisp-style aliases. */
-    LISPCMD("bit-and",       bitandcmd,      doc_bitand),
-    LISPCMD("&",             bitandcmd,      doc_bitand),
-    LISPCMD("bit-or",        bitorcmd,       doc_bitor),
-    LISPCMD("|",             bitorcmd,       doc_bitor),
-    LISPCMD("bit-xor",       bitxorcmd,      doc_bitxor),
-    LISPCMD("^",             bitxorcmd,      doc_bitxor),
-    LISPCMD("bit-not",       bitnotcmd,      doc_bitnot),
-    LISPCMD("~",             bitnotcmd,      doc_bitnot),
-    LISPCMD("<<",            shlcmd,         doc_shl),
-    LISPCMD(">>",            shrcmd,         doc_shr),
+    LISPCMD("bit-and", bitandcmd, doc_bitand),
+    LISPCMD("&", bitandcmd, doc_bitand),
+    LISPCMD("bit-or", bitorcmd, doc_bitor),
+    LISPCMD("|", bitorcmd, doc_bitor),
+    LISPCMD("bit-xor", bitxorcmd, doc_bitxor),
+    LISPCMD("^", bitxorcmd, doc_bitxor),
+    LISPCMD("bit-not", bitnotcmd, doc_bitnot),
+    LISPCMD("~", bitnotcmd, doc_bitnot),
+    LISPCMD("<<", shlcmd, doc_shl),
+    LISPCMD(">>", shrcmd, doc_shr),
     /* Pairs and lists */
-    LISPCMD("cons",          conscmd,        doc_cons),
-    LISPCMD("car",           carcmd,         doc_car),
-    LISPCMD("cdr",           cdrcmd,         doc_cdr),
-    LISPCMD("list",          listcmd,        doc_list),
-    LISPCMD("length",        lengthcmd,      doc_length),
-    LISPCMD("nth",           nthcmd,         doc_nth),
-    LISPCMD("reverse",       reversecmd,     doc_reverse),
-    LISPCMD("append",        appendcmd,      doc_append),
+    LISPCMD("cons", conscmd, doc_cons),
+    LISPCMD("car", carcmd, doc_car),
+    LISPCMD("cdr", cdrcmd, doc_cdr),
+    LISPCMD("list", listcmd, doc_list),
+    LISPCMD("length", lengthcmd, doc_length),
+    LISPCMD("nth", nthcmd, doc_nth),
+    LISPCMD("reverse", reversecmd, doc_reverse),
+    LISPCMD("append", appendcmd, doc_append),
     /* Vectors — O(1) random-access array */
-    LISPCMD("vec",           veccmd,         doc_vec),
-    LISPCMD("vec-ref",       vecrefcmd,      doc_vecref),
-    LISPCMD("vec-set!",      vecsetcmd,      doc_vecset),
-    LISPCMD("vec-len",       veclencmd,      doc_veclen),
+    LISPCMD("vec", veccmd, doc_vec),
+    LISPCMD("vec-ref", vecrefcmd, doc_vecref),
+    LISPCMD("vec-set!", vecsetcmd, doc_vecset),
+    LISPCMD("vec-len", veclencmd, doc_veclen),
     /* Functions and binding */
-    LISPCMD("def",           defcmd,         doc_def),
-    LISPCMD("fn",            fncmd,          doc_fn),
-    LISPCMD("defmacro",      defmacrocmd,    doc_defmacro),
+    LISPCMD("def", defcmd, doc_def),
+    LISPCMD("fn", fncmd, doc_fn),
+    LISPCMD("defmacro", defmacrocmd, doc_defmacro),
     LISPCMD("macroexpand-1", expandmacrocmd, doc_macroexpand),
-    LISPCMD("eval",          evalcmd,        doc_eval),
-    LISPCMD("apply",         applycmd,       doc_apply),
+    LISPCMD("eval", evalcmd, doc_eval),
+    LISPCMD("apply", applycmd, doc_apply),
     /* Higher-order */
-    LISPCMD("map",           mapcmd,         doc_map),
-    LISPCMD("filter",        filtercmd,      doc_filter),
-    LISPCMD("reduce",        reducecmd,      doc_reduce),
-    LISPCMD("any?",          anypcmd,        doc_any),
-    LISPCMD("all?",          allpcmd,        doc_all),
+    LISPCMD("map", mapcmd, doc_map),
+    LISPCMD("filter", filtercmd, doc_filter),
+    LISPCMD("reduce", reducecmd, doc_reduce),
+    LISPCMD("any?", anypcmd, doc_any),
+    LISPCMD("all?", allpcmd, doc_all),
     /* Predicates */
-    LISPCMD("number?",       numberpcmd,     doc_numberp),
-    LISPCMD("string?",       stringpcmd,     doc_stringp),
-    LISPCMD("symbol?",       symbolpcmd,     doc_symbolp),
-    LISPCMD("pair?",         pairpcmd,       doc_pairp),
-    LISPCMD("fn?",           fnpcmd,         doc_fnp),
+    LISPCMD("number?", numberpcmd, doc_numberp),
+    LISPCMD("string?", stringpcmd, doc_stringp),
+    LISPCMD("symbol?", symbolpcmd, doc_symbolp),
+    LISPCMD("pair?", pairpcmd, doc_pairp),
+    LISPCMD("fn?", fnpcmd, doc_fnp),
     /* I/O */
-    LISPCMD("pr",            prcmd,          doc_pr),
-    LISPCMD("print",         prcmd,          doc_pr),
-    LISPCMD("prn",           prncmd,         doc_prn),
-    LISPCMD("println",       prncmd,         doc_prn),
+    LISPCMD("pr", prcmd, doc_pr),
+    LISPCMD("print", prcmd, doc_pr),
+    LISPCMD("prn", prncmd, doc_prn),
+    LISPCMD("println", prncmd, doc_prn),
     /* Persistence */
-    LISPCMD("persist",       persistcmd,     doc_persist),
-    LISPCMD("forget",        forgetcmd,      doc_forget),
-    LISPCMD("unpersist",     unpersistcmd,   doc_unpersist),
-    LISPCMD("savedb",        savedbcmd,      doc_savedb),
-    LISPCMD("loaddb",        loaddbcmd,      doc_loaddb),
-    LISPCMD("ispersistent",  ispersistentcmd,doc_ispersistent),
+    LISPCMD("persist", persistcmd, doc_persist),
+    LISPCMD("forget", forgetcmd, doc_forget),
+    LISPCMD("unpersist", unpersistcmd, doc_unpersist),
+    LISPCMD("savedb", savedbcmd, doc_savedb),
+    LISPCMD("loaddb", loaddbcmd, doc_loaddb),
+    LISPCMD("ispersistent", ispersistentcmd, doc_ispersistent),
     /* Introspection / utilities */
-    LISPCMD("inspect",       inspectcmd,     doc_inspect),
-    LISPCMD("disasm",        disasmcmd,      doc_disasm),
-    LISPCMD("source",        sourcecmd,      doc_source),
-    LISPCMD("dir",           dircmd,         doc_dir),
-    LISPCMD("time",          timecmd,        doc_time),
-    LISPCMD("exit",          exitcmd,        doc_exit),
-    LISPCMD("quit",          exitcmd,        doc_exit),
+    LISPCMD("inspect", inspectcmd, doc_inspect),
+    LISPCMD("disasm", disasmcmd, doc_disasm),
+    LISPCMD("source", sourcecmd, doc_source),
+    LISPCMD("dir", dircmd, doc_dir),
+    LISPCMD("time", timecmd, doc_time),
+    LISPCMD("exit", exitcmd, doc_exit),
+    LISPCMD("quit", exitcmd, doc_exit),
     /* Help / discovery */
-    LISPCMD("doc",           doccmd,         doc_doc),
-    LISPCMD("help",          helpcmd,        doc_help),
+    LISPCMD("doc", doccmd, doc_doc),
+    LISPCMD("help", helpcmd, doc_help),
     /* FFI */
-    LISPCMD("ffi-fn",        ffifncmd,       doc_ffifn),
+    LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
     /* Clojure-style hash-maps (EXP_DICT) */
-    LISPCMD("hash-map",      hashmapcmd,     doc_hashmap),
-    LISPCMD("assoc!",        assocbangcmd,   doc_assocbang),
-    LISPCMD("dissoc!",       dissocbangcmd,  doc_dissocbang),
-    LISPCMD("get",           getcmd,         doc_get),
-    LISPCMD("contains?",     containspcmd,   doc_containsp),
-    LISPCMD("keys",          keyscmd,        doc_keys),
-    LISPCMD("vals",          valscmd,        doc_vals),
-    LISPCMD("count",         countcmd,       doc_count),
+    LISPCMD("hash-map", hashmapcmd, doc_hashmap),
+    LISPCMD("assoc!", assocbangcmd, doc_assocbang),
+    LISPCMD("dissoc!", dissocbangcmd, doc_dissocbang),
+    LISPCMD("get", getcmd, doc_get),
+    LISPCMD("contains?", containspcmd, doc_containsp),
+    LISPCMD("keys", keyscmd, doc_keys),
+    LISPCMD("vals", valscmd, doc_vals),
+    LISPCMD("count", countcmd, doc_count),
     /* Doubly-linked deques (EXP_LIST) — Redis-list shaped */
-    LISPCMD("deque",         dequecmd,       doc_deque),
-    LISPCMD("push-right!",   pushrightbangcmd, doc_pushrightbang),
-    LISPCMD("push-left!",    pushleftbangcmd,  doc_pushleftbang),
-    LISPCMD("pop-right!",    poprightbangcmd,  doc_poprightbang),
-    LISPCMD("pop-left!",     popleftbangcmd,   doc_popleftbang),
-    LISPCMD("peek-left",     peekleftcmd,    doc_peekleft),
-    LISPCMD("peek-right",    peekrightcmd,   doc_peekright),
+    LISPCMD("deque", dequecmd, doc_deque),
+    LISPCMD("push-right!", pushrightbangcmd, doc_pushrightbang),
+    LISPCMD("push-left!", pushleftbangcmd, doc_pushleftbang),
+    LISPCMD("pop-right!", poprightbangcmd, doc_poprightbang),
+    LISPCMD("pop-left!", popleftbangcmd, doc_popleftbang),
+    LISPCMD("peek-left", peekleftcmd, doc_peekleft),
+    LISPCMD("peek-right", peekrightcmd, doc_peekright),
     /* Binary-safe blobs (EXP_BLOB) */
-    LISPCMD("make-blob",     makeblobcmd,    doc_makeblob),
-    LISPCMD("blob-len",      bloblencmd,     doc_bloblen),
-    LISPCMD("blob-ref",      blobrefcmd,     doc_blobref),
-    LISPCMD("blob->string",  blob2stringcmd, doc_blob2string),
-    LISPCMD("string->blob",  string2blobcmd, doc_string2blob),
-    /* Clojure-style varargs vector ctor — populates EXP_VECTOR. Same as #[...]. */
-    LISPCMD("vector",        vectorcmd,      doc_vector),
+    LISPCMD("make-blob", makeblobcmd, doc_makeblob),
+    LISPCMD("blob-len", bloblencmd, doc_bloblen),
+    LISPCMD("blob-ref", blobrefcmd, doc_blobref),
+    LISPCMD("blob->string", blob2stringcmd, doc_blob2string),
+    LISPCMD("string->blob", string2blobcmd, doc_string2blob),
+    /* Clojure-style varargs vector ctor — populates EXP_VECTOR. Same as #[...].
+     */
+    LISPCMD("vector", vectorcmd, doc_vector),
     /* Redis inspector commands — only meaningful under -R (combined REPL
        + RESP). Outside -R, redis-keys/count return empty/0 since the
        resp_db is never populated. */
-    LISPCMD("redis-count",   rediscountcmd,  doc_redis_count),
-    LISPCMD("redis-keys",    rediskeyscmd,   doc_redis_keys),
-    LISPCMD("redis-type",    redistypecmd,   doc_redis_type),
-    LISPCMD("redis-get",     redisgetcmd,    doc_redis_get),
-    LISPCMD("redis-flush",   redisflushcmd,  doc_redis_flush),
-    LISPCMD("redis-port",    redisportcmd,   doc_redis_port),
-    LISPCMD("redis-defcmd",  rediscmddefcmd, doc_redis_defcmd),
-    LISPCMD("redis-undefcmd",rediscmdundefcmd,doc_redis_undefcmd),
-    LISPCMD("redis-cmds",    rediscmdscmd,   doc_redis_cmds),
+    LISPCMD("redis-count", rediscountcmd, doc_redis_count),
+    LISPCMD("redis-keys", rediskeyscmd, doc_redis_keys),
+    LISPCMD("redis-type", redistypecmd, doc_redis_type),
+    LISPCMD("redis-get", redisgetcmd, doc_redis_get),
+    LISPCMD("redis-flush", redisflushcmd, doc_redis_flush),
+    LISPCMD("redis-port", redisportcmd, doc_redis_port),
+    LISPCMD("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
+    LISPCMD("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
+    LISPCMD("redis-cmds", rediscmdscmd, doc_redis_cmds),
 };
 #undef LISPCMD
 #undef LISPCMD_TAIL
@@ -289,9 +290,7 @@ void *memalloc(size_t count, size_t size) {
 inline exp_t *refexp(exp_t *e) {
   /* Tagged immediates (fixnum, char) and canonical singletons (nil, t)
      are immortal — skip the refcount traffic. */
-  if (!is_ptr(e))
-    return e;
-  if (e == nil_singleton || e == true_singleton)
+  if (is_immortal(e))
     return e;
   REFCOUNT_INC(&e->nref);
   return e;
@@ -321,10 +320,8 @@ static ALCOVE_TLS int exp_bump_left = 0;
 inline int unrefexp(exp_t *e) {
   int ret;
   while (1) {
-    if (!is_ptr(e))
-      return 0;
-    if (e == nil_singleton || e == true_singleton)
-      return 1;
+    if (is_immortal(e))
+      return is_ptr(e) ? 1 : 0;
     if ((ret = REFCOUNT_DEC(&e->nref)) > 0)
       return ret;
     /* meta holds a strdup'd name for LAMBDA/MACRO, or a borrowed
@@ -427,7 +424,8 @@ ALCOVE_TLS shard_t *current_shard = &main_shard;
    failure (errno set by alc_wake_init). The reactor must call this
    before entering its select() loop. */
 int shard_runtime_init(shard_t *sh) {
-  if (sh->runtime_ready == 1) return 0;
+  if (sh->runtime_ready == 1)
+    return 0;
   mpsc_init(&sh->inbox);
   if (alc_wake_init(&sh->wake) < 0) {
     sh->runtime_ready = -1;
@@ -440,12 +438,16 @@ int shard_runtime_init(shard_t *sh) {
 /* Tear down inbox/wake. Caller is responsible for ensuring no producer
    will signal after this returns. */
 void shard_runtime_destroy(shard_t *sh) {
-  if (sh->runtime_ready != 1) return;
+  if (sh->runtime_ready != 1)
+    return;
   /* Drain any leftover nodes so we don't leak. No producer exists today;
      any node here is a bug. When Step 2.5 lands, variant-specific
      cleanup (close fds, dec refcounts) belongs at the producer side. */
   int leaked = 0;
-  for (mpsc_node_t *n; (n = mpsc_dequeue(&sh->inbox)); ) { free(n); leaked++; }
+  for (mpsc_node_t *n; (n = mpsc_dequeue(&sh->inbox));) {
+    free(n);
+    leaked++;
+  }
   assert(leaked == 0 && "stray inbox nodes — producer didn't quiesce");
   alc_wake_destroy(&sh->wake);
   sh->runtime_ready = 0;
@@ -461,9 +463,8 @@ uint64_t alcove_global_gen = 1;
 inline env_t *ref_env(env_t *env) {
   if (env) {
     REFCOUNT_INC(&env->nref);
-    return env;
-  } else
-    return env;
+  }
+  return env;
 }
 
 inline env_t *make_env(env_t *rootenv) {
@@ -562,7 +563,7 @@ inline void tokenappend(token_t *token, char *src, int len) {
     strncpy(tmp, token->data, token->maxsize);
     token->maxsize *= d;
     free(token->data);
-    token->data = tmp;       /* WAS MISSING — UAF on the next access. */
+    token->data = tmp; /* WAS MISSING — UAF on the next access. */
   }
   strncpy(token->data + token->size, src, len);
   token->size += len;
@@ -669,17 +670,18 @@ int dump_dict(dict_t *d, FILE *stream) {
    create_dict was reserved for incremental rehash (Redis-style) but
    never wired; this is the simpler one-shot version. */
 static void dict_rehash(dict_t *d, unsigned int new_size) {
-  if (new_size == 0 || (new_size & (new_size - 1)) != 0) return; /* power of 2 */
+  if (new_size == 0 || (new_size & (new_size - 1)) != 0)
+    return; /* power of 2 */
   keyval_t **new_table = memalloc(new_size, sizeof(keyval_t *));
-  if (!new_table) return;  /* OOM: stay at current size, performance only */
+  if (!new_table)
+    return; /* OOM: stay at current size, performance only */
   unsigned int new_mask = new_size - 1;
   unsigned int j;
   for (j = 0; j < d->ht[0].size; j++) {
     keyval_t *k = d->ht[0].table[j];
     while (k) {
       keyval_t *next = k->next;
-      unsigned int h = bernstein_hash((unsigned char *)k->key,
-                                      strlen(k->key));
+      unsigned int h = bernstein_hash((unsigned char *)k->key, strlen(k->key));
       unsigned int slot = h & new_mask;
       k->next = new_table[slot];
       new_table[slot] = k;
@@ -827,10 +829,8 @@ inline exp_t *make_node(exp_t *node) {
 }
 
 inline exp_t *make_internal(lispCmd *cmd, int flags) {
-  exp_t *cur = make_nil();
-  cur->type = EXP_INTERNAL;
+  MAKE_TYPED(cur, EXP_INTERNAL, cmd);
   cur->flags = flags;
-  cur->fnc = cmd;
   return cur;
 }
 
@@ -1011,30 +1011,23 @@ void print_node(exp_t *node) {
   return;
 }
 
-inline exp_t *make_fromstr(char *str, int length) {
-  exp_t *cur = make_nil();
-  cur->ptr = memalloc(length + 1, sizeof(char));
-  /* memcpy not strncpy: we explicitly NUL-terminate at +length below.
-     strncpy here triggers -Wstringop-truncation because the count
-     equals the source length, with no room for the implicit NUL. */
-  memcpy(cur->ptr, str, length);
-  *((char *)cur->ptr + length) = '\0';
-  return cur;
+inline char *alloc_str(char *str, int length) {
+  char *ptr = memalloc(length + 1, sizeof(char));
+  memcpy(ptr, str, length);
+  ptr[length] = '\0';
+  return ptr;
 }
 
 inline exp_t *make_string(char *str, int length) {
-  exp_t *cur = make_fromstr(str, length);
-  cur->type = EXP_STRING;
+  MAKE_TYPED(cur, EXP_STRING, alloc_str(str, length));
   //  printf("STR %s\n",(char*)cur->ptr);
   return cur;
 }
 
 inline exp_t *make_symbol(char *str, int length) {
-  exp_t *cur = make_fromstr(str, length);
-  cur->type = EXP_SYMBOL;
+  MAKE_TYPED(cur, EXP_SYMBOL, alloc_str(str, length));
   return cur;
 }
-
 
 inline exp_t *make_quote(exp_t *node) {
   exp_t *cur = make_symbol("quote", strlen("quote"));
@@ -1241,18 +1234,25 @@ char *dump_str(char *ptr, FILE *stream) {
    the returned buffer for caller convenience (klen carries the real
    length, the trailing NUL is decorative). */
 static int dump_strn(const char *ptr, size_t n, FILE *stream) {
-  if (dumpsize_t(stream, &n) <= 0) return 0;
+  if (dumpsize_t(stream, &n) <= 0)
+    return 0;
   return n == 0 || fwrite(ptr, 1, n, stream) == n;
 }
 static int load_strn(char **pptr, size_t *plen, FILE *stream) {
   size_t n;
-  if (loadsize_t(stream, &n) <= 0) return 0;
+  if (loadsize_t(stream, &n) <= 0)
+    return 0;
   /* Sanity cap matches RESP_MAX_BULK so a corrupted dump can't drag
      us into a 16 EB allocation. */
-  if (n > (size_t)(512u * 1024 * 1024)) return 0;
+  if (n > (size_t)(512u * 1024 * 1024))
+    return 0;
   char *p = malloc(n + 1);
-  if (!p) return 0;
-  if (n > 0 && fread(p, 1, n, stream) != n) { free(p); return 0; }
+  if (!p)
+    return 0;
+  if (n > 0 && fread(p, 1, n, stream) != n) {
+    free(p);
+    return 0;
+  }
   p[n] = 0;
   *pptr = p;
   *plen = n;
@@ -1264,20 +1264,26 @@ static int load_strn(char **pptr, size_t *plen, FILE *stream) {
    we write it here for dump symmetric with dump_string), then size_t
    len, then exactly len bytes. */
 exp_t *dump_blob(exp_t *e, FILE *stream) {
-  if (dumptype(stream, &e->type) <= 0) return NULL;
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
   alc_blob_t *b = (alc_blob_t *)e->ptr;
   size_t n = b->len;
-  if (dumpsize_t(stream, &n) <= 0) return NULL;
-  if (n > 0 && fwrite(b->bytes, 1, n, stream) != n) return NULL;
+  if (dumpsize_t(stream, &n) <= 0)
+    return NULL;
+  if (n > 0 && fwrite(b->bytes, 1, n, stream) != n)
+    return NULL;
   return e;
 }
 exp_t *load_blob(exp_t *e, FILE *stream) {
   /* load_exp_t allocated a placeholder via make_nil(); discard it and
      return a fresh blob — matches the load_char/load_string pattern. */
-  if (e) unrefexp(e);
+  if (e)
+    unrefexp(e);
   size_t n;
-  if (loadsize_t(stream, &n) <= 0) return NULL;
-  if (n > (size_t)(512u * 1024 * 1024)) return NULL;
+  if (loadsize_t(stream, &n) <= 0)
+    return NULL;
+  if (n > (size_t)(512u * 1024 * 1024))
+    return NULL;
   /* make_blob copies the input; using a stack buffer for tiny blobs
      would be a micro-opt but the heap path is fine for cold load. */
   char *buf = (n > 0) ? malloc(n) : NULL;
@@ -1609,8 +1615,10 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
       int c;
       /* Eat inter-form whitespace, commas, and line comments. */
       while ((c = getc(stream)) != EOF) {
-        if (c == ',') continue;
-        if (c < 256 && (ISWHITESPACE & chrmap[c])) continue;
+        if (c == ',')
+          continue;
+        if (c < 256 && (ISWHITESPACE & chrmap[c]))
+          continue;
         if (c == ';') { /* line comment */
           while ((c = getc(stream)) != EOF && c != '\n')
             ;
@@ -1623,11 +1631,16 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
         return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
                      "End of file in hash-map literal");
       }
-      if (c == '}') return lnode;
+      if (c == '}')
+        return lnode;
       ungetc(c, stream);
       vnode = reader(stream, '}', 0);
-      if (!vnode) return lnode; /* `}` consumed by inner reader */
-      if (iserror(vnode)) { unrefexp(lnode); return vnode; }
+      if (!vnode)
+        return lnode; /* `}` consumed by inner reader */
+      if (iserror(vnode)) {
+        unrefexp(lnode);
+        return vnode;
+      }
       cnode = cnode->next = make_node(vnode);
     }
   } else if (x == '\'') {
@@ -1642,7 +1655,7 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
     int c;
     while ((c = getc(stream)) != EOF && c != '\n')
       ;
-    return NULL;  /* signal "no form here" — caller's loop continues. */
+    return NULL; /* signal "no form here" — caller's loop continues. */
   }
   /* Note: `|` was previously hooked here as a reader macro that built
      a wrapped list — it didn't implement Common Lisp's |sym with spaces|
@@ -1859,8 +1872,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             if ((z = getc(stream)) != EOF) {
               if ((ret = escapereader(stream, &token, z)))
                 return ret;
-            }
-            else {
+            } else {
               freetoken(token);
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
                            "End of file reached while parsing");
@@ -2055,9 +2067,9 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
           if (idx && isnumber(idx) && ischar(val)) {
             if ((FIX_VAL(idx) >= 0) &&
                 (FIX_VAL(idx) < (int64_t)strlen(key->ptr))) {
-              *((char *)key->ptr + FIX_VAL(idx)) =
-                  (unsigned char)CHAR_VAL(val);
-              if (idx) unrefexp(idx);
+              *((char *)key->ptr + FIX_VAL(idx)) = (unsigned char)CHAR_VAL(val);
+              if (idx)
+                unrefexp(idx);
               unrefexp(key);
               goto finish;
             } else {
@@ -2068,7 +2080,8 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
             fret = error(ERROR_NUMBER_EXPECTED, keyv, env,
                          "Error number and char expected");
           }
-          if (idx) unrefexp(idx);
+          if (idx)
+            unrefexp(idx);
           unrefexp(key);
           unrefexp(keyv);
           unrefexp(val);
@@ -2102,7 +2115,8 @@ finish:
    are resolved dynamically against the CALLER's env chain at invoke
    time. If closure semantics are ever added, the env arena and the
    bytecode VM's lifetime assumptions both need revisiting. */
-const char doc_fn[] = "(fn (params...) body...) — anonymous function. Body is a sequence; the last expression's value is returned.";
+const char doc_fn[] = "(fn (params...) body...) — anonymous function. Body is "
+                      "a sequence; the last expression's value is returned.";
 exp_t *fncmd(exp_t *e, env_t *env) {
   exp_t *val;
   exp_t *vali;
@@ -2141,7 +2155,9 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   return val;
 }
 
-const char doc_def[] = "(def name (params...) body...) — define a named function. Body that uses only supported forms compiles to bytecode (sometimes JIT'd).";
+const char doc_def[] =
+    "(def name (params...) body...) — define a named function. Body that uses "
+    "only supported forms compiles to bytecode (sometimes JIT'd).";
 exp_t *defcmd(exp_t *e, env_t *env) {
   exp_t *val;
   exp_t *vali;
@@ -2188,7 +2204,9 @@ exp_t *defcmd(exp_t *e, env_t *env) {
   return val;
 }
 
-const char doc_macroexpand[] = "(macroexpand-1 form) — expand the outermost macro call in form once and return the resulting code.";
+const char doc_macroexpand[] =
+    "(macroexpand-1 form) — expand the outermost macro call in form once and "
+    "return the resulting code.";
 exp_t *expandmacrocmd(exp_t *e, env_t *env) {
   exp_t *tmpexp;
   exp_t *tmpexp2;
@@ -2208,7 +2226,9 @@ finish:
   return tmpexp;
 }
 
-const char doc_defmacro[] = "(defmacro name (params...) body) — define a macro. Body returns a code form that replaces the call site at expansion time.";
+const char doc_defmacro[] =
+    "(defmacro name (params...) body) — define a macro. Body returns a code "
+    "form that replaces the call site at expansion time.";
 exp_t *defmacrocmd(exp_t *e, env_t *env) {
   exp_t *val;
   exp_t *vali;
@@ -2252,7 +2272,8 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-const char doc_quote[] = "(quote x) — return x without evaluating it. Reader shorthand: 'x.";
+const char doc_quote[] =
+    "(quote x) — return x without evaluating it. Reader shorthand: 'x.";
 exp_t *quotecmd(exp_t *e, env_t *env) {
   exp_t *ret = refexp(cadr(e));
   unrefexp(e);
@@ -2260,7 +2281,9 @@ exp_t *quotecmd(exp_t *e, env_t *env) {
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
-const char doc_if[] = "(if test then [else]) — branch on test. Falsey is nil/empty; everything else (including 0 and \"\") is truthy.";
+const char doc_if[] =
+    "(if test then [else]) — branch on test. Falsey is nil/empty; everything "
+    "else (including 0 and \"\") is truthy.";
 exp_t *ifcmd(exp_t *e, env_t *env) {
   /* Tail-aware: propagates in_tail_position to the selected branch. */
   int outer_tail = in_tail_position;
@@ -2312,7 +2335,9 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
   }
 }
 
-const char doc_eq[] = "(= place val) — assign val to place. Place can be a symbol, (car/cdr ...), or (str i) for in-place char update.";
+const char doc_eq[] =
+    "(= place val) — assign val to place. Place can be a symbol, (car/cdr "
+    "...), or (str i) for in-place char update.";
 exp_t *equalcmd(exp_t *e, env_t *env) {
   exp_t *tmpexp = EVAL(caddr(e), env);
   exp_t *tmpkey = refexp(cadr(e));
@@ -2325,7 +2350,8 @@ exp_t *equalcmd(exp_t *e, env_t *env) {
   /* to be unrefed tmpkey in case of evaluate */
 }
 
-const char doc_persist[] = "(persist sym) — mark sym so its current binding survives savedb / loaddb (db.dump).";
+const char doc_persist[] = "(persist sym) — mark sym so its current binding "
+                           "survives savedb / loaddb (db.dump).";
 exp_t *persistcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
@@ -2342,7 +2368,8 @@ exp_t *persistcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_ispersistent[] = "(ispersistent sym) — t if sym is currently marked persistent, nil otherwise.";
+const char doc_ispersistent[] = "(ispersistent sym) — t if sym is currently "
+                                "marked persistent, nil otherwise.";
 exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   int64_t ret = 0;
@@ -2366,7 +2393,9 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
 /* `forget` and `unpersist` split apart for clarity. The historical
    `forget` only zeroed the timestamp (= "don't save next savedb") which
    surprised users who expected the binding to actually vanish. */
-const char doc_forget[] = "(forget sym) — remove sym's binding entirely. After this, sym is unbound. Use (unpersist sym) if you only want to stop saving it.";
+const char doc_forget[] =
+    "(forget sym) — remove sym's binding entirely. After this, sym is unbound. "
+    "Use (unpersist sym) if you only want to stop saving it.";
 exp_t *forgetcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   if (!issymbol(tmpkey)) {
@@ -2379,7 +2408,8 @@ exp_t *forgetcmd(exp_t *e, env_t *env) {
      drops the value's ref; bumping global_gen invalidates any stale
      gcache entries pointing at the now-freed pointer. */
   env_t *cur = env;
-  while (cur->root) cur = cur->root;
+  while (cur->root)
+    cur = cur->root;
   if (cur->d) {
     del_keyval_dict(cur->d, tmpkey->ptr);
     GEN_BUMP();
@@ -2388,7 +2418,9 @@ exp_t *forgetcmd(exp_t *e, env_t *env) {
   return NIL_EXP;
 }
 
-const char doc_unpersist[] = "(unpersist sym) — clear sym's persistence mark; the binding stays live but won't be written by (savedb).";
+const char doc_unpersist[] =
+    "(unpersist sym) — clear sym's persistence mark; the binding stays live "
+    "but won't be written by (savedb).";
 exp_t *unpersistcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
@@ -2439,7 +2471,8 @@ typedef struct {
 static int resp_dump_iter(const char *k, size_t klen, exp_t *val,
                           int64_t expiry_us, void *ctx) {
   resp_dump_ctx_t *c = (resp_dump_ctx_t *)ctx;
-  if (c->failed) return 1; /* short-circuit on prior I/O failure */
+  if (c->failed)
+    return 1; /* short-circuit on prior I/O failure */
   if (!__DUMPABLE__(val)) {
     /* Skip with a warning — callers can tighten by registering more
        dump fns (currently EXP_BLOB is the only RESP-side type with
@@ -2451,12 +2484,22 @@ static int resp_dump_iter(const char *k, size_t klen, exp_t *val,
     return 0; /* continue */
   }
   uint8_t marker = 0xFE;
-  if (fwrite(&marker, 1, 1, c->stream) != 1) { c->failed = 1; return 1; }
-  if (fwrite(&expiry_us, sizeof(int64_t), 1, c->stream) != 1) {
-    c->failed = 1; return 1;
+  if (fwrite(&marker, 1, 1, c->stream) != 1) {
+    c->failed = 1;
+    return 1;
   }
-  if (!__DUMP__(val, c->stream)) { c->failed = 1; return 1; }
-  if (!dump_strn(k, klen, c->stream)) { c->failed = 1; return 1; }
+  if (fwrite(&expiry_us, sizeof(int64_t), 1, c->stream) != 1) {
+    c->failed = 1;
+    return 1;
+  }
+  if (!__DUMP__(val, c->stream)) {
+    c->failed = 1;
+    return 1;
+  }
+  if (!dump_strn(k, klen, c->stream)) {
+    c->failed = 1;
+    return 1;
+  }
   c->count++;
   return 0;
 }
@@ -2472,17 +2515,20 @@ static int dump_lisp_section(dict_t *d, FILE *stream) {
       while (ckv) {
         keyval_t *pkv = ckv;
         ckv = pkv->next;
-        if (pkv->timestamp <= 0) continue;
+        if (pkv->timestamp <= 0)
+          continue;
         if (!__DUMPABLE__(pkv->val)) {
-          fprintf(stderr,
-                  "savedb: skipping %s — type %d has no dump fn\n",
+          fprintf(stderr, "savedb: skipping %s — type %d has no dump fn\n",
                   (char *)pkv->key, TYPEOF_E(pkv->val));
           continue;
         }
         uint8_t marker = 0xFE;
-        if (fwrite(&marker, 1, 1, stream) != 1) return 0;
-        if (!__DUMP__(pkv->val, stream)) return 0;
-        if (!dump_str(pkv->key, stream)) return 0;
+        if (fwrite(&marker, 1, 1, stream) != 1)
+          return 0;
+        if (!__DUMP__(pkv->val, stream))
+          return 0;
+        if (!dump_str(pkv->key, stream))
+          return 0;
       }
     }
   }
@@ -2495,37 +2541,47 @@ static int dump_lisp_section(dict_t *d, FILE *stream) {
    Returns 1 on success, 0 on I/O failure. */
 int alcove_dump_unified(env_t *global, struct lfkv *kv, FILE *stream) {
   /* Header: 4-byte magic + 2-byte version. */
-  if (fwrite(ALCOVE_DUMP_MAGIC, 1, 4, stream) != 4) return 0;
+  if (fwrite(ALCOVE_DUMP_MAGIC, 1, 4, stream) != 4)
+    return 0;
   uint16_t ver = ALCOVE_DUMP_VERSION;
-  if (fwrite(&ver, 2, 1, stream) != 1) return 0;
+  if (fwrite(&ver, 2, 1, stream) != 1)
+    return 0;
 
   /* Walk to the global env (savedb is allowed from a nested env, and
      callers that don't have an env handy may pass NULL to skip the
      Lisp section entirely — RESP SAVE uses this path). */
   env_t *root = global;
-  while (root && root->root) root = root->root;
+  while (root && root->root)
+    root = root->root;
 
   /* Section L. */
   uint8_t tag = ALCOVE_SEC_LISP;
   uint8_t end = 0x00;
-  if (fwrite(&tag, 1, 1, stream) != 1) return 0;
-  if (root && root->d && !dump_lisp_section(root->d, stream)) return 0;
-  if (fwrite(&end, 1, 1, stream) != 1) return 0;
+  if (fwrite(&tag, 1, 1, stream) != 1)
+    return 0;
+  if (root && root->d && !dump_lisp_section(root->d, stream))
+    return 0;
+  if (fwrite(&end, 1, 1, stream) != 1)
+    return 0;
 
   /* Section R. */
   if (kv) {
     tag = ALCOVE_SEC_RESP;
-    if (fwrite(&tag, 1, 1, stream) != 1) return 0;
+    if (fwrite(&tag, 1, 1, stream) != 1)
+      return 0;
     resp_dump_ctx_t ctx = {stream, 0, 0};
     lfkv_foreach(kv, resp_dump_iter, &ctx);
-    if (ctx.failed) return 0;
-    if (fwrite(&end, 1, 1, stream) != 1) return 0;
+    if (ctx.failed)
+      return 0;
+    if (fwrite(&end, 1, 1, stream) != 1)
+      return 0;
   }
 
   /* Trailer: section-tag 0 marks end-of-file. Forward-compatible —
      a future reader sees 0 and stops; an older reader handed a future
      file with extra sections sees an unknown tag and bails cleanly. */
-  if (fwrite(&end, 1, 1, stream) != 1) return 0;
+  if (fwrite(&end, 1, 1, stream) != 1)
+    return 0;
   return 1;
 }
 
@@ -2537,18 +2593,25 @@ static int load_section_records(FILE *stream, env_t *root, struct lfkv *kv,
   int n = 0;
   for (;;) {
     uint8_t marker;
-    if (fread(&marker, 1, 1, stream) != 1) return -1;
-    if (marker == 0x00) return n;       /* end of section */
-    if (marker != 0xFE) return -1;      /* corrupt */
+    if (fread(&marker, 1, 1, stream) != 1)
+      return -1;
+    if (marker == 0x00)
+      return n; /* end of section */
+    if (marker != 0xFE)
+      return -1; /* corrupt */
     int64_t expiry = 0;
     if (is_resp && fread(&expiry, sizeof(int64_t), 1, stream) != 1)
       return -1;
     exp_t *val = load_exp_t(stream);
-    if (!val) return -1;
+    if (!val)
+      return -1;
     if (is_resp) {
       char *k = NULL;
       size_t klen = 0;
-      if (!load_strn(&k, &klen, stream)) { unrefexp(val); return -1; }
+      if (!load_strn(&k, &klen, stream)) {
+        unrefexp(val);
+        return -1;
+      }
       if (kv) {
         /* lfkv_set transfers the caller's ref; bump first since we
            still hold it via val and need to release on failure. */
@@ -2559,11 +2622,16 @@ static int load_section_records(FILE *stream, env_t *root, struct lfkv *kv,
       unrefexp(val);
     } else {
       char *key = NULL;
-      if (!load_str(&key, stream)) { unrefexp(val); return -1; }
+      if (!load_str(&key, stream)) {
+        unrefexp(val);
+        return -1;
+      }
       if (root) {
-        if (!root->d) root->d = create_dict();
+        if (!root->d)
+          root->d = create_dict();
         keyval_t *kvp = set_get_keyval_dict(root->d, key, val);
-        if (kvp) kvp->timestamp = gettimeusec();
+        if (kvp)
+          kvp->timestamp = gettimeusec();
       }
       free(key);
       unrefexp(val);
@@ -2577,9 +2645,10 @@ static int load_section_records(FILE *stream, env_t *root, struct lfkv *kv,
      0 = magic missing → caller should fall back to legacy reader
     -1 = our format detected but corrupt/truncated. */
 int alcove_load_unified(env_t *global, struct lfkv *kv, FILE *stream,
-                       int *n_lisp, int *n_resp) {
+                        int *n_lisp, int *n_resp) {
   char magic[4];
-  if (fread(magic, 1, 4, stream) != 4) return 0;
+  if (fread(magic, 1, 4, stream) != 4)
+    return 0;
   if (memcmp(magic, ALCOVE_DUMP_MAGIC, 4) != 0) {
     /* Not our format — rewind so the legacy reader sees the original
        byte stream. */
@@ -2587,38 +2656,48 @@ int alcove_load_unified(env_t *global, struct lfkv *kv, FILE *stream,
     return 0;
   }
   uint16_t ver;
-  if (fread(&ver, 2, 1, stream) != 1) return -1;
+  if (fread(&ver, 2, 1, stream) != 1)
+    return -1;
   if (ver != ALCOVE_DUMP_VERSION) {
     fprintf(stderr, "loaddb: unsupported alcove.dump version %u\n", ver);
     return -1;
   }
   env_t *root = global;
-  while (root && root->root) root = root->root;
+  while (root && root->root)
+    root = root->root;
   int nl = 0, nr = 0;
   for (;;) {
     uint8_t tag;
-    if (fread(&tag, 1, 1, stream) != 1) return -1;
-    if (tag == 0x00) break; /* end-of-file trailer */
+    if (fread(&tag, 1, 1, stream) != 1)
+      return -1;
+    if (tag == 0x00)
+      break; /* end-of-file trailer */
     if (tag == ALCOVE_SEC_LISP) {
       int got = load_section_records(stream, root, NULL, 0);
-      if (got < 0) return -1;
+      if (got < 0)
+        return -1;
       nl += got;
     } else if (tag == ALCOVE_SEC_RESP) {
       int got = load_section_records(stream, NULL, kv, 1);
-      if (got < 0) return -1;
+      if (got < 0)
+        return -1;
       nr += got;
     } else {
       fprintf(stderr, "loaddb: unknown section tag 0x%02x — stopping\n", tag);
       return -1;
     }
   }
-  if (n_lisp) *n_lisp = nl;
-  if (n_resp) *n_resp = nr;
+  if (n_lisp)
+    *n_lisp = nl;
+  if (n_resp)
+    *n_resp = nr;
   GEN_BUMP();
   return 1;
 }
 
-const char doc_savedb[] = "(savedb) writes to the active db (default ./db.dump, overridden by --db). (savedb \"path\") writes to the given file.";
+const char doc_savedb[] =
+    "(savedb) writes to the active db (default ./db.dump, overridden by --db). "
+    "(savedb \"path\") writes to the given file.";
 exp_t *savedbcmd(exp_t *e, env_t *env) {
   /* Resolve the target path: optional first arg, else session default.
      The arg is evaluated so callers can build the path: (savedb (str ...)). */
@@ -2626,9 +2705,13 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   exp_t *path_arg = NULL;
   if (e->next) {
     path_arg = EVAL(e->next->content, env);
-    if (iserror(path_arg)) { unrefexp(e); return path_arg; }
-    if (!is_ptr(path_arg) || !isstring(path_arg)) {
-      unrefexp(path_arg); unrefexp(e);
+    if (iserror(path_arg)) {
+      unrefexp(e);
+      return path_arg;
+    }
+    if (!isstring(path_arg)) {
+      unrefexp(path_arg);
+      unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "savedb: optional argument must be a filename string");
     }
@@ -2636,9 +2719,10 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   }
   FILE *stream = fopen(path, "w");
   if (!stream) {
-    if (path_arg) unrefexp(path_arg);
-    return error(ERROR_ILLEGAL_VALUE, e, env,
-                 "Unable to open '%s' for writing", path);
+    if (path_arg)
+      unrefexp(path_arg);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "Unable to open '%s' for writing",
+                 path);
   }
   /* Unified writer: section L (this env) + section R (resp_kv if a
      reactor is alive). Old-format db.dump files are still readable
@@ -2646,9 +2730,10 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   int ok = alcove_dump_unified(env, resp_kv_get(), stream);
   fclose(stream);
   if (!ok) {
-    if (path_arg) unrefexp(path_arg);
-    return error(ERROR_ILLEGAL_VALUE, e, env,
-                 "savedb: I/O error writing '%s'", path);
+    if (path_arg)
+      unrefexp(path_arg);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "savedb: I/O error writing '%s'",
+                 path);
   }
   /* Successful explicit save → adopt this path as the session default,
      so a follow-up (loaddb) or (savedb) targets the same file. The
@@ -2680,7 +2765,10 @@ int loaddb_from_file_path(env_t *env, const char *path) {
      next savedb. */
   int nl = 0, nr = 0;
   int u = alcove_load_unified(env, resp_kv_get(), stream, &nl, &nr);
-  if (u == 1) { fclose(stream); return nl + nr; }
+  if (u == 1) {
+    fclose(stream);
+    return nl + nr;
+  }
   if (u < 0) {
     fclose(stream);
     return -1;
@@ -2720,15 +2808,22 @@ int loaddb_from_file(env_t *env) {
   return loaddb_from_file_path(env, alcove_db_path);
 }
 
-const char doc_loaddb[] = "(loaddb) reads the active db (default ./db.dump, overridden by --db). (loaddb \"path\") reads from the given file. Auto-runs at startup unless --noload.";
+const char doc_loaddb[] =
+    "(loaddb) reads the active db (default ./db.dump, overridden by --db). "
+    "(loaddb \"path\") reads from the given file. Auto-runs at startup unless "
+    "--noload.";
 exp_t *loaddbcmd(exp_t *e, env_t *env) {
   const char *path = alcove_db_path;
   exp_t *path_arg = NULL;
   if (e->next) {
     path_arg = EVAL(e->next->content, env);
-    if (iserror(path_arg)) { unrefexp(e); return path_arg; }
-    if (!is_ptr(path_arg) || !isstring(path_arg)) {
-      unrefexp(path_arg); unrefexp(e);
+    if (iserror(path_arg)) {
+      unrefexp(e);
+      return path_arg;
+    }
+    if (!isstring(path_arg)) {
+      unrefexp(path_arg);
+      unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "loaddb: optional argument must be a filename string");
     }
@@ -2738,7 +2833,8 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
   if (n < 0) {
     exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
                        "Unable to open '%s' for reading", path);
-    if (path_arg) unrefexp(path_arg);
+    if (path_arg)
+      unrefexp(path_arg);
     return err;
   }
   printf("loaded %d entries from %s\n", n, path);
@@ -2754,7 +2850,8 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
 
 /* cmpcmd serves four lisp names; one doc per dispatch keeps the table
    clean. Comparisons are variadic: (< a b c) means a<b AND b<c. */
-const char doc_lt[] = "(< a b ...) — strictly less than (chained: each pair must hold).";
+const char doc_lt[] =
+    "(< a b ...) — strictly less than (chained: each pair must hold).";
 const char doc_gt[] = "(> a b ...) — strictly greater than (chained).";
 const char doc_le[] = "(<= a b ...) — less than or equal (chained).";
 const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
@@ -2766,7 +2863,10 @@ static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
          (isnumber(b) ? (double)FIX_VAL(b) : b->f);
     return 1;
   }
-  if (isstring(a) && isstring(b)) { *d = strcmp(a->ptr, b->ptr); return 1; }
+  if (isstring(a) && isstring(b)) {
+    *d = strcmp(a->ptr, b->ptr);
+    return 1;
+  }
   if (ischar(a) && ischar(b)) {
     *d = (double)CHAR_VAL(a) - (double)CHAR_VAL(b);
     return 1;
@@ -2778,21 +2878,23 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
   exp_t *op = car(e);
   if (!op || !issymbol(op)) {
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "compare: missing operator");
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "compare: missing operator");
   }
   /* Decode the operator once. Branches keep the same semantics that
      bytecode SLOT_<cmp>_FIX uses, so chained results agree with the
      compiler's per-pair comparisons. */
   int op_kind;
-  if      (strcmp(op->ptr, "<")  == 0) op_kind = 0;
-  else if (strcmp(op->ptr, ">")  == 0) op_kind = 1;
-  else if (strcmp(op->ptr, "<=") == 0) op_kind = 2;
-  else if (strcmp(op->ptr, ">=") == 0) op_kind = 3;
+  if (strcmp(op->ptr, "<") == 0)
+    op_kind = 0;
+  else if (strcmp(op->ptr, ">") == 0)
+    op_kind = 1;
+  else if (strcmp(op->ptr, "<=") == 0)
+    op_kind = 2;
+  else if (strcmp(op->ptr, ">=") == 0)
+    op_kind = 3;
   else {
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "compare: unknown operator");
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "compare: unknown operator");
   }
 
   /* Walk args pairwise: (< a b c d) iff a<b AND b<c AND c<d. 0 or 1
@@ -2804,21 +2906,24 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
   while (cur_node) {
     exp_t *v = EVAL(cur_node->content, env);
     if (iserror(v)) {
-      if (prev) unrefexp(prev);
+      if (prev)
+        unrefexp(prev);
       unrefexp(e);
       return v;
     }
     if (prev) {
       double d;
       if (!alc_pair_cmp(prev, v, &d)) {
-        unrefexp(prev); unrefexp(v); unrefexp(e);
+        unrefexp(prev);
+        unrefexp(v);
+        unrefexp(e);
         return error(ERROR_ILLEGAL_VALUE, NULL, env,
                      "compare: incompatible types");
       }
-      int ok = (op_kind == 0) ? (d <  0)
-             : (op_kind == 1) ? (d >  0)
-             : (op_kind == 2) ? (d <= 0)
-             :                  (d >= 0);
+      int ok = (op_kind == 0)   ? (d < 0)
+               : (op_kind == 1) ? (d > 0)
+               : (op_kind == 2) ? (d <= 0)
+                                : (d >= 0);
       unrefexp(prev);
       if (!ok) {
         unrefexp(v);
@@ -2829,103 +2934,118 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
     prev = v;
     cur_node = cur_node->next;
   }
-  if (prev) unrefexp(prev);
+  if (prev)
+    unrefexp(prev);
   unrefexp(e);
   return TRUE_EXP;
 }
 
-#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV) \
-exp_t *name(exp_t *e, env_t *env) { \
-  int64_t sum_i = (init_i); \
-  expfloat sum_f = (init_i); \
-  int saw_float = 0; \
-  exp_t *c = cdr(e); \
-  exp_t *v = NULL; \
-  int i = 0; \
-  exp_t *ret = NULL; \
-  do { \
-    if (c) { \
-      i++; \
-      v = EVAL(c->content, env); \
-      if (iserror(v)) { \
-        unrefexp(e); \
-        return v; \
-      } \
-      if ((IS_DIV) && i > 1) { \
-        if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) { \
-          ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0"); \
-          unrefexp(v); \
-          goto finish; \
-        } \
-      } \
-      if (saw_float) { \
-        if (isnumber(v)) { \
-          sum_f OP FIX_VAL(v); \
-        } else if (isfloat(v)) { \
-          sum_f OP v->f; \
-        } else { \
-          ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation"); \
-          unrefexp(v); \
-          goto finish; \
-        } \
-      } else { \
-        if (isnumber(v)) { \
-          if (i > 1 || (init_i) != 0) { \
-            sum_i OP FIX_VAL(v); \
-          } else { \
-            sum_i = FIX_VAL(v); \
-          } \
-        } else if (isfloat(v)) { \
-          if (i > 1 || (init_i) != 0) { \
-            sum_f = sum_i; sum_f OP v->f; \
-          } else { \
-            sum_f = v->f; \
-          } \
-          sum_i = 0; \
-          saw_float = 1; \
-        } else { \
-          ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation"); \
-          unrefexp(v); \
-          goto finish; \
-        } \
-      } \
-      unrefexp(v); \
-    } \
-  } while (c && (c = c->next)); \
-  if (i == 1) { \
-    if (IS_SUB) { \
-      if (saw_float) sum_f = -sum_f; \
-      else sum_i = -sum_i; \
-    } else if (IS_DIV) { \
-      if (saw_float) { \
-        if (sum_f == 0) { ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0"); goto finish; } \
-        sum_f = 1 / sum_f; \
-      } else { \
-        if (sum_i == 0) { ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0"); goto finish; } \
-        sum_i = 1 / sum_i; \
-      } \
-    } \
-  } \
-  ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i); \
-finish: \
-  unrefexp(e); \
-  return ret; \
-}
+#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV)                             \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    int64_t sum_i = (init_i);                                                  \
+    expfloat sum_f = (init_i);                                                 \
+    int saw_float = 0;                                                         \
+    exp_t *c = cdr(e);                                                         \
+    exp_t *v = NULL;                                                           \
+    int i = 0;                                                                 \
+    exp_t *ret = NULL;                                                         \
+    do {                                                                       \
+      if (c) {                                                                 \
+        i++;                                                                   \
+        v = EVAL(c->content, env);                                             \
+        if (iserror(v)) {                                                      \
+          unrefexp(e);                                                         \
+          return v;                                                            \
+        }                                                                      \
+        if ((IS_DIV) && i > 1) {                                               \
+          if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) { \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");       \
+            unrefexp(v);                                                       \
+            goto finish;                                                       \
+          }                                                                    \
+        }                                                                      \
+        if (saw_float) {                                                       \
+          if (isnumber(v)) {                                                   \
+            sum_f OP FIX_VAL(v);                                               \
+          } else if (isfloat(v)) {                                             \
+            sum_f OP v->f;                                                     \
+          } else {                                                             \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
+                        "Illegal value in operation");                         \
+            unrefexp(v);                                                       \
+            goto finish;                                                       \
+          }                                                                    \
+        } else {                                                               \
+          if (isnumber(v)) {                                                   \
+            if (i > 1 || (init_i) != 0) {                                      \
+              sum_i OP FIX_VAL(v);                                             \
+            } else {                                                           \
+              sum_i = FIX_VAL(v);                                              \
+            }                                                                  \
+          } else if (isfloat(v)) {                                             \
+            if (i > 1 || (init_i) != 0) {                                      \
+              sum_f = sum_i;                                                   \
+              sum_f OP v->f;                                                   \
+            } else {                                                           \
+              sum_f = v->f;                                                    \
+            }                                                                  \
+            sum_i = 0;                                                         \
+            saw_float = 1;                                                     \
+          } else {                                                             \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
+                        "Illegal value in operation");                         \
+            unrefexp(v);                                                       \
+            goto finish;                                                       \
+          }                                                                    \
+        }                                                                      \
+        unrefexp(v);                                                           \
+      }                                                                        \
+    } while (c && (c = c->next));                                              \
+    if (i == 1) {                                                              \
+      if (IS_SUB) {                                                            \
+        if (saw_float)                                                         \
+          sum_f = -sum_f;                                                      \
+        else                                                                   \
+          sum_i = -sum_i;                                                      \
+      } else if (IS_DIV) {                                                     \
+        if (saw_float) {                                                       \
+          if (sum_f == 0) {                                                    \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");       \
+            goto finish;                                                       \
+          }                                                                    \
+          sum_f = 1 / sum_f;                                                   \
+        } else {                                                               \
+          if (sum_i == 0) {                                                    \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");       \
+            goto finish;                                                       \
+          }                                                                    \
+          sum_i = 1 / sum_i;                                                   \
+        }                                                                      \
+      }                                                                        \
+    }                                                                          \
+    ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i);               \
+  finish:                                                                      \
+    unrefexp(e);                                                               \
+    return ret;                                                                \
+  }
 
-const char doc_plus[] = "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
+const char doc_plus[] =
+    "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
 MATH_CMD(pluscmd, 0, +=, 0, 0)
 
 const char doc_mul[] = "(* x ...) — product of all args. (*) is 1.";
 MATH_CMD(multiplycmd, 1, *=, 0, 0)
 
-const char doc_minus[] = "(- a) negates; (- a b c ...) subtracts the rest from a.";
+const char doc_minus[] =
+    "(- a) negates; (- a b c ...) subtracts the rest from a.";
 MATH_CMD(minuscmd, 0, -=, 1, 0)
 
-const char doc_div[] = "(/ a b ...) — divide a by the rest. Integer division if all args are ints; otherwise float.";
+const char doc_div[] = "(/ a b ...) — divide a by the rest. Integer division "
+                       "if all args are ints; otherwise float.";
 MATH_CMD(dividecmd, 0, /=, 0, 1)
 
-
-const char doc_sqrt[] = "(sqrt x) — float square root. See sqrt-int for the integer version.";
+const char doc_sqrt[] =
+    "(sqrt x) — float square root. See sqrt-int for the integer version.";
 exp_t *sqrtcmd(exp_t *e, env_t *env) {
   exp_t *v;
   exp_t *ret;
@@ -2962,10 +3082,12 @@ exp_t *make_vector(int64_t n, exp_t *fill) {
      hands us a tiny alloc that the loop then writes terabytes past.
      1<<32 elements (32 GiB of pointers) is well past any sane vector;
      anything bigger we refuse rather than guess. */
-  if (n < 0 || n > ((int64_t)1 << 32)) return NULL;
+  if (n < 0 || n > ((int64_t)1 << 32))
+    return NULL;
   size_t bytes = sizeof(alc_vec_t) + (size_t)n * sizeof(exp_t *);
   alc_vec_t *v = (alc_vec_t *)memalloc(1, bytes);
-  if (!v) return NULL;
+  if (!v)
+    return NULL;
   v->len = n;
   int64_t i;
   for (i = 0; i < n; i++)
@@ -2976,7 +3098,8 @@ exp_t *make_vector(int64_t n, exp_t *fill) {
   return e;
 }
 
-const char doc_vec[] = "(vec n init) — fixed-size vector of n cells initialised to init. (vec n) defaults init to nil.";
+const char doc_vec[] = "(vec n init) — fixed-size vector of n cells "
+                       "initialised to init. (vec n) defaults init to nil.";
 exp_t *veccmd(exp_t *e, env_t *env) {
   exp_t *nexp = NULL, *fill = NIL_EXP;
   if (e->next)
@@ -3015,7 +3138,8 @@ exp_t *veccmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_vecref[] = "(vec-ref v i) — read element i of vector v (O(1)). 0-based index.";
+const char doc_vecref[] =
+    "(vec-ref v i) — read element i of vector v (O(1)). 0-based index.";
 exp_t *vecrefcmd(exp_t *e, env_t *env) {
   exp_t *vexp = NULL, *iexp = NULL;
   if (e->next)
@@ -3031,7 +3155,7 @@ exp_t *vecrefcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return iexp;
   }
-  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+  if (!isvector(vexp) || !isnumber(iexp)) {
     if (vexp)
       unrefexp(vexp);
     if (iexp)
@@ -3055,7 +3179,8 @@ exp_t *vecrefcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_vecset[] = "(vec-set! v i x) — store x into element i of vector v. Returns x.";
+const char doc_vecset[] =
+    "(vec-set! v i x) — store x into element i of vector v. Returns x.";
 exp_t *vecsetcmd(exp_t *e, env_t *env) {
   exp_t *vexp = NULL, *iexp = NULL, *valexp = NULL;
   if (e->next)
@@ -3079,7 +3204,7 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return valexp;
   }
-  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+  if (!isvector(vexp) || !isnumber(iexp)) {
     if (vexp)
       unrefexp(vexp);
     if (iexp)
@@ -3117,7 +3242,7 @@ exp_t *veclencmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return vexp;
   }
-  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR) {
+  if (!isvector(vexp)) {
     if (vexp)
       unrefexp(vexp);
     unrefexp(e);
@@ -3132,7 +3257,8 @@ exp_t *veclencmd(exp_t *e, env_t *env) {
 /* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
    avoid a sqrt + double→int round-trip in pure-integer code (common
    in trial-division early exit). */
-const char doc_sqrtint[] = "(sqrt-int n) — integer square root (floor). Faster than (int (sqrt n)) and exact.";
+const char doc_sqrtint[] = "(sqrt-int n) — integer square root (floor). Faster "
+                           "than (int (sqrt n)) and exact.";
 exp_t *sqrtintcmd(exp_t *e, env_t *env) {
   exp_t *v = NULL;
   if (e->next)
@@ -3183,7 +3309,9 @@ exp_t *expcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_expt[] = "(expt b e) — b raised to the e power. Stays integer if both args are fixnums and the result fits in 61 bits; falls back to float otherwise. Alias: **.";
+const char doc_expt[] = "(expt b e) — b raised to the e power. Stays integer "
+                        "if both args are fixnums and the result fits in 61 "
+                        "bits; falls back to float otherwise. Alias: **.";
 exp_t *exptcmd(exp_t *e, env_t *env) {
   exp_t *v = NULL;
   exp_t *v2 = NULL;
@@ -3215,7 +3343,8 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
         int64_t fix_max = ((int64_t)1 << 60) - 1;
         int64_t fix_min = -((int64_t)1 << 60);
         while (k > 0 && !overflow) {
-          if (k & 1) overflow |= __builtin_mul_overflow(r, base, &r);
+          if (k & 1)
+            overflow |= __builtin_mul_overflow(r, base, &r);
           k >>= 1;
           if (k > 0 && !overflow)
             overflow |= __builtin_mul_overflow(base, base, &base);
@@ -3230,8 +3359,7 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
                             isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
     }
   } else {
-    ret = error(ERROR_ILLEGAL_VALUE, e, env,
-                "Illegal value in operation");
+    ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
   }
   unrefexp(v);
   unrefexp(v2);
@@ -3240,7 +3368,8 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
 }
 
 /* prcmd backs both `pr` and `print`; prncmd backs `prn` and `println`. */
-const char doc_pr[] = "(pr x ...) — print each arg with no separator and no trailing newline. Alias: print.";
+const char doc_pr[] = "(pr x ...) — print each arg with no separator and no "
+                      "trailing newline. Alias: print.";
 exp_t *prcmd(exp_t *e, env_t *env) {
   exp_t *v = e;
   exp_t *val;
@@ -3257,7 +3386,8 @@ exp_t *prcmd(exp_t *e, env_t *env) {
     unrefexp(val);
   }
   unrefexp(e);
-  return NIL_EXP;  /* NULL caused forcmd to mistake a clean run as "missing param" */
+  return NIL_EXP; /* NULL caused forcmd to mistake a clean run as "missing
+                     param" */
 }
 
 const char doc_prn[] = "(prn x ...) — like pr, then a newline. Alias: println.";
@@ -3279,7 +3409,10 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
    ffi_call, and marshals the result back.
 
    Conditional on -DALCOVE_FFI=1 (Makefile auto-detects via ffi.h). */
-const char doc_ffifn[] = "(ffi-fn lib name ret arg-types ...) — bind a C function from a shared library. Types: void int long uint ulong ptr cstr double float. ALCOVE_FFI build only.";
+const char doc_ffifn[] =
+    "(ffi-fn lib name ret arg-types ...) — bind a C function from a shared "
+    "library. Types: void int long uint ulong ptr cstr double float. "
+    "ALCOVE_FFI build only.";
 #ifdef ALCOVE_FFI
 #include <dlfcn.h>
 #include <ffi.h>
@@ -3351,10 +3484,10 @@ static int alc_ffi_typeof(const char *name, alc_ffi_tag_t *tag,
    (one-time per lib name), so the contention cost is negligible. */
 #if !ALCOVE_SINGLE_THREADED
 static pthread_mutex_t g_ffi_libs_mtx = PTHREAD_MUTEX_INITIALIZER;
-#define FFI_LIBS_LOCK()   pthread_mutex_lock(&g_ffi_libs_mtx)
+#define FFI_LIBS_LOCK() pthread_mutex_lock(&g_ffi_libs_mtx)
 #define FFI_LIBS_UNLOCK() pthread_mutex_unlock(&g_ffi_libs_mtx)
 #else
-#define FFI_LIBS_LOCK()   ((void)0)
+#define FFI_LIBS_LOCK() ((void)0)
 #define FFI_LIBS_UNLOCK() ((void)0)
 #endif
 static struct ffi_lib_cache {
@@ -3506,9 +3639,7 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   snprintf(f->display_name, dnlen, "%s:%s", (char *)libname->ptr,
            (char *)fnname->ptr);
 
-  ret = make_nil();
-  ret->type = EXP_FFI;
-  ret->ptr = f;
+  INIT_TYPED(ret, EXP_FFI, f);
 
 cleanup:
   unrefexp(libname);
@@ -3558,19 +3689,31 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     exp_t *a = args[i];
     int ok = 0;
     switch (f->arg_tags[i]) {
-    case AFFI_INT:    case AFFI_LONG:  ok = isnumber(a) || isfloat(a); break;
-    case AFFI_DOUBLE: ok = isnumber(a) || isfloat(a); break;
-    case AFFI_STRING: ok = isstring(a); break;
-    case AFFI_PTR:    ok = isnumber(a) || a == NIL_EXP; break;
-    default:          ok = 1; break;
+    case AFFI_INT:
+    case AFFI_LONG:
+      ok = isnumber(a) || isfloat(a);
+      break;
+    case AFFI_DOUBLE:
+      ok = isnumber(a) || isfloat(a);
+      break;
+    case AFFI_STRING:
+      ok = isstring(a);
+      break;
+    case AFFI_PTR:
+      ok = isnumber(a) || a == NIL_EXP;
+      break;
+    default:
+      ok = 1;
+      break;
     }
     if (!ok) {
       int j;
-      for (j = 0; j < nargs; j++) unrefexp(args[j]);
+      for (j = 0; j < nargs; j++)
+        unrefexp(args[j]);
       return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
                    "ffi: %s: arg %d wrong type for tag %d",
-                   f->display_name ? f->display_name : "?",
-                   i, (int)f->arg_tags[i]);
+                   f->display_name ? f->display_name : "?", i,
+                   (int)f->arg_tags[i]);
     }
   }
   for (int i = 0; i < nargs; i++) {
@@ -3661,7 +3804,8 @@ void alc_ffi_free(void *ptr) {
    arg, type-check, produce result, unrefexp args + form, return owned ref. */
 
 /* (mod a b) — integer modulo. Both args must be fixnums. */
-const char doc_mod[] = "(mod a b) — remainder of a / b. Sign follows the divisor for floats; truncation for ints.";
+const char doc_mod[] = "(mod a b) — remainder of a / b. Sign follows the "
+                       "divisor for floats; truncation for ints.";
 exp_t *modcmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *b = NULL, *ret = NULL;
   if (e->next && e->next->next) {
@@ -3705,9 +3849,16 @@ exp_t *modcmd(exp_t *e, env_t *env) {
     exp_t *a = NULL, *b = NULL, *ret = NULL;                                   \
     if (e->next && e->next->next) {                                            \
       a = EVAL(e->next->content, env);                                         \
-      if (iserror(a)) { unrefexp(e); return a; }                               \
+      if (iserror(a)) {                                                        \
+        unrefexp(e);                                                           \
+        return a;                                                              \
+      }                                                                        \
       b = EVAL(e->next->next->content, env);                                   \
-      if (iserror(b)) { unrefexp(a); unrefexp(e); return b; }                  \
+      if (iserror(b)) {                                                        \
+        unrefexp(a);                                                           \
+        unrefexp(e);                                                           \
+        return b;                                                              \
+      }                                                                        \
       if (isnumber(a) && isnumber(b)) {                                        \
         int64_t va = FIX_VAL(a), vb = FIX_VAL(b);                              \
         ret = MAKE_FIX(expr);                                                  \
@@ -3716,23 +3867,28 @@ exp_t *modcmd(exp_t *e, env_t *env) {
                     "bit op requires two integer args");                       \
       }                                                                        \
     } else {                                                                   \
-      ret = error(ERROR_MISSING_PARAMETER, e, env,                             \
-                  "bit op needs two args");                                    \
+      ret = error(ERROR_MISSING_PARAMETER, e, env, "bit op needs two args");   \
     }                                                                          \
-    unrefexp(a); unrefexp(b); unrefexp(e);                                     \
+    unrefexp(a);                                                               \
+    unrefexp(b);                                                               \
+    unrefexp(e);                                                               \
     return ret;                                                                \
   }
 
-const char doc_bitand[] = "(bit-and a b) — bitwise AND on two integers. Alias: &.";
-BITOP_AB(bitandcmd, va & vb)
-const char doc_bitor[]  = "(bit-or a b) — bitwise OR on two integers. Alias: |.";
-BITOP_AB(bitorcmd,  va | vb)
-const char doc_bitxor[] = "(bit-xor a b) — bitwise XOR on two integers. Alias: ^.";
+const char doc_bitand[] =
+    "(bit-and a b) — bitwise AND on two integers. Alias: &.";
+BITOP_AB(bitandcmd, va &vb)
+const char doc_bitor[] = "(bit-or a b) — bitwise OR on two integers. Alias: |.";
+BITOP_AB(bitorcmd, va | vb)
+const char doc_bitxor[] =
+    "(bit-xor a b) — bitwise XOR on two integers. Alias: ^.";
 BITOP_AB(bitxorcmd, va ^ vb)
-const char doc_shl[]    = "(<< x n) — bitwise shift x left by n bits. Wraps inside int61.";
-BITOP_AB(shlcmd,    (int64_t)((uint64_t)va << (vb & 63)))
-const char doc_shr[]    = "(>> x n) — arithmetic shift x right by n bits (sign-preserving).";
-BITOP_AB(shrcmd,    va >> (vb & 63))
+const char doc_shl[] =
+    "(<< x n) — bitwise shift x left by n bits. Wraps inside int61.";
+BITOP_AB(shlcmd, (int64_t)((uint64_t)va << (vb & 63)))
+const char doc_shr[] =
+    "(>> x n) — arithmetic shift x right by n bits (sign-preserving).";
+BITOP_AB(shrcmd, va >> (vb & 63))
 #undef BITOP_AB
 
 /* (~ x) — bitwise NOT. ~0 is -1 (all bits set, fits cleanly in int61). */
@@ -3741,7 +3897,10 @@ exp_t *bitnotcmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *ret = NULL;
   if (e->next) {
     a = EVAL(e->next->content, env);
-    if (iserror(a)) { unrefexp(e); return a; }
+    if (iserror(a)) {
+      unrefexp(e);
+      return a;
+    }
     if (isnumber(a)) {
       ret = MAKE_FIX(~FIX_VAL(a));
     } else {
@@ -3750,7 +3909,8 @@ exp_t *bitnotcmd(exp_t *e, env_t *env) {
   } else {
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(~ x) needs one arg");
   }
-  unrefexp(a); unrefexp(e);
+  unrefexp(a);
+  unrefexp(e);
   return ret;
 }
 
@@ -3795,32 +3955,44 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
 }
 
 /* (max a b ...) — variadic; at least one arg required. */
-#define MINMAX_CMD(name, is_lt, err_name) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *cur = e->next; \
-  if (!cur) { \
-    unrefexp(e); \
-    return error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)"); \
-  } \
-  exp_t *best = EVAL(cur->content, env); \
-  if (iserror(best)) { unrefexp(e); return best; } \
-  cur = cur->next; \
-  while (cur) { \
-    exp_t *v = EVAL(cur->content, env); \
-    if (iserror(v)) { unrefexp(best); unrefexp(e); return v; } \
-    int err; \
-    int lt = (is_lt) ? alc_numlt(v, best, &err) : alc_numlt(best, v, &err); \
-    if (err) { \
-      unrefexp(best); unrefexp(v); unrefexp(e); \
-      return error(ERROR_ILLEGAL_VALUE, e, env, err_name ": non-numeric"); \
-    } \
-    if (lt) { unrefexp(best); best = v; } \
-    else unrefexp(v); \
-    cur = cur->next; \
-  } \
-  unrefexp(e); \
-  return best; \
-}
+#define MINMAX_CMD(name, is_lt, err_name)                                      \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *cur = e->next;                                                      \
+    if (!cur) {                                                                \
+      unrefexp(e);                                                             \
+      return error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)");        \
+    }                                                                          \
+    exp_t *best = EVAL(cur->content, env);                                     \
+    if (iserror(best)) {                                                       \
+      unrefexp(e);                                                             \
+      return best;                                                             \
+    }                                                                          \
+    cur = cur->next;                                                           \
+    while (cur) {                                                              \
+      exp_t *v = EVAL(cur->content, env);                                      \
+      if (iserror(v)) {                                                        \
+        unrefexp(best);                                                        \
+        unrefexp(e);                                                           \
+        return v;                                                              \
+      }                                                                        \
+      int err;                                                                 \
+      int lt = (is_lt) ? alc_numlt(v, best, &err) : alc_numlt(best, v, &err);  \
+      if (err) {                                                               \
+        unrefexp(best);                                                        \
+        unrefexp(v);                                                           \
+        unrefexp(e);                                                           \
+        return error(ERROR_ILLEGAL_VALUE, e, env, err_name ": non-numeric");   \
+      }                                                                        \
+      if (lt) {                                                                \
+        unrefexp(best);                                                        \
+        best = v;                                                              \
+      } else                                                                   \
+        unrefexp(v);                                                           \
+      cur = cur->next;                                                         \
+    }                                                                          \
+    unrefexp(e);                                                               \
+    return best;                                                               \
+  }
 
 const char doc_max[] = "(max x ...) — largest of the args.";
 MINMAX_CMD(maxcmd, 0, "max")
@@ -3828,7 +4000,6 @@ MINMAX_CMD(maxcmd, 0, "max")
 /* (min a b ...) */
 const char doc_min[] = "(min x ...) — smallest of the args.";
 MINMAX_CMD(mincmd, 1, "min")
-
 
 /* (length x) — list length, string length, or 0 for nil. */
 const char doc_length[] = "(length x) — element count of a list/string/vector.";
@@ -3885,17 +4056,19 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
          the tag bits of a tagged immediate. Same fix pattern as
          appendcmd / reversecmd. nil/empty list is a clean miss. */
       if (b && b != NIL_EXP && !ispair(b)) {
-        unrefexp(a); unrefexp(b); unrefexp(e);
+        unrefexp(a);
+        unrefexp(b);
+        unrefexp(e);
         return error(ERROR_ILLEGAL_VALUE, NULL, env,
                      "nth: second argument is not a list");
       }
       int64_t idx = FIX_VAL(a);
       exp_t *cur = b;
-      while (idx > 0 && is_ptr(cur) && ispair(cur) && cur->next) {
+      while (idx > 0 && ispair(cur) && cur->next) {
         cur = cur->next;
         idx--;
       }
-      if (idx == 0 && is_ptr(cur) && ispair(cur) && cur->content)
+      if (idx == 0 && ispair(cur) && cur->content)
         ret = refexp(cur->content);
     }
   }
@@ -3906,7 +4079,8 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
 }
 
 /* (reverse list) — non-destructive; returns a new list. */
-const char doc_reverse[] = "(reverse xs) — list with elements in reverse order.";
+const char doc_reverse[] =
+    "(reverse xs) — list with elements in reverse order.";
 exp_t *reversecmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *acc = NIL_EXP;
   if (e->next) {
@@ -3925,7 +4099,7 @@ exp_t *reversecmd(exp_t *e, env_t *env) {
                    "reverse: argument is not a list");
     }
     exp_t *cur = a;
-    while (is_ptr(cur) && ispair(cur) && cur->content) {
+    while (ispair(cur) && cur->content) {
       exp_t *node = make_node(refexp(cur->content));
       node->next = (acc == NIL_EXP) ? NULL : acc;
       acc = node;
@@ -3956,14 +4130,15 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
        tagged fixnum like (append 10 ...) walks `cur->content` which
        dereferences the tag bits and segfaults. */
     if (list && list != NIL_EXP && !ispair(list)) {
-      if (head) unrefexp(head);
+      if (head)
+        unrefexp(head);
       unrefexp(list);
       unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "append: argument is not a list");
     }
     exp_t *cur = list;
-    while (is_ptr(cur) && ispair(cur) && cur->content) {
+    while (ispair(cur) && cur->content) {
       exp_t *node = make_node(refexp(cur->content));
       if (!head) {
         head = node;
@@ -4003,8 +4178,8 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
 const char doc_numberp[] = "(number? x) — t if x is a fixnum or float.";
 const char doc_stringp[] = "(string? x) — t if x is a string.";
 const char doc_symbolp[] = "(symbol? x) — t if x is a symbol.";
-const char doc_pairp[]   = "(pair? x) — t if x is a non-empty pair (cons cell).";
-const char doc_fnp[]     = "(fn? x) — t if x is callable (lambda or builtin).";
+const char doc_pairp[] = "(pair? x) — t if x is a non-empty pair (cons cell).";
+const char doc_fnp[] = "(fn? x) — t if x is callable (lambda or builtin).";
 PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
 PRED_CMD(stringpcmd, isstring(a))
 PRED_CMD(symbolpcmd, issymbol(a))
@@ -4013,7 +4188,8 @@ PRED_CMD(fnpcmd, (islambda(a) || isinternal(a) || isffi(a)))
 #undef PRED_CMD
 
 /* (exit) / (exit code) — terminate the process. */
-const char doc_exit[] = "(exit) or (exit code) — terminate the process. Default exit code is 0. Alias: quit.";
+const char doc_exit[] = "(exit) or (exit code) — terminate the process. "
+                        "Default exit code is 0. Alias: quit.";
 exp_t *exitcmd(exp_t *e, env_t *env) {
   int code = 0;
   if (e->next) {
@@ -4028,7 +4204,8 @@ exp_t *exitcmd(exp_t *e, env_t *env) {
 }
 
 /* (random n) — pseudo-random fixnum in [0, n). Seeded once from time. */
-const char doc_random[] = "(random n) — uniform fixnum in [0, n). (random) gives a 64-bit value.";
+const char doc_random[] =
+    "(random n) — uniform fixnum in [0, n). (random) gives a 64-bit value.";
 exp_t *randomcmd(exp_t *e, env_t *env) {
   static int seeded = 0;
   if (!seeded) {
@@ -4050,7 +4227,8 @@ exp_t *randomcmd(exp_t *e, env_t *env) {
 }
 
 /* (map fn list) — non-destructive; returns a new list of (fn x) values. */
-const char doc_map[] = "(map fn xs ...) — apply fn to corresponding elements of one or more lists; returns a new list.";
+const char doc_map[] = "(map fn xs ...) — apply fn to corresponding elements "
+                       "of one or more lists; returns a new list.";
 exp_t *mapcmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *head = NULL, *tail = NULL;
   if (!(e->next && e->next->next)) {
@@ -4069,12 +4247,14 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
     return xs;
   }
   if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    unrefexp(fn);
+    unrefexp(xs);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "map: second argument is not a list");
   }
   exp_t *cur = xs;
-  while (is_ptr(cur) && ispair(cur) && cur->content) {
+  while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -4103,7 +4283,8 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 /* (filter pred list) — keep elements where (pred x) is truthy. */
-const char doc_filter[] = "(filter pred xs) — list of elements of xs for which (pred elem) is truthy.";
+const char doc_filter[] = "(filter pred xs) — list of elements of xs for which "
+                          "(pred elem) is truthy.";
 exp_t *filtercmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *head = NULL, *tail = NULL;
   if (!(e->next && e->next->next)) {
@@ -4122,12 +4303,14 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
     return xs;
   }
   if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    unrefexp(fn);
+    unrefexp(xs);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "filter: second argument is not a list");
   }
   exp_t *cur = xs;
-  while (is_ptr(cur) && ispair(cur) && cur->content) {
+  while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -4159,7 +4342,8 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 /* (reduce fn init list) — left fold: ((fn (fn init x0) x1) x2 ...). */
-const char doc_reduce[] = "(reduce fn init xs) — left fold: (fn (fn (fn init x0) x1) x2)... Returns init for empty xs.";
+const char doc_reduce[] = "(reduce fn init xs) — left fold: (fn (fn (fn init "
+                          "x0) x1) x2)... Returns init for empty xs.";
 exp_t *reducecmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *acc = NULL, *xs = NULL;
   if (!(e->next && e->next->next && e->next->next->next)) {
@@ -4185,7 +4369,10 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     return xs;
   }
   if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn); unrefexp(acc); unrefexp(xs); unrefexp(e);
+    unrefexp(fn);
+    unrefexp(acc);
+    unrefexp(xs);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "reduce: third argument is not a list");
   }
@@ -4198,7 +4385,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
      workloads. Falls back to the general path on non-fixnum or when
      the lambda has any other shape. */
   int fast_op = 0; /* 0=none, 1=add, 2=sub, 3=mul */
-  if (is_ptr(fn) && islambda(fn) && (fn->flags & FLAG_COMPILED) && fn->bc &&
+  if (islambda(fn) && (fn->flags & FLAG_COMPILED) && fn->bc &&
       fn->bc->ncode == 6) {
     uint8_t *c = fn->bc->code;
     if (c[0] == OP_LOAD_SLOT && c[1] == 0 && c[2] == OP_LOAD_SLOT &&
@@ -4214,7 +4401,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   if (fast_op) {
-    while (is_ptr(cur) && ispair(cur) && cur->content) {
+    while (ispair(cur) && cur->content) {
       exp_t *x = cur->content;
       if (isnumber(acc) && isnumber(x)) {
         int64_t a = FIX_VAL(acc), b = FIX_VAL(x);
@@ -4239,7 +4426,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
       cur = cur->next;
     }
   } else {
-    while (is_ptr(cur) && ispair(cur) && cur->content) {
+    while (ispair(cur) && cur->content) {
       exp_t *argv[2] = {acc, refexp(cur->content)};
       acc = vm_invoke_values(fn, 2, argv, env);
       if (acc && iserror(acc)) {
@@ -4262,7 +4449,8 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
 /* (any? pred list) — return t as soon as (pred x) is truthy for any
    element of list, nil if none match. Walks in C with one
    vm_invoke_values per element instead of recursive bytecode. */
-const char doc_any[] = "(any? pred xs) — t if pred is truthy for at least one element. Short-circuits.";
+const char doc_any[] = "(any? pred xs) — t if pred is truthy for at least one "
+                       "element. Short-circuits.";
 exp_t *anypcmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *ret = NIL_EXP;
   if (!(e->next && e->next->next)) {
@@ -4281,12 +4469,14 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
     return xs;
   }
   if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    unrefexp(fn);
+    unrefexp(xs);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "any?: second argument is not a list");
   }
   exp_t *cur = xs;
-  while (is_ptr(cur) && ispair(cur) && cur->content) {
+  while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -4311,7 +4501,8 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
 }
 /* (all? pred list) — return t if (pred x) is truthy for every
    element, nil at the first failure. Empty list → t. */
-const char doc_all[] = "(all? pred xs) — t if pred is truthy for every element (vacuously t for empty). Short-circuits.";
+const char doc_all[] = "(all? pred xs) — t if pred is truthy for every element "
+                       "(vacuously t for empty). Short-circuits.";
 exp_t *allpcmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *xs = NULL, *ret = TRUE_EXP;
   if (!(e->next && e->next->next)) {
@@ -4330,12 +4521,14 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
     return xs;
   }
   if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn); unrefexp(xs); unrefexp(e);
+    unrefexp(fn);
+    unrefexp(xs);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "all?: second argument is not a list");
   }
   exp_t *cur = xs;
-  while (is_ptr(cur) && ispair(cur) && cur->content) {
+  while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
     if (res && iserror(res)) {
@@ -4362,7 +4555,8 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
 /* (apply fn args-list) — call fn with each element of args-list as
    separate args. Implemented by re-using vm_invoke_values for compiled
    lambdas; falls back to AST invoke otherwise. */
-const char doc_apply[] = "(apply fn args) — call fn with the elements of the list args as its arguments.";
+const char doc_apply[] = "(apply fn args) — call fn with the elements of the "
+                         "list args as its arguments.";
 exp_t *applycmd(exp_t *e, env_t *env) {
   exp_t *fn = NULL, *args = NULL, *ret = NULL;
   if (e->next && e->next->next) {
@@ -4418,7 +4612,8 @@ exp_t *oddcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_do[] = "(do expr ...) — evaluate exprs in order; returns the value of the last one.";
+const char doc_do[] = "(do expr ...) — evaluate exprs in order; returns the "
+                      "value of the last one.";
 exp_t *docmd(exp_t *e, env_t *env) {
   /* Tail-aware: propagates in_tail_position to the final expression so
      a tail call inside (do ... (f x)) actually gets TCO. Returns the
@@ -4443,7 +4638,8 @@ exp_t *docmd(exp_t *e, env_t *env) {
   return ret ? ret : NIL_EXP;
 }
 
-const char doc_when[] = "(when test expr ...) — if test is truthy, evaluate the body in order; else nil.";
+const char doc_when[] = "(when test expr ...) — if test is truthy, evaluate "
+                        "the body in order; else nil.";
 exp_t *whencmd(exp_t *e, env_t *env) {
   exp_t *val = cadr(e);
   exp_t *cur = cddr(e);
@@ -4467,7 +4663,8 @@ exp_t *whencmd(exp_t *e, env_t *env) {
   }
 }
 
-const char doc_while[] = "(while test expr ...) — re-evaluate body while test stays truthy. Returns nil.";
+const char doc_while[] = "(while test expr ...) — re-evaluate body while test "
+                         "stays truthy. Returns nil.";
 exp_t *whilecmd(exp_t *e, env_t *env) {
   exp_t *val = cadr(e);
   exp_t *cur = cddr(e);
@@ -4490,7 +4687,8 @@ exp_t *whilecmd(exp_t *e, env_t *env) {
   }
 }
 
-const char doc_repeat[] = "(repeat n expr ...) — run body n times, returning the last expression's value.";
+const char doc_repeat[] = "(repeat n expr ...) — run body n times, returning "
+                          "the last expression's value.";
 exp_t *repeatcmd(exp_t *e, env_t *env) {
   exp_t *val = EVAL(cadr(e), env);
   exp_t *cur = cddr(e);
@@ -4530,17 +4728,21 @@ exp_t *repeatcmd(exp_t *e, env_t *env) {
   }
 }
 
-const char doc_and[] = "(and expr ...) — short-circuit AND. (and) is t. Returns the last truthy or first falsey value.";
+const char doc_and[] = "(and expr ...) — short-circuit AND. (and) is t. "
+                       "Returns the last truthy or first falsey value.";
 exp_t *andcmd(exp_t *e, env_t *env) {
   /* (and) → t (vacuous), per doc. The previous loop EVAL'd car(NULL)
      and ended up returning nil for the empty case. */
   exp_t *cur = cdr(e);
   exp_t *ret = TRUE_EXP;
   while (cur) {
-    if (ret != TRUE_EXP) unrefexp(ret);
+    if (ret != TRUE_EXP)
+      unrefexp(ret);
     ret = EVAL(car(cur), env);
-    if (iserror(ret)) goto finish;
-    if (!istrue(ret)) goto finish;
+    if (iserror(ret))
+      goto finish;
+    if (!istrue(ret))
+      goto finish;
     cur = cdr(cur);
   }
 finish:
@@ -4548,7 +4750,8 @@ finish:
   return ret;
 }
 
-const char doc_or[] = "(or expr ...) — short-circuit OR. (or) is nil. Returns the first truthy value, else nil.";
+const char doc_or[] = "(or expr ...) — short-circuit OR. (or) is nil. Returns "
+                      "the first truthy value, else nil.";
 exp_t *orcmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *ret = NULL;
@@ -4566,7 +4769,8 @@ finish:
   return ret;
 }
 
-const char doc_no[] = "(no x) — t if x is nil or empty list/string, nil otherwise. The canonical \"is falsey?\" test.";
+const char doc_no[] = "(no x) — t if x is nil or empty list/string, nil "
+                      "otherwise. The canonical \"is falsey?\" test.";
 exp_t *nocmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *tmpexp = EVAL(car(cur), env);
@@ -4638,13 +4842,16 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
   return ret;
 }
 
-const char doc_is[] = "(is a b) — pointer/value identity (eq?). Same fixnum or same heap object.";
+const char doc_is[] =
+    "(is a b) — pointer/value identity (eq?). Same fixnum or same heap object.";
 EQUALITY_CMD(iscmd, isequal)
 
-const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into pairs/strings/vectors.";
+const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into "
+                       "pairs/strings/vectors.";
 EQUALITY_CMD(isocmd, isoequal)
 
-const char doc_in[] = "(in val a b c ...) — t if (is val) matches any of the rest.";
+const char doc_in[] =
+    "(in val a b c ...) — t if (is val) matches any of the rest.";
 exp_t *incmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *val = EVAL(cadr(e), env);
@@ -4676,7 +4883,10 @@ exp_t *incmd(exp_t *e, env_t *env) {
   return cur;
 }
 
-const char doc_case[] = "(case key v1 e1 v2 e2 ... default) — Arc-style flat pairs (NOT (val expr) clauses). First v that matches key returns its e; trailing odd element is the default.";
+const char doc_case[] =
+    "(case key v1 e1 v2 e2 ... default) — Arc-style flat pairs (NOT (val expr) "
+    "clauses). First v that matches key returns its e; trailing odd element is "
+    "the default.";
 exp_t *casecmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
   exp_t *val = EVAL(cadr(e), env);
@@ -4700,7 +4910,9 @@ exp_t *casecmd(exp_t *e, env_t *env) {
   return cur;
 }
 
-const char doc_for[] = "(for var start end body ...) — iterate var from start to end inclusive, evaluating body. Returns last body value.";
+const char doc_for[] =
+    "(for var start end body ...) — iterate var from start to end inclusive, "
+    "evaluating body. Returns last body value.";
 exp_t *forcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret = NULL;
@@ -4756,14 +4968,17 @@ exp_t *forcmd(exp_t *e, env_t *env) {
                               MAKE_FIX(counter));
           curval = curin;
           while (curval) {
-            if (ret) unrefexp(ret);
+            if (ret)
+              unrefexp(ret);
             ret = EVAL(curval->content, newenv);
-            if (iserror(ret)) goto error;
+            if (iserror(ret))
+              goto error;
             /* NULL is treated as nil — some builtins (historically prn,
                others may return NULL too) didn't return NIL_EXP. We
                normalize here so the post-loop "if (!ret)" doesn't
                misread a clean iteration as "missing parameter". */
-            if (!ret) ret = NIL_EXP;
+            if (!ret)
+              ret = NIL_EXP;
             curval = curval->next;
           }
           counter++;
@@ -4783,7 +4998,8 @@ error:
   return ret;
 }
 
-const char doc_each[] = "(each var coll body ...) — bind var to each element of coll (list/string/vector) and run body.";
+const char doc_each[] = "(each var coll body ...) — bind var to each element "
+                        "of coll (list/string/vector) and run body.";
 exp_t *eachcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *curvar;
@@ -4847,7 +5063,8 @@ finish:
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-const char doc_time[] = "(time expr) — evaluate expr, print elapsed wall time, and return the value.";
+const char doc_time[] = "(time expr) — evaluate expr, print elapsed wall time, "
+                        "and return the value.";
 exp_t *timecmd(exp_t *e, env_t *env) {
   unrefexp(e);
   return make_integeri(gettimeusec());
@@ -4921,7 +5138,7 @@ static void inspect_value(exp_t *v) {
       if (!first)
         printf(" ");
       first = 0;
-      if (is_ptr(p->content) && issymbol(p->content))
+      if (issymbol(p->content))
         printf("%s", (char *)p->content->ptr);
     }
     printf(")\x1B[39m\n");
@@ -4954,7 +5171,8 @@ static void inspect_value(exp_t *v) {
 }
 
 /* (inspect val) — evaluates val, prints type info + type-specific details. */
-const char doc_inspect[] = "(inspect x) — print internal representation: type, refcount, and (for lambdas) compile/JIT status.";
+const char doc_inspect[] = "(inspect x) — print internal representation: type, "
+                           "refcount, and (for lambdas) compile/JIT status.";
 exp_t *inspectcmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
   if (arg && iserror(arg)) {
@@ -5024,7 +5242,8 @@ static void dir_collect_dict(dict_t *d, const char *needle, dir_entry_t **arr,
   }
 }
 
-const char doc_dir[] = "(dir) — list every name bound in the current environment chain.";
+const char doc_dir[] =
+    "(dir) — list every name bound in the current environment chain.";
 exp_t *dircmd(exp_t *e, env_t *env) {
   const char *needle = NULL;
   int show_builtins = 0;
@@ -5106,7 +5325,7 @@ exp_t *dircmd(exp_t *e, env_t *env) {
         if (!first)
           printf(" ");
         first = 0;
-        if (is_ptr(p->content) && issymbol(p->content))
+        if (issymbol(p->content))
           printf("%s", (char *)p->content->ptr);
       }
       printf(")");
@@ -5128,14 +5347,15 @@ exp_t *dircmd(exp_t *e, env_t *env) {
 /* (disasm fn)  — evaluates fn, expects a compiled lambda, prints its
    bytecode op-by-op plus the JIT install status. Useful for verifying
    what bytecode the compiler produces (no more ad-hoc fprintf in C). */
-const char doc_disasm[] = "(disasm fn) — print the bytecode of a compiled function (or note that it's not compiled).";
+const char doc_disasm[] = "(disasm fn) — print the bytecode of a compiled "
+                          "function (or note that it's not compiled).";
 exp_t *disasmcmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
   if (arg && iserror(arg)) {
     unrefexp(e);
     return arg;
   }
-  if (!arg || !is_ptr(arg) || !islambda(arg)) {
+  if (!arg || !islambda(arg)) {
     printf("\x1B[96m(disasm): not a lambda\x1B[39m\n");
   } else if (!(arg->flags & FLAG_COMPILED) || !arg->bc) {
     printf("\x1B[96m(disasm): lambda is not compiled (runs as AST)\x1B[39m\n");
@@ -5166,7 +5386,7 @@ static void pp_indent(int n) {
    back to multi-line. */
 static int pp_flat_width(exp_t *e) {
   if (e == NULL)
-    return 3;                           /* "nil" */
+    return 3; /* "nil" */
   if (isnumber(e)) {
     int64_t v = FIX_VAL(e);
     int w = (v < 0) ? 2 : 1;
@@ -5178,23 +5398,24 @@ static int pp_flat_width(exp_t *e) {
     return w;
   }
   if (ischar(e))
-    return 4;                           /* "#\X" */
+    return 4; /* "#\X" */
   if (!is_ptr(e))
     return 8;
   switch (e->type) {
   case EXP_SYMBOL:
   case EXP_STRING:
-    return e->ptr ? (int)strlen((char *)e->ptr) + (e->type == EXP_STRING ? 2 : 0)
-                  : 3;
+    return e->ptr
+               ? (int)strlen((char *)e->ptr) + (e->type == EXP_STRING ? 2 : 0)
+               : 3;
   case EXP_FLOAT:
-    return 12;                          /* approx */
+    return 12; /* approx */
   case EXP_PAIR: {
-    int w = 2;                          /* parens */
+    int w = 2; /* parens */
     exp_t *cur;
     int first = 1;
     for (cur = e; cur; cur = cur->next) {
       if (cur->type != EXP_PAIR) {
-        w += 3 + pp_flat_width(cur);    /* " . X" */
+        w += 3 + pp_flat_width(cur); /* " . X" */
         break;
       }
       if (!first)
@@ -5202,7 +5423,7 @@ static int pp_flat_width(exp_t *e) {
       first = 0;
       w += pp_flat_width(cur->content);
       if (w > PP_WIDTH * 4)
-        return PP_WIDTH * 4;            /* short-circuit on big forms */
+        return PP_WIDTH * 4; /* short-circuit on big forms */
     }
     return w;
   }
@@ -5225,13 +5446,13 @@ static void pp_body(exp_t *body, int indent) {
 }
 
 static void pp_form(exp_t *e, int indent) {
-  if (!is_ptr(e) || !ispair(e) || !istrue(e)) {
+  if (!ispair(e) || !istrue(e)) {
     print_node(e);
     return;
   }
 
   exp_t *head = car(e);
-  const char *s = (is_ptr(head) && issymbol(head)) ? (const char *)head->ptr : NULL;
+  const char *s = (issymbol(head)) ? (const char *)head->ptr : NULL;
 
   /* If the whole form is small, stay on one line. */
   if (pp_flat_width(e) <= PP_WIDTH - indent) {
@@ -5248,8 +5469,14 @@ static void pp_form(exp_t *e, int indent) {
       int sub = indent + 4;
       printf("\x1B[33m(\x1B[1;35mif\x1B[22;39m ");
       pp_form(cond, sub);
-      putchar('\n'); pp_indent(sub); pp_form(th, sub);
-      if (el) { putchar('\n'); pp_indent(sub); pp_form(el, sub); }
+      putchar('\n');
+      pp_indent(sub);
+      pp_form(th, sub);
+      if (el) {
+        putchar('\n');
+        pp_indent(sub);
+        pp_form(el, sub);
+      }
       printf("\x1B[33m)\x1B[39m");
       return;
     }
@@ -5310,7 +5537,7 @@ static void pp_form(exp_t *e, int indent) {
   /* General call form (HEAD ARG1 ARG2 ...).  Header inline; if too long,
      stack args under first arg with align indent. */
   printf("\x1B[33m(\x1B[39m");
-  print_node(head);                      /* head atom */
+  print_node(head); /* head atom */
   exp_t *args = cdr(e);
   int sub = indent + (s ? (int)strlen(s) : 1) + 2;
   /* Place first arg on header line, rest on new lines. */
@@ -5334,7 +5561,8 @@ static void pp_form(exp_t *e, int indent) {
    the name; for anonymous lambdas it's `fn` or `mac`.  Closures get
    a "; closure over <env>" comment so the user knows the body's
    free vars resolve against a captured environment. */
-const char doc_source[] = "(source fn) — print the original (params) + body for a user-defined function.";
+const char doc_source[] = "(source fn) — print the original (params) + body "
+                          "for a user-defined function.";
 exp_t *sourcecmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
   if (arg && iserror(arg)) {
@@ -5378,7 +5606,8 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
 
-const char doc_cons[] = "(cons x ys) — pair with car=x, cdr=ys. To prepend onto a list: (cons elem list).";
+const char doc_cons[] = "(cons x ys) — pair with car=x, cdr=ys. To prepend "
+                        "onto a list: (cons elem list).";
 exp_t *conscmd(exp_t *e, env_t *env) {
   exp_t *a = EVAL(cadr(e), env);
   if iserror (a) {
@@ -5408,7 +5637,8 @@ PAIR_PART_CMD(cdrcmd, cdr)
 const char doc_car[] = "(car xs) — head of a pair / first element of a list.";
 PAIR_PART_CMD(carcmd, car)
 
-const char doc_list[] = "(list x ...) — construct a list of all args. (list) is nil.";
+const char doc_list[] =
+    "(list x ...) — construct a list of all args. (list) is nil.";
 exp_t *listcmd(exp_t *e, env_t *env) {
   exp_t *a = cdr(e);
   exp_t *tmpexp = NULL;
@@ -5439,14 +5669,16 @@ error:
   return tmpexp;
 }
 
-const char doc_eval[] = "(eval expr) — evaluate a quoted expression as code in the current env.";
+const char doc_eval[] =
+    "(eval expr) — evaluate a quoted expression as code in the current env.";
 exp_t *evalcmd(exp_t *e, env_t *env) {
   exp_t *ret = evaluate(EVAL(cadr(e), env), env);
   unrefexp(e);
   return ret;
 }
 
-const char doc_let[] = "(let var val body) — bind var to val in body. The binding is local; body returns its last expression.";
+const char doc_let[] = "(let var val body) — bind var to val in body. The "
+                       "binding is local; body returns its last expression.";
 exp_t *letcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret;
@@ -5484,7 +5716,8 @@ finish:
   return ret;
 }
 
-const char doc_with[] = "(with (var1 val1 var2 val2 ...) body) — bind all pairs in parallel, then evaluate body.";
+const char doc_with[] = "(with (var1 val1 var2 val2 ...) body) — bind all "
+                        "pairs in parallel, then evaluate body.";
 exp_t *withcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret;
@@ -6140,7 +6373,7 @@ static uint32_t arm64_asr_imm(int rd, int rn, int shift) {
 /* LSL Xd, Xn, #shift  (logical shift left).
    Encoded via UBFM Xd, Xn, #(-shift mod 64), #(63-shift). */
 static uint32_t arm64_lsl_imm(int rd, int rn, int shift) {
-  uint32_t s   = (uint32_t)(shift & 0x3f);
+  uint32_t s = (uint32_t)(shift & 0x3f);
   uint32_t imr = (64u - s) & 0x3fu;
   uint32_t ims = 63u - s;
   return 0xD3400000u | (imr << 16) | (ims << 10) | ((uint32_t)rn << 5) |
@@ -6180,7 +6413,7 @@ static uint32_t arm64_ldp_off_sp(int rt1, int rt2, int byte_offset) {
 /* MOV Xd, SP  — alias of ADD Xd, SP, #0. SP is encoded as Rn=31 in
    ADD/SUB-immediate forms (only XZR otherwise). */
 static uint32_t arm64_mov_from_sp(int rd) {
-  return 0x91000000u | (31u << 5) | (uint32_t)rd;  /* add Rd, SP, #0 */
+  return 0x91000000u | (31u << 5) | (uint32_t)rd; /* add Rd, SP, #0 */
 }
 /* BL #imm  — branch with link, signed 26-bit instruction offset (±128MB).
    Caller computes off_insns relative to this BL's PC. */
@@ -6188,8 +6421,7 @@ __attribute__((unused)) static uint32_t arm64_bl(int off_insns) {
   return 0x94000000u | ((uint32_t)off_insns & 0x3FFFFFFu);
 }
 /* BLR Xn  — branch with link to register (indirect call). */
-__attribute__((unused))
-static uint32_t arm64_blr(int rn) {
+__attribute__((unused)) static uint32_t arm64_blr(int rn) {
   return 0xD63F0000u | ((uint32_t)rn << 5);
 }
 /* SDIV Xd, Xn, Xm  — signed 64-bit divide. */
@@ -6241,8 +6473,7 @@ static uint32_t arm64_sub_w_imm(int rd, int rn, int imm) {
          (uint32_t)rd;
 }
 /* CMP Wn, Wm — alias for SUBS WZR, Wn, Wm. */
-__attribute__((unused))
-static uint32_t arm64_cmp_reg_w(int rn, int rm) {
+__attribute__((unused)) static uint32_t arm64_cmp_reg_w(int rn, int rm) {
   return 0x6B000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) | 31u;
 }
 /* CBZ Wt, label — 32-bit variant. */
@@ -6400,7 +6631,8 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   /* Worst case: 12 instructions (load, tbz, cmp, b.cond, sub/add, str,
      b loop, mov, ret, movz, ret + slack). Caller's buffer is uint32_t
      insns[32] — comfortable margin. Trip if a future tweak overruns. */
-  if (n > 16) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 16)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6428,31 +6660,45 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
     return 0;
   int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
 
-  if (c[4] != OP_BR_IF_FALSE) return 0;
-  if (c[7] != OP_LOAD_SLOT || c[8] != slot) return 0;
-  if (c[9] != OP_JUMP) return 0;
+  if (c[4] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[7] != OP_LOAD_SLOT || c[8] != slot)
+    return 0;
+  if (c[9] != OP_JUMP)
+    return 0;
 
   uint8_t op_a = c[12];
-  if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX) return 0;
-  if (c[13] != slot) return 0;
+  if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX)
+    return 0;
+  if (c[13] != slot)
+    return 0;
   int16_t K2 = (int16_t)((uint16_t)c[14] | ((uint16_t)c[15] << 8));
 
-  if (c[16] != OP_CALL_GLOBAL) return 0;
+  if (c[16] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_a = c[17];
-  if (c[18] != 1) return 0;
-  if (idx_a >= bc->nconsts) return 0;
+  if (c[18] != 1)
+    return 0;
+  if (idx_a >= bc->nconsts)
+    return 0;
 
   uint8_t op_b = c[19];
-  if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX) return 0;
-  if (c[20] != slot) return 0;
+  if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX)
+    return 0;
+  if (c[20] != slot)
+    return 0;
   int16_t K3 = (int16_t)((uint16_t)c[21] | ((uint16_t)c[22] << 8));
 
-  if (c[23] != OP_CALL_GLOBAL) return 0;
+  if (c[23] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_b = c[24];
-  if (c[25] != 1) return 0;
-  if (idx_b >= bc->nconsts) return 0;
+  if (c[25] != 1)
+    return 0;
+  if (idx_b >= bc->nconsts)
+    return 0;
 
-  if (c[26] != OP_ADD || c[27] != OP_RET) return 0;
+  if (c[26] != OP_ADD || c[27] != OP_RET)
+    return 0;
 
   /* Iterative fast path conditions: both calls go to THIS function
      (self-recursion, not just same-name-each-other), both SUB, K2/K3
@@ -6462,18 +6708,24 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
      The self-name check is critical: without it any user lambda whose
      body shape matches gets silently rewritten as iterative-fib-of-its-
      own-arg, ignoring whatever callee the user actually wrote. */
-  if (!bc->self_name) return 0;
+  if (!bc->self_name)
+    return 0;
   exp_t *ca = bc->consts[idx_a];
   exp_t *cb = bc->consts[idx_b];
-  if (!(is_ptr(ca) && issymbol(ca) && is_ptr(cb) && issymbol(cb))) return 0;
-  if (strcmp((const char *)ca->ptr, bc->self_name) != 0) return 0;
-  if (strcmp((const char *)cb->ptr, bc->self_name) != 0) return 0;
+  if (!(issymbol(ca) && issymbol(cb)))
+    return 0;
+  if (strcmp((const char *)ca->ptr, bc->self_name) != 0)
+    return 0;
+  if (strcmp((const char *)cb->ptr, bc->self_name) != 0)
+    return 0;
   int is_fib_like = op_a == OP_SLOT_SUB_FIX && op_b == OP_SLOT_SUB_FIX &&
                     ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
-  if (!is_fib_like) return 0;  /* general 2-call recursion: fall back */
+  if (!is_fib_like)
+    return 0; /* general 2-call recursion: fall back */
 
   int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
-  if (slot_off < 0 || slot_off > 32760) return 0;
+  if (slot_off < 0 || slot_off > 32760)
+    return 0;
 
   /* Initial untagged seeds: a = K1-2, b = K1-1. Since base case returns
      n itself, f(x) = x for x < K1. Iteration computes f(n) for n >= K1
@@ -6485,27 +6737,37 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
      ARM64 cond codes: GE=10, LT=11, GT=12, LE=13. */
   int exit_cc;
   switch (cmp_op) {
-    case OP_SLOT_LT_FIX: exit_cc = 11; break;  /* base when n <  K1 */
-    case OP_SLOT_GT_FIX: exit_cc = 12; break;  /* base when n >  K1 */
-    case OP_SLOT_LE_FIX: exit_cc = 13; break;  /* base when n <= K1 */
-    case OP_SLOT_GE_FIX: exit_cc = 10; break;  /* base when n >= K1 */
-    default: return 0;
+  case OP_SLOT_LT_FIX:
+    exit_cc = 11;
+    break; /* base when n <  K1 */
+  case OP_SLOT_GT_FIX:
+    exit_cc = 12;
+    break; /* base when n >  K1 */
+  case OP_SLOT_LE_FIX:
+    exit_cc = 13;
+    break; /* base when n <= K1 */
+  case OP_SLOT_GE_FIX:
+    exit_cc = 10;
+    break; /* base when n >= K1 */
+  default:
+    return 0;
   }
 
   int n = 0;
   /* Load + tag-check + untag n into x1. */
-  out[n++] = arm64_ldr_imm(1, 0, slot_off);    /* x1 = env->inline_vals[slot] */
+  out[n++] = arm64_ldr_imm(1, 0, slot_off); /* x1 = env->inline_vals[slot] */
   int patch_tbz = n;
-  out[n++] = 0;                                 /* tbz x1,#0,deopt */
-  out[n++] = arm64_asr_imm(1, 1, 3);           /* x1 >>= 3 (sign-ext untag) */
+  out[n++] = 0;                      /* tbz x1,#0,deopt */
+  out[n++] = arm64_asr_imm(1, 1, 3); /* x1 >>= 3 (sign-ext untag) */
 
   /* Compare untagged n vs K1; branch to base-case re-tag-and-return. */
   /* K1 fits a 12-bit cmp imm for the typical fib(<= 2000) range; if it
      overflows, fall back to bytecode rather than emit MOVZ/CMP_REG. */
-  if ((int)K1 < 0 || (int)K1 > 4095) return 0;
+  if ((int)K1 < 0 || (int)K1 > 4095)
+    return 0;
   out[n++] = arm64_cmp_imm(1, (int)K1);
   int patch_base = n;
-  out[n++] = 0;                                 /* b.cond <exit_cc> base_pc */
+  out[n++] = 0; /* b.cond <exit_cc> base_pc */
 
   /* Iterative fib: x2 = a, x3 = b, x4 = i, x5 = scratch (for swap).
      Loop: cmp i, n; b.gt done; (a,b) = (b, a+b); i++; b loop. */
@@ -6514,16 +6776,16 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
   n += emit_mov64(out + n, 4, (uint64_t)(int64_t)K1);
 
   int loop_top = n;
-  out[n++] = arm64_cmp_reg(4, 1);              /* cmp x4, x1  (i vs n) */
+  out[n++] = arm64_cmp_reg(4, 1); /* cmp x4, x1  (i vs n) */
   int patch_done = n;
-  out[n++] = 0;                                 /* b.gt done */
-  out[n++] = arm64_mov_reg(5, 2);              /* x5 = a (saved) */
-  out[n++] = arm64_mov_reg(2, 3);              /* a = b */
-  out[n++] = arm64_add_reg(3, 5, 3);           /* b = old_a + b */
-  out[n++] = arm64_add_imm(4, 4, 1);           /* i++ */
+  out[n++] = 0;                      /* b.gt done */
+  out[n++] = arm64_mov_reg(5, 2);    /* x5 = a (saved) */
+  out[n++] = arm64_mov_reg(2, 3);    /* a = b */
+  out[n++] = arm64_add_reg(3, 5, 3); /* b = old_a + b */
+  out[n++] = arm64_add_imm(4, 4, 1); /* i++ */
   {
     int cur = n++;
-    out[cur] = arm64_b(loop_top - cur);        /* b loop_top */
+    out[cur] = arm64_b(loop_top - cur); /* b loop_top */
   }
 
   /* done: x0 = (b << 3) | 1 (re-tag), ret. */
@@ -6549,9 +6811,10 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
      base predicate. */
   out[patch_done] = arm64_b_cond(12, done_pc - patch_done);
   out[patch_base] = arm64_b_cond(exit_cc, base_pc - patch_base);
-  out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
-  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 32)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6561,68 +6824,97 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
    Iteratively: acc = BASE; while !cmp(n, K1) { acc *= n; n = n op K2 }
    ~3 cycles per iteration vs ~60 in the bytecode dispatch. */
 static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 24) return 0;
+  if (bc->ncode != 24)
+    return 0;
   uint8_t *c = bc->code;
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_LT_FIX && cmp_op != OP_SLOT_GT_FIX &&
-      cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX) return 0;
+      cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX)
+    return 0;
   uint8_t slot = c[1];
-  if (slot >= ENV_INLINE_SLOTS) return 0;
+  if (slot >= ENV_INLINE_SLOTS)
+    return 0;
   int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
 
-  if (c[4] != OP_BR_IF_FALSE) return 0;
-  if (c[7] != OP_LOAD_FIX) return 0;
+  if (c[4] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[7] != OP_LOAD_FIX)
+    return 0;
   int16_t BASE = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
-  if (c[10] != OP_JUMP) return 0;
+  if (c[10] != OP_JUMP)
+    return 0;
 
-  if (c[13] != OP_LOAD_SLOT || c[14] != slot) return 0;
+  if (c[13] != OP_LOAD_SLOT || c[14] != slot)
+    return 0;
   uint8_t step_op = c[15];
-  if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX) return 0;
-  if (c[16] != slot) return 0;
+  if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (c[16] != slot)
+    return 0;
   int16_t K2 = (int16_t)((uint16_t)c[17] | ((uint16_t)c[18] << 8));
 
-  if (c[19] != OP_CALL_GLOBAL) return 0;
+  if (c[19] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_call = c[20];
-  if (c[21] != 1) return 0;
-  if (c[22] != OP_MUL || c[23] != OP_RET) return 0;
+  if (c[21] != 1)
+    return 0;
+  if (c[22] != OP_MUL || c[23] != OP_RET)
+    return 0;
 
   /* Self-name guard (see recurse_add_two): the iterative-fact emission
      is only correct if the recursive call goes back to THIS function. */
-  if (!bc->self_name || idx_call >= bc->nconsts) return 0;
+  if (!bc->self_name || idx_call >= bc->nconsts)
+    return 0;
   exp_t *callee = bc->consts[idx_call];
-  if (!is_ptr(callee) || !issymbol(callee)) return 0;
-  if (strcmp((const char *)callee->ptr, bc->self_name) != 0) return 0;
+  if (!issymbol(callee))
+    return 0;
+  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
+    return 0;
 
   int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
-  if (slot_off < 0 || slot_off > 32760) return 0;
-  if ((int)K1 < 0 || (int)K1 > 4095) return 0;
-  int k2_abs = (int)K2; if (k2_abs < 0) k2_abs = -k2_abs;
-  if (k2_abs > 4095) return 0;
+  if (slot_off < 0 || slot_off > 32760)
+    return 0;
+  if ((int)K1 < 0 || (int)K1 > 4095)
+    return 0;
+  int k2_abs = (int)K2;
+  if (k2_abs < 0)
+    k2_abs = -k2_abs;
+  if (k2_abs > 4095)
+    return 0;
 
   /* exit cc: BASE returned when cmp_op holds. */
   int exit_cc;
   switch (cmp_op) {
-    case OP_SLOT_LT_FIX: exit_cc = 11; break;
-    case OP_SLOT_GT_FIX: exit_cc = 12; break;
-    case OP_SLOT_LE_FIX: exit_cc = 13; break;
-    case OP_SLOT_GE_FIX: exit_cc = 10; break;
-    default: return 0;
+  case OP_SLOT_LT_FIX:
+    exit_cc = 11;
+    break;
+  case OP_SLOT_GT_FIX:
+    exit_cc = 12;
+    break;
+  case OP_SLOT_LE_FIX:
+    exit_cc = 13;
+    break;
+  case OP_SLOT_GE_FIX:
+    exit_cc = 10;
+    break;
+  default:
+    return 0;
   }
 
   int n = 0;
   /* x1 = untagged n; x2 = acc; x3 = scratch (K2 if needed). */
   out[n++] = arm64_ldr_imm(1, 0, slot_off);
   int patch_tbz = n;
-  out[n++] = 0;                                 /* tbz x1,#0,deopt */
-  out[n++] = arm64_asr_imm(1, 1, 3);           /* untag */
+  out[n++] = 0;                      /* tbz x1,#0,deopt */
+  out[n++] = arm64_asr_imm(1, 1, 3); /* untag */
   n += emit_mov64(out + n, 2, (uint64_t)(int64_t)BASE);
 
   int loop_top = n;
   out[n++] = arm64_cmp_imm(1, (int)K1);
   int patch_done = n;
-  out[n++] = 0;                                 /* b.<exit_cc> done */
-  out[n++] = arm64_mul(2, 2, 1);               /* acc *= n */
+  out[n++] = 0;                  /* b.<exit_cc> done */
+  out[n++] = arm64_mul(2, 2, 1); /* acc *= n */
   if (step_op == OP_SLOT_SUB_FIX)
     out[n++] = arm64_sub_imm(1, 1, k2_abs);
   else
@@ -6642,9 +6934,10 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ret();
 
   out[patch_done] = arm64_b_cond(exit_cc, done_pc - patch_done);
-  out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
-  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 32)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6657,44 +6950,67 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
    Tail loop. Reads marks[i] (singleton t or nil), conditionally
    increments acc, increments i, tail-self. */
 static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 41) return 0;
+  if (bc->ncode != 41)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT) return 0;
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_i = c[1];
-  if (c[2] != OP_LOAD_SLOT) return 0;
+  if (c[2] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_n = c[3];
-  if (c[4] != OP_GT) return 0;
-  if (c[5] != OP_BR_IF_FALSE) return 0;
-  if (c[8] != OP_LOAD_SLOT) return 0;
+  if (c[4] != OP_GT)
+    return 0;
+  if (c[5] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[8] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_acc = c[9];
-  if (c[10] != OP_JUMP) return 0;
-  if (c[13] != OP_SLOT_ADD_FIX || c[14] != s_i) return 0;
-  if (c[15] != 1 || c[16] != 0) return 0;
-  if (c[17] != OP_LOAD_SLOT || c[18] != s_n) return 0;
-  if (c[19] != OP_LOAD_SLOT) return 0;
+  if (c[10] != OP_JUMP)
+    return 0;
+  if (c[13] != OP_SLOT_ADD_FIX || c[14] != s_i)
+    return 0;
+  if (c[15] != 1 || c[16] != 0)
+    return 0;
+  if (c[17] != OP_LOAD_SLOT || c[18] != s_n)
+    return 0;
+  if (c[19] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_marks = c[20];
-  if (c[21] != OP_LOAD_SLOT || c[22] != s_marks) return 0;
-  if (c[23] != OP_LOAD_SLOT || c[24] != s_i) return 0;
-  if (c[25] != OP_VEC_REF) return 0;
-  if (c[26] != OP_BR_IF_FALSE) return 0;
-  if (c[29] != OP_SLOT_ADD_FIX || c[30] != s_acc) return 0;
-  if (c[31] != 1 || c[32] != 0) return 0;
-  if (c[33] != OP_JUMP) return 0;
-  if (c[36] != OP_LOAD_SLOT || c[37] != s_acc) return 0;
-  if (c[38] != OP_TAIL_SELF || c[39] != 4) return 0;
-  if (c[40] != OP_RET) return 0;
+  if (c[21] != OP_LOAD_SLOT || c[22] != s_marks)
+    return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != s_i)
+    return 0;
+  if (c[25] != OP_VEC_REF)
+    return 0;
+  if (c[26] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[29] != OP_SLOT_ADD_FIX || c[30] != s_acc)
+    return 0;
+  if (c[31] != 1 || c[32] != 0)
+    return 0;
+  if (c[33] != OP_JUMP)
+    return 0;
+  if (c[36] != OP_LOAD_SLOT || c[37] != s_acc)
+    return 0;
+  if (c[38] != OP_TAIL_SELF || c[39] != 4)
+    return 0;
+  if (c[40] != OP_RET)
+    return 0;
 
   if (s_i >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
-      s_acc >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS) return 0;
+      s_acc >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS)
+    return 0;
 
-  int off_i     = (int)offsetof(env_t, inline_vals[0]) + (int)s_i     * 8;
-  int off_n     = (int)offsetof(env_t, inline_vals[0]) + (int)s_n     * 8;
-  int off_acc   = (int)offsetof(env_t, inline_vals[0]) + (int)s_acc   * 8;
+  int off_i = (int)offsetof(env_t, inline_vals[0]) + (int)s_i * 8;
+  int off_n = (int)offsetof(env_t, inline_vals[0]) + (int)s_n * 8;
+  int off_acc = (int)offsetof(env_t, inline_vals[0]) + (int)s_acc * 8;
   int off_marks = (int)offsetof(env_t, inline_vals[0]) + (int)s_marks * 8;
-  int off_ptr   = (int)offsetof(struct exp_t, ptr);
-  if (off_i > 32760 || off_n > 32760 || off_acc > 32760 ||
-      off_marks > 32760 || off_ptr > 32760) return 0;
+  int off_ptr = (int)offsetof(struct exp_t, ptr);
+  if (off_i > 32760 || off_n > 32760 || off_acc > 32760 || off_marks > 32760 ||
+      off_ptr > 32760)
+    return 0;
 
   int n = 0;
   int entry_pc = n;
@@ -6702,14 +7018,17 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   /* x9 = nil_singleton, kept across iterations. */
   n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)nil_singleton);
 
-  out[n++] = arm64_ldr_imm(1, 0, off_i);   /* x1 = i */
-  out[n++] = arm64_ldr_imm(2, 0, off_n);   /* x2 = n */
-  int patch_da = n; out[n++] = 0;
-  int patch_db = n; out[n++] = 0;
+  out[n++] = arm64_ldr_imm(1, 0, off_i); /* x1 = i */
+  out[n++] = arm64_ldr_imm(2, 0, off_n); /* x2 = n */
+  int patch_da = n;
+  out[n++] = 0;
+  int patch_db = n;
+  out[n++] = 0;
 
   /* if (i > n) → done, return acc */
   out[n++] = arm64_cmp_reg(1, 2);
-  int patch_done = n; out[n++] = 0;        /* b.gt done */
+  int patch_done = n;
+  out[n++] = 0; /* b.gt done */
 
   /* x3 = marks->ptr (alc_vec_t*) */
   out[n++] = arm64_ldr_imm(3, 0, off_marks);
@@ -6721,9 +7040,11 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ldr_imm(5, 4, 0);
 
   /* truthy = (x5 != 0) && (x5 != nil_singleton). If truthy: acc += 8. */
-  int patch_skip_a = n; out[n++] = 0;      /* cbz x5, skip */
+  int patch_skip_a = n;
+  out[n++] = 0; /* cbz x5, skip */
   out[n++] = arm64_cmp_reg(5, 9);
-  int patch_skip_b = n; out[n++] = 0;      /* b.eq skip */
+  int patch_skip_b = n;
+  out[n++] = 0; /* b.eq skip */
   /* tagged inc: load acc, add 8, store */
   out[n++] = arm64_ldr_imm(6, 0, off_acc);
   out[n++] = arm64_add_imm(6, 6, 8);
@@ -6735,7 +7056,10 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_str_imm(1, 0, off_i);
 
   /* tail-self: b entry */
-  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);
+  }
 
   /* done: x0 = acc */
   int done_pc = n;
@@ -6747,13 +7071,14 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_movz(0, 0, 0);
   out[n++] = arm64_ret();
 
-  out[patch_done]   = arm64_b_cond(12 /* GT */, done_pc - patch_done);
-  out[patch_da]     = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db]     = arm64_tbz(2, 0, deopt_pc - patch_db);
+  out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
+  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
   out[patch_skip_a] = arm64_cbz(5, skip_pc - patch_skip_a);
   out[patch_skip_b] = arm64_b_cond(0, skip_pc - patch_skip_b);
 
-  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 64)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6766,115 +7091,158 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
    Walks a cons list of primes, mod-testing each against i. Inline
    refexp/unrefexp on the cdr walk; deopts to bytecode if a count hits 0. */
 static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 37) return 0;
+  if (bc->ncode != 37)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT) return 0;
-  uint8_t s_acc = c[1];
-  if (c[2] != OP_NOT) return 0;
-  if (c[3] != OP_BR_IF_FALSE) return 0;
-  if (c[6] != OP_LOAD_GLOBAL) return 0;
-  uint8_t idx_t = c[7];
-  if (c[8] != OP_JUMP) return 0;
-  if (c[11] != OP_LOAD_SLOT) return 0;
-  uint8_t s_i = c[12];
-  if (c[13] != OP_LOAD_SLOT || c[14] != s_acc) return 0;
-  if (c[15] != OP_CAR) return 0;
-  if (c[16] != OP_MOD) return 0;
-  if (c[17] != OP_LOAD_FIX || c[18] != 0 || c[19] != 0) return 0;
-  if (c[20] != OP_IS) return 0;
-  if (c[21] != OP_BR_IF_FALSE) return 0;
-  if (c[24] != OP_LOAD_GLOBAL) return 0;
-  uint8_t idx_nil = c[25];
-  if (c[26] != OP_JUMP) return 0;
-  if (c[29] != OP_LOAD_SLOT || c[30] != s_acc) return 0;
-  if (c[31] != OP_CDR) return 0;
-  if (c[32] != OP_LOAD_SLOT || c[33] != s_i) return 0;
-  if (c[34] != OP_TAIL_SELF || c[35] != 2) return 0;
-  if (c[36] != OP_RET) return 0;
-
-  if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts) return 0;
-  exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
-  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (c[0] != OP_LOAD_SLOT)
     return 0;
-  if (!is_ptr(cnil) || !issymbol(cnil) ||
-      strcmp((const char *)cnil->ptr, "nil") != 0) return 0;
-  if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS) return 0;
+  uint8_t s_acc = c[1];
+  if (c[2] != OP_NOT)
+    return 0;
+  if (c[3] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[6] != OP_LOAD_GLOBAL)
+    return 0;
+  uint8_t idx_t = c[7];
+  if (c[8] != OP_JUMP)
+    return 0;
+  if (c[11] != OP_LOAD_SLOT)
+    return 0;
+  uint8_t s_i = c[12];
+  if (c[13] != OP_LOAD_SLOT || c[14] != s_acc)
+    return 0;
+  if (c[15] != OP_CAR)
+    return 0;
+  if (c[16] != OP_MOD)
+    return 0;
+  if (c[17] != OP_LOAD_FIX || c[18] != 0 || c[19] != 0)
+    return 0;
+  if (c[20] != OP_IS)
+    return 0;
+  if (c[21] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[24] != OP_LOAD_GLOBAL)
+    return 0;
+  uint8_t idx_nil = c[25];
+  if (c[26] != OP_JUMP)
+    return 0;
+  if (c[29] != OP_LOAD_SLOT || c[30] != s_acc)
+    return 0;
+  if (c[31] != OP_CDR)
+    return 0;
+  if (c[32] != OP_LOAD_SLOT || c[33] != s_i)
+    return 0;
+  if (c[34] != OP_TAIL_SELF || c[35] != 2)
+    return 0;
+  if (c[36] != OP_RET)
+    return 0;
 
-  int off_acc  = (int)offsetof(env_t, inline_vals[0]) + (int)s_acc * 8;
-  int off_i    = (int)offsetof(env_t, inline_vals[0]) + (int)s_i   * 8;
+  if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts)
+    return 0;
+  exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
+  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+    return 0;
+  if (!issymbol(cnil) ||
+      strcmp((const char *)cnil->ptr, "nil") != 0)
+    return 0;
+  if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
+    return 0;
+
+  int off_acc = (int)offsetof(env_t, inline_vals[0]) + (int)s_acc * 8;
+  int off_i = (int)offsetof(env_t, inline_vals[0]) + (int)s_i * 8;
   int off_cont = (int)offsetof(struct exp_t, content);
   int off_next = (int)offsetof(struct exp_t, next);
   int off_nref = (int)offsetof(struct exp_t, nref);
-  if (off_acc > 32760 || off_i > 32760 ||
-      off_cont > 32760 || off_next > 32760 || off_nref > 16380) return 0;
+  if (off_acc > 32760 || off_i > 32760 || off_cont > 32760 ||
+      off_next > 32760 || off_nref > 16380)
+    return 0;
 #if !ALCOVE_SINGLE_THREADED
   int off_flags = (int)offsetof(struct exp_t, flags);
-  if (off_flags > 4095) return 0; /* LDRB unsigned-offset limit */
+  if (off_flags > 4095)
+    return 0; /* LDRB unsigned-offset limit */
   int patch_shared_ref = -1, patch_shared_unref = -1;
 #endif
 
   int n = 0;
   int entry_pc = n;
 
-  n += emit_mov64(out + n, 9,  (uint64_t)(uintptr_t)nil_singleton);
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)nil_singleton);
   n += emit_mov64(out + n, 10, (uint64_t)(uintptr_t)true_singleton);
 
   out[n++] = arm64_ldr_imm(1, 0, off_acc);
-  int patch_t1 = n; out[n++] = 0;
+  int patch_t1 = n;
+  out[n++] = 0;
   out[n++] = arm64_cmp_reg(1, 9);
-  int patch_t2 = n; out[n++] = 0;
+  int patch_t2 = n;
+  out[n++] = 0;
 
   out[n++] = arm64_ldr_imm(2, 1, off_cont);
-  int patch_da = n; out[n++] = 0;
+  int patch_da = n;
+  out[n++] = 0;
 
   out[n++] = arm64_ldr_imm(3, 0, off_i);
-  int patch_db = n; out[n++] = 0;
+  int patch_db = n;
+  out[n++] = 0;
 
   out[n++] = arm64_sub_imm(2, 2, 1);
   out[n++] = arm64_sub_imm(3, 3, 1);
-  int patch_dc = n; out[n++] = 0;
+  int patch_dc = n;
+  out[n++] = 0;
 
   out[n++] = arm64_sdiv(4, 3, 2);
   out[n++] = arm64_msub(5, 4, 2, 3);
-  int patch_n1 = n; out[n++] = 0;
+  int patch_n1 = n;
+  out[n++] = 0;
 
   out[n++] = arm64_ldr_imm(4, 1, off_next);
 
-  int patch_skip_ref_a = n; out[n++] = 0;
+  int patch_skip_ref_a = n;
+  out[n++] = 0;
   out[n++] = arm64_cmp_reg(4, 9);
-  int patch_skip_ref_b = n; out[n++] = 0;
+  int patch_skip_ref_b = n;
+  out[n++] = 0;
   out[n++] = arm64_cmp_reg(4, 10);
-  int patch_skip_ref_c = n; out[n++] = 0;
+  int patch_skip_ref_c = n;
+  out[n++] = 0;
 #if !ALCOVE_SINGLE_THREADED
   /* Deopt to bytecode if the cdr target is FLAG_SHARED — the bytecode
      interp uses atomic refcount macros, the JIT inlines plain ldr/str. */
   out[n++] = arm64_ldrb_imm(7, 4, off_flags);
-  patch_shared_ref = n; out[n++] = 0;       /* tbnz w7, #3, deopt */
+  patch_shared_ref = n;
+  out[n++] = 0; /* tbnz w7, #3, deopt */
 #endif
   out[n++] = arm64_ldr_w_imm(6, 4, off_nref);
   out[n++] = arm64_add_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 4, off_nref);
   int skip_ref_pc = n;
 
-  int patch_skip_unref_a = n; out[n++] = 0;
+  int patch_skip_unref_a = n;
+  out[n++] = 0;
   out[n++] = arm64_cmp_reg(1, 9);
-  int patch_skip_unref_b = n; out[n++] = 0;
+  int patch_skip_unref_b = n;
+  out[n++] = 0;
   out[n++] = arm64_cmp_reg(1, 10);
-  int patch_skip_unref_c = n; out[n++] = 0;
+  int patch_skip_unref_c = n;
+  out[n++] = 0;
 #if !ALCOVE_SINGLE_THREADED
   out[n++] = arm64_ldrb_imm(7, 1, off_flags);
-  patch_shared_unref = n; out[n++] = 0;     /* tbnz w7, #3, deopt */
+  patch_shared_unref = n;
+  out[n++] = 0; /* tbnz w7, #3, deopt */
 #endif
   out[n++] = arm64_ldr_w_imm(6, 1, off_nref);
   out[n++] = arm64_sub_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 1, off_nref);
-  int patch_to_deopt = n; out[n++] = 0;
+  int patch_to_deopt = n;
+  out[n++] = 0;
   int skip_unref_pc = n;
 
   out[n++] = arm64_str_imm(4, 0, off_acc);
 
-  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);
+  }
 
   int ret_t_pc = n;
   out[n++] = arm64_mov_reg(0, 10);
@@ -6902,13 +7270,14 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_a] = arm64_cbz(1, skip_unref_pc - patch_skip_unref_a);
   out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
-  out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+  out[patch_to_deopt] = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
 #if !ALCOVE_SINGLE_THREADED
-  out[patch_shared_ref]   = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
+  out[patch_shared_ref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
   out[patch_shared_unref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_unref);
 #endif
 
-  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 96)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -6924,78 +7293,121 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
    column + diagonal conflicts. Inline refexp/unrefexp for the cdr walk;
    falls through to bytecode (NULL deopt) if a refcount actually hits 0. */
 static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 71) return 0;
+  if (bc->ncode != 71)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT) return 0;
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_qs = c[1];
-  if (c[2] != OP_NOT) return 0;
-  if (c[3] != OP_BR_IF_FALSE) return 0;
-  if (c[6] != OP_LOAD_GLOBAL) return 0;
+  if (c[2] != OP_NOT)
+    return 0;
+  if (c[3] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[6] != OP_LOAD_GLOBAL)
+    return 0;
   uint8_t idx_t = c[7];
-  if (c[8] != OP_JUMP) return 0;
-  if (c[11] != OP_LOAD_SLOT) return 0;
+  if (c[8] != OP_JUMP)
+    return 0;
+  if (c[11] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_c = c[12];
-  if (c[13] != OP_LOAD_SLOT || c[14] != s_qs) return 0;
-  if (c[15] != OP_CAR) return 0;
-  if (c[16] != OP_IS) return 0;
-  if (c[17] != OP_BR_IF_FALSE) return 0;
-  if (c[20] != OP_LOAD_GLOBAL) return 0;
+  if (c[13] != OP_LOAD_SLOT || c[14] != s_qs)
+    return 0;
+  if (c[15] != OP_CAR)
+    return 0;
+  if (c[16] != OP_IS)
+    return 0;
+  if (c[17] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[20] != OP_LOAD_GLOBAL)
+    return 0;
   uint8_t idx_nil1 = c[21];
-  if (c[22] != OP_JUMP) return 0;
-  if (c[25] != OP_LOAD_SLOT || c[26] != s_c) return 0;
-  if (c[27] != OP_LOAD_SLOT) return 0;
+  if (c[22] != OP_JUMP)
+    return 0;
+  if (c[25] != OP_LOAD_SLOT || c[26] != s_c)
+    return 0;
+  if (c[27] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_off = c[28];
-  if (c[29] != OP_ADD) return 0;
-  if (c[30] != OP_LOAD_SLOT || c[31] != s_qs) return 0;
-  if (c[32] != OP_CAR) return 0;
-  if (c[33] != OP_IS) return 0;
-  if (c[34] != OP_BR_IF_FALSE) return 0;
-  if (c[37] != OP_LOAD_GLOBAL) return 0;
+  if (c[29] != OP_ADD)
+    return 0;
+  if (c[30] != OP_LOAD_SLOT || c[31] != s_qs)
+    return 0;
+  if (c[32] != OP_CAR)
+    return 0;
+  if (c[33] != OP_IS)
+    return 0;
+  if (c[34] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[37] != OP_LOAD_GLOBAL)
+    return 0;
   uint8_t idx_nil2 = c[38];
-  if (c[39] != OP_JUMP) return 0;
-  if (c[42] != OP_LOAD_SLOT || c[43] != s_c) return 0;
-  if (c[44] != OP_LOAD_SLOT || c[45] != s_off) return 0;
-  if (c[46] != OP_SUB) return 0;
-  if (c[47] != OP_LOAD_SLOT || c[48] != s_qs) return 0;
-  if (c[49] != OP_CAR) return 0;
-  if (c[50] != OP_IS) return 0;
-  if (c[51] != OP_BR_IF_FALSE) return 0;
-  if (c[54] != OP_LOAD_GLOBAL) return 0;
+  if (c[39] != OP_JUMP)
+    return 0;
+  if (c[42] != OP_LOAD_SLOT || c[43] != s_c)
+    return 0;
+  if (c[44] != OP_LOAD_SLOT || c[45] != s_off)
+    return 0;
+  if (c[46] != OP_SUB)
+    return 0;
+  if (c[47] != OP_LOAD_SLOT || c[48] != s_qs)
+    return 0;
+  if (c[49] != OP_CAR)
+    return 0;
+  if (c[50] != OP_IS)
+    return 0;
+  if (c[51] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[54] != OP_LOAD_GLOBAL)
+    return 0;
   uint8_t idx_nil3 = c[55];
-  if (c[56] != OP_JUMP) return 0;
-  if (c[59] != OP_LOAD_SLOT || c[60] != s_c) return 0;
-  if (c[61] != OP_LOAD_SLOT || c[62] != s_qs) return 0;
-  if (c[63] != OP_CDR) return 0;
-  if (c[64] != OP_SLOT_ADD_FIX || c[65] != s_off || c[66] != 1 || c[67] != 0) return 0;
-  if (c[68] != OP_TAIL_SELF || c[69] != 3) return 0;
-  if (c[70] != OP_RET) return 0;
+  if (c[56] != OP_JUMP)
+    return 0;
+  if (c[59] != OP_LOAD_SLOT || c[60] != s_c)
+    return 0;
+  if (c[61] != OP_LOAD_SLOT || c[62] != s_qs)
+    return 0;
+  if (c[63] != OP_CDR)
+    return 0;
+  if (c[64] != OP_SLOT_ADD_FIX || c[65] != s_off || c[66] != 1 || c[67] != 0)
+    return 0;
+  if (c[68] != OP_TAIL_SELF || c[69] != 3)
+    return 0;
+  if (c[70] != OP_RET)
+    return 0;
 
-  if (idx_t >= bc->nconsts) return 0;
+  if (idx_t >= bc->nconsts)
+    return 0;
   exp_t *ct = bc->consts[idx_t];
-  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
     return 0;
   for (int k = 0; k < 3; k++) {
     uint8_t idx = (k == 0) ? idx_nil1 : (k == 1) ? idx_nil2 : idx_nil3;
-    if (idx >= bc->nconsts) return 0;
+    if (idx >= bc->nconsts)
+      return 0;
     exp_t *cn = bc->consts[idx];
-    if (!is_ptr(cn) || !issymbol(cn) ||
-        strcmp((const char *)cn->ptr, "nil") != 0) return 0;
+    if (!issymbol(cn) ||
+        strcmp((const char *)cn->ptr, "nil") != 0)
+      return 0;
   }
   if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
-      s_off >= ENV_INLINE_SLOTS) return 0;
+      s_off >= ENV_INLINE_SLOTS)
+    return 0;
 
-  int off_c   = (int)offsetof(env_t, inline_vals[0]) + (int)s_c   * 8;
-  int off_qs  = (int)offsetof(env_t, inline_vals[0]) + (int)s_qs  * 8;
+  int off_c = (int)offsetof(env_t, inline_vals[0]) + (int)s_c * 8;
+  int off_qs = (int)offsetof(env_t, inline_vals[0]) + (int)s_qs * 8;
   int off_off = (int)offsetof(env_t, inline_vals[0]) + (int)s_off * 8;
   int off_cont = (int)offsetof(struct exp_t, content);
   int off_next = (int)offsetof(struct exp_t, next);
   int off_nref = (int)offsetof(struct exp_t, nref);
-  if (off_c > 32760 || off_qs > 32760 || off_off > 32760 ||
-      off_cont > 32760 || off_next > 32760 || off_nref > 16380) return 0;
+  if (off_c > 32760 || off_qs > 32760 || off_off > 32760 || off_cont > 32760 ||
+      off_next > 32760 || off_nref > 16380)
+    return 0;
 #if !ALCOVE_SINGLE_THREADED
   int off_flags = (int)offsetof(struct exp_t, flags);
-  if (off_flags > 4095) return 0; /* LDRB unsigned-offset limit */
+  if (off_flags > 4095)
+    return 0; /* LDRB unsigned-offset limit */
   int patch_shared_ref = -1, patch_shared_unref = -1;
 #endif
 
@@ -7003,55 +7415,66 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   int entry_pc = n;
 
   /* Preload nil + true into x9, x10 (live across iterations). */
-  n += emit_mov64(out + n, 9,  (uint64_t)(uintptr_t)nil_singleton);
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)nil_singleton);
   n += emit_mov64(out + n, 10, (uint64_t)(uintptr_t)true_singleton);
 
   /* x1 = qs. If null or nil → return t. */
   out[n++] = arm64_ldr_imm(1, 0, off_qs);
-  int patch_t1 = n; out[n++] = 0;          /* cbz x1, ret_t */
+  int patch_t1 = n;
+  out[n++] = 0; /* cbz x1, ret_t */
   out[n++] = arm64_cmp_reg(1, 9);
-  int patch_t2 = n; out[n++] = 0;          /* b.eq ret_t */
+  int patch_t2 = n;
+  out[n++] = 0; /* b.eq ret_t */
 
   /* x2 = car(qs) tagged. Tag-check. */
   out[n++] = arm64_ldr_imm(2, 1, off_cont);
-  int patch_da = n; out[n++] = 0;          /* tbz x2,#0,deopt */
+  int patch_da = n;
+  out[n++] = 0; /* tbz x2,#0,deopt */
 
   /* x3 = c. If c == car → return nil. */
   out[n++] = arm64_ldr_imm(3, 0, off_c);
   out[n++] = arm64_cmp_reg(3, 2);
-  int patch_n1 = n; out[n++] = 0;          /* b.eq ret_nil */
+  int patch_n1 = n;
+  out[n++] = 0; /* b.eq ret_nil */
 
   /* x4 = offset. Tag-check. */
   out[n++] = arm64_ldr_imm(4, 0, off_off);
-  int patch_db = n; out[n++] = 0;          /* tbz x4,#0,deopt */
+  int patch_db = n;
+  out[n++] = 0; /* tbz x4,#0,deopt */
 
   /* (c + off)_tagged = c_tagged + off_tagged - 1. Compare with car. */
   out[n++] = arm64_add_reg(5, 3, 4);
   out[n++] = arm64_sub_imm(5, 5, 1);
   out[n++] = arm64_cmp_reg(5, 2);
-  int patch_n2 = n; out[n++] = 0;          /* b.eq ret_nil */
+  int patch_n2 = n;
+  out[n++] = 0; /* b.eq ret_nil */
 
   /* (c - off)_tagged = c_tagged - off_tagged + 1. Compare with car. */
   out[n++] = arm64_sub_reg(5, 3, 4);
   out[n++] = arm64_add_imm(5, 5, 1);
   out[n++] = arm64_cmp_reg(5, 2);
-  int patch_n3 = n; out[n++] = 0;          /* b.eq ret_nil */
+  int patch_n3 = n;
+  out[n++] = 0; /* b.eq ret_nil */
 
   /* Cdr walk. x5 = cdr(qs) = qs->next. */
   out[n++] = arm64_ldr_imm(5, 1, off_next);
 
   /* refexp(x5) inline: skip if NULL/nil/true; else nref++. */
-  int patch_skip_ref_a = n; out[n++] = 0;  /* cbz x5, skip_ref */
+  int patch_skip_ref_a = n;
+  out[n++] = 0; /* cbz x5, skip_ref */
   out[n++] = arm64_cmp_reg(5, 9);
-  int patch_skip_ref_b = n; out[n++] = 0;  /* b.eq skip_ref */
+  int patch_skip_ref_b = n;
+  out[n++] = 0; /* b.eq skip_ref */
   out[n++] = arm64_cmp_reg(5, 10);
-  int patch_skip_ref_c = n; out[n++] = 0;  /* b.eq skip_ref */
+  int patch_skip_ref_c = n;
+  out[n++] = 0; /* b.eq skip_ref */
 #if !ALCOVE_SINGLE_THREADED
   /* If the target is FLAG_SHARED, deopt to bytecode (which uses atomic
      refcount macros). Reads the low byte of flags — FLAG_SHARED=8 lives
      in bit 3, well within the byte. */
   out[n++] = arm64_ldrb_imm(7, 5, off_flags);
-  patch_shared_ref = n; out[n++] = 0;       /* tbnz w7, #3, deopt */
+  patch_shared_ref = n;
+  out[n++] = 0; /* tbnz w7, #3, deopt */
 #endif
   out[n++] = arm64_ldr_w_imm(6, 5, off_nref);
   out[n++] = arm64_add_w_imm(6, 6, 1);
@@ -7059,19 +7482,24 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   int skip_ref_pc = n;
 
   /* unrefexp(x1=qs) inline: skip if NULL/nil/true; else nref--; if 0 deopt. */
-  int patch_skip_unref_a = n; out[n++] = 0;  /* cbz x1, skip_unref */
+  int patch_skip_unref_a = n;
+  out[n++] = 0; /* cbz x1, skip_unref */
   out[n++] = arm64_cmp_reg(1, 9);
-  int patch_skip_unref_b = n; out[n++] = 0;
+  int patch_skip_unref_b = n;
+  out[n++] = 0;
   out[n++] = arm64_cmp_reg(1, 10);
-  int patch_skip_unref_c = n; out[n++] = 0;
+  int patch_skip_unref_c = n;
+  out[n++] = 0;
 #if !ALCOVE_SINGLE_THREADED
   out[n++] = arm64_ldrb_imm(7, 1, off_flags);
-  patch_shared_unref = n; out[n++] = 0;     /* tbnz w7, #3, deopt */
+  patch_shared_unref = n;
+  out[n++] = 0; /* tbnz w7, #3, deopt */
 #endif
   out[n++] = arm64_ldr_w_imm(6, 1, off_nref);
   out[n++] = arm64_sub_w_imm(6, 6, 1);
   out[n++] = arm64_str_w_imm(6, 1, off_nref);
-  int patch_to_deopt = n; out[n++] = 0;       /* cbz w6, deopt */
+  int patch_to_deopt = n;
+  out[n++] = 0; /* cbz w6, deopt */
   int skip_unref_pc = n;
 
   /* slot[qs] = cdr (x5) */
@@ -7082,7 +7510,10 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_str_imm(4, 0, off_off);
 
   /* tail-self: b entry */
-  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);
+  }
 
   /* ret_t: x0 = true_singleton */
   int ret_t_pc = n;
@@ -7115,16 +7546,18 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_a] = arm64_cbz(1, skip_unref_pc - patch_skip_unref_a);
   out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
-  out[patch_to_deopt]    = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+  out[patch_to_deopt] = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
 #if !ALCOVE_SINGLE_THREADED
-  out[patch_shared_ref]   = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
+  out[patch_shared_ref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
   out[patch_shared_unref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_unref);
 #endif
 
   /* Suppress unused-on-some-paths warnings. */
-  (void)arm64_cbnz; (void)arm64_cmp_reg_w;
+  (void)arm64_cbnz;
+  (void)arm64_cmp_reg_w;
 
-  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 96)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7137,55 +7570,80 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
    Tight inner loop — writes nil into marks[j], increments j by step,
    tail-self. ~10 instructions per iteration. */
 static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 35) return 0;
+  if (bc->ncode != 35)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT) return 0;
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_j = c[1];
-  if (c[2] != OP_LOAD_SLOT) return 0;
+  if (c[2] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_n = c[3];
-  if (c[4] != OP_GT) return 0;
-  if (c[5] != OP_BR_IF_FALSE) return 0;
-  if (c[8] != OP_LOAD_GLOBAL) return 0;
+  if (c[4] != OP_GT)
+    return 0;
+  if (c[5] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[8] != OP_LOAD_GLOBAL)
+    return 0;
   uint8_t idx_nil1 = c[9];
-  if (c[10] != OP_JUMP) return 0;
+  if (c[10] != OP_JUMP)
+    return 0;
 
-  if (c[13] != OP_LOAD_SLOT) return 0;
+  if (c[13] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_marks = c[14];
-  if (c[15] != OP_LOAD_SLOT || c[16] != s_j) return 0;
-  if (c[17] != OP_LOAD_GLOBAL) return 0;
+  if (c[15] != OP_LOAD_SLOT || c[16] != s_j)
+    return 0;
+  if (c[17] != OP_LOAD_GLOBAL)
+    return 0;
   uint8_t idx_nil2 = c[18];
-  if (c[19] != OP_VEC_SET) return 0;
-  if (c[20] != OP_POP) return 0;
+  if (c[19] != OP_VEC_SET)
+    return 0;
+  if (c[20] != OP_POP)
+    return 0;
 
-  if (c[21] != OP_LOAD_SLOT) return 0;
+  if (c[21] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_step = c[22];
-  if (c[23] != OP_LOAD_SLOT || c[24] != s_j) return 0;
-  if (c[25] != OP_LOAD_SLOT || c[26] != s_step) return 0;
-  if (c[27] != OP_ADD) return 0;
-  if (c[28] != OP_LOAD_SLOT || c[29] != s_n) return 0;
-  if (c[30] != OP_LOAD_SLOT || c[31] != s_marks) return 0;
-  if (c[32] != OP_TAIL_SELF || c[33] != 4) return 0;
-  if (c[34] != OP_RET) return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != s_j)
+    return 0;
+  if (c[25] != OP_LOAD_SLOT || c[26] != s_step)
+    return 0;
+  if (c[27] != OP_ADD)
+    return 0;
+  if (c[28] != OP_LOAD_SLOT || c[29] != s_n)
+    return 0;
+  if (c[30] != OP_LOAD_SLOT || c[31] != s_marks)
+    return 0;
+  if (c[32] != OP_TAIL_SELF || c[33] != 4)
+    return 0;
+  if (c[34] != OP_RET)
+    return 0;
 
   /* Both LOAD_GLOBALs must resolve to nil. */
-  if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts) return 0;
+  if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
+    return 0;
   exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!is_ptr(cn1) || !issymbol(cn1) ||
-      strcmp((const char *)cn1->ptr, "nil") != 0) return 0;
-  if (!is_ptr(cn2) || !issymbol(cn2) ||
-      strcmp((const char *)cn2->ptr, "nil") != 0) return 0;
+  if (!issymbol(cn1) ||
+      strcmp((const char *)cn1->ptr, "nil") != 0)
+    return 0;
+  if (!issymbol(cn2) ||
+      strcmp((const char *)cn2->ptr, "nil") != 0)
+    return 0;
 
   if (s_j >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
-      s_step >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS) return 0;
+      s_step >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS)
+    return 0;
 
-  int off_j     = (int)offsetof(env_t, inline_vals[0]) + (int)s_j     * 8;
-  int off_n     = (int)offsetof(env_t, inline_vals[0]) + (int)s_n     * 8;
-  int off_step  = (int)offsetof(env_t, inline_vals[0]) + (int)s_step  * 8;
+  int off_j = (int)offsetof(env_t, inline_vals[0]) + (int)s_j * 8;
+  int off_n = (int)offsetof(env_t, inline_vals[0]) + (int)s_n * 8;
+  int off_step = (int)offsetof(env_t, inline_vals[0]) + (int)s_step * 8;
   int off_marks = (int)offsetof(env_t, inline_vals[0]) + (int)s_marks * 8;
-  int off_ptr   = (int)offsetof(struct exp_t, ptr);
-  if (off_j > 32760 || off_n > 32760 || off_step > 32760 ||
-      off_marks > 32760 || off_ptr > 32760) return 0;
+  int off_ptr = (int)offsetof(struct exp_t, ptr);
+  if (off_j > 32760 || off_n > 32760 || off_step > 32760 || off_marks > 32760 ||
+      off_ptr > 32760)
+    return 0;
 
   int n = 0;
 
@@ -7193,12 +7651,15 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   /* x1 = j tagged, x2 = n tagged. */
   out[n++] = arm64_ldr_imm(1, 0, off_j);
   out[n++] = arm64_ldr_imm(2, 0, off_n);
-  int patch_da = n; out[n++] = 0;            /* tbz x1,#0,deopt */
-  int patch_db = n; out[n++] = 0;            /* tbz x2,#0,deopt */
+  int patch_da = n;
+  out[n++] = 0; /* tbz x1,#0,deopt */
+  int patch_db = n;
+  out[n++] = 0; /* tbz x2,#0,deopt */
 
   /* if (j > n): return nil. cmp x1, x2; b.gt done */
   out[n++] = arm64_cmp_reg(1, 2);
-  int patch_done = n; out[n++] = 0;          /* b.gt done */
+  int patch_done = n;
+  out[n++] = 0; /* b.gt done */
 
   /* x3 = marks (exp_t*), then x3 = marks->ptr (alc_vec_t*). */
   out[n++] = arm64_ldr_imm(3, 0, off_marks);
@@ -7219,7 +7680,10 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_str_imm(1, 0, off_j);
 
   /* tail-self: b entry */
-  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);
+  }
 
   /* done: x0 = nil */
   int done_pc = n;
@@ -7232,10 +7696,11 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ret();
 
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
-  out[patch_da]   = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db]   = arm64_tbz(2, 0, deopt_pc - patch_db);
+  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
 
-  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 64)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7245,58 +7710,87 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
      (def lp (k) (if (cmp k K1) (do (g K_arg) (lp (op k K2))) k))
    Establish a frame, run the loop in registers, BLR
    jit_call_global1_drop for the inner call, propagate any error. */
-static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 26) return 0;
+static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
+                                       int *outn) {
+  if (bc->ncode != 26)
+    return 0;
   uint8_t *c = bc->code;
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX) return 0;
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+    return 0;
   uint8_t slot = c[1];
-  if (slot >= ENV_INLINE_SLOTS) return 0;
+  if (slot >= ENV_INLINE_SLOTS)
+    return 0;
   int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
 
-  if (c[4] != OP_BR_IF_FALSE) return 0;
-  if (c[7] != OP_LOAD_FIX) return 0;
+  if (c[4] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[7] != OP_LOAD_FIX)
+    return 0;
   int16_t arg_imm = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
 
-  if (c[10] != OP_CALL_GLOBAL) return 0;
+  if (c[10] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t const_idx = c[11];
-  if (c[12] != 1) return 0;
-  if (const_idx >= bc->nconsts) return 0;
+  if (c[12] != 1)
+    return 0;
+  if (const_idx >= bc->nconsts)
+    return 0;
 
-  if (c[13] != OP_POP) return 0;
+  if (c[13] != OP_POP)
+    return 0;
 
   uint8_t arith_op = c[14];
-  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX) return 0;
-  if (c[15] != slot) return 0;
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (c[15] != slot)
+    return 0;
   int16_t arith_imm = (int16_t)((uint16_t)c[16] | ((uint16_t)c[17] << 8));
 
-  if (c[18] != OP_TAIL_SELF || c[19] != 1) return 0;
-  if (c[20] != OP_JUMP) return 0;
-  if (c[23] != OP_LOAD_SLOT || c[24] != slot) return 0;
-  if (c[25] != OP_RET) return 0;
+  if (c[18] != OP_TAIL_SELF || c[19] != 1)
+    return 0;
+  if (c[20] != OP_JUMP)
+    return 0;
+  if (c[23] != OP_LOAD_SLOT || c[24] != slot)
+    return 0;
+  if (c[25] != OP_RET)
+    return 0;
 
   int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
-  if (slot_off > 32760) return 0;
+  if (slot_off > 32760)
+    return 0;
   int64_t cmp_tagged = ((int64_t)cmp_imm << 3) | 1;
-  if (cmp_tagged < 0 || cmp_tagged > 4095) return 0;
+  if (cmp_tagged < 0 || cmp_tagged > 4095)
+    return 0;
   int arith_delta = ((int)arith_imm) << 3;
-  if (arith_delta < 0 || arith_delta > 4095) return 0;
+  if (arith_delta < 0 || arith_delta > 4095)
+    return 0;
   int64_t tagged_arg = ((int64_t)arg_imm << 3) | 1;
 
   int inv_cc;
   switch (cmp_op) {
-    case OP_SLOT_GT_FIX: inv_cc = 13; break;
-    case OP_SLOT_LT_FIX: inv_cc = 10; break;
-    case OP_SLOT_GE_FIX: inv_cc = 11; break;
-    case OP_SLOT_LE_FIX: inv_cc = 12; break;
-    default: return 0;
+  case OP_SLOT_GT_FIX:
+    inv_cc = 13;
+    break;
+  case OP_SLOT_LT_FIX:
+    inv_cc = 10;
+    break;
+  case OP_SLOT_GE_FIX:
+    inv_cc = 11;
+    break;
+  case OP_SLOT_LE_FIX:
+    inv_cc = 12;
+    break;
+  default:
+    return 0;
   }
 
   int n = 0;
   out[n++] = arm64_ldr_imm(1, 0, slot_off);
-  int patch_deopt = n; out[n++] = 0;
+  int patch_deopt = n;
+  out[n++] = 0;
 
   out[n++] = arm64_stp_pre_sp(29, 30, -32);
   out[n++] = arm64_stp_off_sp(19, 20, 16);
@@ -7306,7 +7800,8 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
   int loop_top = n;
   out[n++] = arm64_ldr_imm(1, 19, slot_off);
   out[n++] = arm64_cmp_imm(1, (int)cmp_tagged);
-  int patch_end = n; out[n++] = 0;
+  int patch_end = n;
+  out[n++] = 0;
 
   n += emit_mov64(out + n, 0, (uint64_t)(uintptr_t)bc);
   out[n++] = arm64_mov_reg(1, 19);
@@ -7315,7 +7810,8 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
   n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&jit_call_global1_drop);
   out[n++] = arm64_blr(9);
 
-  int patch_err = n; out[n++] = 0;            /* cbnz x0, err */
+  int patch_err = n;
+  out[n++] = 0; /* cbnz x0, err */
 
   out[n++] = arm64_ldr_imm(1, 19, slot_off);
   if (arith_op == OP_SLOT_SUB_FIX)
@@ -7323,7 +7819,10 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
   else
     out[n++] = arm64_add_imm(1, 1, arith_delta);
   out[n++] = arm64_str_imm(1, 19, slot_off);
-  { int cur = n++; out[cur] = arm64_b(loop_top - cur); }
+  {
+    int cur = n++;
+    out[cur] = arm64_b(loop_top - cur);
+  }
 
   int end_pc = n;
   out[n++] = arm64_ldr_imm(0, 19, slot_off);
@@ -7342,11 +7841,12 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
 
   /* Use the proper helper so the offset gets range-checked instead of
      silently truncated by the inline mask. */
-  out[patch_err]   = arm64_cbnz(0, err_pc - patch_err);
-  out[patch_end]   = arm64_b_cond(inv_cc, end_pc - patch_end);
+  out[patch_err] = arm64_cbnz(0, err_pc - patch_err);
+  out[patch_end] = arm64_b_cond(inv_cc, end_pc - patch_end);
   out[patch_deopt] = arm64_tbz(1, 0, deopt_pc - patch_deopt);
 
-  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 64)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7360,61 +7860,92 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out, int *outn)
    is a direct intra-buffer BL into our own entry. We stash the 3 originals
    and 3 intermediate results in the stack frame across calls. */
 static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 50) return 0;
+  if (bc->ncode != 50)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT) return 0;
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_y = c[1];
-  if (c[2] != OP_LOAD_SLOT) return 0;
+  if (c[2] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_x = c[3];
-  if (c[4] != OP_LT) return 0;
-  if (c[5] != OP_NOT) return 0;
-  if (c[6] != OP_BR_IF_FALSE) return 0;
-  if (c[9] != OP_LOAD_SLOT) return 0;
+  if (c[4] != OP_LT)
+    return 0;
+  if (c[5] != OP_NOT)
+    return 0;
+  if (c[6] != OP_BR_IF_FALSE)
+    return 0;
+  if (c[9] != OP_LOAD_SLOT)
+    return 0;
   uint8_t s_z = c[10];
-  if (c[11] != OP_JUMP) return 0;
+  if (c[11] != OP_JUMP)
+    return 0;
 
-  if (c[14] != OP_SLOT_SUB_FIX || c[15] != s_x || c[16] != 1 || c[17] != 0) return 0;
-  if (c[18] != OP_LOAD_SLOT || c[19] != s_y) return 0;
-  if (c[20] != OP_LOAD_SLOT || c[21] != s_z) return 0;
-  if (c[22] != OP_CALL_GLOBAL) return 0;
+  if (c[14] != OP_SLOT_SUB_FIX || c[15] != s_x || c[16] != 1 || c[17] != 0)
+    return 0;
+  if (c[18] != OP_LOAD_SLOT || c[19] != s_y)
+    return 0;
+  if (c[20] != OP_LOAD_SLOT || c[21] != s_z)
+    return 0;
+  if (c[22] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_a = c[23];
-  if (c[24] != 3) return 0;
+  if (c[24] != 3)
+    return 0;
 
-  if (c[25] != OP_SLOT_SUB_FIX || c[26] != s_y || c[27] != 1 || c[28] != 0) return 0;
-  if (c[29] != OP_LOAD_SLOT || c[30] != s_z) return 0;
-  if (c[31] != OP_LOAD_SLOT || c[32] != s_x) return 0;
-  if (c[33] != OP_CALL_GLOBAL) return 0;
+  if (c[25] != OP_SLOT_SUB_FIX || c[26] != s_y || c[27] != 1 || c[28] != 0)
+    return 0;
+  if (c[29] != OP_LOAD_SLOT || c[30] != s_z)
+    return 0;
+  if (c[31] != OP_LOAD_SLOT || c[32] != s_x)
+    return 0;
+  if (c[33] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_b = c[34];
-  if (c[35] != 3) return 0;
+  if (c[35] != 3)
+    return 0;
 
-  if (c[36] != OP_SLOT_SUB_FIX || c[37] != s_z || c[38] != 1 || c[39] != 0) return 0;
-  if (c[40] != OP_LOAD_SLOT || c[41] != s_x) return 0;
-  if (c[42] != OP_LOAD_SLOT || c[43] != s_y) return 0;
-  if (c[44] != OP_CALL_GLOBAL) return 0;
+  if (c[36] != OP_SLOT_SUB_FIX || c[37] != s_z || c[38] != 1 || c[39] != 0)
+    return 0;
+  if (c[40] != OP_LOAD_SLOT || c[41] != s_x)
+    return 0;
+  if (c[42] != OP_LOAD_SLOT || c[43] != s_y)
+    return 0;
+  if (c[44] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_c = c[45];
-  if (c[46] != 3) return 0;
-  if (c[47] != OP_TAIL_SELF || c[48] != 3 || c[49] != OP_RET) return 0;
+  if (c[46] != 3)
+    return 0;
+  if (c[47] != OP_TAIL_SELF || c[48] != 3 || c[49] != OP_RET)
+    return 0;
 
-  if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS || s_z >= ENV_INLINE_SLOTS)
+  if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS ||
+      s_z >= ENV_INLINE_SLOTS)
     return 0;
 
   /* All three CALL_GLOBALs must target THIS function — the matcher
      emits intra-buffer BL to entry. Without the check, any (def f (x y z)
      ...) with the tak shape silently rewires the calls. */
-  if (!bc->self_name) return 0;
-  if (idx_a >= bc->nconsts || idx_b >= bc->nconsts || idx_c >= bc->nconsts) return 0;
-  exp_t *ka = bc->consts[idx_a], *kb = bc->consts[idx_b], *kc = bc->consts[idx_c];
-  if (!is_ptr(ka) || !issymbol(ka) || !is_ptr(kb) || !issymbol(kb) ||
-      !is_ptr(kc) || !issymbol(kc)) return 0;
-  if (strcmp((const char*)ka->ptr, bc->self_name) != 0 ||
-      strcmp((const char*)kb->ptr, bc->self_name) != 0 ||
-      strcmp((const char*)kc->ptr, bc->self_name) != 0) return 0;
+  if (!bc->self_name)
+    return 0;
+  if (idx_a >= bc->nconsts || idx_b >= bc->nconsts || idx_c >= bc->nconsts)
+    return 0;
+  exp_t *ka = bc->consts[idx_a], *kb = bc->consts[idx_b],
+        *kc = bc->consts[idx_c];
+  if (!issymbol(ka) || !issymbol(kb) ||
+      !issymbol(kc))
+    return 0;
+  if (strcmp((const char *)ka->ptr, bc->self_name) != 0 ||
+      strcmp((const char *)kb->ptr, bc->self_name) != 0 ||
+      strcmp((const char *)kc->ptr, bc->self_name) != 0)
+    return 0;
 
   int off_x = (int)offsetof(env_t, inline_vals[0]) + (int)s_x * 8;
   int off_y = (int)offsetof(env_t, inline_vals[0]) + (int)s_y * 8;
   int off_z = (int)offsetof(env_t, inline_vals[0]) + (int)s_z * 8;
-  if (off_x > 32760 || off_y > 32760 || off_z > 32760) return 0;
+  if (off_x > 32760 || off_y > 32760 || off_z > 32760)
+    return 0;
 
   /* Frame: 80 bytes. [sp+0]=fp, +8=lr, +16=x19, +24=pad, +32..+48=orig
      x/y/z, +56..+72=t1/t2/t3. */
@@ -7422,11 +7953,14 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   int entry_pc = n;
   out[n++] = arm64_ldr_imm(1, 0, off_y);
   out[n++] = arm64_ldr_imm(2, 0, off_x);
-  int patch_da = n; out[n++] = 0;
-  int patch_db = n; out[n++] = 0;
+  int patch_da = n;
+  out[n++] = 0;
+  int patch_db = n;
+  out[n++] = 0;
 
   out[n++] = arm64_cmp_reg(1, 2);
-  int patch_recurse = n; out[n++] = 0;
+  int patch_recurse = n;
+  out[n++] = 0;
   out[n++] = arm64_ldr_imm(0, 0, off_z);
   out[n++] = arm64_ret();
 
@@ -7443,8 +7977,12 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
 
   out[n++] = arm64_sub_imm(2, 2, 8);
   out[n++] = arm64_str_imm(2, 0, off_x);
-  { int cur = n++; out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu); }
-  int patch_b1 = n; out[n++] = 0;
+  {
+    int cur = n++;
+    out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu);
+  }
+  int patch_b1 = n;
+  out[n++] = 0;
   out[n++] = arm64_str_imm(0, 31, 56);
   out[n++] = arm64_mov_reg(0, 19);
 
@@ -7455,8 +7993,12 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_str_imm(1, 0, off_y);
   out[n++] = arm64_ldr_imm(1, 31, 32);
   out[n++] = arm64_str_imm(1, 0, off_z);
-  { int cur = n++; out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu); }
-  int patch_b2 = n; out[n++] = 0;
+  {
+    int cur = n++;
+    out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu);
+  }
+  int patch_b2 = n;
+  out[n++] = 0;
   out[n++] = arm64_str_imm(0, 31, 64);
   out[n++] = arm64_mov_reg(0, 19);
 
@@ -7467,8 +8009,12 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_str_imm(1, 0, off_y);
   out[n++] = arm64_ldr_imm(1, 31, 40);
   out[n++] = arm64_str_imm(1, 0, off_z);
-  { int cur = n++; out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu); }
-  int patch_b3 = n; out[n++] = 0;
+  {
+    int cur = n++;
+    out[cur] = 0x94000000u | ((uint32_t)(entry_pc - cur) & 0x3FFFFFFu);
+  }
+  int patch_b3 = n;
+  out[n++] = 0;
   out[n++] = arm64_str_imm(0, 31, 72);
   out[n++] = arm64_mov_reg(0, 19);
 
@@ -7481,7 +8027,10 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
 
   out[n++] = arm64_ldp_off_sp(19, 20, 16);
   out[n++] = arm64_ldp_post_sp(29, 30, 80);
-  { int cur = n++; out[cur] = arm64_b(entry_pc - cur); }
+  {
+    int cur = n++;
+    out[cur] = arm64_b(entry_pc - cur);
+  }
 
   int bail_pc = n;
   out[n++] = arm64_ldp_off_sp(19, 20, 16);
@@ -7499,7 +8048,8 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
   out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
 
-  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 96)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7513,91 +8063,126 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
    frame, recursive-CALLs the inner ack(m, n-1) via intra-buffer BL,
    then tail-self's to ack(m-1, result). */
 static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 53) return 0;
+  if (bc->ncode != 53)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT) return 0;
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
   uint8_t slot_m = c[1];
-  if (c[2] != OP_LOAD_FIX || c[3] != 0 || c[4] != 0) return 0;
-  if (c[5] != OP_IS) return 0;
-  if (c[6] != OP_BR_IF_FALSE) return 0;
+  if (c[2] != OP_LOAD_FIX || c[3] != 0 || c[4] != 0)
+    return 0;
+  if (c[5] != OP_IS)
+    return 0;
+  if (c[6] != OP_BR_IF_FALSE)
+    return 0;
 
-  if (c[9] != OP_SLOT_ADD_FIX) return 0;
+  if (c[9] != OP_SLOT_ADD_FIX)
+    return 0;
   uint8_t slot_n_check = c[10];
-  if (c[11] != 1 || c[12] != 0) return 0;
-  if (c[13] != OP_JUMP) return 0;
+  if (c[11] != 1 || c[12] != 0)
+    return 0;
+  if (c[13] != OP_JUMP)
+    return 0;
 
-  if (c[16] != OP_LOAD_SLOT) return 0;
+  if (c[16] != OP_LOAD_SLOT)
+    return 0;
   uint8_t slot_n = c[17];
-  if (slot_n != slot_n_check) return 0;
-  if (c[18] != OP_LOAD_FIX || c[19] != 0 || c[20] != 0) return 0;
-  if (c[21] != OP_IS) return 0;
-  if (c[22] != OP_BR_IF_FALSE) return 0;
+  if (slot_n != slot_n_check)
+    return 0;
+  if (c[18] != OP_LOAD_FIX || c[19] != 0 || c[20] != 0)
+    return 0;
+  if (c[21] != OP_IS)
+    return 0;
+  if (c[22] != OP_BR_IF_FALSE)
+    return 0;
 
-  if (c[25] != OP_SLOT_SUB_FIX || c[26] != slot_m) return 0;
-  if (c[27] != 1 || c[28] != 0) return 0;
-  if (c[29] != OP_LOAD_FIX || c[30] != 1 || c[31] != 0) return 0;
-  if (c[32] != OP_TAIL_SELF || c[33] != 2) return 0;
-  if (c[34] != OP_JUMP) return 0;
+  if (c[25] != OP_SLOT_SUB_FIX || c[26] != slot_m)
+    return 0;
+  if (c[27] != 1 || c[28] != 0)
+    return 0;
+  if (c[29] != OP_LOAD_FIX || c[30] != 1 || c[31] != 0)
+    return 0;
+  if (c[32] != OP_TAIL_SELF || c[33] != 2)
+    return 0;
+  if (c[34] != OP_JUMP)
+    return 0;
 
-  if (c[37] != OP_SLOT_SUB_FIX || c[38] != slot_m) return 0;
-  if (c[39] != 1 || c[40] != 0) return 0;
-  if (c[41] != OP_LOAD_SLOT || c[42] != slot_m) return 0;
-  if (c[43] != OP_SLOT_SUB_FIX || c[44] != slot_n) return 0;
-  if (c[45] != 1 || c[46] != 0) return 0;
-  if (c[47] != OP_CALL_GLOBAL) return 0;
+  if (c[37] != OP_SLOT_SUB_FIX || c[38] != slot_m)
+    return 0;
+  if (c[39] != 1 || c[40] != 0)
+    return 0;
+  if (c[41] != OP_LOAD_SLOT || c[42] != slot_m)
+    return 0;
+  if (c[43] != OP_SLOT_SUB_FIX || c[44] != slot_n)
+    return 0;
+  if (c[45] != 1 || c[46] != 0)
+    return 0;
+  if (c[47] != OP_CALL_GLOBAL)
+    return 0;
   uint8_t idx_call = c[48];
-  if (c[49] != 2) return 0;
+  if (c[49] != 2)
+    return 0;
   /* CALL_GLOBAL must target THIS function (intra-buffer BL). */
-  if (!bc->self_name || idx_call >= bc->nconsts) return 0;
+  if (!bc->self_name || idx_call >= bc->nconsts)
+    return 0;
   exp_t *callee = bc->consts[idx_call];
-  if (!is_ptr(callee) || !issymbol(callee)) return 0;
-  if (strcmp((const char*)callee->ptr, bc->self_name) != 0) return 0;
-  if (c[50] != OP_TAIL_SELF || c[51] != 2 || c[52] != OP_RET) return 0;
-  if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS) return 0;
+  if (!issymbol(callee))
+    return 0;
+  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
+    return 0;
+  if (c[50] != OP_TAIL_SELF || c[51] != 2 || c[52] != OP_RET)
+    return 0;
+  if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS)
+    return 0;
 
   int off_m = (int)offsetof(env_t, inline_vals[0]) + (int)slot_m * 8;
   int off_n = (int)offsetof(env_t, inline_vals[0]) + (int)slot_n * 8;
-  if (off_m > 32760 || off_n > 32760) return 0;
+  if (off_m > 32760 || off_n > 32760)
+    return 0;
 
   int n = 0;
 
   /* entry: load m,n into x1,x2; tag-check both. x0 stays as env. */
   int entry_pc = n;
-  out[n++] = arm64_ldr_imm(1, 0, off_m);   /* x1 = m */
-  out[n++] = arm64_ldr_imm(2, 0, off_n);   /* x2 = n */
-  int patch_da = n; out[n++] = 0;          /* tbz x1,#0,deopt */
-  int patch_db = n; out[n++] = 0;          /* tbz x2,#0,deopt */
+  out[n++] = arm64_ldr_imm(1, 0, off_m); /* x1 = m */
+  out[n++] = arm64_ldr_imm(2, 0, off_n); /* x2 = n */
+  int patch_da = n;
+  out[n++] = 0; /* tbz x1,#0,deopt */
+  int patch_db = n;
+  out[n++] = 0; /* tbz x2,#0,deopt */
 
   /* if m == FIX(0) (= 1): return n + 8 (= n + FIX(1) - FIX(0) = n+1 tagged). */
   out[n++] = arm64_cmp_imm(1, 1);
-  int patch_not_m0 = n; out[n++] = 0;      /* b.ne not_m0 */
-  out[n++] = arm64_add_imm(0, 2, 8);       /* x0 = x2 + 8 (tagged n+1) */
+  int patch_not_m0 = n;
+  out[n++] = 0;                      /* b.ne not_m0 */
+  out[n++] = arm64_add_imm(0, 2, 8); /* x0 = x2 + 8 (tagged n+1) */
   out[n++] = arm64_ret();
 
   int not_m0_pc = n;
   /* if n == FIX(0) (= 1): tail-self (m-1, 1). */
   out[n++] = arm64_cmp_imm(2, 1);
-  int patch_not_n0 = n; out[n++] = 0;      /* b.ne not_n0 */
-  out[n++] = arm64_sub_imm(1, 1, 8);       /* x1 = m - 8 (tagged m-1) */
+  int patch_not_n0 = n;
+  out[n++] = 0;                      /* b.ne not_n0 */
+  out[n++] = arm64_sub_imm(1, 1, 8); /* x1 = m - 8 (tagged m-1) */
   out[n++] = arm64_str_imm(1, 0, off_m);
-  n += emit_mov64(out + n, 3, 9);          /* tagged 1 = 9 */
+  n += emit_mov64(out + n, 3, 9); /* tagged 1 = 9 */
   out[n++] = arm64_str_imm(3, 0, off_n);
   {
     int cur = n++;
-    out[cur] = arm64_b(entry_pc - cur);    /* b entry */
+    out[cur] = arm64_b(entry_pc - cur); /* b entry */
   }
 
   /* not_n0: nested CALL ack(m, n-1), then tail-self (m-1, result). */
   int not_n0_pc = n;
 
   /* prologue: stp x29,x30 (FP/LR); stp x19,x20. 32-byte frame, 16-aligned. */
-  out[n++] = arm64_stp_pre_sp(29, 30, -32);     /* sp -= 32; [sp+0]=fp,[sp+8]=lr */
-  out[n++] = arm64_stp_off_sp(19, 20, 16);      /* stp x19, x20, [sp, #16] */
-  out[n++] = arm64_mov_from_sp(29);             /* mov x29, sp */
+  out[n++] = arm64_stp_pre_sp(29, 30, -32); /* sp -= 32; [sp+0]=fp,[sp+8]=lr */
+  out[n++] = arm64_stp_off_sp(19, 20, 16);  /* stp x19, x20, [sp, #16] */
+  out[n++] = arm64_mov_from_sp(29);         /* mov x29, sp */
 
-  out[n++] = arm64_mov_reg(19, 0);              /* x19 = env */
-  out[n++] = arm64_mov_reg(20, 1);              /* x20 = m_orig */
+  out[n++] = arm64_mov_reg(19, 0); /* x19 = env */
+  out[n++] = arm64_mov_reg(20, 1); /* x20 = m_orig */
 
   /* slot_n = n - 1 (tagged: -8). x2 still has n. */
   out[n++] = arm64_sub_imm(2, 2, 8);
@@ -7612,17 +8197,18 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
   }
 
   /* tag-check result in x0; bail on non-fixnum. */
-  int patch_bail = n; out[n++] = 0;             /* tbz x0,#0,bail */
+  int patch_bail = n;
+  out[n++] = 0; /* tbz x0,#0,bail */
 
   /* tail-self prep: slot_m = m_orig - 1, slot_n = result, env back in x0. */
   out[n++] = arm64_sub_imm(20, 20, 8);
   out[n++] = arm64_str_imm(20, 19, off_m);
-  out[n++] = arm64_str_imm(0,  19, off_n);
+  out[n++] = arm64_str_imm(0, 19, off_n);
   out[n++] = arm64_mov_reg(0, 19);
 
   /* epilogue then b entry (tail-self). */
-  out[n++] = arm64_ldp_off_sp(19, 20, 16);      /* ldp x19, x20, [sp, #16] */
-  out[n++] = arm64_ldp_post_sp(29, 30, 32);     /* ldp fp,lr ; sp += 32 */
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);  /* ldp x19, x20, [sp, #16] */
+  out[n++] = arm64_ldp_post_sp(29, 30, 32); /* ldp fp,lr ; sp += 32 */
   {
     int cur = n++;
     out[cur] = arm64_b(entry_pc - cur);
@@ -7630,7 +8216,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* bail: tear down + return x0 (NULL/error). */
   int bail_pc = n;
-  out[n++] = arm64_ldp_off_sp(19, 20, 16);      /* ldp x19, x20, [sp, #16] */
+  out[n++] = arm64_ldp_off_sp(19, 20, 16); /* ldp x19, x20, [sp, #16] */
   out[n++] = arm64_ldp_post_sp(29, 30, 32);
   out[n++] = arm64_ret();
 
@@ -7642,14 +8228,16 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
   /* Patch forward branches. */
   out[patch_not_m0] = arm64_b_cond(1 /* NE */, not_m0_pc - patch_not_m0);
   out[patch_not_n0] = arm64_b_cond(1 /* NE */, not_n0_pc - patch_not_n0);
-  out[patch_bail]   = arm64_tbz(0, 0, bail_pc - patch_bail);
-  out[patch_da]     = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db]     = arm64_tbz(2, 0, deopt_pc - patch_db);
+  out[patch_bail] = arm64_tbz(0, 0, bail_pc - patch_bail);
+  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
+  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
 
   /* Suppress unused-warning for the helper we resolved inline. */
-  (void)arm64_stp_pre_sp; (void)arm64_ldp_post_sp;
+  (void)arm64_stp_pre_sp;
+  (void)arm64_ldp_post_sp;
 
-  if (n > 64) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 64)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7658,19 +8246,27 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
    Computes (a mod b == K) and returns t/nil. Native: sdiv + msub for the
    remainder, csel for the boolean result. ~10 cycles vs ~150 in bytecode. */
 static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 10) return 0;
+  if (bc->ncode != 10)
+    return 0;
   uint8_t *c = bc->code;
-  if (c[0] != OP_LOAD_SLOT || c[1] >= ENV_INLINE_SLOTS) return 0;
-  if (c[2] != OP_LOAD_SLOT || c[3] >= ENV_INLINE_SLOTS) return 0;
-  if (c[4] != OP_MOD) return 0;
-  if (c[5] != OP_LOAD_FIX) return 0;
+  if (c[0] != OP_LOAD_SLOT || c[1] >= ENV_INLINE_SLOTS)
+    return 0;
+  if (c[2] != OP_LOAD_SLOT || c[3] >= ENV_INLINE_SLOTS)
+    return 0;
+  if (c[4] != OP_MOD)
+    return 0;
+  if (c[5] != OP_LOAD_FIX)
+    return 0;
   int16_t K = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
-  if (c[8] != OP_IS) return 0;
-  if (c[9] != OP_RET) return 0;
+  if (c[8] != OP_IS)
+    return 0;
+  if (c[9] != OP_RET)
+    return 0;
 
   int off_a = (int)offsetof(env_t, inline_vals[0]) + (int)c[1] * 8;
   int off_b = (int)offsetof(env_t, inline_vals[0]) + (int)c[3] * 8;
-  if (off_a > 32760 || off_b > 32760) return 0;
+  if (off_a > 32760 || off_b > 32760)
+    return 0;
 
   /* (K << 3) is the value we compare against. Untagged a%b is (a<<3) %
      (b<<3) once we've stripped the tag bit. */
@@ -7678,16 +8274,19 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
 
   int n = 0;
   /* Load both slots. */
-  out[n++] = arm64_ldr_imm(1, 0, off_a);   /* x1 = a tagged */
-  out[n++] = arm64_ldr_imm(2, 0, off_b);   /* x2 = b tagged */
+  out[n++] = arm64_ldr_imm(1, 0, off_a); /* x1 = a tagged */
+  out[n++] = arm64_ldr_imm(2, 0, off_b); /* x2 = b tagged */
   /* Tag-check both. */
-  int patch_t1 = n; out[n++] = 0;          /* tbz x1,#0,deopt */
-  int patch_t2 = n; out[n++] = 0;          /* tbz x2,#0,deopt */
+  int patch_t1 = n;
+  out[n++] = 0; /* tbz x1,#0,deopt */
+  int patch_t2 = n;
+  out[n++] = 0; /* tbz x2,#0,deopt */
   /* Untag (sub 1). After this, x1=a<<3, x2=b<<3. */
   out[n++] = arm64_sub_imm(1, 1, 1);
   out[n++] = arm64_sub_imm(2, 2, 1);
   /* Guard against div-by-zero. */
-  int patch_dz = n; out[n++] = 0;          /* cbz x2, deopt */
+  int patch_dz = n;
+  out[n++] = 0; /* cbz x2, deopt */
   /* x3 = x1 / x2, then x4 = x1 - x3*x2  (= a%b << 3). */
   out[n++] = arm64_sdiv(3, 1, 2);
   out[n++] = arm64_msub(4, 3, 2, 1);
@@ -7712,9 +8311,10 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
 
   out[patch_t1] = arm64_tbz(1, 0, deopt_pc - patch_t1);
   out[patch_t2] = arm64_tbz(2, 0, deopt_pc - patch_t2);
-  out[patch_dz] = arm64_cbz(2,    deopt_pc - patch_dz);
+  out[patch_dz] = arm64_cbz(2, deopt_pc - patch_dz);
 
-  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 32)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7723,62 +8323,93 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
      (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S)))))
    Iteratively: i, s untagged; loop while i <= n; s += K_step_s; i++. */
 static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 48) return 0;
+  if (bc->ncode != 48)
+    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_FIX) return 0;
+  if (c[0] != OP_LOAD_FIX)
+    return 0;
   int16_t K_init_s = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
-  if (c[3] != OP_BIND_SLOT) return 0;
-  if (c[5] != OP_LOAD_FIX) return 0;
+  if (c[3] != OP_BIND_SLOT)
+    return 0;
+  if (c[5] != OP_LOAD_FIX)
+    return 0;
   int16_t K_init_i = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
-  if (c[8] != OP_BIND_SLOT) return 0;
-  if (c[10] != OP_LOAD_SLOT) return 0;
+  if (c[8] != OP_BIND_SLOT)
+    return 0;
+  if (c[10] != OP_LOAD_SLOT)
+    return 0;
   uint8_t slot_arg = c[11];
-  if (c[12] != OP_BIND_SLOT) return 0;
-  if (c[14] != OP_LOAD_CONST) return 0;
-  if (c[16] != OP_SLOT_LE_SLOT) return 0;
-  if (c[19] != OP_BR_IF_FALSE) return 0;
+  if (c[12] != OP_BIND_SLOT)
+    return 0;
+  if (c[14] != OP_LOAD_CONST)
+    return 0;
+  if (c[16] != OP_SLOT_LE_SLOT)
+    return 0;
+  if (c[19] != OP_BR_IF_FALSE)
+    return 0;
   int16_t br_off = (int16_t)((uint16_t)c[20] | ((uint16_t)c[21] << 8));
-  if (br_off != 19) return 0;
-  if (c[22] != OP_POP) return 0;
+  if (br_off != 19)
+    return 0;
+  if (c[22] != OP_POP)
+    return 0;
 
   uint8_t step_s_op = c[23];
-  if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX) return 0;
+  if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX)
+    return 0;
   int16_t K_step_s = (int16_t)((uint16_t)c[25] | ((uint16_t)c[26] << 8));
-  if (c[27] != OP_STORE_SLOT) return 0;
+  if (c[27] != OP_STORE_SLOT)
+    return 0;
 
-  if (c[29] != OP_LOAD_SLOT) return 0;
-  if (c[31] != OP_LOAD_FIX) return 0;
+  if (c[29] != OP_LOAD_SLOT)
+    return 0;
+  if (c[31] != OP_LOAD_FIX)
+    return 0;
   int16_t K_step_i = (int16_t)((uint16_t)c[32] | ((uint16_t)c[33] << 8));
-  if (K_step_i != 1) return 0;
-  if (c[34] != OP_ADD) return 0;
-  if (c[35] != OP_STORE_SLOT) return 0;
-  if (c[37] != OP_POP) return 0;
-  if (c[38] != OP_JUMP) return 0;
+  if (K_step_i != 1)
+    return 0;
+  if (c[34] != OP_ADD)
+    return 0;
+  if (c[35] != OP_STORE_SLOT)
+    return 0;
+  if (c[37] != OP_POP)
+    return 0;
+  if (c[38] != OP_JUMP)
+    return 0;
   int16_t jmp_off = (int16_t)((uint16_t)c[39] | ((uint16_t)c[40] << 8));
-  if (jmp_off != -25) return 0;
+  if (jmp_off != -25)
+    return 0;
 
-  if (c[41] != OP_UNBIND_SLOT) return 0;
-  if (c[43] != OP_UNBIND_SLOT) return 0;
-  if (c[45] != OP_UNBIND_SLOT) return 0;
-  if (c[47] != OP_RET) return 0;
-  if (slot_arg >= ENV_INLINE_SLOTS) return 0;
+  if (c[41] != OP_UNBIND_SLOT)
+    return 0;
+  if (c[43] != OP_UNBIND_SLOT)
+    return 0;
+  if (c[45] != OP_UNBIND_SLOT)
+    return 0;
+  if (c[47] != OP_RET)
+    return 0;
+  if (slot_arg >= ENV_INLINE_SLOTS)
+    return 0;
 
   int arg_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot_arg * 8;
-  if (arg_off < 0 || arg_off > 32760) return 0;
+  if (arg_off < 0 || arg_off > 32760)
+    return 0;
 
   /* K_step_s clamped to arm64 add_imm/sub_imm 12-bit range. K_step_i
      fixed at 1 (verified above). K_init_i / K_init_s arbitrary int16
      — emit via mov64 to be safe. */
-  int step_abs = (int)K_step_s; if (step_abs < 0) step_abs = -step_abs;
-  if (step_abs > 4095) return 0;
+  int step_abs = (int)K_step_s;
+  if (step_abs < 0)
+    step_abs = -step_abs;
+  if (step_abs > 4095)
+    return 0;
 
   int n = 0;
   /* Load + tag-check + untag n_max into x1. */
   out[n++] = arm64_ldr_imm(1, 0, arg_off);
   int patch_tbz = n;
-  out[n++] = 0;                                 /* tbz x1,#0,deopt */
-  out[n++] = arm64_asr_imm(1, 1, 3);           /* x1 = n_max (untagged) */
+  out[n++] = 0;                      /* tbz x1,#0,deopt */
+  out[n++] = arm64_asr_imm(1, 1, 3); /* x1 = n_max (untagged) */
 
   /* x2 = i (init), x3 = s (init). */
   n += emit_mov64(out + n, 2, (uint64_t)(int64_t)K_init_i);
@@ -7788,7 +8419,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
   int loop_top = n;
   out[n++] = arm64_cmp_reg(2, 1);
   int patch_done = n;
-  out[n++] = 0;                                 /* b.gt done */
+  out[n++] = 0; /* b.gt done */
 
   /* s op= K_step_s */
   if (step_s_op == OP_SLOT_ADD_FIX)
@@ -7816,9 +8447,10 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ret();
 
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
-  out[patch_tbz]  = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
 
-  if (n > 32) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 32)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -7934,7 +8566,8 @@ int jit_compile(bytecode_t *bc) {
 
   /* Hard cap is the insns[128] declaration above; trip if anything
      exceeds the buffer. The widest shape today is ackermann (~50). */
-  if (n > 128) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 128)
+    return 0; /* JIT buffer guard (was assert) */
   size_t sz = (size_t)n * 4;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
@@ -8296,7 +8929,8 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* Worst case ~55 bytes (load, test, jcc, cmp, jcc, sub/add, mov,
      jmp, mov, ret, xor, ret + slack). Caller's buffer is uint8_t buf[256]. */
-  if (n > 80) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 80)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8460,7 +9094,8 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
 
   /* Worst case ~134 bytes (entry tag-check + frame setup + ~45-byte
      call sequence + arith + jmp + exits). buf is 256 bytes. */
-  if (n > 160) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 160)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8699,7 +9334,8 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     (void)inv_cc;
     (void)slot;
 
-    if (n > 200) return 0;  /* JIT buffer guard (was assert) */
+    if (n > 200)
+      return 0; /* JIT buffer guard (was assert) */
     *outn = n;
     return 1;
   }
@@ -8794,7 +9430,8 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Worst case ~190 bytes (entry tag-check + 2 ~45-byte call sequences
      + tag-checks + tagged add + frame teardown + bail + deopt). buf
      is 256 bytes. The matcher with the largest emission. */
-  if (n > 224) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 224)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -8898,14 +9535,14 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_t >= bc->nconsts)
     return 0;
   exp_t *ct = bc->consts[idx_t];
-  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
     return 0;
   for (int k = 0; k < 3; k++) {
     uint8_t idx = (k == 0) ? idx_nil1 : (k == 1) ? idx_nil2 : idx_nil3;
     if (idx >= bc->nconsts)
       return 0;
     exp_t *cn = bc->consts[idx];
-    if (!is_ptr(cn) || !issymbol(cn) ||
+    if (!issymbol(cn) ||
         strcmp((const char *)cn->ptr, "nil") != 0)
       return 0;
   }
@@ -8924,7 +9561,8 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   uint64_t true_addr = (uint64_t)(uintptr_t)true_singleton;
 #if !ALCOVE_SINGLE_THREADED
   int32_t off_flags = (int32_t)offsetof(struct exp_t, flags);
-  if (off_flags > 127) return 0; /* keep disp8 encoding */
+  if (off_flags > 127)
+    return 0; /* keep disp8 encoding */
   int jnz_shared_ref = -1, jnz_shared_unref = -1;
 #endif
 
@@ -9110,7 +9748,8 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jnz_shared_unref, 6, deopt_pc);
 #endif
 
-  if (n > 480) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 480)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9182,9 +9821,9 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts)
     return 0;
   exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
-  if (!is_ptr(ct) || !issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
     return 0;
-  if (!is_ptr(cnil) || !issymbol(cnil) ||
+  if (!issymbol(cnil) ||
       strcmp((const char *)cnil->ptr, "nil") != 0)
     return 0;
   if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
@@ -9200,7 +9839,8 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   uint64_t true_addr = (uint64_t)(uintptr_t)true_singleton;
 #if !ALCOVE_SINGLE_THREADED
   int32_t off_flags = (int32_t)offsetof(struct exp_t, flags);
-  if (off_flags > 127) return 0; /* keep disp8 encoding */
+  if (off_flags > 127)
+    return 0; /* keep disp8 encoding */
   int jnz_shared_ref = -1, jnz_shared_unref = -1;
 #endif
 
@@ -9355,7 +9995,8 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jnz_shared_unref, 6, deopt_pc);
 #endif
 
-  if (n > 480) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 480)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9513,7 +10154,8 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_skip_inc, 6, skip_inc_pc);
   x64_patch_rel32(buf, je_skip_inc, 6, skip_inc_pc);
 
-  if (n > 200) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 200)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9586,10 +10228,10 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
     return 0;
   exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!is_ptr(cn1) || !issymbol(cn1) ||
+  if (!issymbol(cn1) ||
       strcmp((const char *)cn1->ptr, "nil") != 0)
     return 0;
-  if (!is_ptr(cn2) || !issymbol(cn2) ||
+  if (!issymbol(cn2) ||
       strcmp((const char *)cn2->ptr, "nil") != 0)
     return 0;
   if (s_j >= ENV_INLINE_SLOTS)
@@ -9696,7 +10338,8 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
 
-  if (n > 200) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 200)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -9781,8 +10424,8 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *ca = bc->consts[idx_a];
   exp_t *cb = bc->consts[idx_b];
   exp_t *cc = bc->consts[idx_c];
-  if (!is_ptr(ca) || !issymbol(ca) || !is_ptr(cb) || !issymbol(cb) ||
-      !is_ptr(cc) || !issymbol(cc))
+  if (!issymbol(ca) || !issymbol(cb) ||
+      !issymbol(cc))
     return 0;
   if (strcmp((const char *)ca->ptr, (const char *)cb->ptr) != 0)
     return 0;
@@ -9931,7 +10574,8 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
 
-  if (n > 480) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 480)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10124,7 +10768,8 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_deopt_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_deopt_b, 6, deopt_pc);
 
-  if (n > 320) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 320)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10284,7 +10929,8 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
 
-  if (n > 128) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 128)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10468,7 +11114,8 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
 
-  if (n > 128) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 128)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10549,7 +11196,8 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz2, 6, deopt_pc);
   x64_patch_rel32(buf, jz_bz, 6, deopt_pc);
 
-  if (n > 96) return 0;  /* JIT buffer guard (was assert) */
+  if (n > 96)
+    return 0; /* JIT buffer guard (was assert) */
   *outn = n;
   return 1;
 }
@@ -10679,7 +11327,8 @@ int jit_compile(bytecode_t *bc) {
      overflow); this catch-all protects buf as a whole including the
      inline leaf-shape paths above. Hard fall-back rather than abort —
      bytecode will run the body. Survives -DNDEBUG, unlike assert(). */
-  if (n > (int)sizeof(buf)) return 0;
+  if (n > (int)sizeof(buf))
+    return 0;
   size_t sz = (size_t)n;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
@@ -10698,7 +11347,6 @@ int jit_compile(bytecode_t *bc) {
 #endif /* __x86_64__ */
 
 #endif /* ALCOVE_JIT */
-
 
 static void emit_u8(compiler_t *c, uint8_t b) {
   if (c->failed)
@@ -10832,8 +11480,7 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
      string-as-callable arm (ticket 6). The earlier blanket refusal
      was too conservative. */
   int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
-                     is_ptr(head) && issymbol(head) &&
-                     strcmp(head->ptr, c->self_name) == 0;
+                     issymbol(head) && strcmp(head->ptr, c->self_name) == 0;
   /* Cross-function tail call is safe regardless of nlet_depth:
      OP_TAIL_CALL wholesale releases current env's inline slots. */
   int is_cross_tail = tail && !is_self_tail;
@@ -10841,7 +11488,7 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
      slot and isn't the self-tail case, we can skip the LOAD_GLOBAL
      dispatch + PUSH/POP and call via the gcache directly. */
   int use_call_global = 0, global_idx = -1;
-  if (!is_self_tail && !is_cross_tail && is_ptr(head) && issymbol(head) &&
+  if (!is_self_tail && !is_cross_tail && issymbol(head) &&
       find_slot(c, head->ptr) < 0) {
     global_idx = add_const(c, head);
     if (global_idx < 0) {
@@ -10916,7 +11563,7 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
      fixnum fitting in int16. Emit one fused op instead of three. */
   if (!a->next->next) {
     int fused = fuse_slot_fix(op);
-    if (fused && is_ptr(arg1) && issymbol(arg1) && isnumber(arg2)) {
+    if (fused && issymbol(arg1) && isnumber(arg2)) {
       int slot = find_slot(c, arg1->ptr);
       int64_t v = FIX_VAL(arg2);
       if (slot >= 0 && v >= INT16_MIN && v <= INT16_MAX) {
@@ -10949,7 +11596,7 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
   (void)tail;
   exp_t *key = cadr(form);
   exp_t *val = caddr(form);
-  if (!is_ptr(key) || !issymbol(key)) {
+  if (!issymbol(key)) {
     c->failed = 1;
     return;
   }
@@ -10972,7 +11619,7 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
   exp_t *var = cadr(form);
   exp_t *val = caddr(form);
   exp_t *body = cadddr(form);
-  if (!is_ptr(var) || !issymbol(var) || !body) {
+  if (!issymbol(var) || !body) {
     c->failed = 1;
     return;
   }
@@ -11012,7 +11659,7 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
 static void compile_with(compiler_t *c, exp_t *form, int tail) {
   exp_t *pairs = cadr(form);
   exp_t *body = caddr(form);
-  if (!is_ptr(pairs) || !ispair(pairs) || !body) {
+  if (!ispair(pairs) || !body) {
     c->failed = 1;
     return;
   }
@@ -11028,7 +11675,7 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
       return;
     }
     exp_t *val = nxt->content;
-    if (!is_ptr(var) || !issymbol(var)) {
+    if (!issymbol(var)) {
       c->failed = 1;
       return;
     }
@@ -11089,7 +11736,7 @@ static void compile_for(compiler_t *c, exp_t *form, int tail) {
   }
   exp_t *body_node = end_node->next;
 
-  if (!is_ptr(var) || !issymbol(var)) {
+  if (!issymbol(var)) {
     c->failed = 1;
     return;
   }
@@ -11237,7 +11884,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
 
   /* Call form. Dispatch on head. */
   exp_t *head = car(e);
-  if (is_ptr(head) && issymbol(head)) {
+  if (issymbol(head)) {
     const char *s = (const char *)head->ptr;
     if (!strcmp(s, "if")) {
       compile_if(c, e, tail);
@@ -11457,7 +12104,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
        know how to handle — let the tree-walker run it. User lambdas
        (not in reserved_symbol) fall through to compile_call. */
     keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)s, NULL);
-    if (kv && is_ptr(kv->val) && isinternal(kv->val)) {
+    if (kv && isinternal(kv->val)) {
       c->failed = 1;
       return;
     }
@@ -11529,7 +12176,7 @@ int compile_lambda(exp_t *fn) {
   bc->nparams = (uint8_t)c.nparams;
   for (int pi = 0; pi < c.nparams; pi++)
     bc->param_keys[pi] = c.slot_names[pi];
-  bc->self_name = (const char *)fn->meta;  /* borrowed; NULL for anon */
+  bc->self_name = (const char *)fn->meta; /* borrowed; NULL for anon */
   fn->bc = bc;
   fn->flags |= FLAG_COMPILED;
 #ifdef ALCOVE_JIT
@@ -11977,15 +12624,17 @@ l_tail_call: {
 
   /* String-as-callable: dispatch via vm_invoke_values, which has the
      indexing arm. Same fallback shape as the !FLAG_COMPILED branch. */
-  if (is_ptr(new_fn) && isstring(new_fn)) {
+  if (isstring(new_fn)) {
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
-    while (sp > 0) unrefexp(POP());
-    if (fn_owned) unrefexp(fn);
+    while (sp > 0)
+      unrefexp(POP());
+    if (fn_owned)
+      unrefexp(fn);
     return ret;
   }
-  if (!is_ptr(new_fn) || !islambda(new_fn)) {
+  if (!islambda(new_fn)) {
     sp = base - 1;
     unrefexp(new_fn);
     RUNTIME_ERR("OP_TAIL_CALL: not a lambda");
@@ -12186,7 +12835,7 @@ l_slot_le_slot: {
 
 l_vec_ref: {
   exp_t *iexp = POP(), *vexp = POP();
-  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+  if (!isvector(vexp) || !isnumber(iexp)) {
     unrefexp(iexp);
     unrefexp(vexp);
     RUNTIME_ERR("vec-ref: bad args");
@@ -12206,7 +12855,7 @@ l_vec_ref: {
 }
 l_vec_set: {
   exp_t *valexp = POP(), *iexp = POP(), *vexp = POP();
-  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR || !isnumber(iexp)) {
+  if (!isvector(vexp) || !isnumber(iexp)) {
     unrefexp(valexp);
     unrefexp(iexp);
     unrefexp(vexp);
@@ -12231,7 +12880,7 @@ l_vec_set: {
 }
 l_vec_len: {
   exp_t *vexp = POP();
-  if (!is_ptr(vexp) || vexp->type != EXP_VECTOR) {
+  if (!isvector(vexp)) {
     unrefexp(vexp);
     RUNTIME_ERR("vec-len: not a vector");
   }
@@ -12326,10 +12975,11 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
      symbol-lookup path added in ticket 5). The bytecode VM compiles
      (sym args...) as OP_CALL_GLOBAL → vm_invoke_values, so we need the
      same arm here or compiled bodies miscompile string-index reads. */
-  if (is_ptr(fn) && isstring(fn)) {
+  if (isstring(fn)) {
     int i;
     if (nargs != 1) {
-      for (i = 0; i < nargs; i++) unrefexp(argv[i]);
+      for (i = 0; i < nargs; i++)
+        unrefexp(argv[i]);
       return error(ERROR_MISSING_PARAMETER, fn, env,
                    "string-index: expected exactly 1 arg, got %d", nargs);
     }
@@ -12344,12 +12994,12 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     unrefexp(idx);
     if (i64 < 0 || i64 >= len) {
       return error(ERROR_INDEX_OUT_OF_RANGE, fn, env,
-                   "string-index: %lld out of range [0, %lld)",
-                   (long long)i64, (long long)len);
+                   "string-index: %lld out of range [0, %lld)", (long long)i64,
+                   (long long)len);
     }
     return make_char(*((char *)fn->ptr + i64));
   }
-  if (!is_ptr(fn) || !islambda(fn)) {
+  if (!islambda(fn)) {
     int i;
     for (i = 0; i < nargs; i++)
       unrefexp(argv[i]);
@@ -12380,11 +13030,12 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
        later as a misleading "unbound variable". */
     if ((fn->flags & FLAG_COMPILED) && fn->bc && fn->bc->nparams != nargs) {
       int i;
-      for (i = 0; i < nargs; i++) unrefexp(argv[i]);
+      for (i = 0; i < nargs; i++)
+        unrefexp(argv[i]);
       destroy_env(newenv);
       return error(ERROR_ILLEGAL_VALUE, fn, env,
-                   "wrong number of args: expected %d, got %d",
-                   fn->bc->nparams, nargs);
+                   "wrong number of args: expected %d, got %d", fn->bc->nparams,
+                   nargs);
     }
     exp_t *p = fn->content;
     int i = 0;
@@ -12457,161 +13108,159 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
   exp_t *ret = NULL;
   refexp(fn);
 
-tailrec:
+tailrec: {
+  exp_t *body = fn->next->content;
+  /* Closure: if fn captured an env at creation, use it as the new
+     call frame's parent so let/with bindings from the defining scope
+     resolve before walking up to global. Args themselves must be
+     evaluated in the CALLER's env (where their free vars live) — so
+     we eval first, bind into newenv with evalexp=false. */
+  env_t *captured = (env_t *)fn->next->bc;
+  /* Pre-evaluate args in the caller's env. Build a fresh list of
+     pre-evaluated values so var2env can bind them without re-eval. */
+  exp_t *evald_args = NULL, *evald_tail = NULL;
   {
-    exp_t *body = fn->next->content;
-    /* Closure: if fn captured an env at creation, use it as the new
-       call frame's parent so let/with bindings from the defining scope
-       resolve before walking up to global. Args themselves must be
-       evaluated in the CALLER's env (where their free vars live) — so
-       we eval first, bind into newenv with evalexp=false. */
-    env_t *captured = (env_t *)fn->next->bc;
-    /* Pre-evaluate args in the caller's env. Build a fresh list of
-       pre-evaluated values so var2env can bind them without re-eval. */
-    exp_t *evald_args = NULL, *evald_tail = NULL;
-    {
-      exp_t *src;
-      for (src = e->next; src; src = src->next) {
-        exp_t *v = EVAL(src->content, env);
-        if (v && iserror(v)) {
-          /* clean up partial evald list */
-          if (evald_args)
-            unrefexp(evald_args);
-          unrefexp(fn);
-          unrefexp(e);
-          in_tail_position = outer_tail;
-          return v;
-        }
-        exp_t *node = make_node(v ? v : NIL_EXP);
-        if (!evald_args) {
-          evald_args = node;
-          evald_tail = node;
-        } else {
-          evald_tail->next = node;
-          evald_tail = node;
-        }
-      }
-    }
-    newenv = make_env(captured ? captured : env);
-    newenv->callingfnc = refexp(e);
-    if ((ret = var2env(e, fn->content, evald_args, newenv, false))) {
-      if (evald_args)
-        unrefexp(evald_args);
-      destroy_env(newenv);
-      unrefexp(fn);
-      unrefexp(e);
-      in_tail_position = outer_tail;
-      return ret;
-    }
-    if (evald_args)
-      unrefexp(evald_args);
-
-    /* Compiled body: cross-function tail calls lose TCO here (internal
-       OP_TAIL_SELF still applies). */
-    if (fn->flags & FLAG_COMPILED) {
-#ifdef ALCOVE_JIT
-      if (fn->bc->jit) {
-        ret = fn->bc->jit(newenv);
-        if (!ret)
-          ret = vm_run(fn, newenv); /* JIT deopt → bytecode */
-      } else
-#endif
-        ret = vm_run(fn, newenv);
-      destroy_env(newenv);
-      unrefexp(fn);
-      unrefexp(e);
-      in_tail_position = outer_tail;
-      return ret;
-    }
-
-    exp_t *cur = body;
-    while (cur) {
-      if (ret) {
-        unrefexp(ret);
-        ret = NULL;
-      }
-      int is_last = (cur->next == NULL);
-      in_tail_position = is_last;
-      ret = EVAL(cur->content, newenv);
-
-      if (is_last && ret && is_ptr(ret) && ispair(ret) &&
-          (ret->flags & FLAG_TAILREC) && is_ptr(ret->content) &&
-          islambda(ret->content)) {
-        exp_t *marker = ret;
-        ret = NULL;
-        exp_t *resolved_fn = marker->content;
-
-        if (resolved_fn == fn) {
-          /* Self-recursion fast path: rebind params in place, skip the
-             env teardown/rebuild. Marker args are already evaluated. */
-          int i;
-          for (i = 0; i < newenv->n_inline; i++)
-            unrefexp(newenv->inline_vals[i]);
-          newenv->n_inline = 0;
-          if (newenv->d) {
-            destroy_dict(newenv->d);
-            newenv->d = NULL;
-          }
-
-          exp_t *curvar = fn->content;
-          exp_t *curval = marker->next;
-          while (curvar && curval) {
-            exp_t *v = curval->content;
-            if (is_ptr(curvar->content) && issymbol(curvar->content)) {
-              if (newenv->n_inline < ENV_INLINE_SLOTS) {
-                newenv->inline_keys[newenv->n_inline] = curvar->content->ptr;
-                newenv->inline_vals[newenv->n_inline] = refexp(v);
-                newenv->n_inline++;
-              } else {
-                if (!newenv->d)
-                  newenv->d = create_dict();
-                set_get_keyval_dict(newenv->d, curvar->content->ptr, v);
-              }
-            }
-            curvar = curvar->next;
-            curval = curval->next;
-          }
-
-          unrefexp(marker);
-          cur = body; /* restart the body loop */
-          continue;
-        }
-
-        /* Different function: full unwind + tailrec jump. */
-        exp_t *new_fn = resolved_fn;
-        marker->content = NULL;
-        if (new_fn->meta) {
-          marker->content =
-              make_symbol((char *)new_fn->meta, strlen((char *)new_fn->meta));
-        } else {
-          marker->content = make_symbol("_", 1);
-        }
-        marker->flags &= ~FLAG_TAILREC;
-
-        destroy_env(newenv);
-        unrefexp(fn);
-        unrefexp(e);
-        fn = new_fn;
-        e = marker;
-        goto tailrec;
-      }
-
-      if (ret && iserror(ret)) {
-        destroy_env(newenv);
+    exp_t *src;
+    for (src = e->next; src; src = src->next) {
+      exp_t *v = EVAL(src->content, env);
+      if (v && iserror(v)) {
+        /* clean up partial evald list */
+        if (evald_args)
+          unrefexp(evald_args);
         unrefexp(fn);
         unrefexp(e);
         in_tail_position = outer_tail;
-        return ret;
+        return v;
       }
-      cur = cur->next;
+      exp_t *node = make_node(v ? v : NIL_EXP);
+      if (!evald_args) {
+        evald_args = node;
+        evald_tail = node;
+      } else {
+        evald_tail->next = node;
+        evald_tail = node;
+      }
     }
-
+  }
+  newenv = make_env(captured ? captured : env);
+  newenv->callingfnc = refexp(e);
+  if ((ret = var2env(e, fn->content, evald_args, newenv, false))) {
+    if (evald_args)
+      unrefexp(evald_args);
     destroy_env(newenv);
     unrefexp(fn);
     unrefexp(e);
     in_tail_position = outer_tail;
     return ret;
   }
+  if (evald_args)
+    unrefexp(evald_args);
+
+  /* Compiled body: cross-function tail calls lose TCO here (internal
+     OP_TAIL_SELF still applies). */
+  if (fn->flags & FLAG_COMPILED) {
+#ifdef ALCOVE_JIT
+    if (fn->bc->jit) {
+      ret = fn->bc->jit(newenv);
+      if (!ret)
+        ret = vm_run(fn, newenv); /* JIT deopt → bytecode */
+    } else
+#endif
+      ret = vm_run(fn, newenv);
+    destroy_env(newenv);
+    unrefexp(fn);
+    unrefexp(e);
+    in_tail_position = outer_tail;
+    return ret;
+  }
+
+  exp_t *cur = body;
+  while (cur) {
+    if (ret) {
+      unrefexp(ret);
+      ret = NULL;
+    }
+    int is_last = (cur->next == NULL);
+    in_tail_position = is_last;
+    ret = EVAL(cur->content, newenv);
+
+    if (is_last && ret && ispair(ret) && (ret->flags & FLAG_TAILREC) &&
+        islambda(ret->content)) {
+      exp_t *marker = ret;
+      ret = NULL;
+      exp_t *resolved_fn = marker->content;
+
+      if (resolved_fn == fn) {
+        /* Self-recursion fast path: rebind params in place, skip the
+           env teardown/rebuild. Marker args are already evaluated. */
+        int i;
+        for (i = 0; i < newenv->n_inline; i++)
+          unrefexp(newenv->inline_vals[i]);
+        newenv->n_inline = 0;
+        if (newenv->d) {
+          destroy_dict(newenv->d);
+          newenv->d = NULL;
+        }
+
+        exp_t *curvar = fn->content;
+        exp_t *curval = marker->next;
+        while (curvar && curval) {
+          exp_t *v = curval->content;
+          if (issymbol(curvar->content)) {
+            if (newenv->n_inline < ENV_INLINE_SLOTS) {
+              newenv->inline_keys[newenv->n_inline] = curvar->content->ptr;
+              newenv->inline_vals[newenv->n_inline] = refexp(v);
+              newenv->n_inline++;
+            } else {
+              if (!newenv->d)
+                newenv->d = create_dict();
+              set_get_keyval_dict(newenv->d, curvar->content->ptr, v);
+            }
+          }
+          curvar = curvar->next;
+          curval = curval->next;
+        }
+
+        unrefexp(marker);
+        cur = body; /* restart the body loop */
+        continue;
+      }
+
+      /* Different function: full unwind + tailrec jump. */
+      exp_t *new_fn = resolved_fn;
+      marker->content = NULL;
+      if (new_fn->meta) {
+        marker->content =
+            make_symbol((char *)new_fn->meta, strlen((char *)new_fn->meta));
+      } else {
+        marker->content = make_symbol("_", 1);
+      }
+      marker->flags &= ~FLAG_TAILREC;
+
+      destroy_env(newenv);
+      unrefexp(fn);
+      unrefexp(e);
+      fn = new_fn;
+      e = marker;
+      goto tailrec;
+    }
+
+    if (ret && iserror(ret)) {
+      destroy_env(newenv);
+      unrefexp(fn);
+      unrefexp(e);
+      in_tail_position = outer_tail;
+      return ret;
+    }
+    cur = cur->next;
+  }
+
+  destroy_env(newenv);
+  unrefexp(fn);
+  unrefexp(e);
+  in_tail_position = outer_tail;
+  return ret;
+}
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -12764,8 +13413,8 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                             "Error index out of range");
               }
             } else {
-              ret = error(ERROR_NUMBER_EXPECTED, e, env,
-                          "Error number expected");
+              ret =
+                  error(ERROR_NUMBER_EXPECTED, e, env, "Error number expected");
             }
             unrefexp(idx);
             unrefexp(tmpexp2);
@@ -13118,7 +13767,8 @@ static char *rl_read_form(int idx) {
    doccmd). The arity/level fields of lispProc are reserved (see the
    struct comment); doc is the only field we surface here. */
 const char doc_doc[] = "(doc name) — print the documentation for a builtin.";
-const char doc_help[] = "(help) — list every builtin and its docstring. (help name) is (doc name).";
+const char doc_help[] =
+    "(help) — list every builtin and its docstring. (help name) is (doc name).";
 
 /* Resolve the arg to a name string. Accepts:
      (doc cons)    — bare symbol (literal head — common interactive form)
@@ -13128,14 +13778,20 @@ const char doc_help[] = "(help) — list every builtin and its docstring. (help 
    *err is set to the error exp_t to propagate. The caller is responsible
    for unrefing eval_owned if it's non-NULL (the buffer holding evaluated
    args we need to keep alive across the printf). */
-static const char *doc_resolve_name(exp_t *arg, env_t *env,
-                                    exp_t **eval_owned, exp_t **err) {
-  *eval_owned = NULL; *err = NULL;
-  if (is_ptr(arg) && issymbol(arg)) return (const char *)arg->ptr;
-  if (is_ptr(arg) && isstring(arg)) return (const char *)arg->ptr;
+static const char *doc_resolve_name(exp_t *arg, env_t *env, exp_t **eval_owned,
+                                    exp_t **err) {
+  *eval_owned = NULL;
+  *err = NULL;
+  if (issymbol(arg))
+    return (const char *)arg->ptr;
+  if (isstring(arg))
+    return (const char *)arg->ptr;
   /* Anything else: evaluate and look again. */
   exp_t *v = EVAL(arg, env);
-  if (iserror(v)) { *err = v; return NULL; }
+  if (iserror(v)) {
+    *err = v;
+    return NULL;
+  }
   if (is_ptr(v) && (issymbol(v) || isstring(v))) {
     *eval_owned = v;
     return (const char *)v->ptr;
@@ -13155,27 +13811,34 @@ exp_t *doccmd(exp_t *e, env_t *env) {
   }
   exp_t *owned = NULL, *err = NULL;
   const char *name = doc_resolve_name(arg, env, &owned, &err);
-  if (!name) { unrefexp(e); return err; }
+  if (!name) {
+    unrefexp(e);
+    return err;
+  }
   int N = (int)(sizeof(lispProcList) / sizeof(lispProc));
   int found = 0;
   for (int i = 0; i < N; i++) {
     if (strcmp(lispProcList[i].name, name) == 0) {
-      if (lispProcList[i].doc) printf("%s\n", lispProcList[i].doc);
-      else printf("(no documentation for %s)\n", name);
+      if (lispProcList[i].doc)
+        printf("%s\n", lispProcList[i].doc);
+      else
+        printf("(no documentation for %s)\n", name);
       found = 1;
       break;
     }
   }
   if (!found)
     printf("(no builtin named '%s'; try (help) to list them)\n", name);
-  if (owned) unrefexp(owned);
+  if (owned)
+    unrefexp(owned);
   unrefexp(e);
   return NIL_EXP;
 }
 
 exp_t *helpcmd(exp_t *e, env_t *env) {
   exp_t *arg = cadr(e);
-  if (arg) return doccmd(e, env);    /* (help name) — defer */
+  if (arg)
+    return doccmd(e, env); /* (help name) — defer */
   int N = (int)(sizeof(lispProcList) / sizeof(lispProc));
   for (int i = 0; i < N; i++) {
     printf("  %-16s %s\n", lispProcList[i].name,
@@ -13205,8 +13868,10 @@ exp_t *helpcmd(exp_t *e, env_t *env) {
    and returns tmpbuf. tmpbuf must hold at least 32 bytes. Returns NULL
    for unsupported key types. */
 static char *alc_key_to_cstr(exp_t *k, char *tmpbuf) {
-  if (k == NULL) return NULL;
-  if (issymbol(k) || isstring(k)) return (char *)k->ptr;
+  if (k == NULL)
+    return NULL;
+  if (issymbol(k) || isstring(k))
+    return (char *)k->ptr;
   if (isnumber(k)) {
     snprintf(tmpbuf, 32, "%lld", (long long)FIX_VAL(k));
     return tmpbuf;
@@ -13218,7 +13883,8 @@ static char *alc_key_to_cstr(exp_t *k, char *tmpbuf) {
    with ':' are keywords; all-digit strings round-trip as fixnums; the
    rest become EXP_STRING. Used by `keys` and dict-printing. */
 static exp_t *alc_cstr_to_key(const char *k) {
-  if (!k) return NIL_EXP;
+  if (!k)
+    return NIL_EXP;
   if (k[0] == ':')
     return make_symbol((char *)k, strlen(k));
   /* All-digit (with optional leading '-')? Try parsing as fixnum. */
@@ -13226,7 +13892,10 @@ static exp_t *alc_cstr_to_key(const char *k) {
   if (*p) {
     int all_digit = 1;
     for (const char *q = p; *q; q++) {
-      if (*q < '0' || *q > '9') { all_digit = 0; break; }
+      if (*q < '0' || *q > '9') {
+        all_digit = 0;
+        break;
+      }
     }
     if (all_digit) {
       char buf[32];
@@ -13239,7 +13908,8 @@ static exp_t *alc_cstr_to_key(const char *k) {
 
 /* ---------- hash-map / dict ops ---------- */
 
-const char doc_hashmap[] = "(hash-map [k v ...]) — build an EXP_DICT. Keys: keyword/string/number. Same as {k v, ...}.";
+const char doc_hashmap[] = "(hash-map [k v ...]) — build an EXP_DICT. Keys: "
+                           "keyword/string/number. Same as {k v, ...}.";
 exp_t *hashmapcmd(exp_t *e, env_t *env) {
   exp_t *ret = make_dict_exp();
   dict_t *d = (dict_t *)ret->ptr;
@@ -13247,17 +13917,31 @@ exp_t *hashmapcmd(exp_t *e, env_t *env) {
   char tmp[32];
   while (a) {
     exp_t *kraw = EVAL(car(a), env);
-    if (iserror(kraw)) { unrefexp(ret); unrefexp(e); return kraw; }
+    if (iserror(kraw)) {
+      unrefexp(ret);
+      unrefexp(e);
+      return kraw;
+    }
     if (!a->next) {
-      unrefexp(kraw); unrefexp(ret); unrefexp(e);
+      unrefexp(kraw);
+      unrefexp(ret);
+      unrefexp(e);
       return error(ERROR_MISSING_PARAMETER, NULL, env,
                    "hash-map: odd number of forms (key without value)");
     }
     exp_t *v = EVAL(car(a->next), env);
-    if (iserror(v)) { unrefexp(kraw); unrefexp(ret); unrefexp(e); return v; }
+    if (iserror(v)) {
+      unrefexp(kraw);
+      unrefexp(ret);
+      unrefexp(e);
+      return v;
+    }
     char *ks = alc_key_to_cstr(kraw, tmp);
     if (!ks) {
-      unrefexp(kraw); unrefexp(v); unrefexp(ret); unrefexp(e);
+      unrefexp(kraw);
+      unrefexp(v);
+      unrefexp(ret);
+      unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "hash-map: unsupported key type");
     }
@@ -13270,39 +13954,59 @@ exp_t *hashmapcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-
 const char doc_assocbang[] = "(assoc! d k v) — set d[k]=v in place; returns d.";
 exp_t *assocbangcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("assoc!")
   exp_t *v = EVAL(cadddr(e), env);
-  if (iserror(v)) { unrefexp(k); unrefexp(d); unrefexp(e); return v; }
-  if (!ks) { unrefexp(k); unrefexp(v); unrefexp(d); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"); }
+  if (iserror(v)) {
+    unrefexp(k);
+    unrefexp(d);
+    unrefexp(e);
+    return v;
+  }
+  if (!ks) {
+    unrefexp(k);
+    unrefexp(v);
+    unrefexp(d);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "assoc!: unsupported key type");
+  }
   set_get_keyval_dict((dict_t *)d->ptr, ks, v);
-  unrefexp(k); unrefexp(v); unrefexp(e);
+  unrefexp(k);
+  unrefexp(v);
+  unrefexp(e);
   return d;
 }
 
-const char doc_dissocbang[] = "(dissoc! d k) — delete key k from d in place; returns d.";
+const char doc_dissocbang[] =
+    "(dissoc! d k) — delete key k from d in place; returns d.";
 exp_t *dissocbangcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("dissoc!")
-  if (ks) del_keyval_dict((dict_t *)d->ptr, ks);
-  unrefexp(k); unrefexp(e);
+  if (ks)
+    del_keyval_dict((dict_t *)d->ptr, ks);
+  unrefexp(k);
+  unrefexp(e);
   return d;
 }
 
-const char doc_get[] = "(get d k [default]) — fetch d[k]. Works on hash-maps. Returns default (or nil) when missing.";
+const char doc_get[] = "(get d k [default]) — fetch d[k]. Works on hash-maps. "
+                       "Returns default (or nil) when missing.";
 exp_t *getcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("get")
   exp_t *ret = NIL_EXP;
   if (ks) {
     keyval_t *kv = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
-    if (kv) ret = refexp(kv->val);
-    else if (cdddr(e)) ret = EVAL(cadddr(e), env);
+    if (kv)
+      ret = refexp(kv->val);
+    else if (cdddr(e))
+      ret = EVAL(cadddr(e), env);
   } else if (cdddr(e)) {
     ret = EVAL(cadddr(e), env);
   }
-  unrefexp(k); unrefexp(d); unrefexp(e);
+  unrefexp(k);
+  unrefexp(d);
+  unrefexp(e);
   return ret;
 }
 
@@ -13312,10 +14016,11 @@ exp_t *containspcmd(exp_t *e, env_t *env) {
   exp_t *ret = NIL_EXP;
   if (ks && set_get_keyval_dict((dict_t *)d->ptr, ks, NULL))
     ret = TRUE_EXP;
-  unrefexp(k); unrefexp(d); unrefexp(e);
+  unrefexp(k);
+  unrefexp(d);
+  unrefexp(e);
   return ret;
 }
-
 
 const char doc_keys[] = "(keys d) — list of keys in d (order undefined).";
 DICT_ITER_CMD(keyscmd, "keys", alc_cstr_to_key((char *)k->key))
@@ -13323,27 +14028,38 @@ DICT_ITER_CMD(keyscmd, "keys", alc_cstr_to_key((char *)k->key))
 const char doc_vals[] = "(vals d) — list of values in d (order matches keys).";
 DICT_ITER_CMD(valscmd, "vals", refexp(k->val))
 
-
-const char doc_count[] = "(count x) — element count for hash-maps, deques, vectors, strings, blobs, and lists.";
+const char doc_count[] = "(count x) — element count for hash-maps, deques, "
+                         "vectors, strings, blobs, and lists.";
 exp_t *countcmd(exp_t *e, env_t *env) {
   exp_t *x = EVAL(cadr(e), env);
-  if (iserror(x)) { unrefexp(e); return x; }
+  if (iserror(x)) {
+    unrefexp(e);
+    return x;
+  }
   int64_t n = 0;
-  if (isdict(x)) n = (int64_t)((dict_t *)x->ptr)->ht[0].used;
-  else if (islist(x)) n = ((alc_list_t *)x->ptr)->len;
-  else if (isblob(x)) n = (int64_t)((alc_blob_t *)x->ptr)->len;
+  if (isdict(x))
+    n = (int64_t)((dict_t *)x->ptr)->ht[0].used;
+  else if (islist(x))
+    n = ((alc_list_t *)x->ptr)->len;
+  else if (isblob(x))
+    n = (int64_t)((alc_blob_t *)x->ptr)->len;
   else if (is_ptr(x) && x->type == EXP_VECTOR && x->ptr)
     n = ((alc_vec_t *)x->ptr)->len;
-  else if (isstring(x)) n = (int64_t)strlen((char *)x->ptr);
+  else if (isstring(x))
+    n = (int64_t)strlen((char *)x->ptr);
   else if (ispair(x)) {
     exp_t *p = x;
-    while (p && istrue(p)) { n++; p = p->next; }
+    while (p && istrue(p)) {
+      n++;
+      p = p->next;
+    }
   } else {
-    unrefexp(x); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "count: unsupported type");
+    unrefexp(x);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "count: unsupported type");
   }
-  unrefexp(x); unrefexp(e);
+  unrefexp(x);
+  unrefexp(e);
   return MAKE_FIX(n);
 }
 
@@ -13354,8 +14070,10 @@ static void alc_list_push_right(alc_list_t *l, exp_t *val) {
   alc_listnode_t *n = (alc_listnode_t *)memalloc(1, sizeof(alc_listnode_t));
   n->val = val;
   n->prev = l->tail;
-  if (l->tail) l->tail->next = n;
-  else l->head = n;
+  if (l->tail)
+    l->tail->next = n;
+  else
+    l->head = n;
   l->tail = n;
   l->len++;
 }
@@ -13364,20 +14082,27 @@ static void alc_list_push_left(alc_list_t *l, exp_t *val) {
   alc_listnode_t *n = (alc_listnode_t *)memalloc(1, sizeof(alc_listnode_t));
   n->val = val;
   n->next = l->head;
-  if (l->head) l->head->prev = n;
-  else l->tail = n;
+  if (l->head)
+    l->head->prev = n;
+  else
+    l->tail = n;
   l->head = n;
   l->len++;
 }
 
-const char doc_deque[] = "(deque [x ...]) — fresh doubly-linked deque populated with given elements.";
+const char doc_deque[] = "(deque [x ...]) — fresh doubly-linked deque "
+                         "populated with given elements.";
 exp_t *dequecmd(exp_t *e, env_t *env) {
   exp_t *ret = make_list_exp();
   alc_list_t *l = (alc_list_t *)ret->ptr;
   exp_t *a = cdr(e);
   while (a) {
     exp_t *v = EVAL(car(a), env);
-    if (iserror(v)) { unrefexp(ret); unrefexp(e); return v; }
+    if (iserror(v)) {
+      unrefexp(ret);
+      unrefexp(e);
+      return v;
+    }
     alc_list_push_right(l, v); /* takes ownership of v */
     a = a->next;
   }
@@ -13385,140 +14110,212 @@ exp_t *dequecmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-#define DEQUE_PUSH_CMD(name, err_name, push_fn) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!islist(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": first arg must be a deque"); } \
-  exp_t *v = EVAL(caddr(e), env); \
-  if (iserror(v)) { unrefexp(d); unrefexp(e); return v; } \
-  push_fn((alc_list_t *)d->ptr, v); \
-  unrefexp(e); \
-  return d; \
-}
+#define DEQUE_PUSH_CMD(name, err_name, push_fn)                                \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *d = EVAL(cadr(e), env);                                             \
+    if (iserror(d)) {                                                          \
+      unrefexp(e);                                                             \
+      return d;                                                                \
+    }                                                                          \
+    if (!islist(d)) {                                                          \
+      unrefexp(d);                                                             \
+      unrefexp(e);                                                             \
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
+                   err_name ": first arg must be a deque");                    \
+    }                                                                          \
+    exp_t *v = EVAL(caddr(e), env);                                            \
+    if (iserror(v)) {                                                          \
+      unrefexp(d);                                                             \
+      unrefexp(e);                                                             \
+      return v;                                                                \
+    }                                                                          \
+    push_fn((alc_list_t *)d->ptr, v);                                          \
+    unrefexp(e);                                                               \
+    return d;                                                                  \
+  }
 
-#define DEQUE_POP_CMD(name, err_name, HEAD, TAIL, NEXT, PREV) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!islist(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a deque"); } \
-  alc_list_t *l = (alc_list_t *)d->ptr; \
-  exp_t *ret = NIL_EXP; \
-  if (l->HEAD) { \
-    alc_listnode_t *n = l->HEAD; \
-    ret = n->val; \
-    l->HEAD = n->NEXT; \
-    if (l->HEAD) l->HEAD->PREV = NULL; \
-    else l->TAIL = NULL; \
-    l->len--; \
-    free(n); \
-  } \
-  unrefexp(d); unrefexp(e); \
-  return ret; \
-}
+#define DEQUE_POP_CMD(name, err_name, HEAD, TAIL, NEXT, PREV)                  \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *d = EVAL(cadr(e), env);                                             \
+    if (iserror(d)) {                                                          \
+      unrefexp(e);                                                             \
+      return d;                                                                \
+    }                                                                          \
+    if (!islist(d)) {                                                          \
+      unrefexp(d);                                                             \
+      unrefexp(e);                                                             \
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
+                   err_name ": arg must be a deque");                          \
+    }                                                                          \
+    alc_list_t *l = (alc_list_t *)d->ptr;                                      \
+    exp_t *ret = NIL_EXP;                                                      \
+    if (l->HEAD) {                                                             \
+      alc_listnode_t *n = l->HEAD;                                             \
+      ret = n->val;                                                            \
+      l->HEAD = n->NEXT;                                                       \
+      if (l->HEAD)                                                             \
+        l->HEAD->PREV = NULL;                                                  \
+      else                                                                     \
+        l->TAIL = NULL;                                                        \
+      l->len--;                                                                \
+      free(n);                                                                 \
+    }                                                                          \
+    unrefexp(d);                                                               \
+    unrefexp(e);                                                               \
+    return ret;                                                                \
+  }
 
-#define DEQUE_PEEK_CMD(name, err_name, HEAD) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!islist(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a deque"); } \
-  alc_list_t *l = (alc_list_t *)d->ptr; \
-  exp_t *ret = (l->HEAD) ? refexp(l->HEAD->val) : NIL_EXP; \
-  unrefexp(d); unrefexp(e); \
-  return ret; \
-}
+#define DEQUE_PEEK_CMD(name, err_name, HEAD)                                   \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *d = EVAL(cadr(e), env);                                             \
+    if (iserror(d)) {                                                          \
+      unrefexp(e);                                                             \
+      return d;                                                                \
+    }                                                                          \
+    if (!islist(d)) {                                                          \
+      unrefexp(d);                                                             \
+      unrefexp(e);                                                             \
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
+                   err_name ": arg must be a deque");                          \
+    }                                                                          \
+    alc_list_t *l = (alc_list_t *)d->ptr;                                      \
+    exp_t *ret = (l->HEAD) ? refexp(l->HEAD->val) : NIL_EXP;                   \
+    unrefexp(d);                                                               \
+    unrefexp(e);                                                               \
+    return ret;                                                                \
+  }
 
-const char doc_pushrightbang[] = "(push-right! d x) — RPUSH; append x to right end of deque, returns d.";
+const char doc_pushrightbang[] =
+    "(push-right! d x) — RPUSH; append x to right end of deque, returns d.";
 DEQUE_PUSH_CMD(pushrightbangcmd, "push-right!", alc_list_push_right)
 
-const char doc_pushleftbang[] = "(push-left! d x) — LPUSH; prepend x to left end of deque, returns d.";
+const char doc_pushleftbang[] =
+    "(push-left! d x) — LPUSH; prepend x to left end of deque, returns d.";
 DEQUE_PUSH_CMD(pushleftbangcmd, "push-left!", alc_list_push_left)
 
-const char doc_poprightbang[] = "(pop-right! d) — RPOP; remove and return rightmost element, or nil.";
+const char doc_poprightbang[] =
+    "(pop-right! d) — RPOP; remove and return rightmost element, or nil.";
 DEQUE_POP_CMD(poprightbangcmd, "pop-right!", tail, head, prev, next)
 
-const char doc_popleftbang[] = "(pop-left! d) — LPOP; remove and return leftmost element, or nil.";
+const char doc_popleftbang[] =
+    "(pop-left! d) — LPOP; remove and return leftmost element, or nil.";
 DEQUE_POP_CMD(popleftbangcmd, "pop-left!", head, tail, next, prev)
 
-const char doc_peekleft[] = "(peek-left d) — leftmost element (no mutation), or nil.";
+const char doc_peekleft[] =
+    "(peek-left d) — leftmost element (no mutation), or nil.";
 DEQUE_PEEK_CMD(peekleftcmd, "peek-left", head)
 
-const char doc_peekright[] = "(peek-right d) — rightmost element (no mutation), or nil.";
+const char doc_peekright[] =
+    "(peek-right d) — rightmost element (no mutation), or nil.";
 DEQUE_PEEK_CMD(peekrightcmd, "peek-right", tail)
-
 
 /* ---------- blob ops ---------- */
 
-const char doc_makeblob[] = "(make-blob N) — N-byte zero-filled blob; or (make-blob \"...\") to copy a string.";
+const char doc_makeblob[] = "(make-blob N) — N-byte zero-filled blob; or "
+                            "(make-blob \"...\") to copy a string.";
 exp_t *makeblobcmd(exp_t *e, env_t *env) {
   exp_t *a = EVAL(cadr(e), env);
-  if (iserror(a)) { unrefexp(e); return a; }
+  if (iserror(a)) {
+    unrefexp(e);
+    return a;
+  }
   exp_t *ret;
   if (isnumber(a)) {
     int64_t n = FIX_VAL(a);
     if (n < 0) {
-      unrefexp(a); unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, NULL, env, "make-blob: negative length");
+      unrefexp(a);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "make-blob: negative length");
     }
     ret = make_blob(NULL, (size_t)n);
   } else if (isstring(a)) {
     ret = make_blob((const char *)a->ptr, strlen((char *)a->ptr));
   } else {
-    unrefexp(a); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "make-blob: arg must be a number or string");
+    unrefexp(a);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "make-blob: arg must be a number or string");
   }
-  unrefexp(a); unrefexp(e);
+  unrefexp(a);
+  unrefexp(e);
   return ret;
 }
 
-
 const char doc_bloblen[] = "(blob-len b) — byte count of b.";
-UNARY_TYPE_CMD(bloblencmd, "blob-len: arg must be a blob", isblob, alc_blob_t, MAKE_FIX((int64_t)val_ptr->len))
+UNARY_TYPE_CMD(bloblencmd, "blob-len: arg must be a blob", isblob, alc_blob_t,
+               MAKE_FIX((int64_t)val_ptr->len))
 
-const char doc_blobref[] = "(blob-ref b i) — byte at index i as fixnum (0..255).";
+const char doc_blobref[] =
+    "(blob-ref b i) — byte at index i as fixnum (0..255).";
 exp_t *blobrefcmd(exp_t *e, env_t *env) {
   exp_t *b = EVAL(cadr(e), env);
-  if (iserror(b)) { unrefexp(e); return b; }
-  if (!isblob(b)) { unrefexp(b); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "blob-ref: first arg must be a blob"); }
+  if (iserror(b)) {
+    unrefexp(e);
+    return b;
+  }
+  if (!isblob(b)) {
+    unrefexp(b);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "blob-ref: first arg must be a blob");
+  }
   exp_t *i = EVAL(caddr(e), env);
-  if (iserror(i)) { unrefexp(b); unrefexp(e); return i; }
-  if (!isnumber(i)) { unrefexp(i); unrefexp(b); unrefexp(e);
-    return error(ERROR_NUMBER_EXPECTED, NULL, env, "blob-ref: index must be a number"); }
+  if (iserror(i)) {
+    unrefexp(b);
+    unrefexp(e);
+    return i;
+  }
+  if (!isnumber(i)) {
+    unrefexp(i);
+    unrefexp(b);
+    unrefexp(e);
+    return error(ERROR_NUMBER_EXPECTED, NULL, env,
+                 "blob-ref: index must be a number");
+  }
   int64_t idx = FIX_VAL(i);
   alc_blob_t *bb = (alc_blob_t *)b->ptr;
   if (idx < 0 || (size_t)idx >= bb->len) {
-    unrefexp(i); unrefexp(b); unrefexp(e);
-    return error(ERROR_INDEX_OUT_OF_RANGE, NULL, env, "blob-ref: index %lld out of range", (long long)idx);
+    unrefexp(i);
+    unrefexp(b);
+    unrefexp(e);
+    return error(ERROR_INDEX_OUT_OF_RANGE, NULL, env,
+                 "blob-ref: index %lld out of range", (long long)idx);
   }
   int64_t v = (int64_t)(unsigned char)bb->bytes[idx];
-  unrefexp(i); unrefexp(b); unrefexp(e);
+  unrefexp(i);
+  unrefexp(b);
+  unrefexp(e);
   return MAKE_FIX(v);
 }
 
-const char doc_blob2string[] = "(blob->string b) — copy blob bytes into a fresh string (truncates at first NUL).";
-UNARY_TYPE_CMD(blob2stringcmd, "blob->string: arg must be a blob", isblob, alc_blob_t, make_string(val_ptr->bytes, (int)val_ptr->len))
+const char doc_blob2string[] = "(blob->string b) — copy blob bytes into a "
+                               "fresh string (truncates at first NUL).";
+UNARY_TYPE_CMD(blob2stringcmd, "blob->string: arg must be a blob", isblob,
+               alc_blob_t, make_string(val_ptr->bytes, (int)val_ptr->len))
 
-const char doc_vector[] = "(vector x ...) — build an EXP_VECTOR populated with the given elements. Same as #[x ...].";
+const char doc_vector[] = "(vector x ...) — build an EXP_VECTOR populated with "
+                          "the given elements. Same as #[x ...].";
 exp_t *vectorcmd(exp_t *e, env_t *env) {
   /* Two-pass: count elements (so we can size the vector once), then
      evaluate-and-store. Cheaper than growing a list intermediary. */
   long n = 0;
-  for (exp_t *p = cdr(e); p; p = p->next) n++;
+  for (exp_t *p = cdr(e); p; p = p->next)
+    n++;
   exp_t *ret = make_vector(n, NIL_EXP);
   if (!ret) {
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "vector: alloc failed");
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "vector: alloc failed");
   }
   alc_vec_t *vv = (alc_vec_t *)ret->ptr;
   long i = 0;
   for (exp_t *p = cdr(e); p; p = p->next, i++) {
     exp_t *v = EVAL(car(p), env);
-    if (iserror(v)) { unrefexp(ret); unrefexp(e); return v; }
+    if (iserror(v)) {
+      unrefexp(ret);
+      unrefexp(e);
+      return v;
+    }
     /* make_vector pre-filled with NIL (refcount bump per slot); release
        the placeholder before overwriting. */
     unrefexp(vv->data[i]);
@@ -13528,9 +14325,10 @@ exp_t *vectorcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_string2blob[] = "(string->blob s) — wrap string bytes in a fresh blob.";
-UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring, char, make_blob(val_ptr, strlen(val_ptr)))
-
+const char doc_string2blob[] =
+    "(string->blob s) — wrap string bytes in a fresh blob.";
+UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
+               char, make_blob(val_ptr, strlen(val_ptr)))
 
 /* Epoch-based reclamation for the lock-free keyspace (LF-1). Included
    here so it can see ALCOVE_TLS and any other build-time toggles. */
@@ -13554,8 +14352,7 @@ UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring, c
 int shard_main(shard_t *sh, int port) {
   current_shard = sh;
   if (shard_runtime_init(sh) < 0) {
-    fprintf(stderr, "alcove: shard_runtime_init failed: %s\n",
-            strerror(errno));
+    fprintf(stderr, "alcove: shard_runtime_init failed: %s\n", strerror(errno));
     /* Fall through anyway — resp_serve detects runtime_ready != 1
        and runs in single-thread degraded mode (no inbox). */
   }
@@ -13564,7 +14361,8 @@ int shard_main(shard_t *sh, int port) {
      already wrote). resp_kv_ensure handles the lazy first-write
      creation; this just ensures reads on a fresh shard see the
      pre-loaded keyspace without waiting for a write. */
-  if (!sh->kv) sh->kv = resp_kv_get();
+  if (!sh->kv)
+    sh->kv = resp_kv_get();
   int rc = resp_serve(port);
   shard_runtime_destroy(sh);
   return rc;
@@ -13592,7 +14390,8 @@ static void *shard_thread_entry(void *p) {
 }
 
 int respN_serve(int port, int nthreads) {
-  if (nthreads <= 1) return shard_main(&main_shard, port);
+  if (nthreads <= 1)
+    return shard_main(&main_shard, port);
   if (nthreads > EPOCH_MAX_THREADS) {
     fprintf(stderr, "alcove: clamping --threads %d to EPOCH_MAX_THREADS=%d\n",
             nthreads, EPOCH_MAX_THREADS);
@@ -13605,7 +14404,9 @@ int respN_serve(int port, int nthreads) {
   pthread_t *tids = calloc((size_t)nthreads, sizeof *tids);
   if (!shards || !args || !tids) {
     fprintf(stderr, "alcove: OOM allocating reactor scaffolding\n");
-    free(shards); free(args); free(tids);
+    free(shards);
+    free(args);
+    free(tids);
     return 1;
   }
   shards[0] = &main_shard;
@@ -13614,7 +14415,8 @@ int respN_serve(int port, int nthreads) {
     env_t *arena = calloc(ENV_ARENA_SLOTS, sizeof *arena);
     if (!sh || !arena) {
       fprintf(stderr, "alcove: OOM allocating shard %d\n", i);
-      free(sh); free(arena);
+      free(sh);
+      free(arena);
       /* Tear down any already-spawned threads. */
       for (int j = 1; j < i; j++) {
         pthread_cancel(tids[j]);
@@ -13622,7 +14424,9 @@ int respN_serve(int port, int nthreads) {
         free(shards[j]->arena);
         free(shards[j]);
       }
-      free(shards); free(args); free(tids);
+      free(shards);
+      free(args);
+      free(tids);
       return 1;
     }
     sh->arena = arena;
@@ -13637,8 +14441,8 @@ int respN_serve(int port, int nthreads) {
     args[i].sh = shards[i];
     args[i].port = port;
     if (pthread_create(&tids[i], NULL, shard_thread_entry, &args[i]) != 0) {
-      fprintf(stderr, "alcove: pthread_create failed for shard %d: %s\n",
-              i, strerror(errno));
+      fprintf(stderr, "alcove: pthread_create failed for shard %d: %s\n", i,
+              strerror(errno));
       /* Continue with fewer threads rather than abort — but mark
          this slot as not-launched so we don't try to join it. */
       tids[i] = 0;
@@ -13649,14 +14453,17 @@ int respN_serve(int port, int nthreads) {
   args[0].rc = shard_main(&main_shard, port);
   /* Once main returns (SIGINT was observed), wait for peers to drain. */
   for (int i = 1; i < nthreads; i++) {
-    if (tids[i]) pthread_join(tids[i], NULL);
+    if (tids[i])
+      pthread_join(tids[i], NULL);
   }
   for (int i = 1; i < nthreads; i++) {
     free(shards[i]->arena);
     free(shards[i]);
   }
   int rc = args[0].rc;
-  free(shards); free(args); free(tids);
+  free(shards);
+  free(args);
+  free(tids);
   return rc;
 }
 
@@ -13666,10 +14473,12 @@ int respN_serve(int port, int nthreads) {
    policy as the -e flag and the interactive REPL. */
 static int alcove_run_init_file(env_t *global, const char *path) {
   FILE *fp = fopen(path, "r");
-  if (!fp) return 0;
+  if (!fp)
+    return 0;
   for (;;) {
     exp_t *e = reader(fp, 0, 0);
-    if (!e) break;
+    if (!e)
+      break;
     if (iserror(e) && e->flags == EXP_ERROR_PARSING_EOF) {
       unrefexp(e);
       break;
@@ -13702,10 +14511,12 @@ static void alcove_try_init_files(env_t *global) {
     return;
   }
   const char *home = getenv("HOME");
-  if (!home) return;
+  if (!home)
+    return;
   char path[1024];
   int n = snprintf(path, sizeof path, "%s/.local/alcove/init.alc", home);
-  if (n < 0 || (size_t)n >= (int)sizeof path) return;
+  if (n < 0 || (size_t)n >= (int)sizeof path)
+    return;
   if (alcove_run_init_file(global, path))
     printf("alcove: loaded %s\n", path);
 }
@@ -13791,7 +14602,7 @@ int main(int argc, char *argv[]) {
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
   int resp_combined = 0; /* -R: combined REPL + RESP single-reactor */
   int resp_port = 6379;
-  int resp_threads = 1;  /* --threads N: number of reactor threads (-r only) */
+  int resp_threads = 1; /* --threads N: number of reactor threads (-r only) */
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
@@ -13803,9 +14614,10 @@ int main(int argc, char *argv[]) {
       } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
-        alcove_db_path = argv[++src];   /* session-wide default */
+        alcove_db_path = argv[++src]; /* session-wide default */
       } else if ((strcmp(argv[src], "--threads") == 0 ||
-                  strcmp(argv[src], "-t") == 0) && src + 1 < argc) {
+                  strcmp(argv[src], "-t") == 0) &&
+                 src + 1 < argc) {
         char *end;
         long n = strtol(argv[++src], &end, 10);
         if (*end == '\0' && n >= 1 && n <= EPOCH_MAX_THREADS) {
@@ -13815,10 +14627,11 @@ int main(int argc, char *argv[]) {
                   EPOCH_MAX_THREADS);
           return 1;
         }
-      } else if (strcmp(argv[src], "-r") == 0 ||
-                 strcmp(argv[src], "-R") == 0) {
-        if (strcmp(argv[src], "-R") == 0) resp_combined = 1;
-        else resp_mode = 1;
+      } else if (strcmp(argv[src], "-r") == 0 || strcmp(argv[src], "-R") == 0) {
+        if (strcmp(argv[src], "-R") == 0)
+          resp_combined = 1;
+        else
+          resp_mode = 1;
         /* Optional explicit port follows. Only consume if it parses
            cleanly as a positive int < 65536, otherwise treat next arg
            as a positional (file/-i). */
@@ -13847,14 +14660,15 @@ int main(int argc, char *argv[]) {
     /* lispProcList registration is needed downstream by isstring/etc.
        only indirectly — but resp_db lives separately. Skip it. */
     (void)N;
-    if (run_init) alcove_try_init_files(global);
+    if (run_init)
+      alcove_try_init_files(global);
     if (auto_load) {
       lfkv_t *kv = resp_kv_init();
       if (kv) {
         int loaded = loaddb_from_file_path(global, alcove_db_path);
         if (loaded > 0)
-          printf("alcove: auto-loaded %d entries from %s\n",
-                 loaded, alcove_db_path);
+          printf("alcove: auto-loaded %d entries from %s\n", loaded,
+                 alcove_db_path);
       }
     }
     int rc = respN_serve(resp_port, resp_threads);
@@ -13876,7 +14690,8 @@ int main(int argc, char *argv[]) {
         printf("alcove: auto-loaded %d entries from %s\n", loaded,
                alcove_db_path);
     }
-    if (run_init) alcove_try_init_files(global);
+    if (run_init)
+      alcove_try_init_files(global);
     return resp_repl_serve(resp_port, global);
   }
 
@@ -13890,7 +14705,8 @@ int main(int argc, char *argv[]) {
              "skip)\n",
              loaded, alcove_db_path);
   }
-  if (run_init) alcove_try_init_files(global);
+  if (run_init)
+    alcove_try_init_files(global);
 
   if (eval_string) {
     /* Wrap the inline code as a read-only memory stream so the existing

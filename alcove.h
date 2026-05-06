@@ -144,6 +144,7 @@ enum {
 #define isblob(e) (is_ptr(e) && (e)->type == EXP_BLOB)
 #define isdict(e) (is_ptr(e) && (e)->type == EXP_DICT)
 #define islist(e) (is_ptr(e) && (e)->type == EXP_LIST)
+#define isvector(e) (is_ptr(e) && (e)->type == EXP_VECTOR)
 /* Self-evaluating: tagged immediates, scalar atoms (≤ EXP_VECTOR), and
    the appended Clojure-style containers (blob/dict/list). The container
    range is contiguous (BLOB..LIST) so the bounds check stays a single
@@ -152,6 +153,9 @@ enum {
   (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
                                ((e)->type >= EXP_BLOB &&                       \
                                 (e)->type <= EXP_LIST))))
+
+/* Helper for fast-path refcounting */
+#define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton)
 
 #define car(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->content : NULL)
 #define cdr(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->next : NULL)
@@ -510,11 +514,20 @@ int del_keyval_dict(dict_t *d, char *key);
 /* lisp */
 exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...);
 exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
+#define MAKE_TYPED(name, t, p) \
+  exp_t *(name) = make_nil(); \
+  (name)->type = (t); \
+  (name)->ptr = (void *)(p)
+
+#define INIT_TYPED(name, t, p) \
+  (name) = make_nil(); \
+  (name)->type = (t); \
+  (name)->ptr = (void *)(p)
 exp_t *make_char(unsigned char c);
 exp_t *make_node(exp_t *node);
 exp_t *make_internal(lispCmd *cmd, int flags);
 exp_t *make_tree(exp_t *root, exp_t *node1);
-exp_t *make_fromstr(char *str, int length);
+
 exp_t *make_string(char *str, int length);
 exp_t *make_symbol(char *str, int length);
 
