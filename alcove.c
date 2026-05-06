@@ -36,6 +36,10 @@
 #endif
 // #include <jemalloc/jemalloc.h>
 #include "alcove.h"
+/* Pull in the lock-free keyspace decls early so the unified savedb
+   writer (defined ~line 2500, well before the #include "lfkv.c" at
+   the bottom) can call lfkv_foreach / lfkv_set / lfkv_set_expiry. */
+#include "lfkv.h"
 
 /* Multi-threaded build needs pthread for the FFI cache mutex (and future
    shard primitives). Header guards make this benign next to the
@@ -1320,6 +1324,61 @@ char *dump_str(char *ptr, FILE *stream) {
   return ptr;
 }
 
+/* Binary-safe variants — RESP keys can hold NULs, so the strlen-based
+   dump_str path doesn't apply. dump_strn writes the size prefix followed
+   by exactly n bytes; load_strn reads symmetrically and NUL-terminates
+   the returned buffer for caller convenience (klen carries the real
+   length, the trailing NUL is decorative). */
+static int dump_strn(const char *ptr, size_t n, FILE *stream) {
+  if (dumpsize_t(stream, &n) <= 0) return 0;
+  return n == 0 || fwrite(ptr, 1, n, stream) == n;
+}
+static int load_strn(char **pptr, size_t *plen, FILE *stream) {
+  size_t n;
+  if (loadsize_t(stream, &n) <= 0) return 0;
+  /* Sanity cap matches RESP_MAX_BULK so a corrupted dump can't drag
+     us into a 16 EB allocation. */
+  if (n > (size_t)(512u * 1024 * 1024)) return 0;
+  char *p = malloc(n + 1);
+  if (!p) return 0;
+  if (n > 0 && fread(p, 1, n, stream) != n) { free(p); return 0; }
+  p[n] = 0;
+  *pptr = p;
+  *plen = n;
+  return 1;
+}
+
+/* EXP_BLOB serializer — alc_blob_t is {len, bytes[]} (binary-safe).
+   Format: type tag (already written by dispatch wrapper for load,
+   we write it here for dump symmetric with dump_string), then size_t
+   len, then exactly len bytes. */
+exp_t *dump_blob(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0) return NULL;
+  alc_blob_t *b = (alc_blob_t *)e->ptr;
+  size_t n = b->len;
+  if (dumpsize_t(stream, &n) <= 0) return NULL;
+  if (n > 0 && fwrite(b->bytes, 1, n, stream) != n) return NULL;
+  return e;
+}
+exp_t *load_blob(exp_t *e, FILE *stream) {
+  /* load_exp_t allocated a placeholder via make_nil(); discard it and
+     return a fresh blob — matches the load_char/load_string pattern. */
+  if (e) unrefexp(e);
+  size_t n;
+  if (loadsize_t(stream, &n) <= 0) return NULL;
+  if (n > (size_t)(512u * 1024 * 1024)) return NULL;
+  /* make_blob copies the input; using a stack buffer for tiny blobs
+     would be a micro-opt but the heap path is fine for cold load. */
+  char *buf = (n > 0) ? malloc(n) : NULL;
+  if (n > 0 && (!buf || fread(buf, 1, n, stream) != n)) {
+    free(buf);
+    return NULL;
+  }
+  exp_t *blob = make_blob(buf ? buf : "", n);
+  free(buf);
+  return blob;
+}
+
 exp_t *dump_string(exp_t *e, FILE *stream) {
   if (dumptype(stream, &e->type) <= 0)
     return NULL;
@@ -2439,6 +2498,215 @@ exp_t *unpersistcmd(exp_t *e, env_t *env) {
    makes foo.db "the" db file for the rest of the session. */
 const char *alcove_db_path = "db.dump";
 
+/* Unified-dump format magic + version. Files starting with "ALCV"
+   carry both the Lisp env and the RESP keyspace; files without the
+   magic fall through to the legacy dump_dict reader (env-only). */
+#define ALCOVE_DUMP_MAGIC "ALCV"
+#define ALCOVE_DUMP_VERSION 1
+#define ALCOVE_SEC_LISP 'L'
+#define ALCOVE_SEC_RESP 'R'
+
+/* Forward decls — resp.c (#included near the bottom of this file)
+   exposes the live RESP keyspace pointer for persistence. resp_kv_get
+   returns NULL until a reactor has started serving (lazy init);
+   resp_kv_init eager-creates the table for the startup auto-load
+   path which runs before any reactor spawns. */
+struct lfkv;
+struct lfkv *resp_kv_get(void);
+struct lfkv *resp_kv_init(void);
+
+/* Iterator ctx for the section-R walk: counts written records and
+   carries the output stream. The lfkv_iter_fn callback below uses
+   the same record framing as section L (0xFE marker per record,
+   followed by val + key) plus an int64 expiry prefix. */
+typedef struct {
+  FILE *stream;
+  size_t count;
+  int failed;
+} resp_dump_ctx_t;
+
+static int resp_dump_iter(const char *k, size_t klen, exp_t *val,
+                          int64_t expiry_us, void *ctx) {
+  resp_dump_ctx_t *c = (resp_dump_ctx_t *)ctx;
+  if (c->failed) return 1; /* short-circuit on prior I/O failure */
+  if (!__DUMPABLE__(val)) {
+    /* Skip with a warning — callers can tighten by registering more
+       dump fns (currently EXP_BLOB is the only RESP-side type with
+       full round-trip support). */
+    fprintf(stderr,
+            "savedb: skipping resp key (%zu bytes) — type %d has no "
+            "dump fn registered\n",
+            klen, TYPEOF_E(val));
+    return 0; /* continue */
+  }
+  uint8_t marker = 0xFE;
+  if (fwrite(&marker, 1, 1, c->stream) != 1) { c->failed = 1; return 1; }
+  if (fwrite(&expiry_us, sizeof(int64_t), 1, c->stream) != 1) {
+    c->failed = 1; return 1;
+  }
+  if (!__DUMP__(val, c->stream)) { c->failed = 1; return 1; }
+  if (!dump_strn(k, klen, c->stream)) { c->failed = 1; return 1; }
+  c->count++;
+  return 0;
+}
+
+/* Walk the global env's dict_t and write every persisted (timestamp>0)
+   entry as a section-L record: 0xFE marker + val + key. Mirrors the
+   existing dump_dict body but with framing, so the reader can detect
+   end-of-section without relying on EOF. */
+static int dump_lisp_section(dict_t *d, FILE *stream) {
+  for (unsigned int i = 0; i < 2; i++) {
+    for (unsigned int j = 0; j < d->ht[i].size; j++) {
+      keyval_t *ckv = d->ht[i].table[j];
+      while (ckv) {
+        keyval_t *pkv = ckv;
+        ckv = pkv->next;
+        if (pkv->timestamp <= 0) continue;
+        if (!__DUMPABLE__(pkv->val)) {
+          fprintf(stderr,
+                  "savedb: skipping %s — type %d has no dump fn\n",
+                  (char *)pkv->key, TYPEOF_E(pkv->val));
+          continue;
+        }
+        uint8_t marker = 0xFE;
+        if (fwrite(&marker, 1, 1, stream) != 1) return 0;
+        if (!__DUMP__(pkv->val, stream)) return 0;
+        if (!dump_str(pkv->key, stream)) return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+/* Unified dump: writes header + section L (Lisp env, persisted vars
+   only) + section R (RESP keyspace, all live entries with their
+   expiry timestamps). `kv` may be NULL — section R is then omitted.
+   Returns 1 on success, 0 on I/O failure. */
+int alcove_dump_unified(env_t *global, struct lfkv *kv, FILE *stream) {
+  /* Header: 4-byte magic + 2-byte version. */
+  if (fwrite(ALCOVE_DUMP_MAGIC, 1, 4, stream) != 4) return 0;
+  uint16_t ver = ALCOVE_DUMP_VERSION;
+  if (fwrite(&ver, 2, 1, stream) != 1) return 0;
+
+  /* Walk to the global env (savedb is allowed from a nested env, and
+     callers that don't have an env handy may pass NULL to skip the
+     Lisp section entirely — RESP SAVE uses this path). */
+  env_t *root = global;
+  while (root && root->root) root = root->root;
+
+  /* Section L. */
+  uint8_t tag = ALCOVE_SEC_LISP;
+  uint8_t end = 0x00;
+  if (fwrite(&tag, 1, 1, stream) != 1) return 0;
+  if (root && root->d && !dump_lisp_section(root->d, stream)) return 0;
+  if (fwrite(&end, 1, 1, stream) != 1) return 0;
+
+  /* Section R. */
+  if (kv) {
+    tag = ALCOVE_SEC_RESP;
+    if (fwrite(&tag, 1, 1, stream) != 1) return 0;
+    resp_dump_ctx_t ctx = {stream, 0, 0};
+    lfkv_foreach(kv, resp_dump_iter, &ctx);
+    if (ctx.failed) return 0;
+    if (fwrite(&end, 1, 1, stream) != 1) return 0;
+  }
+
+  /* Trailer: section-tag 0 marks end-of-file. Forward-compatible —
+     a future reader sees 0 and stops; an older reader handed a future
+     file with extra sections sees an unknown tag and bails cleanly. */
+  if (fwrite(&end, 1, 1, stream) != 1) return 0;
+  return 1;
+}
+
+/* Read records until the 0x00 end-of-section marker. shape determines
+   whether to consume the section-R expiry prefix. Returns the number
+   of records loaded, or -1 on parse error. */
+static int load_section_records(FILE *stream, env_t *root, struct lfkv *kv,
+                                int is_resp) {
+  int n = 0;
+  for (;;) {
+    uint8_t marker;
+    if (fread(&marker, 1, 1, stream) != 1) return -1;
+    if (marker == 0x00) return n;       /* end of section */
+    if (marker != 0xFE) return -1;      /* corrupt */
+    int64_t expiry = 0;
+    if (is_resp && fread(&expiry, sizeof(int64_t), 1, stream) != 1)
+      return -1;
+    exp_t *val = load_exp_t(stream);
+    if (!val) return -1;
+    if (is_resp) {
+      char *k = NULL;
+      size_t klen = 0;
+      if (!load_strn(&k, &klen, stream)) { unrefexp(val); return -1; }
+      if (kv) {
+        /* lfkv_set transfers the caller's ref; bump first since we
+           still hold it via val and need to release on failure. */
+        if (lfkv_set(kv, k, klen, refexp(val)) == 0 && expiry > 0)
+          lfkv_set_expiry(kv, k, klen, expiry);
+      }
+      free(k);
+      unrefexp(val);
+    } else {
+      char *key = NULL;
+      if (!load_str(&key, stream)) { unrefexp(val); return -1; }
+      if (root) {
+        if (!root->d) root->d = create_dict();
+        keyval_t *kvp = set_get_keyval_dict(root->d, key, val);
+        if (kvp) kvp->timestamp = gettimeusec();
+      }
+      free(key);
+      unrefexp(val);
+    }
+    n++;
+  }
+}
+
+/* Unified load: reads header, then sections by tag. Returns:
+     1 = our format successfully loaded (n_lisp + n_resp via out-params)
+     0 = magic missing → caller should fall back to legacy reader
+    -1 = our format detected but corrupt/truncated. */
+int alcove_load_unified(env_t *global, struct lfkv *kv, FILE *stream,
+                       int *n_lisp, int *n_resp) {
+  char magic[4];
+  if (fread(magic, 1, 4, stream) != 4) return 0;
+  if (memcmp(magic, ALCOVE_DUMP_MAGIC, 4) != 0) {
+    /* Not our format — rewind so the legacy reader sees the original
+       byte stream. */
+    fseek(stream, 0, SEEK_SET);
+    return 0;
+  }
+  uint16_t ver;
+  if (fread(&ver, 2, 1, stream) != 1) return -1;
+  if (ver != ALCOVE_DUMP_VERSION) {
+    fprintf(stderr, "loaddb: unsupported alcove.dump version %u\n", ver);
+    return -1;
+  }
+  env_t *root = global;
+  while (root && root->root) root = root->root;
+  int nl = 0, nr = 0;
+  for (;;) {
+    uint8_t tag;
+    if (fread(&tag, 1, 1, stream) != 1) return -1;
+    if (tag == 0x00) break; /* end-of-file trailer */
+    if (tag == ALCOVE_SEC_LISP) {
+      int got = load_section_records(stream, root, NULL, 0);
+      if (got < 0) return -1;
+      nl += got;
+    } else if (tag == ALCOVE_SEC_RESP) {
+      int got = load_section_records(stream, NULL, kv, 1);
+      if (got < 0) return -1;
+      nr += got;
+    } else {
+      fprintf(stderr, "loaddb: unknown section tag 0x%02x — stopping\n", tag);
+      return -1;
+    }
+  }
+  if (n_lisp) *n_lisp = nl;
+  if (n_resp) *n_resp = nr;
+  GEN_BUMP();
+  return 1;
+}
+
 const char doc_savedb[] = "(savedb) writes to the active db (default ./db.dump, overridden by --db). (savedb \"path\") writes to the given file.";
 exp_t *savedbcmd(exp_t *e, env_t *env) {
   /* Resolve the target path: optional first arg, else session default.
@@ -2455,16 +2723,22 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
     }
     path = (const char *)path_arg->ptr;
   }
-  env_t *cur = env;
   FILE *stream = fopen(path, "w");
   if (!stream) {
     if (path_arg) unrefexp(path_arg);
     return error(ERROR_ILLEGAL_VALUE, e, env,
                  "Unable to open '%s' for writing", path);
   }
-  while (cur->root) cur = cur->root;
-  if (cur->d) dump_dict(cur->d, stream);
+  /* Unified writer: section L (this env) + section R (resp_kv if a
+     reactor is alive). Old-format db.dump files are still readable
+     via the magic-detection path in loaddb_from_file_path. */
+  int ok = alcove_dump_unified(env, resp_kv_get(), stream);
   fclose(stream);
+  if (!ok) {
+    if (path_arg) unrefexp(path_arg);
+    return error(ERROR_ILLEGAL_VALUE, e, env,
+                 "savedb: I/O error writing '%s'", path);
+  }
   /* Successful explicit save → adopt this path as the session default,
      so a follow-up (loaddb) or (savedb) targets the same file. The
      strdup leaks across the run but session-default is set rarely. */
@@ -2488,6 +2762,19 @@ int loaddb_from_file_path(env_t *env, const char *path) {
   FILE *stream = fopen(path, "r");
   if (!stream)
     return -1;
+  /* Magic detection: unified format ("ALCV") covers env + RESP and
+     gets dispatched through alcove_load_unified. Anything else is
+     assumed to be the legacy dump_dict format (env-only) — kept
+     readable so existing db.dump files migrate transparently on the
+     next savedb. */
+  int nl = 0, nr = 0;
+  int u = alcove_load_unified(env, resp_kv_get(), stream, &nl, &nr);
+  if (u == 1) { fclose(stream); return nl + nr; }
+  if (u < 0) {
+    fclose(stream);
+    return -1;
+  }
+  /* Legacy path — alcove_load_unified rewound the stream on miss. */
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
@@ -13751,6 +14038,12 @@ int shard_main(shard_t *sh, int port) {
     /* Fall through anyway — resp_serve detects runtime_ready != 1
        and runs in single-thread degraded mode (no inbox). */
   }
+  /* Mirror the global lfkv into the shard's TLS pointer if it has
+     already been created (auto-load at startup, or a peer shard
+     already wrote). resp_kv_ensure handles the lazy first-write
+     creation; this just ensures reads on a fresh shard see the
+     pre-loaded keyspace without waiting for a write. */
+  if (!sh->kv) sh->kv = resp_kv_get();
   int rc = resp_serve(port);
   shard_runtime_destroy(sh);
   return rc;
@@ -13935,6 +14228,12 @@ int main(int argc, char *argv[]) {
   exp_tfuncList[EXP_MACRO] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_MACRO]->load = load_macro;
   exp_tfuncList[EXP_MACRO]->dump = dump_macro;
+  /* EXP_BLOB — RESP string values are binary-safe blobs. Registering
+     dump/load here lets the unified savedb format persist the RESP
+     keyspace (alongside the existing Lisp env section). */
+  exp_tfuncList[EXP_BLOB] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_BLOB]->load = load_blob;
+  exp_tfuncList[EXP_BLOB]->dump = dump_blob;
 
   reserved_symbol = create_dict();
   /* Allocate immortal singletons before any other code references them. */
@@ -14017,16 +14316,26 @@ int main(int argc, char *argv[]) {
     argc = dst;
   }
 
-  /* RESP server short-circuits the rest of main(): no auto-load, no
-     REPL, no file/-e processing. The init file still runs so users can
-     pre-populate resp_db (or any other startup hook). Returns the
-     server's exit code. */
+  /* RESP server short-circuits the rest of main(): no REPL, no file/-e
+     processing. The init file still runs so users can pre-populate
+     resp_db (or any other startup hook). Auto-load of the persistence
+     file happens here too — eager-initialize g_resp_kv first since
+     reactors lazy-init it on first write. */
   if (resp_mode) {
     int N = sizeof(lispProcList) / sizeof(lispProc);
     /* lispProcList registration is needed downstream by isstring/etc.
        only indirectly — but resp_db lives separately. Skip it. */
     (void)N;
     if (run_init) alcove_try_init_files(global);
+    if (auto_load) {
+      lfkv_t *kv = resp_kv_init();
+      if (kv) {
+        int loaded = loaddb_from_file_path(global, alcove_db_path);
+        if (loaded > 0)
+          printf("alcove: auto-loaded %d entries from %s\n",
+                 loaded, alcove_db_path);
+      }
+    }
     int rc = respN_serve(resp_port, resp_threads);
     /* Release the unused top-level dict we created above so leak
        checkers see a clean exit. The non-RESP path frees it later. */

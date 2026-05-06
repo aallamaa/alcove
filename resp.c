@@ -161,6 +161,44 @@ static void resp_kv_ensure(void) {
   current_shard->kv = g_resp_kv;
 }
 
+/* Public getter: alcove.c persistence code (savedb / loaddb / SAVE)
+   needs the live g_resp_kv but is defined above the #include "resp.c"
+   line, so it can't see the static directly. Returns NULL before any
+   reactor has started serving (g_resp_kv is lazy-init). */
+lfkv_t *resp_kv_get(void) {
+  return atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                              memory_order_acquire);
+}
+
+/* Eager initializer for the auto-load path. Reactors lazy-init g_resp_kv
+   on the first write, but the startup auto-load happens before any
+   reactor spawns and needs a live table to install entries into. Does
+   not require a current_shard (unlike resp_kv_ensure). Idempotent and
+   thread-safe via the same CAS. Returns the live g_resp_kv. */
+lfkv_t *resp_kv_init(void) {
+  lfkv_t *cur = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                                     memory_order_acquire);
+  if (cur) return cur;
+  size_t slots = RESP_KV_DEFAULT_SLOTS;
+  const char *env = getenv("RESP_KV_SLOTS");
+  if (env) {
+    char *e;
+    unsigned long v = strtoul(env, &e, 10);
+    if (*e == '\0' && v && (v & (v - 1)) == 0) slots = v;
+  }
+  lfkv_t *fresh = lfkv_new(slots);
+  if (!fresh) return NULL;
+  lfkv_t *expected = NULL;
+  if (!atomic_compare_exchange_strong_explicit(
+          (_Atomic(lfkv_t *) *)&g_resp_kv, &expected, fresh,
+          memory_order_release, memory_order_acquire)) {
+    lfkv_destroy(fresh);
+    return atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                                memory_order_acquire);
+  }
+  return fresh;
+}
+
 /* Lookup: returns refexp-bumped value or NULL. Caller MUST unrefexp.
    Lazy expiry handled inside lfkv_get. */
 static inline exp_t *resp_kv_lookup(const char *key, size_t klen) {
@@ -723,6 +761,58 @@ static void cmd_ttl(resp_client_t *c, char **argv, long *argl, int argc,
                            : (long long)(left / 1000000));
 }
 
+/* SAVE — synchronous unified dump. Blocks the reactor for the duration
+   of the walk + fsync. For non-blocking persistence, BGSAVE will land
+   in the next commit (fork + child runs the same writer). */
+static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
+  (void)argv; (void)argl;
+  ARGN(1);
+  const char *path = alcove_db_path;
+  /* Atomic-rename: write to <path>.tmp first, fsync, rename over the
+     real file. A crash mid-write leaves the previous dump intact. */
+  size_t plen = strlen(path);
+  char *tmp = malloc(plen + 5);
+  if (!tmp) { resp_write_err(c, "ERR SAVE: out of memory"); return; }
+  memcpy(tmp, path, plen);
+  memcpy(tmp + plen, ".tmp", 5);
+  FILE *stream = fopen(tmp, "w");
+  if (!stream) {
+    char msg[256];
+    snprintf(msg, sizeof msg, "ERR SAVE: cannot open %s: %s",
+             tmp, strerror(errno));
+    free(tmp);
+    resp_write_err(c, msg);
+    return;
+  }
+  /* Pass NULL for the env: in RESP-only mode the Lisp env isn't
+     interesting to persist. (The Lisp `(savedb)` builtin still walks
+     the env it was called from.) Section L emits an empty record
+     stream — the file still has the section header so the loader
+     stays format-compatible. */
+  int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
+  if (ok) {
+    fflush(stream);
+    fsync(fileno(stream));
+  }
+  fclose(stream);
+  if (!ok) {
+    unlink(tmp);
+    free(tmp);
+    resp_write_err(c, "ERR SAVE: write failed");
+    return;
+  }
+  if (rename(tmp, path) != 0) {
+    char msg[256];
+    snprintf(msg, sizeof msg, "ERR SAVE: rename to %s failed: %s",
+             path, strerror(errno));
+    free(tmp);
+    resp_write_err(c, msg);
+    return;
+  }
+  free(tmp);
+  resp_write_simple(c, "OK");
+}
+
 static void cmd_persist(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   const char *k = argv[1];
@@ -1270,6 +1360,7 @@ typedef enum {
   HK_LPUSH, HK_RPUSH, HK_LPOP, HK_RPOP, HK_LLEN, HK_LINDEX, HK_LRANGE,
   HK_HSET, HK_HGET, HK_HDEL, HK_HEXISTS, HK_HLEN,
   HK_HKEYS, HK_HVALS, HK_HGETALL,
+  HK_SAVE,
 } resp_kind_t;
 
 #define RESP_CMD_TABLE_BITS 6           /* 64 buckets, load = 41/64 = 0.64 */
@@ -1306,7 +1397,7 @@ static const struct { const char *name; resp_kind_t kind; } resp_cmd_seed[] = {
   {"HGET",     HK_HGET},      {"HDEL",     HK_HDEL},
   {"HEXISTS",  HK_HEXISTS},   {"HLEN",     HK_HLEN},
   {"HKEYS",    HK_HKEYS},     {"HVALS",    HK_HVALS},
-  {"HGETALL",  HK_HGETALL},
+  {"HGETALL",  HK_HGETALL},   {"SAVE",     HK_SAVE},
 };
 
 /* The seed→table build is one-shot for the whole process; calling it
@@ -1418,6 +1509,7 @@ static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
   case HK_HKEYS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 0);
   case HK_HVALS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
   case HK_HGETALL:   return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
+  case HK_SAVE:      return cmd_save(c, argv, argl, argc);
   }
 
   if (resp_user_dispatch(c, cmd, clen, argv, argl, argc)) return;
