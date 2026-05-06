@@ -157,27 +157,16 @@ exp_t *name(exp_t *e, env_t *env) { \
 
 #define PAIR_PART_CMD(name, part_macro) \
 exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *tmpexp = EVAL(cadr(e), env); \
-  exp_t *tmpexp2 = tmpexp; \
-  unrefexp(e); \
-  if (!iserror(tmpexp)) { \
-    tmpexp = refexp(part_macro(tmpexp2)); \
-    unrefexp(tmpexp2); \
-  } \
-  return tmpexp; \
+  EVAL_ARG_1(a); \
+  exp_t *ret = refexp(part_macro(a)); \
+  CLEAN_RETURN_1(a, ret); \
 }
 
 #define EQUALITY_CMD(name, eq_func) \
 exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *cur1 = EVAL(cadr(e), env); \
-  if (iserror(cur1)) { unrefexp(e); return cur1; } \
-  exp_t *cur2 = EVAL(caddr(e), env); \
-  if (iserror(cur2)) { unrefexp(cur1); unrefexp(e); return cur2; } \
-  unrefexp(e); \
-  exp_t *ret = (eq_func(cur1, cur2) ? TRUE_EXP : NIL_EXP); \
-  unrefexp(cur1); \
-  unrefexp(cur2); \
-  return ret; \
+  EVAL_ARG_2(a, b); \
+  exp_t *ret = (eq_func(a, b) ? TRUE_EXP : NIL_EXP); \
+  CLEAN_RETURN_2(a, b, ret); \
 }
 
 #endif /* ALCOVE_BUILTINS_H */

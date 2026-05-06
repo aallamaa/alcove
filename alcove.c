@@ -231,6 +231,53 @@ lispProc lispProcList[] = {
 #undef LISPCMD
 #undef LISPCMD_TAIL
 
+
+/* ---------------- Argument Evaluation & Cleanup Macros ----------------
+   Built-in commands frequently evaluate 1-4 arguments sequentially, checking
+   for errors and managing unrefexp cascades. These macros reduce boilerplate.
+   All assume `e` and `env` are in scope (the standard command signature). */
+
+#define EVAL_ARG_1(v1) \
+  exp_t *v1 = NULL; \
+  if (e->next) { \
+    v1 = EVAL(e->next->content, env); \
+    if (iserror(v1)) { unrefexp(e); return v1; } \
+  }
+
+#define EVAL_ARG_2(v1, v2) \
+  EVAL_ARG_1(v1) \
+  exp_t *v2 = NULL; \
+  if (e->next && e->next->next) { \
+    v2 = EVAL(e->next->next->content, env); \
+    if (iserror(v2)) { unrefexp(v1); unrefexp(e); return v2; } \
+  }
+
+#define EVAL_ARG_3(v1, v2, v3) \
+  EVAL_ARG_2(v1, v2) \
+  exp_t *v3 = NULL; \
+  if (e->next && e->next->next && e->next->next->next) { \
+    v3 = EVAL(e->next->next->next->content, env); \
+    if (iserror(v3)) { unrefexp(v1); unrefexp(v2); unrefexp(e); return v3; } \
+  }
+
+#define EVAL_ARG_4(v1, v2, v3, v4) \
+  EVAL_ARG_3(v1, v2, v3) \
+  exp_t *v4 = NULL; \
+  if (e->next && e->next->next && e->next->next->next && e->next->next->next->next) { \
+    v4 = EVAL(e->next->next->next->next->content, env); \
+    if (iserror(v4)) { unrefexp(v1); unrefexp(v2); unrefexp(v3); unrefexp(e); return v4; } \
+  }
+
+#define CLEAN_RETURN_1(v1, ret) \
+  do { unrefexp(v1); unrefexp(e); return (ret); } while(0)
+#define CLEAN_RETURN_2(v1, v2, ret) \
+  do { unrefexp(v1); unrefexp(v2); unrefexp(e); return (ret); } while(0)
+#define CLEAN_RETURN_3(v1, v2, v3, ret) \
+  do { unrefexp(v1); unrefexp(v2); unrefexp(v3); unrefexp(e); return (ret); } while(0)
+#define CLEAN_RETURN_4(v1, v2, v3, v4, ret) \
+  do { unrefexp(v1); unrefexp(v2); unrefexp(v3); unrefexp(v4); unrefexp(e); return (ret); } while(0)
+
+
 int64_t gettimeusec() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
@@ -3141,96 +3188,39 @@ exp_t *veccmd(exp_t *e, env_t *env) {
 const char doc_vecref[] =
     "(vec-ref v i) — read element i of vector v (O(1)). 0-based index.";
 exp_t *vecrefcmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL, *iexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
-  if (e->next && e->next->next)
-    iexp = EVAL(e->next->next->content, env);
-  if (iserror(iexp)) {
-    unrefexp(vexp);
-    unrefexp(e);
-    return iexp;
-  }
-  if (!isvector(vexp) || !isnumber(iexp)) {
-    if (vexp)
-      unrefexp(vexp);
-    if (iexp)
-      unrefexp(iexp);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args");
-  }
+  EVAL_ARG_2(vexp, iexp);
+
+  if (!isvector(vexp) || !isnumber(iexp))
+    CLEAN_RETURN_2(vexp, iexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args"));
+
   alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
-  if (i < 0 || i >= v->len) {
-    unrefexp(vexp);
-    unrefexp(iexp);
-    unrefexp(e);
-    return error(ERROR_INDEX_OUT_OF_RANGE, e, env,
-                 "vec-ref: index out of range");
-  }
+  if (i < 0 || i >= v->len)
+    CLEAN_RETURN_2(vexp, iexp, error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-ref: index out of range"));
+
   exp_t *ret = refexp(v->data[i]);
-  unrefexp(vexp);
-  unrefexp(iexp);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_2(vexp, iexp, ret);
 }
 
 const char doc_vecset[] =
     "(vec-set! v i x) — store x into element i of vector v. Returns x.";
 exp_t *vecsetcmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL, *iexp = NULL, *valexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
-  if (e->next && e->next->next)
-    iexp = EVAL(e->next->next->content, env);
-  if (iserror(iexp)) {
-    unrefexp(vexp);
-    unrefexp(e);
-    return iexp;
-  }
-  if (e->next && e->next->next && e->next->next->next)
-    valexp = EVAL(e->next->next->next->content, env);
-  if (iserror(valexp)) {
-    unrefexp(vexp);
-    unrefexp(iexp);
-    unrefexp(e);
-    return valexp;
-  }
-  if (!isvector(vexp) || !isnumber(iexp)) {
-    if (vexp)
-      unrefexp(vexp);
-    if (iexp)
-      unrefexp(iexp);
-    if (valexp)
-      unrefexp(valexp);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args");
-  }
+  EVAL_ARG_3(vexp, iexp, valexp);
+
+  if (!isvector(vexp) || !isnumber(iexp))
+    CLEAN_RETURN_3(vexp, iexp, valexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args"));
+
   alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
-  if (i < 0 || i >= v->len) {
-    unrefexp(vexp);
-    unrefexp(iexp);
-    unrefexp(valexp);
-    unrefexp(e);
-    return error(ERROR_INDEX_OUT_OF_RANGE, e, env,
-                 "vec-set!: index out of range");
-  }
+  if (i < 0 || i >= v->len)
+    CLEAN_RETURN_3(vexp, iexp, valexp, error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-set!: index out of range"));
+
   /* Replace the slot — drop old ref, install new (transfer valexp's). */
   unrefexp(v->data[i]);
   v->data[i] = valexp; /* ownership transferred */
-  unrefexp(vexp);
-  unrefexp(iexp);
-  unrefexp(e);
-  return refexp(v->data[i]); /* return the value, like (= ...) */
+  
+  exp_t *ret = refexp(v->data[i]); /* return the value, like (= ...) */
+  CLEAN_RETURN_2(vexp, iexp, ret); /* valexp is already owned by vector slot, don't clean it! */
 }
 
 const char doc_veclen[] = "(vec-len v) — number of cells in vector v.";
@@ -4038,29 +4028,16 @@ done:
 /* (nth n list) — 0-indexed; returns nil if out of range. */
 const char doc_nth[] = "(nth xs i) — 0-based element of list/string/vector.";
 exp_t *nthcmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *b = NULL, *ret = NIL_EXP;
-  if (e->next && e->next->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
-    b = EVAL(e->next->next->content, env);
-    if (iserror(b)) {
-      unrefexp(a);
-      unrefexp(e);
-      return b;
-    }
+  exp_t *ret = NIL_EXP;
+  EVAL_ARG_2(a, b);
+  if (a && b) {
     if (isnumber(a)) {
       /* b must be a heap pair (or nil) — without is_ptr we'd dereference
          the tag bits of a tagged immediate. Same fix pattern as
          appendcmd / reversecmd. nil/empty list is a clean miss. */
       if (b && b != NIL_EXP && !ispair(b)) {
-        unrefexp(a);
-        unrefexp(b);
-        unrefexp(e);
-        return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                     "nth: second argument is not a list");
+        CLEAN_RETURN_2(a, b, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                     "nth: second argument is not a list"));
       }
       int64_t idx = FIX_VAL(a);
       exp_t *cur = b;
@@ -4072,10 +4049,7 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
         ret = refexp(cur->content);
     }
   }
-  unrefexp(a);
-  unrefexp(b);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_2(a, b, ret);
 }
 
 /* (reverse list) — non-destructive; returns a new list. */
@@ -4230,29 +4204,13 @@ exp_t *randomcmd(exp_t *e, env_t *env) {
 const char doc_map[] = "(map fn xs ...) — apply fn to corresponding elements "
                        "of one or more lists; returns a new list.";
 exp_t *mapcmd(exp_t *e, env_t *env) {
-  exp_t *fn = NULL, *xs = NULL, *head = NULL, *tail = NULL;
-  if (!(e->next && e->next->next)) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)");
-  }
-  fn = EVAL(e->next->content, env);
-  if (iserror(fn)) {
-    unrefexp(e);
-    return fn;
-  }
-  xs = EVAL(e->next->next->content, env);
-  if (iserror(xs)) {
-    unrefexp(fn);
-    unrefexp(e);
-    return xs;
-  }
-  if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn);
-    unrefexp(xs);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "map: second argument is not a list");
-  }
+  exp_t *head = NULL, *tail = NULL;
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !xs)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)"));
+  if (xs && xs != NIL_EXP && !ispair(xs))
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "map: second argument is not a list"));
+  
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
@@ -4260,10 +4218,7 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
-      unrefexp(fn);
-      unrefexp(xs);
-      unrefexp(e);
-      return res;
+      CLEAN_RETURN_2(fn, xs, res);
     }
     if (!res)
       res = NIL_EXP;
@@ -4277,38 +4232,19 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
     }
     cur = cur->next;
   }
-  unrefexp(fn);
-  unrefexp(xs);
-  unrefexp(e);
-  return head ? head : NIL_EXP;
+  CLEAN_RETURN_2(fn, xs, head ? head : NIL_EXP);
 }
 /* (filter pred list) — keep elements where (pred x) is truthy. */
 const char doc_filter[] = "(filter pred xs) — list of elements of xs for which "
                           "(pred elem) is truthy.";
 exp_t *filtercmd(exp_t *e, env_t *env) {
-  exp_t *fn = NULL, *xs = NULL, *head = NULL, *tail = NULL;
-  if (!(e->next && e->next->next)) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)");
-  }
-  fn = EVAL(e->next->content, env);
-  if (iserror(fn)) {
-    unrefexp(e);
-    return fn;
-  }
-  xs = EVAL(e->next->next->content, env);
-  if (iserror(xs)) {
-    unrefexp(fn);
-    unrefexp(e);
-    return xs;
-  }
-  if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn);
-    unrefexp(xs);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "filter: second argument is not a list");
-  }
+  exp_t *head = NULL, *tail = NULL;
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !xs)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)"));
+  if (xs && xs != NIL_EXP && !ispair(xs))
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "filter: second argument is not a list"));
+  
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
@@ -4316,10 +4252,7 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
-      unrefexp(fn);
-      unrefexp(xs);
-      unrefexp(e);
-      return res;
+      CLEAN_RETURN_2(fn, xs, res);
     }
     int keep = (res != NULL && res != NIL_EXP);
     if (res)
@@ -4336,46 +4269,17 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
     }
     cur = cur->next;
   }
-  unrefexp(fn);
-  unrefexp(xs);
-  unrefexp(e);
-  return head ? head : NIL_EXP;
+  CLEAN_RETURN_2(fn, xs, head ? head : NIL_EXP);
 }
 /* (reduce fn init list) — left fold: ((fn (fn init x0) x1) x2 ...). */
 const char doc_reduce[] = "(reduce fn init xs) — left fold: (fn (fn (fn init "
                           "x0) x1) x2)... Returns init for empty xs.";
 exp_t *reducecmd(exp_t *e, env_t *env) {
-  exp_t *fn = NULL, *acc = NULL, *xs = NULL;
-  if (!(e->next && e->next->next && e->next->next->next)) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)");
-  }
-  fn = EVAL(e->next->content, env);
-  if (iserror(fn)) {
-    unrefexp(e);
-    return fn;
-  }
-  acc = EVAL(e->next->next->content, env);
-  if (iserror(acc)) {
-    unrefexp(fn);
-    unrefexp(e);
-    return acc;
-  }
-  xs = EVAL(e->next->next->next->content, env);
-  if (iserror(xs)) {
-    unrefexp(fn);
-    unrefexp(acc);
-    unrefexp(e);
-    return xs;
-  }
-  if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn);
-    unrefexp(acc);
-    unrefexp(xs);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "reduce: third argument is not a list");
-  }
+  EVAL_ARG_3(fn, acc, xs);
+  if (!fn || !acc || !xs)
+    CLEAN_RETURN_3(fn, acc, xs, error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)"));
+  if (xs && xs != NIL_EXP && !ispair(xs))
+    CLEAN_RETURN_3(fn, acc, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "reduce: third argument is not a list"));
 
   /* Fast path: detect a simple 6-byte binary-arithmetic lambda
      (fn (a b) (op a b)) — bytecode is LOAD_SLOT 0, LOAD_SLOT 1, OP, RET.
@@ -4414,12 +4318,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
            and resume fast-path on the next element. */
         exp_t *argv[2] = {acc, refexp(x)};
         acc = vm_invoke_values(fn, 2, argv, env);
-        if (acc && iserror(acc)) {
-          unrefexp(fn);
-          unrefexp(xs);
-          unrefexp(e);
-          return acc;
-        }
+        if (acc && iserror(acc)) CLEAN_RETURN_2(fn, xs, acc);
         if (!acc)
           acc = NIL_EXP;
       }
@@ -4429,21 +4328,13 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     while (ispair(cur) && cur->content) {
       exp_t *argv[2] = {acc, refexp(cur->content)};
       acc = vm_invoke_values(fn, 2, argv, env);
-      if (acc && iserror(acc)) {
-        unrefexp(fn);
-        unrefexp(xs);
-        unrefexp(e);
-        return acc;
-      }
+      if (acc && iserror(acc)) CLEAN_RETURN_2(fn, xs, acc);
       if (!acc)
         acc = NIL_EXP;
       cur = cur->next;
     }
   }
-  unrefexp(fn);
-  unrefexp(xs);
-  unrefexp(e);
-  return acc;
+  CLEAN_RETURN_2(fn, xs, acc);
 }
 
 /* (any? pred list) — return t as soon as (pred x) is truthy for any
@@ -4452,39 +4343,18 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
 const char doc_any[] = "(any? pred xs) — t if pred is truthy for at least one "
                        "element. Short-circuits.";
 exp_t *anypcmd(exp_t *e, env_t *env) {
-  exp_t *fn = NULL, *xs = NULL, *ret = NIL_EXP;
-  if (!(e->next && e->next->next)) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(any? pred list)");
-  }
-  fn = EVAL(e->next->content, env);
-  if (iserror(fn)) {
-    unrefexp(e);
-    return fn;
-  }
-  xs = EVAL(e->next->next->content, env);
-  if (iserror(xs)) {
-    unrefexp(fn);
-    unrefexp(e);
-    return xs;
-  }
-  if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn);
-    unrefexp(xs);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "any?: second argument is not a list");
-  }
+  exp_t *ret = NIL_EXP;
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !xs)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(any? pred list)"));
+  if (xs && xs != NIL_EXP && !ispair(xs))
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "any?: second argument is not a list"));
+  
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
-    if (res && iserror(res)) {
-      unrefexp(fn);
-      unrefexp(xs);
-      unrefexp(e);
-      return res;
-    }
+    if (res && iserror(res)) CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
     if (res)
       unrefexp(res);
@@ -4494,49 +4364,25 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
     }
     cur = cur->next;
   }
-  unrefexp(fn);
-  unrefexp(xs);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_2(fn, xs, ret);
 }
 /* (all? pred list) — return t if (pred x) is truthy for every
    element, nil at the first failure. Empty list → t. */
 const char doc_all[] = "(all? pred xs) — t if pred is truthy for every element "
                        "(vacuously t for empty). Short-circuits.";
 exp_t *allpcmd(exp_t *e, env_t *env) {
-  exp_t *fn = NULL, *xs = NULL, *ret = TRUE_EXP;
-  if (!(e->next && e->next->next)) {
-    unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env, "(all? pred list)");
-  }
-  fn = EVAL(e->next->content, env);
-  if (iserror(fn)) {
-    unrefexp(e);
-    return fn;
-  }
-  xs = EVAL(e->next->next->content, env);
-  if (iserror(xs)) {
-    unrefexp(fn);
-    unrefexp(e);
-    return xs;
-  }
-  if (xs && xs != NIL_EXP && !ispair(xs)) {
-    unrefexp(fn);
-    unrefexp(xs);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "all?: second argument is not a list");
-  }
+  exp_t *ret = TRUE_EXP;
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !xs)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(all? pred list)"));
+  if (xs && xs != NIL_EXP && !ispair(xs))
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "all?: second argument is not a list"));
+  
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
     exp_t *argv[1] = {refexp(cur->content)};
     exp_t *res = vm_invoke_values(fn, 1, argv, env);
-    if (res && iserror(res)) {
-      unrefexp(fn);
-      unrefexp(xs);
-      unrefexp(e);
-      return res;
-    }
+    if (res && iserror(res)) CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
     if (res)
       unrefexp(res);
@@ -4546,10 +4392,7 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
     }
     cur = cur->next;
   }
-  unrefexp(fn);
-  unrefexp(xs);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_2(fn, xs, ret);
 }
 
 /* (apply fn args-list) — call fn with each element of args-list as
@@ -5609,22 +5452,12 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
 const char doc_cons[] = "(cons x ys) — pair with car=x, cdr=ys. To prepend "
                         "onto a list: (cons elem list).";
 exp_t *conscmd(exp_t *e, env_t *env) {
-  exp_t *a = EVAL(cadr(e), env);
-  if iserror (a) {
-    unrefexp(e);
-    return a;
-  }
-  exp_t *b = EVAL(caddr(e), env);
-  if iserror (b) {
-    unrefexp(a);
-    unrefexp(e);
-    return b;
-  }
+  EVAL_ARG_2(a, b);
   exp_t *ret = make_node(a);
   if (istrue(b))
     ret->next = b;
   else {
-    unrefexp(b);
+    if (b) unrefexp(b);
     ret->next = NULL;
   }
   unrefexp(e);
@@ -13958,25 +13791,13 @@ const char doc_assocbang[] = "(assoc! d k v) — set d[k]=v in place; returns d.
 exp_t *assocbangcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("assoc!")
   exp_t *v = EVAL(cadddr(e), env);
-  if (iserror(v)) {
-    unrefexp(k);
-    unrefexp(d);
-    unrefexp(e);
-    return v;
-  }
-  if (!ks) {
-    unrefexp(k);
-    unrefexp(v);
-    unrefexp(d);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "assoc!: unsupported key type");
-  }
+  if (iserror(v)) CLEAN_RETURN_2(k, d, v);
+  
+  if (!ks)
+    CLEAN_RETURN_3(k, d, v, error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"));
+
   set_get_keyval_dict((dict_t *)d->ptr, ks, v);
-  unrefexp(k);
-  unrefexp(v);
-  unrefexp(e);
-  return d;
+  CLEAN_RETURN_2(k, v, d);
 }
 
 const char doc_dissocbang[] =
@@ -13985,9 +13806,7 @@ exp_t *dissocbangcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("dissoc!")
   if (ks)
     del_keyval_dict((dict_t *)d->ptr, ks);
-  unrefexp(k);
-  unrefexp(e);
-  return d;
+  CLEAN_RETURN_1(k, d); /* d is not unref'd, it is returned */
 }
 
 const char doc_get[] = "(get d k [default]) — fetch d[k]. Works on hash-maps. "
@@ -14004,10 +13823,7 @@ exp_t *getcmd(exp_t *e, env_t *env) {
   } else if (cdddr(e)) {
     ret = EVAL(cadddr(e), env);
   }
-  unrefexp(k);
-  unrefexp(d);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_2(k, d, ret);
 }
 
 const char doc_containsp[] = "(contains? d k) — t if d has key k, else nil.";
