@@ -193,15 +193,22 @@ typedef struct exp_t {
   int nref;                 /* 4 bytes */
   union {                   /* 8 bytes */
     struct exp_t *content;
+    struct bytecode_t *bc;  /* set on compiled lambdas */
     void *ptr;
     int64_t s64;
     expfloat f;
     lispCmd *fnc;
   };
-  struct keyval_t *meta; /* 8 bytes — lambda/macro name, symbol-cache ptr */
+  struct keyval_t *meta; /* 8 bytes — overloaded by node role:
+                              - on the lambda/macro head: strdup'd name
+                                (free'd in unrefexp)
+                              - on the body wrapper (e->next of a
+                                lambda/macro): captured env_t* for
+                                closures (released via destroy_env)
+                              - on cached-symbol exp_t's: keyval_t*
+                                back-pointer for the symbol cache. */
   struct exp_t *next;    /* 8 bytes */
-  struct bytecode_t *bc; /* 8 bytes — set on compiled lambdas, else NULL */
-} exp_t;                 /* 40 bytes */
+} exp_t;                 /* 32 bytes */
 
 /* ---------------- Bytecode VM ----------------
    Lambda bodies that use only supported forms (fixnum arithmetic,
@@ -303,6 +310,7 @@ typedef struct gcache_entry {
 } gcache_entry;
 
 typedef struct bytecode_t {
+  struct exp_t *content; /* original arguments list of the compiled lambda */
   uint8_t *code;
   int ncode;
   exp_t **consts; /* owned refs — unref on free */
@@ -330,6 +338,17 @@ typedef struct bytecode_t {
   void *jit_mem; /* mmap'd page; freed via munmap on bytecode_free */
   size_t jit_size;
 } bytecode_t;
+
+/* Resolve a lambda's params list, accounting for the union overload
+   on `content`/`bc`. After compile_lambda runs, fn->bc occupies the
+   same slot as fn->content, and the original params chain has been
+   migrated to bc->content. Use this helper everywhere a caller needs
+   the params of a possibly-compiled lambda — touching fn->content
+   directly on a FLAG_COMPILED lambda dereferences a bytecode_t* as
+   an exp_t* and corrupts memory. */
+static inline struct exp_t *lambda_params(struct exp_t *fn) {
+  return (fn->flags & FLAG_COMPILED) ? fn->bc->content : fn->content;
+}
 
 extern uint64_t alcove_global_gen;
 

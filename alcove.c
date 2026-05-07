@@ -376,7 +376,8 @@ void graceful_shutdown(const char *msg) {
 
 void *memalloc(size_t count, size_t size) {
   void *ptr = calloc(count, size);
-  if (!ptr) graceful_shutdown("Fatal error: Out of memory");
+  if (!ptr)
+    graceful_shutdown("Fatal error: Out of memory");
   return ptr;
 }
 
@@ -422,16 +423,17 @@ inline int unrefexp(exp_t *e) {
     if (e->meta && (e->type == EXP_LAMBDA || e->type == EXP_MACRO)) {
       free(e->meta);
     }
-    if (e->bc && e->type == EXP_LAMBDA) {
+    if ((e->flags & FLAG_COMPILED) &&
+        (e->type == EXP_LAMBDA || e->type == EXP_MACRO)) {
       bytecode_free(e->bc);
     }
-    /* Closure capture lives in lambda/macro's wrapper-node bc field
+    /* Closure capture lives in lambda/macro's wrapper-node meta field
        (see fncmd / defcmd / defmacrocmd). Release it BEFORE unref'ing
        the wrapper, since after that e->next may be freed. */
     if ((e->type == EXP_LAMBDA || e->type == EXP_MACRO) && e->next &&
-        e->next->bc) {
-      destroy_env((env_t *)e->next->bc);
-      e->next->bc = NULL;
+        e->next->meta) {
+      destroy_env((env_t *)e->next->meta);
+      e->next->meta = NULL;
     }
     exp_t *next = e->next;
     if ((e->type == EXP_SYMBOL) || (e->type == EXP_STRING) ||
@@ -462,6 +464,12 @@ inline int unrefexp(exp_t *e) {
       free(l);
     } else if (((e->type >= EXP_NUMBER) && (e->type <= EXP_BOOLEAN)) ||
                (e->type == EXP_INTERNAL)) {
+      /* Numeric/char/bool live inline in the union; EXP_INTERNAL has
+         no payload — nothing to release here. */
+    } else if ((e->flags & FLAG_COMPILED) &&
+               (e->type == EXP_LAMBDA || e->type == EXP_MACRO)) {
+      /* content is unioned with bc; bytecode_free above already
+         released the params via bc->content. */
     } else
       unrefexp(e->content);
 
@@ -479,7 +487,7 @@ inline int unrefexp(exp_t *e) {
    wins over calloc/free per function call.
 
    Closures complicate this. fncmd / defcmd / defmacrocmd do
-     val->next->bc = (struct bytecode_t *)ref_env(env)
+     val->next->meta = (struct keyval_t *)ref_env(env)
    to keep the defining env alive while the lambda exists. When that
    captured env is an arena slot AND the lambda outlives its caller,
    destroy_env's REFCOUNT_DEC stays > 0 and the bump-pointer rollback
@@ -886,12 +894,12 @@ inline exp_t *make_nil() {
     exp_freelist = nil_exp->next;
     /* Zero out the fields that could carry stale state from the
        previous tenant. memset would also work but is ~3x slower
-       for a 40-byte struct on a hot path. */
+       for a 32-byte struct on a hot path. (content and bc share the
+       primary union; clearing content covers both.) */
     nil_exp->flags = 0;
     nil_exp->content = NULL;
     nil_exp->meta = NULL;
     nil_exp->next = NULL;
-    nil_exp->bc = NULL;
   } else {
     if (exp_bump_left == 0) {
       exp_bump_next = (exp_t *)calloc(EXP_BUMP_CHUNK, sizeof(exp_t));
@@ -1105,7 +1113,8 @@ void print_node(exp_t *node) {
 
 exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
   char *ptr = realloc(token->data, final_length + 1);
-  if (!ptr) graceful_shutdown("Fatal error: Out of memory");
+  if (!ptr)
+    graceful_shutdown("Fatal error: Out of memory");
   if (offset > 0)
     memmove(ptr, ptr + offset, final_length);
   ptr[final_length] = '\0';
@@ -1117,7 +1126,8 @@ exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
 exp_t *make_symbol_from_token(token_t *token) {
   int final_length = token->size;
   char *ptr = realloc(token->data, final_length + 1);
-  if (!ptr) graceful_shutdown("Fatal error: Out of memory");
+  if (!ptr)
+    graceful_shutdown("Fatal error: Out of memory");
   ptr[final_length] = '\0';
   free(token);
   MAKE_TYPED(cur, EXP_SYMBOL, ptr);
@@ -1509,14 +1519,15 @@ exp_t *dump_lambda(exp_t *e, FILE *stream) {
   if (!dump_str((char *)name, stream))
     return NULL;
   /* Flags: bit0 = has params; bit1 = has body. */
+  exp_t *params = lambda_params(e);
   uint8_t flags = 0;
-  if (e->content)
+  if (params)
     flags |= 1;
   if (e->next && e->next->content)
     flags |= 2;
   if (fwrite(&flags, 1, 1, stream) != 1)
     return NULL;
-  if ((flags & 1) && !__DUMP__(e->content, stream))
+  if ((flags & 1) && !__DUMP__(params, stream))
     return NULL;
   if ((flags & 2) && !__DUMP__(e->next->content, stream))
     return NULL;
@@ -1562,14 +1573,15 @@ exp_t *dump_macro(exp_t *e, FILE *stream) {
   const char *name = e->meta ? (const char *)e->meta : "";
   if (!dump_str((char *)name, stream))
     return NULL;
+  exp_t *params = lambda_params(e);
   uint8_t flags = 0;
-  if (e->content)
+  if (params)
     flags |= 1;
   if (e->next && e->next->content)
     flags |= 2;
   if (fwrite(&flags, 1, 1, stream) != 1)
     return NULL;
-  if ((flags & 1) && !__DUMP__(e->content, stream))
+  if ((flags & 1) && !__DUMP__(params, stream))
     return NULL;
   if ((flags & 2) && !__DUMP__(e->next->content, stream))
     return NULL;
@@ -2242,13 +2254,13 @@ exp_t *fncmd(exp_t *e, env_t *env) {
       val->next = vali;
       val->type = EXP_LAMBDA;
       /* Closure: stash the env at fn-creation time in the wrapper
-         node's `bc` field (unused for non-bytecode wrappers — see
-         comment in unrefexp). invoke() later uses this as the new
-         call env's root, so let/with bindings from the enclosing scope
-         resolve correctly. For top-level fns env is global, so the
-         capture is just an extra ref on global (cheap). */
+         node's `meta` field (see comment in unrefexp). invoke() later
+         uses this as the new call env's root, so let/with bindings
+         from the enclosing scope resolve correctly. For top-level fns
+         env is global, so the capture is just an extra ref on global
+         (cheap). */
       if (env)
-        val->next->bc = (struct bytecode_t *)ref_env(env);
+        val->next->meta = (struct keyval_t *)ref_env(env);
       /* Compile only when there's no real captured scope — the bytecode
          VM's gcache caches global resolutions per-bc, which is wrong if
          a captured `n` from a let later mutates. Closures (env != global,
@@ -2289,7 +2301,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         val->meta = (keyval_t *)strdup(name->ptr);
         /* Closure: capture defining env (see fncmd for rationale). */
         if (env)
-          val->next->bc = (struct bytecode_t *)ref_env(env);
+          val->next->meta = (struct keyval_t *)ref_env(env);
         /* Compile only when defined at top level (env->root == NULL).
            A nested (def ...) inside a let captures the let env and
            runs as AST so name lookups walk the captured chain. */
@@ -2359,7 +2371,7 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
         val->type = EXP_MACRO;
         val->meta = (keyval_t *)strdup(name->ptr);
         if (env)
-          val->next->bc = (struct bytecode_t *)ref_env(env);
+          val->next->meta = (struct keyval_t *)ref_env(env);
         if (!(env->d))
           env->d = create_dict();
         set_get_keyval_dict(env->d, name->ptr,
@@ -5063,13 +5075,14 @@ static void inspect_value(exp_t *v) {
   if (v->type == EXP_LAMBDA) {
     if (v->meta)
       printf("\x1B[96mname:\t%s\x1B[39m\n", (char *)v->meta);
+    exp_t *params = lambda_params(v);
     int arity = 0;
     exp_t *p;
-    for (p = v->content; p; p = p->next)
+    for (p = params; p; p = p->next)
       arity++;
     printf("\x1B[96marity:\t%d\nparams:\t(", arity);
     int first = 1;
-    for (p = v->content; p; p = p->next) {
+    for (p = params; p; p = p->next) {
       if (!first)
         printf(" ");
       first = 0;
@@ -5251,19 +5264,22 @@ exp_t *dircmd(exp_t *e, env_t *env) {
     else
       kind = "?";
     printf("  %-20s  %-8s", arr[i].name, kind);
-    if (is_ptr(v) && v->type == EXP_LAMBDA && v->content) {
+    if (is_ptr(v) && v->type == EXP_LAMBDA) {
       /* Lambda: print parameter list. */
-      printf("  (");
-      int first = 1;
-      exp_t *p;
-      for (p = v->content; p; p = p->next) {
-        if (!first)
-          printf(" ");
-        first = 0;
-        if (issymbol(p->content))
-          printf("%s", (char *)p->content->ptr);
+      exp_t *params = lambda_params(v);
+      if (params) {
+        printf("  (");
+        int first = 1;
+        exp_t *p;
+        for (p = params; p; p = p->next) {
+          if (!first)
+            printf(" ");
+          first = 0;
+          if (issymbol(p->content))
+            printf("%s", (char *)p->content->ptr);
+        }
+        printf(")");
       }
-      printf(")");
     } else if (isnumber(v) || ischar(v) || isfloat(v) || isstring(v)) {
       /* Atomic value: show it. */
       printf("  ");
@@ -5514,7 +5530,7 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
   /* Only flag as a "closure" if the captured env is non-global. Top-
      level def'd lambdas always capture g_global_env; that's not a
      real closure, just the default scope. */
-  env_t *cap = (env_t *)(arg->next ? arg->next->bc : NULL);
+  env_t *cap = (env_t *)(arg->next ? arg->next->meta : NULL);
   int captured = (cap && cap != g_global_env) ? 1 : 0;
   /* Print the header inline (def NAME PARAMS or fn PARAMS), then
      pretty-print each body form on its own indented line. */
@@ -5524,7 +5540,7 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
   } else {
     printf("\x1B[33m(\x1B[1;35m%s\x1B[22;39m ", is_macro ? "mac" : "fn");
   }
-  print_node(arg->content); /* params list */
+  print_node(lambda_params(arg)); /* params list */
   exp_t *body = arg->next ? arg->next->content : NULL;
   while (body) {
     printf("\n  ");
@@ -5984,6 +6000,8 @@ void bytecode_free(bytecode_t *bc) {
   if (!bc)
     return;
   int i;
+  if (bc->content)
+    unrefexp(bc->content);
   for (i = 0; i < bc->nconsts; i++)
     unrefexp(bc->consts[i]);
   free(bc->consts);
@@ -12081,6 +12099,11 @@ int compile_lambda(exp_t *fn) {
     return 0;
   }
   bytecode_t *bc = calloc(1, sizeof(bytecode_t));
+  /* Migrate the params list off fn->content onto bc->content. After
+     `fn->bc = bc` below, the union assignment overwrites fn->content
+     with bc, so this is an ownership *transfer* — bytecode_free will
+     unrefexp(bc->content) at end of life. Don't refexp here. */
+  bc->content = fn->content;
   bc->code = c.code;
   bc->ncode = c.ncode;
   bc->consts = c.consts;
@@ -12598,8 +12621,10 @@ l_tail_call: {
     env->d = NULL;
   }
 
-  /* Bind new args to new_fn's params. */
-  exp_t *p = new_fn->content;
+  /* Bind new args to new_fn's params. lambda_params handles the
+     content/bc union overload (compiled lambdas migrate params to
+     bc->content). */
+  exp_t *p = lambda_params(new_fn);
   int i = 0;
   while (p && i < n) {
     if (!is_ptr(p->content) || !issymbol(p->content)) {
@@ -12923,7 +12948,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   }
   /* Honor closure capture (see invoke()). For top-level fns this is
      just global so behavior is unchanged. */
-  env_t *captured = (env_t *)fn->next->bc;
+  env_t *captured = (env_t *)fn->next->meta;
   env_t *newenv = make_env(captured ? captured : env);
   /* callingfnc stays NULL — OP_CALL is always non-tail from our side. */
 
@@ -12953,7 +12978,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
                    "wrong number of args: expected %d, got %d", fn->bc->nparams,
                    nargs);
     }
-    exp_t *p = fn->content;
+    exp_t *p = lambda_params(fn);
     int i = 0;
     while (p && i < nargs) {
       if (!is_ptr(p->content) || !issymbol(p->content)) {
@@ -13031,7 +13056,7 @@ tailrec: {
      resolve before walking up to global. Args themselves must be
      evaluated in the CALLER's env (where their free vars live) — so
      we eval first, bind into newenv with evalexp=false. */
-  env_t *captured = (env_t *)fn->next->bc;
+  env_t *captured = (env_t *)fn->next->meta;
   /* Pre-evaluate args in the caller's env. Build a fresh list of
      pre-evaluated values so var2env can bind them without re-eval. */
   exp_t *evald_args = NULL, *evald_tail = NULL;
@@ -13060,7 +13085,8 @@ tailrec: {
   }
   newenv = make_env(captured ? captured : env);
   newenv->callingfnc = refexp(e);
-  if ((ret = var2env(e, fn->content, evald_args, newenv, false))) {
+  exp_t *params = lambda_params(fn);
+  if ((ret = var2env(e, params, evald_args, newenv, false))) {
     if (evald_args)
       unrefexp(evald_args);
     destroy_env(newenv);
