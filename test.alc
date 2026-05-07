@@ -738,3 +738,51 @@
   (for i 1 3 (pr "")))
 (step8)
 (assert "ticket8: arkanoid-shaped step" 'ok 'ok)
+
+;; alcove-001: two distinct bugs. (A) OP_BIND_SLOT didn't initialise
+;; inline_keys[idx], so lookup()/updatebang()'s strcmp walked stale
+;; arena pointers — SIGSEGV on let/with/for. (B) defcmd/fncmd body
+;; validator rejected non-pair first forms, silently producing
+;; unbound names for (def g () 42), (def g (x) x), (fn () 42).
+
+;; Bug B — body validator must accept any expression as the first
+;; body form: literal, symbol, nil, or pair. Pre-fix these all
+;; failed silently (binding never created, call → "unbound name").
+(def alc001b-lit () 42)
+(assert "alcove-001 B: def with literal body"
+        (alc001b-lit)                       42)
+(def alc001b-nil () nil)
+(assert "alcove-001 B: def with nil body"
+        (alc001b-nil)                       nil)
+(def alc001b-sym (x) x)
+(assert "alcove-001 B: def with bare-symbol body"
+        (alc001b-sym 7)                     7)
+(assert "alcove-001 B: anon fn with literal body"
+        ((fn () 99))                        99)
+
+;; Bug A — OP_BIND_SLOT (let/with/for) must leave inline_keys in a
+;; lookup-safe state. Repro: deliberately populate the env arena
+;; with a high-water-mark of param strings via a multi-arg fn call,
+;; then exercise nested let/with/for. The bug fires when lookup()
+;; walks inline_keys past a slot left uninitialised by OP_BIND_SLOT.
+;; Pre-fix: random crash depending on arena residue. Post-fix: NULL
+;; sentinel skipped cleanly by the symbolic walk.
+(def alc001a-pollute (a b c d e f) (+ a b c d e f))
+(alc001a-pollute 1 2 3 4 5 6) ; pollutes arena slot's inline_keys[0..5]
+(def alc001a-let () (let x 1 (let y 2 (let z 3 (+ x y z)))))
+(assert "alcove-001 A: nested let after pollution"
+        (alc001a-let)                       6)
+(def alc001a-with () (with (p 10 q 20 r 30) (+ p q r)))
+(assert "alcove-001 A: with after pollution"
+        (alc001a-with)                      60)
+(def alc001a-for () (let s 0 (for i 1 5 (= s (+ s i))) s))
+(assert "alcove-001 A: for-body after pollution"
+        (alc001a-for)                       15)
+;; Combined stress: function with params (puts real keys in arena)
+;; immediately followed by let-body that walks inline_keys for a
+;; symbol that lives in the OUTER env. Pre-fix: strcmp walks
+;; stale pointers from the prior tenant on every iteration.
+(def alc001a-outer (m)
+  (let n 100 (+ m n)))
+(assert "alcove-001 A: outer-symbol lookup through let body"
+        (alc001a-outer 7)                   107)
