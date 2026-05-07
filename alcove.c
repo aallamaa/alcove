@@ -2080,7 +2080,8 @@ inline exp_t *lookup(exp_t *e, env_t *env) {
            common case (1-6 params) this beats a full hash lookup. */
         int i;
         for (i = 0; i < curenv->n_inline; i++) {
-          if (strcmp(curenv->inline_keys[i], key) == 0)
+          const char *k = curenv->inline_keys[i];
+          if (k && strcmp(k, key) == 0)
             return refexp(curenv->inline_vals[i]);
         }
         if ((curenv->d) && (ret = set_get_keyval_dict(curenv->d, key, NULL)))
@@ -2109,7 +2110,8 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
       while (cur) {
         int i;
         for (i = 0; i < cur->n_inline; i++) {
-          if (strcmp(cur->inline_keys[i], keyv->ptr) == 0) {
+          const char *k = cur->inline_keys[i];
+          if (k && strcmp(k, keyv->ptr) == 0) {
             unrefexp(cur->inline_vals[i]);
             cur->inline_vals[i] = refexp(val);
             unrefexp(keyv);
@@ -2247,7 +2249,9 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   if (cur && ispair(cur->content)) {
     header = car(cur);
     cur = cdr(cur);
-    if (cur && ispair(cur->content)) {
+    if (cur) {
+      /* Body is the remaining list; first form may be nil/literal/symbol
+         as well as a pair — all are legal body expressions. */
       body = cur;
       vali = make_node(refexp(body));
       val = make_node(refexp(header));
@@ -2292,7 +2296,9 @@ exp_t *defcmd(exp_t *e, env_t *env) {
     if (cur && ispair(cur->content)) {
       header = car(cur);
       cur = cdr(cur);
-      if (cur && ispair(cur->content)) {
+      if (cur) {
+        /* Body is the remaining list; first form may be nil/literal/symbol
+           as well as a pair — all are legal body expressions. */
         body = cur;
         vali = make_node(refexp(body));
         val = make_node(refexp(header));
@@ -12296,15 +12302,18 @@ l_store_slot: {
   NEXT;
 }
 l_bind_slot: {
-  /* let/with entry: allocate a new inline slot and bump n_inline if
-     this is a fresh position. Key already set by the compiler via
-     inline_keys at an earlier BIND (not needed here — lookups go
-     through compile-time slot resolution, not inline_keys scan). */
+  /* let/with/for entry: allocate a new inline slot and bump n_inline
+     if this is a fresh position. The compiler resolves these names to
+     slot indices at compile time, so symbolic lookup never needs to
+     find them — but lookup() / updatebang() / dir() walk inline_keys
+     in [0, n_inline), so we must write a sentinel here. NULL means
+     "skip on symbolic walk"; the slot is still reachable by index. */
   uint8_t idx = READ_U8;
   exp_t *v = POP();
   /* Slot is fresh (compiler guarantees no prior BIND at same idx
      without intervening UNBIND). No old value to unref. */
   env->inline_vals[idx] = v;
+  env->inline_keys[idx] = NULL;
   if (idx >= env->n_inline)
     env->n_inline = idx + 1;
   NEXT;
