@@ -786,3 +786,48 @@
   (let n 100 (+ m n)))
 (assert "alcove-001 A: outer-symbol lookup through let body"
         (alc001a-outer 7)                   107)
+
+;; alcove-002: TAIL_AWARE special forms (if/do/when/and/or/case) must
+;; manage `in_tail_position` so a user-fn call inside a sub-expression
+;; can't return a tail-call marker that the form's truthiness check
+;; mis-reads as a real value. Plus two pre-existing nits in whencmd:
+;; the `(when t)` no-body case crashed on `cur->next` deref, and the
+;; function unconditionally returned NIL_EXP instead of the last body
+;; form's value.
+
+;; (or) and (and) with zero args.
+(assert "alcove-002: (or)  -> nil"               (or)               nil)
+(assert "alcove-002: (and) -> t"                 (and)              t)
+
+;; (when test) with no body — must NOT crash, returns nil per docstring.
+(assert "alcove-002: (when t)   no body -> nil"  (when t)           nil)
+(assert "alcove-002: (when nil) no body -> nil"  (when nil)         nil)
+
+;; (when test body...) — returns the last body form's value. Pre-fix
+;; this always returned nil regardless of body.
+(assert "alcove-002: (when t 42) -> 42"          (when t 42)        42)
+(assert "alcove-002: (when t 1 2 3) -> 3"        (when t 1 2 3)     3)
+(assert "alcove-002: (when t (+ 1 2)) -> 3"      (when t (+ 1 2))   3)
+(assert "alcove-002: (when nil 42) -> nil"       (when nil 42)      nil)
+
+;; Tail-marker leak through earlier (and)/(or) args. The hazard: an
+;; earlier arg evaluates a user-fn-call in TAIL position; the trampoline
+;; returns a tail marker (pair with FLAG_TAILREC); the short-circuit
+;; check treats the pair as truthy/non-empty and either fires the body
+;; (and) early-stops, or (or) early-returns the marker itself. Reproduce
+;; via a TAIL_AWARE form wrapping (and)/(or) so in_tail_position is set.
+(def alc002-helper (n) n)  ; trivial user fn; gets compiled
+(def alc002-and-leak ()
+  ;; (and (alc002-helper nil) 7) — first arg is a user-call returning
+  ;; nil. Pre-fix, in tail position the call returns a marker that
+  ;; istrue() reads as true, so `and` continues, returns 7 (wrong).
+  (when t (and (alc002-helper nil) 7)))
+(assert "alcove-002: tail-leak through (and) earlier arg"
+        (alc002-and-leak)                                nil)
+(def alc002-or-leak ()
+  ;; (or (alc002-helper nil) 7) — first arg returns nil; (or) should
+  ;; fall through to 7. Pre-fix in tail position, the marker is treated
+  ;; as truthy and (or) returns the marker instead of 7.
+  (when t (or (alc002-helper nil) 7)))
+(assert "alcove-002: tail-leak through (or) earlier arg"
+        (alc002-or-leak)                                 7)

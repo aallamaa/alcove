@@ -4639,26 +4639,48 @@ exp_t *docmd(exp_t *e, env_t *env) {
 const char doc_when[] = "(when test expr ...) — if test is truthy, evaluate "
                         "the body in order; else nil.";
 exp_t *whencmd(exp_t *e, env_t *env) {
+  /* Tail position: when is TAIL_AWARE. The condition must NOT be
+     evaluated in tail position — if it is, a user-fn call inside it
+     returns a tail marker, and istrue() reports the marker as true
+     (it's a non-empty pair), so the body fires when the condition was
+     actually nil. Only the last body form inherits the outer tail. */
+  int outer_tail = in_tail_position;
   exp_t *val = cadr(e);
   exp_t *cur = cddr(e);
+  in_tail_position = 0;
   exp_t *ret = EVAL(val, env);
   if iserror (ret) {
+    in_tail_position = outer_tail;
     unrefexp(e);
     return ret;
   }
-  if (istrue(ret))
+  /* Body runs only when test is truthy AND there's a body to run
+     ((when test) with no body forms gives cur=NULL — the per-arg
+     tail-flag read `cur->next` would segfault). */
+  int body_ran = 0;
+  if (istrue(ret) && cur)
     do {
       unrefexp(ret);
+      body_ran = 1;
+      in_tail_position = (cur->next == NULL) ? outer_tail : 0;
       ret = EVAL(car(cur), env);
     } while ((cur = cdr(cur)) && !(ret && iserror(ret)));
+  in_tail_position = outer_tail;
   if (ret && iserror(ret)) {
     unrefexp(e);
     return ret;
-  } else {
+  }
+  /* Return the last body expression's value (matches docstring and
+     Arc semantics). The pre-existing code unconditionally returned
+     NIL_EXP, so (when t 42) gave nil. If the body never ran (falsey
+     test, or no body forms), discard ret (which holds the test value
+     or last body iteration's truthy ret) and return NIL_EXP. */
+  unrefexp(e);
+  if (!body_ran) {
     unrefexp(ret);
-    unrefexp(e);
     return NIL_EXP;
   }
+  return ret ? ret : NIL_EXP;
 }
 
 const char doc_while[] = "(while test expr ...) — re-evaluate body while test "
@@ -4905,9 +4927,17 @@ const char doc_case[] =
     "clauses). First v that matches key returns its e; trailing odd element is "
     "the default.";
 exp_t *casecmd(exp_t *e, env_t *env) {
+  /* Tail position: case is TAIL_AWARE. The discriminant must NOT be
+     in tail position (it's used for matching, not returned). The
+     selected body expression IS the return value, so it inherits the
+     outer tail flag. Same trap as when/and/or: a tail marker from a
+     user-fn call would mis-compare via isequal. */
+  int outer_tail = in_tail_position;
   exp_t *cur = cdr(e);
+  in_tail_position = 0;
   exp_t *val = EVAL(cadr(e), env);
   if iserror (val) {
+    in_tail_position = outer_tail;
     unrefexp(e);
     return val;
   }
@@ -4922,6 +4952,7 @@ exp_t *casecmd(exp_t *e, env_t *env) {
     } else
       ret = car(cur);
   unrefexp(val);
+  in_tail_position = outer_tail;
   cur = EVAL(ret, env);
   unrefexp(e);
   return cur;
