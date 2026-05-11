@@ -208,9 +208,10 @@ Equality:
 - `in` — `(in x a b c)` is `(or (iso x a) (iso x b) (iso x c))`.
 
 Type predicates (all return `t` / `nil`): `number?`, `string?`,
-`symbol?`, `pair?`, `fn?`. There is no `vec?`, `blob?`, `dict?`,
-`deque?` user-facing — check via `(is x nil)` for nil, or just access
-and handle errors.
+`symbol?`, `pair?`, `fn?`, `vec?`, `blob?`, `dict?`, `deque?`. All
+accept zero or one argument; the no-arg form returns `nil`. `pair?`
+is true only for *non-empty* pairs — the empty list (nil) is excluded
+to match the `list?`-equivalent intent.
 
 ### Bitwise
 

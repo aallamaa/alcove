@@ -177,6 +177,10 @@ lispProc lispProcList[] = {
     LISPCMD("symbol?", symbolpcmd, doc_symbolp),
     LISPCMD("pair?", pairpcmd, doc_pairp),
     LISPCMD("fn?", fnpcmd, doc_fnp),
+    LISPCMD("vec?", vecpcmd, doc_vecp),
+    LISPCMD("blob?", blobpcmd, doc_blobp),
+    LISPCMD("dict?", dictpcmd, doc_dictp),
+    LISPCMD("deque?", dequepcmd, doc_dequep),
     /* I/O */
     LISPCMD("pr", prcmd, doc_pr),
     LISPCMD("print", prcmd, doc_pr),
@@ -4659,11 +4663,19 @@ const char doc_stringp[] = "(string? x) — t if x is a string.";
 const char doc_symbolp[] = "(symbol? x) — t if x is a symbol.";
 const char doc_pairp[] = "(pair? x) — t if x is a non-empty pair (cons cell).";
 const char doc_fnp[] = "(fn? x) — t if x is callable (lambda or builtin).";
+const char doc_vecp[] = "(vec? x) — t if x is a vector.";
+const char doc_blobp[] = "(blob? x) — t if x is a blob.";
+const char doc_dictp[] = "(dict? x) — t if x is a hash-map.";
+const char doc_dequep[] = "(deque? x) — t if x is a deque.";
 PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
 PRED_CMD(stringpcmd, isstring(a))
 PRED_CMD(symbolpcmd, issymbol(a))
 PRED_CMD(pairpcmd, (ispair(a) && a->content))
 PRED_CMD(fnpcmd, (islambda(a) || isinternal(a) || isffi(a)))
+PRED_CMD(vecpcmd, isvector(a))
+PRED_CMD(blobpcmd, isblob(a))
+PRED_CMD(dictpcmd, isdict(a))
+PRED_CMD(dequepcmd, islist(a))
 #undef PRED_CMD
 
 /* (exit) / (exit code) — terminate the process. */

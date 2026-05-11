@@ -994,3 +994,50 @@
 (vec-axpy! cs-y (vec-ref cs-c 2) W-row2)   ; y -= [5,6]    = [-4,-4]
 (assert "tensor combo: column-weighted sum via axpy"
         (vec->list cs-y)                                 (list -4.0 -4.0))
+
+;; ---------- container type predicates ----------
+;; vec?
+(assert "vec?: empty vec"           (vec? (vec 0 0))           t)
+(assert "vec?: populated vec"       (vec? (vec 3 0))           t)
+(assert "vec?: literal vec"         (vec? #[1 2 3])            t)
+(assert "vec?: nil"                 (vec? nil)                 nil)
+(assert "vec?: list (cons-pair)"    (vec? (list 1 2))          nil)
+(assert "vec?: string"              (vec? "x")                 nil)
+(assert "vec?: number"              (vec? 5)                   nil)
+(assert "vec?: blob"                (vec? (make-blob 1))       nil)
+(assert "vec?: hash-map"            (vec? (hash-map))          nil)
+(assert "vec?: deque"               (vec? (deque))             nil)
+
+;; blob?
+(assert "blob?: empty blob"         (blob? (make-blob 0))      t)
+(assert "blob?: populated blob"     (blob? (make-blob 5))      t)
+(assert "blob?: from string"        (blob? (string->blob "x")) t)
+(assert "blob?: nil"                (blob? nil)                nil)
+(assert "blob?: string (not blob)"  (blob? "abc")              nil)
+(assert "blob?: vec"                (blob? (vec 1 0))          nil)
+(assert "blob?: list"               (blob? (list 1))           nil)
+
+;; dict?
+(assert "dict?: empty hash-map"     (dict? (hash-map))         t)
+(assert "dict?: populated hash-map" (dict? (hash-map "k" 1))   t)
+(assert "dict?: nil"                (dict? nil)                nil)
+(assert "dict?: list"               (dict? (list 1 2))         nil)
+(assert "dict?: vec"                (dict? (vec 1 0))          nil)
+(assert "dict?: blob"               (dict? (make-blob 1))      nil)
+(assert "dict?: deque"              (dict? (deque))            nil)
+
+;; deque?
+(assert "deque?: empty deque"       (deque? (deque))           t)
+(assert "deque?: populated deque"   (deque? (deque 1 2 3))     t)
+(assert "deque?: nil"               (deque? nil)               nil)
+(assert "deque?: list (cons)"       (deque? (list 1 2))        nil)
+(assert "deque?: vec"               (deque? (vec 1 0))         nil)
+(assert "deque?: hash-map"          (deque? (hash-map))        nil)
+(assert "deque?: number"            (deque? 0)                 nil)
+
+;; no-arg behavior — every predicate accepts 0 args and returns nil
+;; (matches the existing numberpcmd / pairpcmd convention).
+(assert "vec?: no args"             (vec?)                     nil)
+(assert "blob?: no args"            (blob?)                    nil)
+(assert "dict?: no args"            (dict?)                    nil)
+(assert "deque?: no args"           (deque?)                   nil)
