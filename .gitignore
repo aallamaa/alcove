@@ -17,6 +17,9 @@ alcove
 *.o
 *.swp
 .DS_Store
+# macOS AppleDouble metadata (created when a Mac extracts a tarball
+# or copies into a non-HFS+ filesystem).
+._*
 # Emacs lockfiles + autosaves (#name#, .#name).
 \#*\#
 .\#*
@@ -35,6 +38,12 @@ examples/mlp/optdigits.tra
 examples/mlp/optdigits.tes
 examples/mlp/digits.bin
 examples/mlp/digits.dump
+
+# Mario demo: built shim + downloaded music track (not redistributed,
+# see examples/mario/README.md > Legal notice).
+examples/mario/libmariogfx.so
+examples/mario/libmariogfx.dylib
+examples/mario/theme.ogg
 
 # MPSC primitive standalone test binaries (Step 2.1).
 mpsc_test
