@@ -39,10 +39,12 @@ CPython 3.13 by 1.6×–60×.
 ### Running it
 
 ```sh
-make                  # build ./alcove
+make                  # build ./alcove (JIT by default; `make nojit` opts out)
 ./alcove              # REPL (use rlwrap for line editing)
 ./alcove file.alc     # run a script and exit
-./alcove --noload     # skip loading db.dump
+./alcove --noload     # skip loading db.dump at startup
+./alcove --db foo.dump file.alc      # load persistent vars from foo.dump
+./alcove --no-init    # skip running .init.alc on startup
 ./alcove -e '(+ 1 2)' # evaluate expression and exit
 ./alcove -r 6379      # RESP2 server on port 6379
 ```
@@ -91,6 +93,10 @@ bricks)` if you actually want to test "is it zero".
 The empty list, the empty string `""`, and `nil` are all falsey. Any
 non-empty list, any symbol other than `nil`, and any non-empty string
 are truthy.
+
+Container types follow the same emptiness rule: an empty `vec`,
+`blob`, hash-map, or deque is falsey; non-empty is truthy. So `(if v
+…)` and `(no v)` Just Work on any container.
 
 ---
 
@@ -147,11 +153,36 @@ is the value of the form.
 
 ### Closures
 
-Yes — `fn` closes over the enclosing environment. `(def make-adder (n)
-(fn (x) (+ x n)))` works (test.alc:228–238 verifies this including
-counters with mutable captured state). The `NO CLOSURES` invariant
-mentioned in older notes refers to the env arena's internal layout, not
-the user-visible language.
+`fn` closes over the enclosing environment. Both pure (read-only)
+captures and mutable captured state work:
+
+```
+; pure: partial application
+(def make-adder (n) (fn (x) (+ x n)))
+(= add5 (make-adder 5))
+(add5 7)                ; 12
+
+; mutable: stateful counter via captured var
+(def make-counter ()
+  (let n 0
+    (fn () (do (= n (+ n 1)) n))))
+(= c (make-counter))
+(c) (c) (c)             ; 1, 2, 3 — captured n persists per closure
+```
+
+Mutating a captured var via `(= var …)` walks up the scope chain and
+updates the originating slot — separate calls to `make-counter`
+produce independent counters because each call has its own `let`
+binding. Globals captured by `fn` also work but live in the single
+global env, so they're shared across every closure that refers to
+them.
+
+`def` is sugar for `(= name (fn (params…) body…))` — `def` and `fn`
+produce the same kind of object. There is no separate `lambda` form;
+just use `fn`. `(fn? x)` tests for a function (including builtins).
+
+The `NO CLOSURES` invariant in older internal notes refers to the env
+arena's storage layout, not the user-visible language.
 
 ---
 
@@ -175,6 +206,11 @@ Equality:
 - `is` — identity / EQ for atoms (symbols, fixnums, chars). Cheap.
 - `iso` — structural equality, recurses into lists/strings.
 - `in` — `(in x a b c)` is `(or (iso x a) (iso x b) (iso x c))`.
+
+Type predicates (all return `t` / `nil`): `number?`, `string?`,
+`symbol?`, `pair?`, `fn?`. There is no `vec?`, `blob?`, `dict?`,
+`deque?` user-facing — check via `(is x nil)` for nil, or just access
+and handle errors.
 
 ### Bitwise
 
@@ -203,21 +239,110 @@ literal of spaces and overwrite slots.
 ### Vectors
 
 ```
-(= v (vec 5 0))      ; length 5, all 0
-(vec-len v)           ; 5
-(vec-ref v 0)         ; 0
+(= v (vec 5 0))           ; length 5, all 0
+(vec-len v)               ; 5
+(vec-ref v 0)             ; 0
 (vec-set! v 2 'x)
 ```
 
 Vectors hold any `exp_t`. `(vec n init)` errors instead of segfaulting
-on absurdly large `n`.
+on absurdly large `n`. The literal form `#[1 2 3]` is shorthand for
+`(vector 1 2 3)`.
+
+**Tensor bulk ops** — for ML / numerical work, nine builtins walk a
+vec's underlying storage in C and do the math in raw `double`s instead
+of allocating an `EXP_FLOAT` per element. They accept vec elements
+that are either float or fixnum (coerced):
+
+| primitive               | semantics                          | mutates? |
+|-------------------------|------------------------------------|----------|
+| `(vec-dot a b)`         | `Σ a[i]*b[i]` → float              | no       |
+| `(vec-max v)`           | largest element → float            | no       |
+| `(vec-argmax v)`        | index of largest element → int     | no       |
+| `(vec-axpy! y a x)`     | `y[i] += a*x[i]`                   | y        |
+| `(vec-scale! v a)`      | `v[i] *= a`                        | v        |
+| `(vec-add! y x)`        | `y[i] += x[i]`                     | y        |
+| `(vec-copy! dst src)`   | `dst[i] = src[i]`                  | dst      |
+| `(vec-fill! v a)`       | `v[i] = a` for all i               | v        |
+| `(vec-relu! v)`         | `v[i] = max(0, v[i])`              | v        |
+
+The mutating ops write output slots in place when the existing slot is
+a uniquely-owned `EXP_FLOAT` (`nref == 1`, `!SHARED`); otherwise they
+fall back to allocating a fresh boxed float. On a steady-state MLP
+inner loop the fast path takes 100% of writes — typically ~35× faster
+than the hand-rolled per-element interpreter version. See
+`examples/mlp/` for a worked example.
+
+The `(vec-dot W[k] x)` pattern wants `W` stored as a vec-of-rows
+(outer vec of inner vecs) rather than a flat row-major vec, so each
+row is a contiguous walk. The mlp demo follows that layout.
+
+### Hash-maps (dicts)
+
+Clojure-style mutable dicts with string keys (anything is `pr`-printed
+to derive the key, so `:foo`, `"foo"`, and `'foo` all hash the same):
+
+```
+(= d (hash-map))
+(assoc! d "k" 1)
+(assoc! d "k2" "v")
+(get d "k")           ; 1
+(contains? d "k")     ; t
+(dissoc! d "k")
+(keys d) (vals d)     ; lists
+(count d)             ; 1
+```
+
+`(hash-map "k1" v1 "k2" v2 …)` builds a populated dict. Iteration
+order is hash-bucket order, not insertion order.
+
+### Deques
+
+Doubly-linked deque with O(1) ends:
+
+```
+(= q (deque))
+(push-right! q 1) (push-right! q 2)
+(push-left!  q 0)         ; q is now (0 1 2)
+(peek-left q)             ; 0  — no mutation
+(peek-right q)            ; 2
+(pop-left! q)             ; 0  — mutates
+(pop-right! q)            ; 2
+(count q)                 ; 1
+```
+
+`(deque x y z)` builds a populated deque. Push/pop returns the value
+moved; peek returns nil on empty.
+
+### Blobs
+
+Binary-safe byte buffer, distinct from `string` only in that strings
+use C `strlen` everywhere (so NUL bytes terminate them). Use blob for
+files, RESP values, or any byte-array workload.
+
+```
+(= b (make-blob 16))            ; 16 zero bytes
+(= b2 (make-blob "abc"))         ; 3 bytes from string
+(blob-len b)
+(blob-ref b 0)                   ; → fixnum (byte value 0..255)
+(blob->string b)                 ; copy bytes into a string
+(string->blob "xyz")             ; opposite direction
+(read-bytes "path/to/file")      ; slurp a file → blob (or nil)
+```
+
+`blob-ref` is read-only; to mutate, convert to string and back, or
+use FFI.
 
 ### I/O
 
 `pr x y z` — write each arg to stdout, no separator, no newline.
 `prn x y z` — same but trailing newline. `print` and `println` exist as
-aliases. There is **no `read-line` or `read-char`** — keyboard input
-requires the FFI route described below.
+aliases.
+
+File reading: `(read-bytes "path")` returns a blob (see above) or
+`nil` on missing/unreadable. There is **no `read-line` or
+`read-char`** — keyboard input requires the FFI route described
+below, and writing to files goes through FFI too.
 
 ### Time, randomness, persistence
 
@@ -226,7 +351,11 @@ requires the FFI route described below.
 - `(random n)` returns a fixnum in `[0, n)`.
 - `(persist 'sym)` marks a top-level binding as persistent. `savedb
   "path"` writes them; auto-loads on startup. `forget 'sym` unbinds.
-  `unpersist 'sym` clears the flag without unbinding.
+  `unpersist 'sym` clears the flag without unbinding. Round-trip
+  works for fixnum, float, char, string, symbol, pair, lambda
+  (source-form), blob, and vec (including nested vec-of-vec with
+  heterogeneous element types). Dict and deque do not yet round-
+  trip — `savedb` prints `skipping <name> — type X has no dump fn`.
 - `(eval form)` evaluates a quoted form in the global environment.
 
 ---
