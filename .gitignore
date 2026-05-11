@@ -3,10 +3,12 @@ alcove
 
 # Cross-compile / benchmark A-B comparison binaries (alcove.jemalloc,
 # alcove.dbg, alcove.asan, alcove-prestep23, alcove.tip, …).
-alcove.*
-alcove-*
-!alcove.c
-!alcove.h
+# Scoped to the repo root so docs/alcove-language.md and similar
+# nested files aren't accidentally ignored by the alcove-* glob.
+/alcove.*
+/alcove-*
+!/alcove.c
+!/alcove.h
 
 # Debug-symbol bundles produced by macOS dsymutil for any of the above.
 *.dSYM/
