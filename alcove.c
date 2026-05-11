@@ -14904,6 +14904,12 @@ static void *shard_thread_entry(void *p) {
 int respN_serve(int port, int nthreads) {
   if (nthreads <= 1)
     return shard_main(&main_shard, port);
+#if ALCOVE_SINGLE_THREADED
+  fprintf(stderr,
+          "alcove: --threads %d ignored — this build is single-threaded "
+          "(rebuild without ALCOVE_SINGLE_THREADED).\n", nthreads);
+  return shard_main(&main_shard, port);
+#else
   if (nthreads > EPOCH_MAX_THREADS) {
     fprintf(stderr, "alcove: clamping --threads %d to EPOCH_MAX_THREADS=%d\n",
             nthreads, EPOCH_MAX_THREADS);
@@ -14929,10 +14935,11 @@ int respN_serve(int port, int nthreads) {
       fprintf(stderr, "alcove: OOM allocating shard %d\n", i);
       free(sh);
       free(arena);
-      /* Tear down any already-spawned threads. */
+      /* Spawning happens later in the function — no threads to join
+         here, just release the shards we already allocated. (The
+         older pthread_cancel call was dead code AND not portable
+         to Bionic libc, which doesn't ship pthread_cancel.) */
       for (int j = 1; j < i; j++) {
-        pthread_cancel(tids[j]);
-        pthread_join(tids[j], NULL);
         free(shards[j]->arena);
         free(shards[j]);
       }
@@ -14977,6 +14984,7 @@ int respN_serve(int port, int nthreads) {
   free(args);
   free(tids);
   return rc;
+#endif /* !ALCOVE_SINGLE_THREADED */
 }
 
 /* Read every top-level form from `path` and evaluate it in `global`.
