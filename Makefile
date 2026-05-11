@@ -38,15 +38,22 @@ ifeq ($(RL_PC_OK),yes)
   RL_OK    := yes
 else
   RL_BREW  := $(shell command -v brew >/dev/null 2>&1 && brew --prefix readline 2>/dev/null)
+  RL_BREW_ARCH_OK := $(shell if [ "$(UNAME_S)" != "Darwin" ]; then \
+                         echo yes; \
+                       elif [ -n "$(RL_BREW)" ] && [ -f "$(RL_BREW)/lib/libreadline.dylib" ]; then \
+                         file "$(RL_BREW)/lib/libreadline.dylib" | grep -Eq '$(ARCH)|universal' && echo yes; \
+                       fi)
   ifneq ($(wildcard /usr/include/readline/readline.h),)
     RL_FLAGS := -DALCOVE_READLINE=1
     RL_LIBS  := -lreadline
     RL_OK    := yes
   else ifneq ($(RL_BREW),)
+  ifeq ($(RL_BREW_ARCH_OK),yes)
   ifneq ($(wildcard $(RL_BREW)/include/readline/readline.h),)
     RL_FLAGS := -DALCOVE_READLINE=1 -I$(RL_BREW)/include
     RL_LIBS  := -L$(RL_BREW)/lib -lreadline
     RL_OK    := yes
+  endif
   endif
   endif
 endif
