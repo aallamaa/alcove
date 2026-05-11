@@ -13318,7 +13318,17 @@ exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env) {
     destroy_env(newenv);
     return ret;
   }
+  /* Macro body evaluation produces the expansion AST. If a user-fn
+     call in the body's tail position inherited in_tail_position from
+     the macro caller, it would return a tail marker that becomes the
+     "expansion" — invokemacro then evaluates the marker as if it were
+     code, which mis-dispatches via FLAG_TAILREC. Body eval is NOT in
+     tail position relative to the macro's caller — the caller's tail
+     position applies to the EXPANSION's eval (invokemacro line 13337). */
+  int outer_tail = in_tail_position;
+  in_tail_position = 0;
   ret = EVAL(fn->next->content, newenv);
+  in_tail_position = outer_tail;
   destroy_env(newenv);
   return ret;
 }
@@ -13389,7 +13399,13 @@ exp_t *evaluate(exp_t *e, env_t *env) {
 #ifdef ALCOVE_FFI
           if isffi (tmpexp2) {
             /* Eval each arg and dispatch through libffi to the C
-               function held by tmpexp2. */
+               function held by tmpexp2. Clear in_tail_position around
+               arg eval — FFI args are real values to marshal, not
+               return values, so a user-fn call inside an arg must NOT
+               produce a tail marker (which alc_ffi_call would reject
+               as a non-number/non-string and fail type validation). */
+            int outer_tail = in_tail_position;
+            in_tail_position = 0;
             alc_ffi_t *f = (alc_ffi_t *)tmpexp2->ptr;
             int n = 0;
             exp_t *acur = e->next;
@@ -13408,6 +13424,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                   unrefexp(argv[j]);
                 free(argv);
                 unrefexp(tmpexp2);
+                in_tail_position = outer_tail;
                 ret = eret;
                 goto finish;
               }
@@ -13415,6 +13432,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             ret = alc_ffi_call(f, n, argv);
             free(argv);
             unrefexp(tmpexp2);
+            in_tail_position = outer_tail;
             goto finisht;
           }
 #endif
@@ -13443,8 +13461,13 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             /* (s i) where s is a var bound to a string — same semantics
                as ("foo" i) on a literal (handled below). Without this
                branch, the symbol-lookup path returned the bound string
-               whole, ignoring the index argument. */
+               whole, ignoring the index argument. Clear tail position
+               for the index eval — a tail marker leaking in here gets
+               rejected as ERROR_NUMBER_EXPECTED instead of indexing. */
+            int outer_tail = in_tail_position;
+            in_tail_position = 0;
             exp_t *idx = EVAL(cadr(e), env);
+            in_tail_position = outer_tail;
             if (iserror(idx)) {
               unrefexp(tmpexp2);
               ret = idx;
@@ -13480,7 +13503,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         ret = e; // what is happening here?
         goto finisht;
       } else if (isstring(tmpexp)) {
+        /* ("foo" i) literal-string indexer. Same tail-clear as the
+           bound-string path above. */
+        int outer_tail = in_tail_position;
+        in_tail_position = 0;
         tmpexp2 = EVAL(cadr(e), env);
+        in_tail_position = outer_tail;
         if (isnumber(tmpexp2)) {
           int64_t idx = FIX_VAL(tmpexp2);
           if ((idx >= 0) && (idx < (int64_t)strlen(tmpexp->ptr))) {
