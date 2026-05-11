@@ -1135,7 +1135,7 @@ exp_t *make_symbol_from_token(token_t *token) {
   return cur;
 }
 
-inline char *alloc_str(char *str, int length) {
+static inline char *alloc_str(char *str, int length) {
   char *ptr = memalloc(length + 1, sizeof(char));
   memcpy(ptr, str, length);
   ptr[length] = '\0';
@@ -9252,14 +9252,16 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
      both arms are SUB, and K2/K3 are 1 and 2 in either order. The base
      case must return n itself (which is what the matcher already
      enforces — c[7]==LOAD_SLOT slot, c[9]==JUMP). */
-  /* Two CALL_GLOBAL ops can reference the same callee via DIFFERENT
-     const indices (the bytecode compiler doesn't dedupe symbol consts).
-     So check the symbol-string values, not the indices. */
+  /* The iterative-fib emission elides the calls entirely, so it's only
+     correct if both go back to THIS function. String-compare against
+     bc->self_name (the bytecode compiler doesn't dedupe symbol consts,
+     so idx_a == idx_b isn't reliable). */
   exp_t *ca = bc->consts[idx_a];
   exp_t *cb = bc->consts[idx_b];
-  int same_callee = is_ptr(ca) && is_ptr(cb) && issymbol(ca) && issymbol(cb) &&
-                    strcmp((const char *)ca->ptr, (const char *)cb->ptr) == 0;
-  int is_fib_like = same_callee && op_a == OP_SLOT_SUB_FIX &&
+  int self_calls = bc->self_name && issymbol(ca) && issymbol(cb) &&
+                   strcmp((const char *)ca->ptr, bc->self_name) == 0 &&
+                   strcmp((const char *)cb->ptr, bc->self_name) == 0;
+  int is_fib_like = self_calls && op_a == OP_SLOT_SUB_FIX &&
                     op_b == OP_SLOT_SUB_FIX &&
                     ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
   if (is_fib_like) {
@@ -10453,8 +10455,11 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (c[47] != OP_TAIL_SELF || c[48] != 3 || c[49] != OP_RET)
     return 0;
 
-  /* All three calls must target the same global (string-compare since
-     the bytecode doesn't dedupe symbol consts). */
+  /* All three calls must target THIS function: the emission below issues
+     a direct CALL to our own entry_pc, so a non-self callee would be
+     silently rewritten as self-recursion. */
+  if (!bc->self_name)
+    return 0;
   if (idx_a >= bc->nconsts || idx_b >= bc->nconsts || idx_c >= bc->nconsts)
     return 0;
   exp_t *ca = bc->consts[idx_a];
@@ -10462,9 +10467,9 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *cc = bc->consts[idx_c];
   if (!issymbol(ca) || !issymbol(cb) || !issymbol(cc))
     return 0;
-  if (strcmp((const char *)ca->ptr, (const char *)cb->ptr) != 0)
-    return 0;
-  if (strcmp((const char *)ca->ptr, (const char *)cc->ptr) != 0)
+  if (strcmp((const char *)ca->ptr, bc->self_name) != 0 ||
+      strcmp((const char *)cb->ptr, bc->self_name) != 0 ||
+      strcmp((const char *)cc->ptr, bc->self_name) != 0)
     return 0;
   if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS ||
       s_z >= ENV_INLINE_SLOTS)
@@ -10698,6 +10703,17 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (c[52] != OP_RET)
     return 0;
   if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS)
+    return 0;
+
+  /* Self-name guard (see try_jit_recurse_add_two): the nested call emits
+     a direct CALL to our own entry_pc, so a non-self callee would be
+     silently rewritten as self-recursion. */
+  if (!bc->self_name)
+    return 0;
+  exp_t *callee = bc->consts[idx];
+  if (!issymbol(callee))
+    return 0;
+  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
     return 0;
 
   int32_t off_m =
@@ -11034,6 +11050,17 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (c[22] != OP_MUL)
     return 0;
   if (c[23] != OP_RET)
+    return 0;
+
+  /* Self-name guard (see try_jit_recurse_add_two): the iterative-fact
+     emission below elides the call entirely, so a non-self callee would
+     be silently rewritten as iterative factorial. */
+  if (!bc->self_name)
+    return 0;
+  exp_t *callee = bc->consts[idx];
+  if (!issymbol(callee))
+    return 0;
+  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
     return 0;
 
   int32_t slot_off =

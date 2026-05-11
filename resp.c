@@ -35,9 +35,11 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 
 #define RESP_DEFAULT_PORT 6379
 #define RESP_RBUF_INIT 4096
