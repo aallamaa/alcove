@@ -1,0 +1,81 @@
+;;; Load the binary dataset produced by prepare-data.py into alcove
+;;; vecs and persist them as digits.dump. Run once; the training
+;;; script then loads them via --db digits.dump (instant).
+
+(= raw (read-bytes "digits.bin"))
+(if (no raw)
+    (do
+      (prn "error: digits.bin not found — run `make data` first")
+      (exit 1)))
+
+;;; ---------- header parsing ----------
+;;; Read a 4-byte little-endian unsigned int at byte offset off.
+(def u32-at (b off)
+  (+ (blob-ref b off)
+     (* 256 (blob-ref b (+ off 1)))
+     (* 65536 (blob-ref b (+ off 2)))
+     (* 16777216 (blob-ref b (+ off 3)))))
+
+(= MAGIC      (u32-at raw 0))
+(= N-TRAIN    (u32-at raw 4))
+(= N-TEST     (u32-at raw 8))
+(= N-FEATURES (u32-at raw 12))
+(= N-CLASSES  (u32-at raw 16))
+
+(if (no (is MAGIC 0x44494754))           ; "DIGT" little-endian
+    (do (prn "error: bad magic " MAGIC) (exit 1)))
+
+(prn "header: " N-TRAIN " train, " N-TEST " test, "
+     N-FEATURES " features, " N-CLASSES " classes")
+
+;;; ---------- unpack ----------
+;;; Convert a `len`-byte slice starting at `off` into a fresh vec of
+;;; floats, each pixel scaled to [0, 1] by dividing by 16 (the source
+;;; range is 0..16).
+(def slice->fvec (b off len)
+  (let v (vec len 0.0)
+    (do
+      (for i 0 (- len 1)
+        (vec-set! v i (/ (blob-ref b (+ off i)) 16.0)))
+      v)))
+
+;;; Build a vec of N examples, each a length-N-FEATURES fvec.
+(def unpack-examples (b off n d)
+  (let xs (vec n 0)
+    (do
+      (for k 0 (- n 1)
+        (vec-set! xs k (slice->fvec b (+ off (* k d)) d)))
+      xs)))
+
+;;; Build a vec of N int labels.
+(def unpack-labels (b off n)
+  (let ys (vec n 0)
+    (do
+      (for k 0 (- n 1)
+        (vec-set! ys k (blob-ref b (+ off k))))
+      ys)))
+
+(= header-bytes 20)
+(= train-X-off  header-bytes)
+(= train-y-off  (+ train-X-off (* N-TRAIN N-FEATURES)))
+(= test-X-off   (+ train-y-off N-TRAIN))
+(= test-y-off   (+ test-X-off  (* N-TEST  N-FEATURES)))
+
+(prn "unpacking train…")
+(= train-X (unpack-examples raw train-X-off N-TRAIN N-FEATURES))
+(= train-y (unpack-labels   raw train-y-off N-TRAIN))
+(prn "unpacking test…")
+(= test-X  (unpack-examples raw test-X-off  N-TEST  N-FEATURES))
+(= test-y  (unpack-labels   raw test-y-off  N-TEST))
+
+;;; ---------- persist ----------
+(persist 'N-TRAIN)
+(persist 'N-TEST)
+(persist 'N-FEATURES)
+(persist 'N-CLASSES)
+(persist 'train-X)
+(persist 'train-y)
+(persist 'test-X)
+(persist 'test-y)
+(savedb "digits.dump")
+(prn "wrote digits.dump")

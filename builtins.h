@@ -39,7 +39,10 @@ extern const char doc_deque[], doc_pushrightbang[], doc_pushleftbang[],
                   doc_poprightbang[], doc_popleftbang[],
                   doc_peekleft[], doc_peekright[];
 extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
-                  doc_blob2string[], doc_string2blob[];
+                  doc_blob2string[], doc_string2blob[], doc_readbytes[];
+extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
+                  doc_vecfill[], doc_vecrelu[], doc_vecargmax[], doc_vecmax[],
+                  doc_veccopy[];
 extern const char doc_vector[];
 /* Redis inspector builtins (only registered, only callable, when the
    process started under -R; otherwise resp_db is empty and they all
@@ -83,6 +86,16 @@ exp_t *bloblencmd(exp_t *e, env_t *env);
 exp_t *blobrefcmd(exp_t *e, env_t *env);
 exp_t *blob2stringcmd(exp_t *e, env_t *env);
 exp_t *string2blobcmd(exp_t *e, env_t *env);
+exp_t *readbytescmd(exp_t *e, env_t *env);
+exp_t *vecdotcmd(exp_t *e, env_t *env);
+exp_t *vecaxpycmd(exp_t *e, env_t *env);
+exp_t *vecscalecmd(exp_t *e, env_t *env);
+exp_t *vecaddcmd(exp_t *e, env_t *env);
+exp_t *vecfillcmd(exp_t *e, env_t *env);
+exp_t *vecrelucmd(exp_t *e, env_t *env);
+exp_t *vecargmaxcmd(exp_t *e, env_t *env);
+exp_t *vecmaxcmd(exp_t *e, env_t *env);
+exp_t *veccopycmd(exp_t *e, env_t *env);
 exp_t *vectorcmd(exp_t *e, env_t *env);
 exp_t *rediscountcmd(exp_t *e, env_t *env);
 exp_t *rediskeyscmd(exp_t *e, env_t *env);

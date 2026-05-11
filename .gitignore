@@ -30,6 +30,12 @@ db.dump
 # FFI example .so (built from .c on demand).
 ffi-examples/libmylib.so
 
+# MLP demo: downloaded dataset + generated alcove artifacts.
+examples/mlp/optdigits.tra
+examples/mlp/optdigits.tes
+examples/mlp/digits.bin
+examples/mlp/digits.dump
+
 # MPSC primitive standalone test binaries (Step 2.1).
 mpsc_test
 mpsc_test_tsan

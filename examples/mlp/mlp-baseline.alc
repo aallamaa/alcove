@@ -1,0 +1,135 @@
+;;; MLP digit classifier — alcove baseline (no tensor ops).
+;;;
+;;; Same architecture and training loop as mlp.alc but with hand-rolled
+;;; per-element inner loops, so every multiply and add goes through the
+;;; bytecode interpreter and allocates a fresh EXP_FLOAT. Kept as the
+;;; "before" data point for the tensor-ops speedup story.
+
+(= HIDDEN 32)
+(= LR     0.05)
+(= EPOCHS 5)
+
+(def randf () (- (/ (random 1000000) 1000000.0) 0.5))
+
+(def init-vec (n scale)
+  (let v (vec n 0.0)
+    (do
+      (for i 0 (- n 1) (vec-set! v i (* (randf) scale)))
+      v)))
+
+(def zero-vec (n) (vec n 0.0))
+
+(= W1 (init-vec (* HIDDEN N-FEATURES) 0.25))
+(= b1 (init-vec HIDDEN 0.0))
+(= W2 (init-vec (* N-CLASSES HIDDEN) 0.35))
+(= b2 (init-vec N-CLASSES 0.0))
+
+(= hidden-pre (zero-vec HIDDEN))
+(= hidden     (zero-vec HIDDEN))
+(= logits     (zero-vec N-CLASSES))
+(= probs      (zero-vec N-CLASSES))
+(= d-out      (zero-vec N-CLASSES))
+(= d-hidden   (zero-vec HIDDEN))
+
+(def forward (x)
+  (do
+    (for j 0 (- HIDDEN 1)
+      (let s (vec-ref b1 j)
+        (do
+          (for i 0 (- N-FEATURES 1)
+            (= s (+ s (* (vec-ref W1 (+ (* j N-FEATURES) i))
+                         (vec-ref x i)))))
+          (vec-set! hidden-pre j s)
+          (vec-set! hidden     j (if (> s 0.0) s 0.0)))))
+    (for k 0 (- N-CLASSES 1)
+      (let s (vec-ref b2 k)
+        (do
+          (for j 0 (- HIDDEN 1)
+            (= s (+ s (* (vec-ref W2 (+ (* k HIDDEN) j))
+                         (vec-ref hidden j)))))
+          (vec-set! logits k s))))))
+
+(def softmax-logits ()
+  (let m (vec-ref logits 0)
+    (do
+      (for k 1 (- N-CLASSES 1)
+        (let z (vec-ref logits k)
+          (if (> z m) (= m z))))
+      (let z 0.0
+        (do
+          (for k 0 (- N-CLASSES 1)
+            (let p (exp (- (vec-ref logits k) m))
+              (do
+                (vec-set! probs k p)
+                (= z (+ z p)))))
+          (for k 0 (- N-CLASSES 1)
+            (vec-set! probs k (/ (vec-ref probs k) z))))))))
+
+(def argmax (v)
+  (let best 0
+    (let bestv (vec-ref v 0)
+      (do
+        (for i 1 (- (vec-len v) 1)
+          (let x (vec-ref v i)
+            (if (> x bestv)
+                (do (= best i) (= bestv x)))))
+        best))))
+
+(def predict (x) (do (forward x) (argmax logits)))
+
+(def step (x target)
+  (do
+    (forward x)
+    (softmax-logits)
+    (for k 0 (- N-CLASSES 1)
+      (vec-set! d-out k (vec-ref probs k)))
+    (vec-set! d-out target (- (vec-ref d-out target) 1.0))
+    (for j 0 (- HIDDEN 1)
+      (let s 0.0
+        (do
+          (for k 0 (- N-CLASSES 1)
+            (= s (+ s (* (vec-ref W2 (+ (* k HIDDEN) j))
+                         (vec-ref d-out k)))))
+          (if (> (vec-ref hidden-pre j) 0.0)
+              (vec-set! d-hidden j s)
+              (vec-set! d-hidden j 0.0)))))
+    (for k 0 (- N-CLASSES 1)
+      (let dok (vec-ref d-out k)
+        (do
+          (vec-set! b2 k (- (vec-ref b2 k) (* LR dok)))
+          (for j 0 (- HIDDEN 1)
+            (let idx (+ (* k HIDDEN) j)
+              (vec-set! W2 idx (- (vec-ref W2 idx)
+                                  (* LR dok (vec-ref hidden j)))))))))
+    (for j 0 (- HIDDEN 1)
+      (let dhj (vec-ref d-hidden j)
+        (do
+          (vec-set! b1 j (- (vec-ref b1 j) (* LR dhj)))
+          (for i 0 (- N-FEATURES 1)
+            (let idx (+ (* j N-FEATURES) i)
+              (vec-set! W1 idx (- (vec-ref W1 idx)
+                                  (* LR dhj (vec-ref x i))))))))) ))
+
+(def accuracy (X y)
+  (let correct 0
+    (do
+      (for k 0 (- (vec-len X) 1)
+        (if (is (predict (vec-ref X k)) (vec-ref y k))
+            (= correct (+ correct 1))))
+      correct)))
+
+(prn "MLP " N-FEATURES "-" HIDDEN "-" N-CLASSES " on UCI optdigits (BASELINE, no tensor ops)")
+(prn "train=" N-TRAIN " test=" N-TEST " lr=" LR " epochs=" EPOCHS)
+(prn "")
+
+(= t0 (time))
+(for epoch 0 (- EPOCHS 1)
+  (for k 0 (- N-TRAIN 1)
+    (step (vec-ref train-X k) (vec-ref train-y k)))
+  (let elapsed (/ (- (time) t0) 1000)
+    (prn "epoch " epoch ":  test acc " (accuracy test-X test-y) "/" N-TEST
+         "  (" elapsed " ms cumulative)")))
+
+(prn "")
+(prn "final train acc: " (accuracy train-X train-y) "/" N-TRAIN)
+(prn "final test  acc: " (accuracy test-X  test-y)  "/" N-TEST)

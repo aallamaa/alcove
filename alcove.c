@@ -146,6 +146,18 @@ lispProc lispProcList[] = {
     LISPCMD("vec-ref", vecrefcmd, doc_vecref),
     LISPCMD("vec-set!", vecsetcmd, doc_vecset),
     LISPCMD("vec-len", veclencmd, doc_veclen),
+    /* Tensor bulk ops — read each element as a double, do the math in
+       raw C, write fresh EXP_FLOATs back. ~100x faster than the
+       interpreted equivalent for MLP-style inner loops. */
+    LISPCMD("vec-dot", vecdotcmd, doc_vecdot),
+    LISPCMD("vec-axpy!", vecaxpycmd, doc_vecaxpy),
+    LISPCMD("vec-scale!", vecscalecmd, doc_vecscale),
+    LISPCMD("vec-add!", vecaddcmd, doc_vecadd),
+    LISPCMD("vec-copy!", veccopycmd, doc_veccopy),
+    LISPCMD("vec-fill!", vecfillcmd, doc_vecfill),
+    LISPCMD("vec-relu!", vecrelucmd, doc_vecrelu),
+    LISPCMD("vec-argmax", vecargmaxcmd, doc_vecargmax),
+    LISPCMD("vec-max", vecmaxcmd, doc_vecmax),
     /* Functions and binding */
     LISPCMD("def", defcmd, doc_def),
     LISPCMD("fn", fncmd, doc_fn),
@@ -213,6 +225,7 @@ lispProc lispProcList[] = {
     LISPCMD("blob-ref", blobrefcmd, doc_blobref),
     LISPCMD("blob->string", blob2stringcmd, doc_blob2string),
     LISPCMD("string->blob", string2blobcmd, doc_string2blob),
+    LISPCMD("read-bytes", readbytescmd, doc_readbytes),
     /* Clojure-style varargs vector ctor — populates EXP_VECTOR. Same as #[...].
      */
     LISPCMD("vector", vectorcmd, doc_vector),
@@ -1612,12 +1625,42 @@ exp_t *load_macro(exp_t *e, FILE *stream) {
   return e;
 }
 
-/* EXP_VECTOR — currently an enum-only placeholder in alcove (no
-   make_vector / no user-facing constructor as of this commit). When
-   vectors land, the persistence story will need a length-prefixed
-   recursive dump/load along the lines of dump_pair. Until then, no
-   exp of type EXP_VECTOR can exist, so registering nothing here is
-   correct (savedb's __DUMPABLE__ check will warn if one ever appears). */
+/* EXP_VECTOR — length-prefixed recursive dump (each element through
+   __DUMP__, so heterogeneous element types round-trip). 32-bit length
+   cap (matches make_vector's 1<<32 sanity bound). */
+exp_t *dump_vec(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  alc_vec_t *v = (alc_vec_t *)e->ptr;
+  uint32_t n = (uint32_t)v->len;
+  if (fwrite(&n, sizeof(n), 1, stream) != 1)
+    return NULL;
+  for (uint32_t i = 0; i < n; i++)
+    if (!__DUMP__(v->data[i], stream))
+      return NULL;
+  return e;
+}
+exp_t *load_vec(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  uint32_t n;
+  if (fread(&n, sizeof(n), 1, stream) != 1)
+    return NULL;
+  exp_t *v = make_vector((int64_t)n, NIL_EXP);
+  if (!v)
+    return NULL;
+  alc_vec_t *vv = (alc_vec_t *)v->ptr;
+  for (uint32_t i = 0; i < n; i++) {
+    unrefexp(vv->data[i]); /* drop the NIL placeholder */
+    vv->data[i] = load_exp_t(stream);
+    if (!vv->data[i]) {
+      vv->len = (int64_t)i; /* truncate so unrefexp doesn't walk past */
+      unrefexp(v);
+      return NULL;
+    }
+  }
+  return v;
+}
 
 exp_t *make_atom_from_token(token_t *token) {
   char *str = token->data;
@@ -2078,6 +2121,18 @@ inline int istrue(exp_t *e) {
     return 0; /* preserve historical behavior */
   if (!is_ptr(e))
     return 0;
+  /* Containers (blob/vec/dict/list) are folded into isatom() for other
+     reasons, so handle them by type before the isatom catch-all below. */
+  if (e->type == EXP_BLOB)
+    return (e->ptr && ((alc_blob_t *)e->ptr)->len > 0);
+  if (e->type == EXP_VECTOR)
+    return (e->ptr && ((alc_vec_t *)e->ptr)->len > 0);
+  if (e->type == EXP_LIST)
+    return (e->ptr && ((alc_list_t *)e->ptr)->len > 0);
+  if (e->type == EXP_DICT) {
+    dict_t *d = (dict_t *)e->ptr;
+    return (d && (d->ht[0].used + d->ht[1].used) > 0);
+  }
   if isatom (e) {
     if isstring (e)
       ret = ((e->ptr) ? strlen(e->ptr) : 0);
@@ -3367,6 +3422,320 @@ exp_t *veclencmd(exp_t *e, env_t *env) {
   unrefexp(vexp);
   unrefexp(e);
   return MAKE_FIX(n);
+}
+
+/* ---------- tensor bulk ops ----------
+   These take vec-of-floats (or vec-of-fixnums; we coerce) and operate
+   on the underlying doubles, eliminating per-element boxing. The
+   interpreter would otherwise allocate an EXP_FLOAT per multiply and
+   per add — these ops collapse the hot inner loops of an MLP forward/
+   backward pass into a single C-level walk.
+
+   Coercion rule: each element must be a number (float or fixnum); any
+   other type errors. The mutating ops (-set! / -axpy! / -scale! / -add!
+   / -fill! / -relu!) replace each output slot with a fresh EXP_FLOAT
+   (we don't try to reuse the old slot's exp_t in place — refcount
+   tracking would be racy and the alloc savings are marginal compared
+   to the multiply count). */
+
+/* Read element i of v as a double. Caller has bounds-checked. Returns
+   0.0 (and sets *err) on a non-number element. */
+static double vec_elem_as_double(alc_vec_t *v, int64_t i, int *err) {
+  exp_t *e = v->data[i];
+  if (isnumber(e))
+    return (double)FIX_VAL(e);
+  if (isfloat(e))
+    return e->f;
+  *err = 1;
+  return 0.0;
+}
+
+/* Write a double into slot i of v. Fast path when the existing slot
+   holds a uniquely-owned EXP_FLOAT: just overwrite its `f` field —
+   no alloc, no refcount round-trip. This is safe because:
+     1. nref == 1 means nothing else can observe this exp_t,
+     2. EXP_FLOAT carries its value inline in the union (no `ptr`
+        ownership to free),
+     3. type/flags don't need updating since we're writing a float
+        into what's already a float.
+   FLAG_SHARED isn't a concern for single-shard ML workloads, but we
+   still check it to keep the multi-shard refcount story honest. */
+static inline void vec_elem_set_double(alc_vec_t *v, int64_t i, double x) {
+  exp_t *cur = v->data[i];
+  if (is_ptr(cur) && cur->type == EXP_FLOAT && cur->nref == 1 &&
+      !(cur->flags & FLAG_SHARED)) {
+    cur->f = (expfloat)x;
+    return;
+  }
+  unrefexp(cur);
+  v->data[i] = make_floatf((expfloat)x);
+}
+
+const char doc_vecdot[] =
+    "(vec-dot a b) — sum of a[i]*b[i] over both vectors (must be equal "
+    "length, numeric elements). Returns a float.";
+exp_t *vecdotcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(aexp, bexp);
+  if (!isvector(aexp) || !isvector(bexp))
+    CLEAN_RETURN_2(aexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-dot a b): both args must be vectors"));
+  alc_vec_t *a = (alc_vec_t *)aexp->ptr;
+  alc_vec_t *b = (alc_vec_t *)bexp->ptr;
+  if (a->len != b->len)
+    CLEAN_RETURN_2(aexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-dot: length mismatch (%lld vs %lld)",
+                         (long long)a->len, (long long)b->len));
+  int err = 0;
+  double s = 0.0;
+  for (int64_t i = 0; i < a->len; i++)
+    s += vec_elem_as_double(a, i, &err) * vec_elem_as_double(b, i, &err);
+  if (err)
+    CLEAN_RETURN_2(aexp, bexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "vec-dot: non-numeric element"));
+  exp_t *ret = make_floatf((expfloat)s);
+  CLEAN_RETURN_2(aexp, bexp, ret);
+}
+
+const char doc_vecaxpy[] =
+    "(vec-axpy! y a x) — in place y[i] += a * x[i]. Returns y.";
+exp_t *vecaxpycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(yexp, aexp, xexp);
+  if (!isvector(yexp) || !isvector(xexp) ||
+      !(isnumber(aexp) || isfloat(aexp)))
+    CLEAN_RETURN_3(yexp, aexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-axpy! y a x): y, x vecs and a scalar"));
+  alc_vec_t *y = (alc_vec_t *)yexp->ptr;
+  alc_vec_t *x = (alc_vec_t *)xexp->ptr;
+  if (y->len != x->len)
+    CLEAN_RETURN_3(yexp, aexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-axpy!: length mismatch"));
+  double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
+  int err = 0;
+  for (int64_t i = 0; i < y->len; i++) {
+    double yv = vec_elem_as_double(y, i, &err);
+    double xv = vec_elem_as_double(x, i, &err);
+    if (err)
+      break;
+    vec_elem_set_double(y, i, yv + a * xv);
+  }
+  if (err)
+    CLEAN_RETURN_3(yexp, aexp, xexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "vec-axpy!: non-numeric element"));
+  exp_t *ret = refexp(yexp);
+  CLEAN_RETURN_3(yexp, aexp, xexp, ret);
+}
+
+const char doc_vecscale[] =
+    "(vec-scale! v a) — in place v[i] *= a. Returns v.";
+exp_t *vecscalecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(vexp, aexp);
+  if (!isvector(vexp) || !(isnumber(aexp) || isfloat(aexp)))
+    CLEAN_RETURN_2(vexp, aexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-scale! v a): vec + scalar"));
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
+  int err = 0;
+  for (int64_t i = 0; i < v->len; i++) {
+    double vi = vec_elem_as_double(v, i, &err);
+    if (err)
+      break;
+    vec_elem_set_double(v, i, vi * a);
+  }
+  if (err)
+    CLEAN_RETURN_2(vexp, aexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "vec-scale!: non-numeric element"));
+  exp_t *ret = refexp(vexp);
+  CLEAN_RETURN_2(vexp, aexp, ret);
+}
+
+const char doc_veccopy[] =
+    "(vec-copy! dst src) — overwrite dst with elements from src (must be "
+    "equal length). Returns dst.";
+exp_t *veccopycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(dexp, sexp);
+  if (!isvector(dexp) || !isvector(sexp))
+    CLEAN_RETURN_2(dexp, sexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-copy! dst src): both must be vectors"));
+  alc_vec_t *d = (alc_vec_t *)dexp->ptr;
+  alc_vec_t *s = (alc_vec_t *)sexp->ptr;
+  if (d->len != s->len)
+    CLEAN_RETURN_2(dexp, sexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-copy!: length mismatch"));
+  for (int64_t i = 0; i < d->len; i++) {
+    unrefexp(d->data[i]);
+    d->data[i] = refexp(s->data[i]);
+  }
+  exp_t *ret = refexp(dexp);
+  CLEAN_RETURN_2(dexp, sexp, ret);
+}
+
+const char doc_vecadd[] =
+    "(vec-add! y x) — in place y[i] += x[i]. Returns y.";
+exp_t *vecaddcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(yexp, xexp);
+  if (!isvector(yexp) || !isvector(xexp))
+    CLEAN_RETURN_2(yexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-add! y x): both must be vectors"));
+  alc_vec_t *y = (alc_vec_t *)yexp->ptr;
+  alc_vec_t *x = (alc_vec_t *)xexp->ptr;
+  if (y->len != x->len)
+    CLEAN_RETURN_2(yexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-add!: length mismatch"));
+  int err = 0;
+  for (int64_t i = 0; i < y->len; i++) {
+    double yv = vec_elem_as_double(y, i, &err);
+    double xv = vec_elem_as_double(x, i, &err);
+    if (err)
+      break;
+    vec_elem_set_double(y, i, yv + xv);
+  }
+  if (err)
+    CLEAN_RETURN_2(yexp, xexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "vec-add!: non-numeric element"));
+  exp_t *ret = refexp(yexp);
+  CLEAN_RETURN_2(yexp, xexp, ret);
+}
+
+const char doc_vecfill[] = "(vec-fill! v a) — in place v[i] = a. Returns v.";
+exp_t *vecfillcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(vexp, aexp);
+  if (!isvector(vexp) || !(isnumber(aexp) || isfloat(aexp)))
+    CLEAN_RETURN_2(vexp, aexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-fill! v a): vec + scalar"));
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
+  for (int64_t i = 0; i < v->len; i++)
+    vec_elem_set_double(v, i, a);
+  exp_t *ret = refexp(vexp);
+  CLEAN_RETURN_2(vexp, aexp, ret);
+}
+
+const char doc_vecrelu[] =
+    "(vec-relu! v) — in place v[i] = max(0, v[i]). Returns v.";
+exp_t *vecrelucmd(exp_t *e, env_t *env) {
+  exp_t *vexp = NULL;
+  if (e->next)
+    vexp = EVAL(e->next->content, env);
+  if (iserror(vexp)) {
+    unrefexp(e);
+    return vexp;
+  }
+  if (!isvector(vexp)) {
+    if (vexp)
+      unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-relu! v): not a vector");
+  }
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  int err = 0;
+  for (int64_t i = 0; i < v->len; i++) {
+    double vi = vec_elem_as_double(v, i, &err);
+    if (err)
+      break;
+    if (vi < 0.0)
+      vec_elem_set_double(v, i, 0.0);
+    /* else: leave the existing exp_t alone, no new alloc */
+  }
+  if (err) {
+    unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_NUMBER_EXPECTED, e, env,
+                 "vec-relu!: non-numeric element");
+  }
+  exp_t *ret = refexp(vexp);
+  unrefexp(vexp);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_vecargmax[] =
+    "(vec-argmax v) — index of the largest element. Empty vec -> -1.";
+exp_t *vecargmaxcmd(exp_t *e, env_t *env) {
+  exp_t *vexp = NULL;
+  if (e->next)
+    vexp = EVAL(e->next->content, env);
+  if (iserror(vexp)) {
+    unrefexp(e);
+    return vexp;
+  }
+  if (!isvector(vexp)) {
+    if (vexp)
+      unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-argmax v): not a vector");
+  }
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  int64_t best = -1;
+  double bestv = 0.0;
+  int err = 0;
+  for (int64_t i = 0; i < v->len; i++) {
+    double x = vec_elem_as_double(v, i, &err);
+    if (err)
+      break;
+    if (best < 0 || x > bestv) {
+      best = i;
+      bestv = x;
+    }
+  }
+  unrefexp(vexp);
+  unrefexp(e);
+  if (err)
+    return error(ERROR_NUMBER_EXPECTED, e, env,
+                 "vec-argmax: non-numeric element");
+  return MAKE_FIX(best);
+}
+
+const char doc_vecmax[] =
+    "(vec-max v) — largest element as a float. Empty vec is an error.";
+exp_t *vecmaxcmd(exp_t *e, env_t *env) {
+  exp_t *vexp = NULL;
+  if (e->next)
+    vexp = EVAL(e->next->content, env);
+  if (iserror(vexp)) {
+    unrefexp(e);
+    return vexp;
+  }
+  if (!isvector(vexp)) {
+    if (vexp)
+      unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-max v): not a vector");
+  }
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  if (v->len == 0) {
+    unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "vec-max: empty vector");
+  }
+  int err = 0;
+  double m = vec_elem_as_double(v, 0, &err);
+  for (int64_t i = 1; i < v->len; i++) {
+    double x = vec_elem_as_double(v, i, &err);
+    if (err)
+      break;
+    if (x > m)
+      m = x;
+  }
+  unrefexp(vexp);
+  unrefexp(e);
+  if (err)
+    return error(ERROR_NUMBER_EXPECTED, e, env,
+                 "vec-max: non-numeric element");
+  return make_floatf((expfloat)m);
 }
 
 /* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
@@ -14376,6 +14745,50 @@ exp_t *blobrefcmd(exp_t *e, env_t *env) {
   return MAKE_FIX(v);
 }
 
+const char doc_readbytes[] =
+    "(read-bytes \"path\") — slurp a file into a blob. Returns nil on "
+    "missing/unreadable file, or an error on bad arg.";
+exp_t *readbytescmd(exp_t *e, env_t *env) {
+  exp_t *a = EVAL(cadr(e), env);
+  if (iserror(a)) {
+    unrefexp(e);
+    return a;
+  }
+  if (!isstring(a)) {
+    unrefexp(a);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "read-bytes: path must be a string");
+  }
+  FILE *fp = fopen((const char *)a->ptr, "rb");
+  unrefexp(a);
+  unrefexp(e);
+  if (!fp)
+    return refexp(NIL_EXP);
+  /* Two-pass: stat-style seek so we allocate exactly once. fseek/ftell
+     can lie on pipes, so cap defensively and fall back if the size
+     looks bogus. */
+  if (fseek(fp, 0, SEEK_END) != 0) {
+    fclose(fp);
+    return refexp(NIL_EXP);
+  }
+  long sz = ftell(fp);
+  if (sz < 0 || sz > (long)(1L << 30)) {
+    fclose(fp);
+    return refexp(NIL_EXP);
+  }
+  rewind(fp);
+  exp_t *blob = make_blob(NULL, (size_t)sz);
+  alc_blob_t *bb = (alc_blob_t *)blob->ptr;
+  if (sz > 0 && fread(bb->bytes, 1, (size_t)sz, fp) != (size_t)sz) {
+    fclose(fp);
+    unrefexp(blob);
+    return refexp(NIL_EXP);
+  }
+  fclose(fp);
+  return blob;
+}
+
 const char doc_blob2string[] = "(blob->string b) — copy blob bytes into a "
                                "fresh string (truncates at first NUL).";
 UNARY_TYPE_CMD(blob2stringcmd, "blob->string: arg must be a blob", isblob,
@@ -14653,6 +15066,13 @@ int main(int argc, char *argv[]) {
   exp_tfuncList[EXP_BLOB] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_BLOB]->load = load_blob;
   exp_tfuncList[EXP_BLOB]->dump = dump_blob;
+
+  /* EXP_VECTOR — length-prefixed recursive dump; heterogeneous element
+     types round-trip through __DUMP__/__LOAD__. Needed for ML / data
+     workloads where the natural representation is a numeric vec. */
+  exp_tfuncList[EXP_VECTOR] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_VECTOR]->load = load_vec;
+  exp_tfuncList[EXP_VECTOR]->dump = dump_vec;
 
   reserved_symbol = create_dict();
   /* Allocate immortal singletons before any other code references them. */

@@ -721,6 +721,7 @@ typedef struct {
 } alc_list_t;
 
 exp_t *make_blob(const char *bytes, size_t len);
+exp_t *make_vector(int64_t n, exp_t *fill);
 exp_t *make_dict_exp(void); /* fresh empty dict_t wrapped in exp_t */
 exp_t *make_list_exp(void); /* fresh empty alc_list_t wrapped in exp_t */
 size_t blob_len(exp_t *e);

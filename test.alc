@@ -831,3 +831,166 @@
   (when t (or (alc002-helper nil) 7)))
 (assert "alcove-002: tail-leak through (or) earlier arg"
         (alc002-or-leak)                                 7)
+
+;; ---------- tensor bulk ops on vec ----------
+;; Helper: vec → list so iso compares element-by-element. `for` only
+;; counts up, so iterate forward and reverse at the end.
+(def vec->list (v)
+  (let xs (list)
+    (do
+      (for i 0 (- (vec-len v) 1)
+        (= xs (cons (vec-ref v i) xs)))
+      (reverse xs))))
+
+;; vec-dot — sum of products, integer elements (exact).
+(= vd-a (vec 4 0)) (vec-set! vd-a 0 1) (vec-set! vd-a 1 2) (vec-set! vd-a 2 3) (vec-set! vd-a 3 4)
+(= vd-b (vec 4 0)) (vec-set! vd-b 0 5) (vec-set! vd-b 1 6) (vec-set! vd-b 2 7) (vec-set! vd-b 3 8)
+(assert "vec-dot: integer elements"
+        (vec-dot vd-a vd-b)                              70.0)         ; 5+12+21+32
+
+;; vec-dot: float elements (exact sum 8.5)
+(= vd-c (vec 4 0.0)) (vec-set! vd-c 0 1.0) (vec-set! vd-c 1 2.0) (vec-set! vd-c 2 3.0) (vec-set! vd-c 3 4.0)
+(= vd-d (vec 4 0.0)) (vec-set! vd-d 0 0.5) (vec-set! vd-d 1 1.5) (vec-set! vd-d 2 -1.0) (vec-set! vd-d 3 2.0)
+(assert "vec-dot: float elements, exact sum"
+        (vec-dot vd-c vd-d)                              8.5)
+
+;; vec-dot: zero-length is 0
+(assert "vec-dot: empty vec is 0"
+        (vec-dot (vec 0 0) (vec 0 0))                    0.0)
+
+;; vec-dot: orthogonal vecs
+(= e1 (vec 3 0)) (vec-set! e1 0 1)
+(= e2 (vec 3 0)) (vec-set! e2 1 1)
+(assert "vec-dot: orthogonal vecs"
+        (vec-dot e1 e2)                                  0.0)
+
+;; vec-axpy! — y += a*x, exact integer math (a=3, x=[1,2,3,4], y=[10,10,10,10])
+(= ax-y (vec 4 0)) (for i 0 3 (vec-set! ax-y i 10))
+(= ax-x (vec 4 0)) (for i 0 3 (vec-set! ax-x i (+ i 1)))
+(vec-axpy! ax-y 3 ax-x)
+(assert "vec-axpy!: integer scale + integer vecs"
+        (vec->list ax-y)                                 (list 13.0 16.0 19.0 22.0))
+
+;; vec-axpy! with a=0 leaves y unchanged in value (though slots are replaced)
+(= ax-y2 (vec 3 7))
+(= ax-x2 (vec 3 99))
+(vec-axpy! ax-y2 0 ax-x2)
+(assert "vec-axpy!: a=0 preserves y"
+        (vec->list ax-y2)                                (list 7.0 7.0 7.0))
+
+;; vec-axpy! with negative a (gradient descent direction)
+(= ax-y3 (vec 3 0)) (vec-set! ax-y3 0 10) (vec-set! ax-y3 1 20) (vec-set! ax-y3 2 30)
+(= ax-x3 (vec 3 0)) (vec-set! ax-x3 0 1) (vec-set! ax-x3 1 2) (vec-set! ax-x3 2 3)
+(vec-axpy! ax-y3 -2 ax-x3)
+(assert "vec-axpy!: negative scalar"
+        (vec->list ax-y3)                                (list 8.0 16.0 24.0))
+
+;; vec-axpy! returns y
+(= ax-y4 (vec 2 1)) (= ax-x4 (vec 2 1))
+(assert "vec-axpy!: returns y"
+        (iso (vec-axpy! ax-y4 1 ax-x4) ax-y4)            t)
+
+;; vec-scale!
+(= sc-v (vec 4 0)) (vec-set! sc-v 0 1) (vec-set! sc-v 1 2) (vec-set! sc-v 2 3) (vec-set! sc-v 3 4)
+(vec-scale! sc-v 5)
+(assert "vec-scale!: integer scale"
+        (vec->list sc-v)                                 (list 5.0 10.0 15.0 20.0))
+
+(= sc-v2 (vec 3 0)) (vec-set! sc-v2 0 2.0) (vec-set! sc-v2 1 4.0) (vec-set! sc-v2 2 8.0)
+(vec-scale! sc-v2 0.5)
+(assert "vec-scale!: halving"
+        (vec->list sc-v2)                                (list 1.0 2.0 4.0))
+
+;; vec-add!
+(= ad-y (vec 4 0)) (for i 0 3 (vec-set! ad-y i (+ i 1)))    ; 1 2 3 4
+(= ad-x (vec 4 0)) (for i 0 3 (vec-set! ad-x i (* i 10)))   ; 0 10 20 30
+(vec-add! ad-y ad-x)
+(assert "vec-add!: element-wise sum"
+        (vec->list ad-y)                                 (list 1.0 12.0 23.0 34.0))
+
+;; vec-fill!
+(= fl-v (vec 5 99))
+(vec-fill! fl-v -1.5)
+(assert "vec-fill!: float fill"
+        (vec->list fl-v)                                 (list -1.5 -1.5 -1.5 -1.5 -1.5))
+
+;; vec-relu!
+(= rl-v (vec 5 0)) (vec-set! rl-v 0 -3) (vec-set! rl-v 1 0) (vec-set! rl-v 2 4)
+(vec-set! rl-v 3 -0.5) (vec-set! rl-v 4 2.5)
+(vec-relu! rl-v)
+(assert "vec-relu!: zeros negatives, preserves non-negatives"
+        (vec->list rl-v)                                 (list 0.0 0 4 0.0 2.5))
+
+;; vec-relu! on all-negative
+(= rl-v2 (vec 3 0)) (vec-set! rl-v2 0 -1) (vec-set! rl-v2 1 -2) (vec-set! rl-v2 2 -3)
+(vec-relu! rl-v2)
+(assert "vec-relu!: all-negative → all-zero"
+        (vec->list rl-v2)                                (list 0.0 0.0 0.0))
+
+;; vec-argmax — basic and ties (first-best wins)
+(= am-v (vec 5 0)) (vec-set! am-v 0 1) (vec-set! am-v 1 -3) (vec-set! am-v 2 9)
+(vec-set! am-v 3 7) (vec-set! am-v 4 2)
+(assert "vec-argmax: basic"
+        (vec-argmax am-v)                                2)
+
+(= am-v2 (vec 4 0)) (vec-set! am-v2 0 5) (vec-set! am-v2 1 5) (vec-set! am-v2 2 5) (vec-set! am-v2 3 5)
+(assert "vec-argmax: ties favor lowest index"
+        (vec-argmax am-v2)                               0)
+
+;; vec-max
+(= mx-v (vec 5 0)) (vec-set! mx-v 0 1.0) (vec-set! mx-v 1 -3.0) (vec-set! mx-v 2 9.0)
+(vec-set! mx-v 3 7.0) (vec-set! mx-v 4 2.0)
+(assert "vec-max: float elements"
+        (vec-max mx-v)                                   9.0)
+
+;; vec-max with mixed int/float
+(= mx-v2 (vec 3 0)) (vec-set! mx-v2 0 1) (vec-set! mx-v2 1 2.5) (vec-set! mx-v2 2 2)
+(assert "vec-max: mixed int/float picks the float"
+        (vec-max mx-v2)                                  2.5)
+
+;; vec-copy!
+(= cp-dst (vec 4 0))
+(= cp-src (vec 4 0)) (vec-set! cp-src 0 10) (vec-set! cp-src 1 20) (vec-set! cp-src 2 30) (vec-set! cp-src 3 40)
+(vec-copy! cp-dst cp-src)
+(assert "vec-copy!: contents match source"
+        (vec->list cp-dst)                               (list 10 20 30 40))
+
+;; vec-copy! doesn't alias — mutating src after copy doesn't change dst
+(vec-set! cp-src 0 999)
+(assert "vec-copy!: no aliasing"
+        (vec-ref cp-dst 0)                               10)
+
+;; combined: MSE-style gradient pattern
+;; d = (probs - one_hot(target)) in one walk.
+;; Using exact-representable binary fractions (0.25, 0.5, 0.25) so iso's
+;; bit-exact float compare passes; the math is the same in concept.
+(= grad-probs (vec 3 0))
+(vec-set! grad-probs 0 0.25) (vec-set! grad-probs 1 0.5) (vec-set! grad-probs 2 0.25)
+(= grad-d (vec 3 0))
+(vec-copy! grad-d grad-probs)
+(vec-set! grad-d 1 (- (vec-ref grad-d 1) 1.0))    ; target=1
+(assert "tensor combo: softmax-CE gradient"
+        (vec->list grad-d)                               (list 0.25 -0.5 0.25))
+
+;; matrix-vec multiply via per-row vec-dot (the forward-pass pattern):
+;; W is 3x2 (3 outputs, 2 inputs); each row a separate vec.
+;; result[k] = dot(W[k], x)
+(= W-row0 (vec 2 0)) (vec-set! W-row0 0 1) (vec-set! W-row0 1 2)
+(= W-row1 (vec 2 0)) (vec-set! W-row1 0 3) (vec-set! W-row1 1 4)
+(= W-row2 (vec 2 0)) (vec-set! W-row2 0 5) (vec-set! W-row2 1 6)
+(= mv-x (vec 2 0)) (vec-set! mv-x 0 10) (vec-set! mv-x 1 20)
+(= mv-out (vec 3 0))
+(vec-set! mv-out 0 (vec-dot W-row0 mv-x))
+(vec-set! mv-out 1 (vec-dot W-row1 mv-x))
+(vec-set! mv-out 2 (vec-dot W-row2 mv-x))
+(assert "tensor combo: 3x2 matvec via per-row vec-dot"
+        (vec->list mv-out)                               (list 50.0 110.0 170.0))
+
+;; column-sum-as-axpy: y = sum_k W[k] * c[k]   (the backprop pattern for d-hidden)
+(= cs-y (vec 2 0.0))
+(= cs-c (vec 3 0)) (vec-set! cs-c 0 1) (vec-set! cs-c 1 0) (vec-set! cs-c 2 -1)
+(vec-axpy! cs-y (vec-ref cs-c 0) W-row0)   ; y += 1 * [1,2] = [1,2]
+(vec-axpy! cs-y (vec-ref cs-c 1) W-row1)   ; y += 0 * [3,4] = [1,2]
+(vec-axpy! cs-y (vec-ref cs-c 2) W-row2)   ; y -= [5,6]    = [-4,-4]
+(assert "tensor combo: column-weighted sum via axpy"
+        (vec->list cs-y)                                 (list -4.0 -4.0))
