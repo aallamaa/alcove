@@ -4656,8 +4656,8 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
     unrefexp(e);                                                               \
     return ret;                                                                \
   }
-/* The five type-predicate cmds, expanded from the PRED_CMD macro above.
-   Each takes a single arg and returns t / nil. */
+/* Type-predicate cmds, expanded from the PRED_CMD macro above. Each
+   takes zero or one arg and returns t / nil (no-arg form is nil). */
 const char doc_numberp[] = "(number? x) — t if x is a fixnum or float.";
 const char doc_stringp[] = "(string? x) — t if x is a string.";
 const char doc_symbolp[] = "(symbol? x) — t if x is a symbol.";
