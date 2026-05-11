@@ -18,6 +18,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <limits.h> /* LLONG_MIN for hex literal overflow guard */
 #include <errno.h>
 #include <math.h>
 #include <stdarg.h>
@@ -1630,6 +1631,40 @@ exp_t *make_atom_from_token(token_t *token) {
   char *stro = str;
   if (str[0] == '\"')
     return make_string_from_token(token, 1, length - 2);
+  /* Hex literals: 0xNN / 0XNN, optionally with leading +/-. The decimal
+     state machine below rejects 'x', so without this fast path 0xFF
+     would be tokenised as the symbol "0xFF". */
+  {
+    const char *p = stro;
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+      neg = (*p == '-');
+      p++;
+    }
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') && p[2]) {
+      const char *q = p + 2;
+      int all_hex = 1;
+      for (; *q; q++) {
+        if (!isxdigit((unsigned char)*q)) { all_hex = 0; break; }
+      }
+      if (all_hex) {
+        errno = 0;
+        long long hv = strtoll(p, NULL, 16);
+        /* Guard the two's-complement one-value asymmetry: -LLONG_MIN
+           is UB. Treat it as out-of-range and let the symbol path
+           take it. */
+        if (errno != ERANGE && !(neg && hv == LLONG_MIN)) {
+          int64_t fix_max = ((int64_t)1 << 60) - 1;
+          int64_t fix_min = -((int64_t)1 << 60);
+          if (neg) hv = -hv;
+          if (hv >= fix_min && hv <= fix_max) {
+            freetoken(token);
+            return MAKE_FIX((int64_t)hv);
+          }
+        }
+      }
+    }
+  }
   while (length--) {
     v = (char)*(str++);
     if ((v == '+') || (v == '-')) {
@@ -3771,10 +3806,14 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     switch (f->arg_tags[i]) {
     case AFFI_INT:
     case AFFI_LONG:
-      ok = isnumber(a) || isfloat(a);
+      /* Chars (tagged immediates) are a natural fit for int args:
+         shims that take ASCII codes via C's `int` convention should
+         accept (gfx-text-set i (s i)) without forcing the caller to
+         hand-convert. The numeric value of a char is its codepoint. */
+      ok = isnumber(a) || isfloat(a) || ischar(a);
       break;
     case AFFI_DOUBLE:
-      ok = isnumber(a) || isfloat(a);
+      ok = isnumber(a) || isfloat(a) || ischar(a);
       break;
     case AFFI_STRING:
       ok = isstring(a);
@@ -3800,15 +3839,21 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     exp_t *a = args[i];
     switch (f->arg_tags[i]) {
     case AFFI_INT:
-      slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a) : (int32_t)a->f;
+      slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a)
+                  : ischar(a)  ? (int32_t)CHAR_VAL(a)
+                               : (int32_t)a->f;
       avalues[i] = &slots[i].i;
       break;
     case AFFI_LONG:
-      slots[i].l = isnumber(a) ? FIX_VAL(a) : (int64_t)a->f;
+      slots[i].l = isnumber(a) ? FIX_VAL(a)
+                  : ischar(a)  ? (int64_t)CHAR_VAL(a)
+                               : (int64_t)a->f;
       avalues[i] = &slots[i].l;
       break;
     case AFFI_DOUBLE:
-      slots[i].d = isfloat(a) ? a->f : (double)FIX_VAL(a);
+      slots[i].d = isfloat(a)  ? a->f
+                  : ischar(a)  ? (double)CHAR_VAL(a)
+                               : (double)FIX_VAL(a);
       avalues[i] = &slots[i].d;
       break;
     case AFFI_STRING:
@@ -4685,12 +4730,19 @@ const char doc_and[] = "(and expr ...) — short-circuit AND. (and) is t. "
                        "Returns the last truthy or first falsey value.";
 exp_t *andcmd(exp_t *e, env_t *env) {
   /* (and) → t (vacuous), per doc. The previous loop EVAL'd car(NULL)
-     and ended up returning nil for the empty case. */
+     and ended up returning nil for the empty case.
+     Tail position: andcmd is TAIL_AWARE; only the last arg inherits
+     the outer tail flag. Earlier args are NOT in tail position — if
+     they were, a user-fn call inside one would return a tail marker
+     and the trampoline check (ispair+content) would treat it as
+     truthy, causing premature short-circuit. */
+  int outer_tail = in_tail_position;
   exp_t *cur = cdr(e);
   exp_t *ret = TRUE_EXP;
   while (cur) {
     if (ret != TRUE_EXP)
       unrefexp(ret);
+    in_tail_position = (cur->next == NULL) ? outer_tail : 0;
     ret = EVAL(car(cur), env);
     if (iserror(ret))
       goto finish;
@@ -4699,6 +4751,7 @@ exp_t *andcmd(exp_t *e, env_t *env) {
     cur = cdr(cur);
   }
 finish:
+  in_tail_position = outer_tail;
   unrefexp(e);
   return ret;
 }
@@ -4706,18 +4759,29 @@ finish:
 const char doc_or[] = "(or expr ...) — short-circuit OR. (or) is nil. Returns "
                       "the first truthy value, else nil.";
 exp_t *orcmd(exp_t *e, env_t *env) {
+  /* See andcmd: only the last arg inherits in_tail_position; earlier
+     args must clear it so user-fn calls inside them return real
+     values, not tail markers (which the trampoline-check would treat
+     as truthy and short-circuit early).
+     Loop must guard cur — (or) with no args yields cur=NULL on
+     entry, and a do/while body would deref cur->next before the
+     condition check. (or) → nil per doc. */
+  int outer_tail = in_tail_position;
   exp_t *cur = cdr(e);
-  exp_t *ret = NULL;
-  do {
-    if (ret)
+  exp_t *ret = NIL_EXP;
+  while (cur) {
+    if (ret != NIL_EXP)
       unrefexp(ret);
+    in_tail_position = (cur->next == NULL) ? outer_tail : 0;
     ret = EVAL(car(cur), env);
     if iserror (ret)
       goto finish;
     if (istrue(ret))
       goto finish;
-  } while ((cur = cdr(cur)));
+    cur = cdr(cur);
+  }
 finish:
+  in_tail_position = outer_tail;
   unrefexp(e);
   return ret;
 }
