@@ -99,6 +99,22 @@
     ctx.imageSmoothingEnabled = false;
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup",   onKey);
+
+    function bindBtn(id, keyField) {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      const down = (e) => { e.preventDefault(); keys[keyField] = 1; };
+      const up = (e) => { e.preventDefault(); keys[keyField] = 0; };
+      btn.addEventListener("touchstart", down, {passive: false});
+      btn.addEventListener("touchend", up, {passive: false});
+      btn.addEventListener("mousedown", down);
+      btn.addEventListener("mouseup", up);
+      btn.addEventListener("mouseleave", up);
+    }
+    bindBtn("btn-left", "left");
+    bindBtn("btn-right", "right");
+    bindBtn("btn-jump", "jump");
+
     startMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
     return 1;
   }
