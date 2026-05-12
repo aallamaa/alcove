@@ -12,10 +12,57 @@
 (function () {
   "use strict";
 
+  // alcove's print_node writes terminal SGR colour escapes (ESC[NNm). The
+  // browser renders those as literal `␛[92m...` garbage in a <pre>, so we
+  // translate them into <span style="color:…"> on the way out. Mirrors the
+  // converter in ../../../web/alcove.js (the REPL shim).
+  const SGR_FG = {
+    30: "#555", 31: "#d33", 32: "#3a3", 33: "#b80",
+    34: "#37d", 35: "#a3a", 36: "#0aa", 37: "#bbb",
+    90: "#888", 91: "#f55", 92: "#5d5", 93: "#dc4",
+    94: "#6af", 95: "#f6f", 96: "#5cc", 97: "#eee",
+  };
+  const SGR_RE = /\x1B\[([0-9;]*)m/g;
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function ansiToHtml(s) {
+    let out = "", open = false, last = 0, m;
+    SGR_RE.lastIndex = 0;
+    while ((m = SGR_RE.exec(s)) !== null) {
+      out += escapeHtml(s.slice(last, m.index));
+      const params = m[1].split(";").filter(Boolean);
+      const code = params.length ? parseInt(params[params.length - 1], 10) : 0;
+      if (open) { out += "</span>"; open = false; }
+      if (code !== 0 && code !== 39 && SGR_FG[code]) {
+        out += `<span style="color:${SGR_FG[code]}">`;
+        open = true;
+      }
+      last = SGR_RE.lastIndex;
+    }
+    out += escapeHtml(s.slice(last));
+    if (open) out += "</span>";
+    return out;
+  }
+
+  function stripAnsi(s) {
+    return s.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "");
+  }
+
   function emit(s, kind) {
     const el = document.getElementById("alcove-output");
-    if (el) el.appendChild(document.createTextNode(s + "\n"));
-    (kind === "stderr" ? console.error : console.log)(s);
+    if (el) {
+      el.insertAdjacentHTML("beforeend", ansiToHtml(s) + "\n");
+      // Pin to bottom so the latest line is always visible. We always
+      // scroll because emit() only runs when new text was just appended.
+      el.scrollTop = el.scrollHeight;
+    }
+    (kind === "stderr" ? console.error : console.log)(stripAnsi(s));
   }
 
   async function loadAlcoveCore(url) {
