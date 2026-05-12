@@ -28,6 +28,9 @@
 #include <sys/time.h>
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
+#ifdef ALCOVE_WEB
+#include <emscripten/emscripten.h>
+#endif
 #ifdef ALCOVE_JIT
 #include <stddef.h>
 #include <sys/mman.h>
@@ -199,6 +202,8 @@ lispProc lispProcList[] = {
     LISPCMD("source", sourcecmd, doc_source),
     LISPCMD("dir", dircmd, doc_dir),
     LISPCMD("time", timecmd, doc_time),
+    LISPCMD("web?", webpcmd, doc_webp),
+    LISPCMD("sleep-ms", sleepmscmd, doc_sleepms),
     LISPCMD("exit", exitcmd, doc_exit),
     LISPCMD("quit", exitcmd, doc_exit),
     /* Help / discovery */
@@ -233,9 +238,11 @@ lispProc lispProcList[] = {
     /* Clojure-style varargs vector ctor — populates EXP_VECTOR. Same as #[...].
      */
     LISPCMD("vector", vectorcmd, doc_vector),
+#ifndef ALCOVE_WEB
     /* Redis inspector commands — only meaningful under -R (combined REPL
        + RESP). Outside -R, redis-keys/count return empty/0 since the
-       resp_db is never populated. */
+       resp_db is never populated. Excluded from the web build since
+       resp.c (pthread/epoll/socket) doesn't compile under emscripten. */
     LISPCMD("redis-count", rediscountcmd, doc_redis_count),
     LISPCMD("redis-keys", rediskeyscmd, doc_redis_keys),
     LISPCMD("redis-type", redistypecmd, doc_redis_type),
@@ -245,6 +252,7 @@ lispProc lispProcList[] = {
     LISPCMD("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
     LISPCMD("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
     LISPCMD("redis-cmds", rediscmdscmd, doc_redis_cmds),
+#endif
 };
 #undef LISPCMD
 #undef LISPCMD_TAIL
@@ -951,6 +959,74 @@ inline exp_t *make_internal(lispCmd *cmd, int flags) {
   cur->flags = flags;
   return cur;
 }
+
+/* Public: register a name → C function as an alcove builtin. Safe to call
+   after main() has finished its init pass. Used by the web build's JS shim
+   to inject browser-side implementations (Canvas, Web Audio, …) as alcove
+   callables, but the API is generic — any embedder can use it. Returns 0
+   on success, -1 if `reserved_symbol` hasn't been created yet. */
+int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware) {
+  if (!reserved_symbol || !name || !fn)
+    return -1;
+  exp_t *val = make_internal(fn, tail_aware ? FLAG_TAIL_AWARE : 0);
+  set_get_keyval_dict(reserved_symbol, (char *)name, val);
+  unrefexp(val);
+  return 0;
+}
+
+/* Embedder helpers — evaluate the Nth argument of an in-flight builtin
+   call and return it as a plain C type. Companion to alcove_register_cmd
+   so a host (e.g. the WASM build's JS shim) can implement builtins with
+   `int(int,int,...)` signatures and let alcove handle the exp_t plumbing.
+   N is 0-indexed. */
+int alcove_arg_int(exp_t *e, env_t *env, int n) {
+  exp_t *cur = e ? e->next : NULL;
+  for (int i = 0; i < n && cur; i++)
+    cur = cur->next;
+  if (!cur || !cur->content)
+    return 0;
+  exp_t *val = EVAL(cur->content, env);
+  if (!val)
+    return 0;
+  int rv = (int)FIX_VAL(val);
+  unrefexp(val);
+  return rv;
+}
+
+/* Returns a pointer to alcove's internal string storage for the Nth arg,
+   or NULL if the arg isn't a string. The pointer is stable for the
+   lifetime of the alcove value (which lives at least as long as the
+   builtin call) — the host should copy if it needs to outlive the call. */
+const char *alcove_arg_string(exp_t *e, env_t *env, int n) {
+  exp_t *cur = e ? e->next : NULL;
+  for (int i = 0; i < n && cur; i++)
+    cur = cur->next;
+  if (!cur || !cur->content)
+    return NULL;
+  exp_t *val = EVAL(cur->content, env);
+  if (!val) return NULL;
+  const char *s = (is_ptr(val) && val->type == EXP_STRING) ? (const char *)val->ptr : NULL;
+  /* Copy into a static round-robin buffer so the pointer is safe to
+     return after we unref. Round-robin gives a few concurrent slots
+     for the common pattern of reading several string args in a row. */
+  static char buf[4][1024];
+  static int slot = 0;
+  const char *out = NULL;
+  if (s) {
+    int i = slot;
+    slot = (slot + 1) & 3;
+    strncpy(buf[i], s, sizeof(buf[i]) - 1);
+    buf[i][sizeof(buf[i]) - 1] = 0;
+    out = buf[i];
+  }
+  unrefexp(val);
+  return out;
+}
+
+/* Wrap a C int as a tagged-fixnum exp_t* for return from a host-side
+   builtin. The host can't compute the tagged value itself without
+   knowing alcove's pointer layout, so we expose this. */
+exp_t *alcove_make_int(int v) { return MAKE_FIX(v); }
 
 void tree_add_node(exp_t *tree, exp_t *node) {
   exp_t *cur = tree;
@@ -2676,8 +2752,15 @@ const char *alcove_db_path = "db.dump";
    resp_kv_init eager-creates the table for the startup auto-load
    path which runs before any reactor spawns. */
 struct lfkv;
+#ifdef ALCOVE_WEB
+/* Web build excludes resp.c (pthread/epoll/socket). resp_kv_get stubbed
+   so savedb/loaddb still link; resp_kv_init isn't needed since the -r
+   branch that called it is also gated out. */
+static inline struct lfkv *resp_kv_get(void) { return NULL; }
+#else
 struct lfkv *resp_kv_get(void);
 struct lfkv *resp_kv_init(void);
+#endif
 
 /* Iterator ctx for the section-R walk: counts written records and
    carries the output stream. The lfkv_iter_fn callback below uses
@@ -5775,6 +5858,43 @@ exp_t *dircmd(exp_t *e, env_t *env) {
   unrefexp(flag_arg);
   unrefexp(e);
   return NULL;
+}
+
+/* (web?) — t if the interpreter was built with -DALCOVE_WEB (running
+   in a browser via Emscripten), nil otherwise. Lets .alc code branch
+   on whether features that need a browser (Canvas, Web Audio, fetch)
+   are available, or whether native-only features (libffi, the JIT,
+   readline) are wired up. */
+const char doc_webp[] = "(web?) — t if running in the WASM build, nil otherwise.";
+exp_t *webpcmd(exp_t *e, env_t *env) {
+  (void)e;
+  (void)env;
+#ifdef ALCOVE_WEB
+  return TRUE_EXP;
+#else
+  return NIL_EXP;
+#endif
+}
+
+/* (sleep-ms N) — block the caller for N milliseconds, then return nil.
+   On native, calls usleep(); on the WASM build, calls emscripten_sleep()
+   which, with -sASYNCIFY=1, suspends the WASM stack so the browser can
+   paint and process events. This is the *only* reliable way for a
+   synchronous .alc game loop to yield to the browser — JS-side
+   setTimeout in an addFunction'd callback can't unwind the alcove
+   eval frames behind it. */
+const char doc_sleepms[] = "(sleep-ms N) — sleep N milliseconds. On web, "
+                           "yields to the browser via Asyncify.";
+exp_t *sleepmscmd(exp_t *e, env_t *env) {
+  int ms = alcove_arg_int(e, env, 0);
+  if (ms > 0) {
+#ifdef ALCOVE_WEB
+    emscripten_sleep((unsigned)ms);
+#else
+    usleep((unsigned)ms * 1000U);
+#endif
+  }
+  return NIL_EXP;
 }
 
 /* (disasm fn)  — evaluates fn, expects a compiled lambda, prints its
@@ -14863,9 +14983,13 @@ UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
 
 /* RESP2 server prototype lives in its own file but is included as
    part of this single TU so it can use file-static helpers
-   (make_string, set_get_keyval_dict, ...) without exporting them. */
+   (make_string, set_get_keyval_dict, ...) without exporting them.
+   Excluded from the web build since it needs pthread/epoll/sockets. */
+#ifndef ALCOVE_WEB
 #include "resp.c"
+#endif
 
+#ifndef ALCOVE_WEB
 /* shard_main — the future pthread entrypoint for a worker shard. For
    N=1 (today) the main thread invokes it with &main_shard, behavior
    identical to a direct resp_serve(port) call: same select() loop,
@@ -14997,6 +15121,7 @@ int respN_serve(int port, int nthreads) {
   return rc;
 #endif /* !ALCOVE_SINGLE_THREADED */
 }
+#endif /* !ALCOVE_WEB */
 
 /* Read every top-level form from `path` and evaluate it in `global`.
    Returns 1 if the file existed (and we processed it), 0 if missing.
@@ -15122,6 +15247,22 @@ int main(int argc, char *argv[]) {
     unrefexp(val);
   }
 
+#ifdef ALCOVE_WEB
+  /* Web build: init complete, hand control back to JS. The Emscripten
+     runtime stays alive (build with -sNO_EXIT_RUNTIME=1) so JS can
+     call _alcove_web_eval after main returns. g_global_env was set
+     above; alcove_web_eval below uses it. */
+  (void)argc;
+  (void)argv;
+  (void)dict;
+  (void)t;
+  (void)nil;
+  (void)stream;
+  (void)evaluatingfile;
+  (void)idx;
+  return 0;
+#endif
+
   /* CLI flag scan:
        --noload / -n       skip auto-load of the db file
        --db <path>         set the session db path. Used by the startup
@@ -15137,10 +15278,12 @@ int main(int argc, char *argv[]) {
   int auto_load = 1;
   int run_init = 1;
   char *eval_string = NULL;
+#ifndef ALCOVE_WEB
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
   int resp_combined = 0; /* -R: combined REPL + RESP single-reactor */
   int resp_port = 6379;
   int resp_threads = 1; /* --threads N: number of reactor threads (-r only) */
+#endif
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
@@ -15153,6 +15296,7 @@ int main(int argc, char *argv[]) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
         alcove_db_path = argv[++src]; /* session-wide default */
+#ifndef ALCOVE_WEB
       } else if ((strcmp(argv[src], "--threads") == 0 ||
                   strcmp(argv[src], "-t") == 0) &&
                  src + 1 < argc) {
@@ -15181,6 +15325,7 @@ int main(int argc, char *argv[]) {
             src++;
           }
         }
+#endif /* !ALCOVE_WEB */
       } else {
         argv[dst++] = argv[src];
       }
@@ -15193,6 +15338,7 @@ int main(int argc, char *argv[]) {
      resp_db (or any other startup hook). Auto-load of the persistence
      file happens here too — eager-initialize g_resp_kv first since
      reactors lazy-init it on first write. */
+#ifndef ALCOVE_WEB
   if (resp_mode) {
     int N = sizeof(lispProcList) / sizeof(lispProc);
     /* lispProcList registration is needed downstream by isstring/etc.
@@ -15232,6 +15378,7 @@ int main(int argc, char *argv[]) {
       alcove_try_init_files(global);
     return resp_repl_serve(resp_port, global);
   }
+#endif /* !ALCOVE_WEB */
 
   /* Auto-load persisted bindings from the chosen db path. Silent on
      missing-file (first run, no DB yet); prints a one-line summary on
@@ -15442,3 +15589,35 @@ endcleanly:
     nil_singleton = NULL;
   }
 }
+
+#ifdef ALCOVE_WEB
+/* Web entry point: invoked from JS after main() has initialised the
+   runtime. Reads forms from `src`, evaluates them against the global
+   env, prints each non-nil result to stdout. Emscripten routes stdout
+   to Module.print, which our JS shim captures. */
+__attribute__((used)) int alcove_web_eval(const char *src) {
+  if (!src || !*src || !g_global_env)
+    return 0;
+  FILE *stream = fmemopen((void *)src, strlen(src), "r");
+  if (!stream)
+    return 0;
+  int forms = 0;
+  while (1) {
+    exp_t *stre = reader(stream, 0, 0);
+    if (iserror(stre) && stre->flags == EXP_ERROR_PARSING_EOF) {
+      unrefexp(stre);
+      break;
+    }
+    exp_t *strf = evaluate(stre, g_global_env);
+    if (strf) {
+      print_node(strf);
+      printf("\n");
+      unrefexp(strf);
+    }
+    forms++;
+  }
+  fclose(stream);
+  fflush(stdout);
+  return forms;
+}
+#endif

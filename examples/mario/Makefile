@@ -37,9 +37,45 @@ ALCOVE := ../../alcove
 THEME      := theme.ogg
 THEME_URL  := https://dn721802.ca.archive.org/0/items/super-mario-history-anniversary/01%20Super%20Mario%20Bros.%20-%20Ground%20Theme.ogg
 
-.PHONY: all run clean theme
+.PHONY: all run clean theme web web-clean
 
 all: $(SHIM_LIB) $(SHIM_LINK)
+
+# Web build: compiles alcove.c into web/mario-core.{js,wasm} via Emscripten.
+# The gfx_* functions are NOT compiled in — they're implemented in JS
+# (web/mario_gfx.js) and injected at runtime via alcove_register_cmd. This
+# keeps alcove.c free of mario-specific code.
+#
+# -sASYNCIFY=1 lets the synchronous game loop in mario.alc yield to the
+# browser inside (gfx-sleep-ms 16); see web/mario_gfx.js for the JS side.
+EMCC ?= emcc
+WEB_OUT := web/mario-core.js
+web: $(WEB_OUT)
+
+$(WEB_OUT): ../../alcove.c ../../alcove.h ../../builtins.h web/mario.html web/mario.js web/mario_gfx.js mario.alc $(THEME)
+	@command -v $(EMCC) >/dev/null 2>&1 || \
+	  (echo "emcc not found. Install Emscripten from https://emscripten.org"; \
+	   exit 1)
+	$(EMCC) -O2 -Wall -W \
+	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
+	  -sASYNCIFY=1 \
+	  -sNO_EXIT_RUNTIME=1 \
+	  -sALLOW_MEMORY_GROWTH=1 \
+	  -sALLOW_TABLE_GROWTH=1 \
+	  -sMODULARIZE=1 \
+	  -sEXPORT_NAME=createMarioModule \
+	  -sEXPORTED_FUNCTIONS=_main,_alcove_web_eval,_alcove_register_cmd,_alcove_arg_int,_alcove_arg_string,_alcove_make_int \
+	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
+	  -o $(WEB_OUT) ../../alcove.c -lm
+	@cp mario.alc web/mario.alc
+	@cp $(THEME) web/$(THEME)
+	@echo
+	@echo "Built $(WEB_OUT). To run:"
+	@echo "  python3 -m http.server -d web 8000"
+	@echo "  open http://localhost:8000/mario.html"
+
+web-clean:
+	rm -f web/mario-core.js web/mario-core.wasm web/mario.alc web/$(THEME)
 
 $(THEME):
 	@command -v curl >/dev/null 2>&1 || \

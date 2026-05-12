@@ -545,6 +545,18 @@ exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
 exp_t *make_char(unsigned char c);
 exp_t *make_node(exp_t *node);
 exp_t *make_internal(lispCmd *cmd, int flags);
+/* Runtime registration of a name → C function as an alcove builtin.
+   Returns 0 on success, -1 if called before alcove's init has set up
+   the reserved-symbol dict. The web build's JS shim uses this with
+   Module.addFunction to inject browser-side builtins. */
+int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware);
+/* Helpers for embedders implementing builtins outside the alcove TU
+   (e.g. JS-side builtins in the WASM build). Evaluate the Nth (0-indexed)
+   argument of the in-flight call and return it as a C int / C string;
+   wrap a C int as a fixnum exp_t* for return. */
+int         alcove_arg_int(exp_t *e, env_t *env, int n);
+const char *alcove_arg_string(exp_t *e, env_t *env, int n);
+exp_t      *alcove_make_int(int v);
 exp_t *make_tree(exp_t *root, exp_t *node1);
 
 exp_t *make_string(char *str, int length);

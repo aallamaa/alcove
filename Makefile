@@ -188,7 +188,28 @@ mpsc-test-tsan:
 	  && ./mpsc_test_tsan \
 	  || echo "tsan unavailable on this toolchain — skipping"
 
+# WebAssembly build via Emscripten. Produces web/alcove-core.{js,wasm}
+# wrapped by web/alcove.js. Excludes JIT, FFI, readline, and the RESP
+# server (all unavailable in the browser). See web/README.md for the
+# script-tag API and the runnable demo at web/index.html.
+EMCC ?= emcc
+web:
+	@command -v $(EMCC) >/dev/null 2>&1 || \
+	  (echo "emcc not found. Install Emscripten from https://emscripten.org"; \
+	   exit 1)
+	$(EMCC) -O2 -Wall -W \
+	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
+	  -sNO_EXIT_RUNTIME=1 \
+	  -sALLOW_MEMORY_GROWTH=1 \
+	  -sMODULARIZE=1 \
+	  -sEXPORT_NAME=createAlcoveModule \
+	  -sEXPORTED_FUNCTIONS=_main,_alcove_web_eval,_alcove_register_cmd,_alcove_arg_int,_alcove_arg_string,_alcove_make_int \
+	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
+	  -sALLOW_TABLE_GROWTH=1 \
+	  -o web/alcove-core.js alcove.c -lm
+
 clean:
 	rm -f alcove mpsc_test mpsc_test_tsan
+	rm -f web/alcove-core.js web/alcove-core.wasm
 
-.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan clean
+.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
