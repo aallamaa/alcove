@@ -12001,10 +12001,21 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
   }
   exp_t *arg1 = a->content;
   exp_t *arg2 = a->next->content;
+  int is_binary = !a->next->next;
+
+  /* Canonicalize (+ K slot) → (+ slot K) for commutative ops so the
+     slot-fix peephole and JIT shape matchers see the canonical form.
+     Binary-only — the peephole below doesn't handle >2 args anyway. */
+  if (is_binary && (op == OP_ADD || op == OP_MUL) && isnumber(arg1) &&
+      issymbol(arg2)) {
+    exp_t *tmp = arg1;
+    arg1 = arg2;
+    arg2 = tmp;
+  }
 
   /* Peephole: exactly 2 args, arg1 is a local slot symbol, arg2 is a
      fixnum fitting in int16. Emit one fused op instead of three. */
-  if (!a->next->next) {
+  if (is_binary) {
     int fused = fuse_slot_fix(op);
     if (fused && issymbol(arg1) && isnumber(arg2)) {
       int slot = find_slot(c, arg1->ptr);
