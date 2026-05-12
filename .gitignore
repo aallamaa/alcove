@@ -45,6 +45,17 @@ examples/mario/libmariogfx.so
 examples/mario/libmariogfx.dylib
 examples/mario/theme.ogg
 
+# Web (Emscripten) build artifacts — produced by `make web` at the
+# repo root and `make web` in examples/mario/. Sources in web/ and
+# examples/mario/web/ stay tracked; the .js/.wasm output and the
+# copies of mario.alc / theme.ogg into web/ do not.
+web/alcove-core.js
+web/alcove-core.wasm
+examples/mario/web/mario-core.js
+examples/mario/web/mario-core.wasm
+examples/mario/web/mario.alc
+examples/mario/web/theme.ogg
+
 # MPSC primitive standalone test binaries (Step 2.1).
 mpsc_test
 mpsc_test_tsan
