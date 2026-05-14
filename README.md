@@ -226,6 +226,8 @@ The default `make` writes `./alcove`. Use it like:
   refcount duality.
 - **Feature proposals**: [`docs/specs/proposals.md`](docs/specs/proposals.md)
   — open language ideas (string-buf, try/catch, unquote-splicing).
+- **Editor support**: [`editor/`](editor/README.md) — syntax
+  highlighting for vim and emacs (drop-in files + install steps).
 
 ---
 
