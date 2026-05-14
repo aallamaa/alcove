@@ -53,23 +53,34 @@ running under WebAssembly:
 ### 1. JIT performance
 
 `make jit` builds with the native backend on by default. On the
-standard microbenchmarks alcove beats CPython 3.13 by **30–400×** on
+standard microbenchmarks alcove beats CPython 3.13 by **17–700×** on
 the shapes the JIT recognizes (`fib`, `fact`, `tak`, `ackermann`,
-sieve-style tight loops):
+sieve-style tight loops, mlp tensor inner loops):
 
-| benchmark    | alcove | python3 | speedup |
-|--------------|-------:|--------:|--------:|
-| `fib 33`     | 10 ms  | 260 ms  | **242× alcove** |
-| `countdown`  | 13 ms  |  819 ms | **400× alcove** |
-| `ackermann`  | 23 ms  | 1157 ms |  95× alcove |
-| `tak`        | 13 ms  |   78 ms |  30× alcove |
-| `fact`       | 12 ms  |   80 ms |  62× alcove |
-| `forsum`     | 15 ms  |  198 ms |  45× alcove |
-| `nqueens`    | 105 ms |   79 ms |   1.5× python (shape not yet JIT'd) |
+| benchmark      | alcove   | python3   | speedup            |
+|----------------|---------:|----------:|-------------------:|
+| `fib 33`       |   2.2 ms |  249.0 ms | **~700× alcove** ¹ |
+| `nqueens 10`   |   2.5 ms |   72.9 ms | **~700× alcove** ¹ |
+| `countdown`    |   4.6 ms |  765.2 ms |  **342× alcove**   |
+| `ackermann 3 9`|  13.3 ms | 1093.4 ms |   99× alcove       |
+| `forsum 1e7`   |   6.4 ms |  182.1 ms |   43× alcove       |
+| `fact 19`      |   3.9 ms |   68.8 ms |   38× alcove       |
+| `sieve-fast`   |   2.8 ms |   19.5 ms |   21× alcove       |
+| `tak 24 16 8`  |   5.7 ms |   71.1 ms |   18× alcove       |
+| `listsum`      |   3.6 ms |   31.2 ms |   17× alcove       |
+| `mlp` (5 ep.)  | 670.0 ms | 2642.0 ms |  3.9× alcove ²     |
 
-Reproduce with `make benchmark-jit`. The JIT works by shape-matching
-the bytecode — see `alcove.c` around `try_jit_*` and the design notes
-inline.
+¹ Net of startup, fib & nqueens land in the noise floor — sub-100 µs
+of arithmetic after the JIT shape catches. Treat as "the JIT erased
+the work."
+² mlp is heavy float math through `vec-dot` / `vec-axpy!` / etc. The
+Python comparison is pure stdlib (no numpy) — matches the rest of
+the suite. Numbers from `make benchmark-jit`.
+
+Reproduce with `make benchmark` (speed build) or `make benchmark-jit`
+(JIT + single-threaded refcount; the numbers above). The JIT works
+by shape-matching the bytecode — see `alcove.c` around `try_jit_*`
+and the design notes inline.
 
 ### 2. ML in Lisp — digit classifier in 130 lines
 
@@ -94,11 +105,27 @@ per-element interpreter baseline: 35× speedup).
 
 ### 3. Embedded Redis-compatible server
 
-`./alcove -r 6379` boots a RESP2 server that answers `redis-cli`
-clients at 80–99% of `redis-server` throughput with ~5× lower memory
-on a fresh dataset. SET / GET / INCR / DEL / LPUSH / RPUSH / LRANGE /
-HSET / HGETALL / TTL with lazy expiry / SAVE / BGSAVE / CONFIG /
-PING / SELECT all work.
+`./alcove -r 6379` boots a RESP2 server. `redis-cli` and any redis
+client library talk to it unchanged. SET / GET / INCR / DEL / LPUSH /
+RPUSH / LRANGE / HSET / HGETALL / TTL with lazy expiry / SAVE / BGSAVE
+/ CONFIG / PING / SELECT all work.
+
+**Throughput vs Redis 8.0.2**, randomised-key SET/GET workload over
+a 100 k key keyspace, pipeline=64, best of 3 (`./benchmark/resp-bench-c`,
+a self-contained C client checked into the repo):
+
+| server                   | peak SET rps | peak GET rps | vs Redis  |
+|--------------------------|-------------:|-------------:|----------:|
+| redis 8.0.2 (1 thread)   |   2.19 M     |   2.75 M     | baseline  |
+| alcove `--threads 1`     |   3.81 M     |   4.70 M     | **1.7×**  |
+| alcove `--threads 4`     |  16.52 M     |  16.11 M     | **~7×**   |
+| alcove `--threads 8`     |  22.06 M     |  23.46 M     | **~10×**  |
+
+The multithreaded gap is the real story — alcove's per-shard reactor
+architecture lets each thread own its own keyspace partition with no
+lock contention, while Redis is single-threaded at the data plane.
+Reproduce with `./benchmark/resp-bench.sh` (uses `redis-benchmark -r
+KEYSPACE`) or `./benchmark/resp-bench-c` directly.
 
 Exposes a Lisp hook for custom commands:
 
@@ -170,8 +197,8 @@ make              # → ./alcove, JIT enabled (default goal)
 make nojit        # JIT off; bytecode only
 make jit-mono     # JIT + single-threaded refcounts (fastest)
 make parser       # debug build with -g3
-make test         # run test.alc (currently 366 asserts) + ffi-examples
-make benchmark    # alcove vs python3 microbenchmarks
+make test         # run test.alc (currently 400+ asserts) + ffi-examples
+make benchmark    # alcove vs python3 microbenchmarks (incl. mlp)
 make web          # → web/alcove-core.{js,wasm} via Emscripten
 ```
 
