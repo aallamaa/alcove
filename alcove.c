@@ -7856,9 +7856,10 @@ static uint32_t arm64_tbz(int rt, int bit, int off_insns) {
   return 0x36000000u | (b5 << 31) | (b40 << 19) |
          (((uint32_t)off_insns & 0x3FFFu) << 5) | (uint32_t)(rt & 0x1f);
 }
-#if !ALCOVE_SINGLE_THREADED
 /* TBNZ Xt, #bit, label — branch if bit is non-zero. Used by the
-   FLAG_SHARED gate that guards inline JIT refops. */
+   FLAG_SHARED gate (multi-threaded only) AND by always-on typed-vec
+   kind checks in the listsum/nqueens shapes, so it must be available
+   in single-threaded builds too. */
 static uint32_t arm64_tbnz(int rt, int bit, int off_insns) {
   arm64_check_off(off_insns, 14, "TBNZ");
   uint32_t b40 = (uint32_t)(bit & 0x1f);
@@ -7866,13 +7867,13 @@ static uint32_t arm64_tbnz(int rt, int bit, int off_insns) {
   return 0x37000000u | (b5 << 31) | (b40 << 19) |
          (((uint32_t)off_insns & 0x3FFFu) << 5) | (uint32_t)(rt & 0x1f);
 }
-/* LDRB Wt, [Xn, #imm] — unsigned byte load (zero-extended). Used to
-   read the low byte of exp_t.flags for the FLAG_SHARED check. */
+/* LDRB Wt, [Xn, #imm] — unsigned byte load (zero-extended). Reads the
+   low byte of exp_t.flags for both FLAG_SHARED and the typed-vec kind
+   check; always compiled in. */
 static uint32_t arm64_ldrb_imm(int rt, int rn, int byte_offset) {
   return 0x39400000u | (((uint32_t)byte_offset & 0xFFFu) << 10) |
          ((uint32_t)(rn & 0x1f) << 5) | (uint32_t)(rt & 0x1f);
 }
-#endif /* !ALCOVE_SINGLE_THREADED */
 /* MOV Xd, Xm  — alias for ORR Xd, XZR, Xm. */
 static uint32_t arm64_mov_reg(int rd, int rm) {
   return 0xAA0003E0u | ((uint32_t)rm << 16) | (uint32_t)rd;
