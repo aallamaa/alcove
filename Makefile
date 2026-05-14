@@ -178,6 +178,11 @@ benchmark-jit: jit-mono
 # target is the side-by-side internal comparison.
 benchmark-mlp:
 	@$(MAKE) -C examples/mlp benchmark
+# Self-contained C RESP client benchmark — randomised-key SET/GET sweep
+# against any RESP server (redis, alcove -r). Optional; redis-benchmark
+# already covers the same workload via `benchmark/resp-bench.sh`.
+benchmark/resp-bench-c: benchmark/resp-bench.c
+	$(CC) -O3 -Wall -W -pthread -o $@ $<
 # Rebuild both variants and compare numbers side-by-side.
 benchmark-compare:
 	@./benchmark/compare.sh
