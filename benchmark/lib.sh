@@ -18,29 +18,50 @@ wait_listening() {
   return 1
 }
 
-# wall-clock in milliseconds since epoch
-now_ms() { "$PYTHON" -c 'import time; print(int(time.time()*1000))'; }
+# wall-clock in microseconds since epoch. Use date rather than spawning
+# Python for the timer itself; the old millisecond timer quantized very
+# fast benchmarks into a 1 ms floor and distorted the startup-adjusted
+# speedup table.
+now_us() {
+  local ns
+  ns=$(date +%s%N)
+  echo $(( ns / 1000 ))
+}
 
-# best-of-N wall-clock in ms: best_of N <cmd...>
+format_ms() {
+  awk -v us="$1" 'BEGIN { printf "%8.3f ms", us / 1000.0 }'
+}
+
+# best-of-N wall-clock in us: best_of N <cmd...>
 best_of() {
   local n="$1"; shift
-  local best=999999999 s e t
+  local best=999999999 s e t rc
   for _ in $(seq 1 "$n"); do
-    s=$(now_ms); "$@" >/dev/null 2>&1; e=$(now_ms)
+    s=$(now_us); "$@" >/dev/null 2>&1; rc=$?; e=$(now_us)
+    if [ "$rc" -ne 0 ]; then
+      echo "benchmark command failed ($rc): $*" >&2
+      return "$rc"
+    fi
     t=$(( e - s ))
     [ "$t" -lt "$best" ] && best=$t
   done
   echo "$best"
 }
 
-# median-of-N wall-clock in ms: median_of N <cmd...>
+# median-of-N wall-clock in us: median_of N <cmd...>
 median_of() {
   local n="$1"; shift
-  local s e
-  {
-    for _ in $(seq 1 "$n"); do
-      s=$(now_ms); "$@" >/dev/null 2>&1; e=$(now_ms)
-      echo $(( e - s ))
-    done
-  } | sort -n | awk -v n="$n" 'NR==int((n+1)/2)'
+  local s e rc vals
+  vals=$(mktemp)
+  for _ in $(seq 1 "$n"); do
+    s=$(now_us); "$@" >/dev/null 2>&1; rc=$?; e=$(now_us)
+    if [ "$rc" -ne 0 ]; then
+      rm -f "$vals"
+      echo "benchmark command failed ($rc): $*" >&2
+      return "$rc"
+    fi
+    echo $(( e - s )) >>"$vals"
+  done
+  sort -n "$vals" | awk -v n="$n" 'NR==int((n+1)/2)'
+  rm -f "$vals"
 }

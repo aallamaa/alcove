@@ -4,8 +4,7 @@
 # Spins up ./alcove -r on a free port, sweeps redis-benchmark across
 # concurrency levels, prints a tidy summary, then tears down the
 # server. Use this to gauge how well the reactor handles many
-# concurrent clients (Step 2.3 ships acceptor-on-its-own-thread; Step
-# 2.4 will add multiple reactors).
+# concurrent clients.
 #
 # Requires: redis-benchmark (brew install redis / apt install redis-tools).
 # Build first: `make jit` (or `make jit-mono`); this script picks up
@@ -28,11 +27,12 @@ PORT="${RESP_PORT:-17131}"
 N="${RESP_N:-100000}"
 PIPELINE="${RESP_PIPELINE:-1}"
 CLIENTS_LIST="${RESP_CLIENTS:-1 10 50 100 200 500}"
+THREADS="${RESP_THREADS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}"
 
 reap_port "$PORT"
 
 LOG="$(mktemp -t alcove-resp.XXXXXX.log)"
-./alcove -r "$PORT" >"$LOG" 2>&1 &
+./alcove --noload --threads "$THREADS" -r "$PORT" >"$LOG" 2>&1 &
 SRV=$!
 trap 'kill -INT $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -f "$LOG"' EXIT
 
@@ -41,7 +41,7 @@ if ! wait_listening "$LOG"; then
 fi
 
 build="$(./alcove -e '(print "")' 2>/dev/null | head -1)"
-echo "alcove RESP benchmark — port=$PORT  N=$N  pipeline=$PIPELINE"
+echo "alcove RESP benchmark — port=$PORT  N=$N  pipeline=$PIPELINE  threads=$THREADS"
 echo
 
 printf "%-10s %12s %12s %10s %10s\n" "clients" "SET rps" "GET rps" "SET p50ms" "GET p50ms"
