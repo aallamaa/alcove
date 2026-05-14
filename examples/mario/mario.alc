@@ -282,11 +282,21 @@
     (vec-set! gdeath  gcount 0)
     (= gcount (+ gcount 1))))
 
-(spawn-goomba 18 13)
-(spawn-goomba 27 13)
-(spawn-goomba 45 13)
-(spawn-goomba 60 13)
-(spawn-goomba 78 13)
+(def spawn-initial-goombas ()
+  (= gcount 0)
+  (spawn-goomba 18 13)
+  (spawn-goomba 27 13)
+  (spawn-goomba 45 13)
+  (spawn-goomba 60 13)
+  (spawn-goomba 78 13))
+(spawn-initial-goombas)
+
+; Snapshot of the freshly-built level so reset-game can restore
+; collected coins / cleared question-blocks on restart. Done once,
+; after every (t-set ...) above has run.
+(= level-template (vec (* LW LH) T-SKY))
+(for i 0 (- (vec-len level) 1)
+  (vec-set! level-template i (vec-ref level i)))
 
 ; ---------------------------------------------------------------------------
 ; Mario state
@@ -305,6 +315,23 @@
 (= dead-timer 0)
 (= camera     0)
 (= anim-tick  0)        ; advances each frame; drives walk / spin cycles
+(= show-restart-prompt 0)  ; rendered as "PRESS ANY KEY" after game-over cooldown
+
+; reset-game — restores the world to its just-launched state. Called
+; from the post-game restart path (any-key after 5 s cooldown). Mirrors
+; the top-level initialisers above + the level template + the goomba
+; spawns; also clears particles by zeroing their lifetimes.
+(def reset-game ()
+  (for i 0 (- (vec-len level) 1)
+    (vec-set! level i (vec-ref level-template i)))
+  (= mpx 64)  (= mpy 352)  (= mvx 0)  (= mvy 0)
+  (= on-ground 0)  (= face 1)
+  (= score 0)  (= coins 0)  (= lives 3)
+  (= won 0)  (= dead-timer 0)
+  (= camera 0)  (= anim-tick 0)
+  (= show-restart-prompt 0)
+  (for i 0 (- MAX-PARTS 1) (vec-set! ptlife i 0))
+  (spawn-initial-goombas))
 
 ; ---------------------------------------------------------------------------
 ; Collision
@@ -554,6 +581,9 @@
   (when (and (> dead-timer 0) (< lives 1))
     (write-text "GAME OVER" 9)
     (gfx-text 260 200 9 4 TEXT-WHITE))
+  (when (> show-restart-prompt 0)
+    (write-text "PRESS ANY KEY" 13)
+    (gfx-text 220 280 13 3 TEXT-WHITE))
   (gfx-present))
 
 ; ---------------------------------------------------------------------------
@@ -617,7 +647,6 @@
 (when (is (gfx-init SCREEN-W SCREEN-H) 0)
   (prn "ERROR: could not open SDL window — is SDL2 installed?")
   (quit))
-
 ; Always open the synth audio device — that's the channel SFX play on.
 ; Then, if a music file is present, hand the music role over to SDL_mixer
 ; (gfx-music-play-file sets the synth's music flag to 0; SFX keep working).
@@ -627,26 +656,59 @@
 
 (= running 1)
 (= last-ms (gfx-now-ms))
+(= keep-playing 1)        ; outer wrapper — flips to 0 on ESC/window-close
 
-(while (and (is running 1) (> lives 0) (is won 0))
-  (update)
-  (render)
-  (when (> (gfx-quit-pressed) 0) (= running 0))
-  (when (> (gfx-should-close) 0) (= running 0))
-  (= now (gfx-now-ms))
-  (= elapsed (- now last-ms))
-  (when (< elapsed FRAME-MS)
-    (gfx-sleep-ms (- FRAME-MS elapsed)))
-  (= last-ms (gfx-now-ms)))
+(while (is keep-playing 1)
+  (while (and (is running 1) (> lives 0) (is won 0))
+    (update)
+    (render)
+    (when (> (gfx-quit-pressed) 0) (= running 0))
+    (when (> (gfx-should-close) 0) (= running 0))
+    (= now (gfx-now-ms))
+    (= elapsed (- now last-ms))
+    (when (< elapsed FRAME-MS)
+      (gfx-sleep-ms (- FRAME-MS elapsed)))
+    (= last-ms (gfx-now-ms)))
 
-; post-game hold so result is visible
-(when (or (> won 0) (< lives 1))
-  (render)
-  (= hold-end (+ (gfx-now-ms) 2000))
-  (while (< (gfx-now-ms) hold-end)
-    (gfx-pump)
-    (when (> (gfx-should-close) 0) (= hold-end (gfx-now-ms)))
-    (gfx-sleep-ms 16)))
+  ; Quit (ESC or window close) → leave the outer loop, skip restart.
+  (when (is running 0) (= keep-playing 0))
+
+  ; Game ended naturally (win or last-life). 5-second cooldown so the
+  ; user can read the result without an accidental keypress instantly
+  ; restarting; then wait for all input released, then any key to play
+  ; again.
+  (when (and (is keep-playing 1) (or (> won 0) (< lives 1)))
+    (render)
+    (= cooldown-end (+ (gfx-now-ms) 5000))
+    (while (and (< (gfx-now-ms) cooldown-end) (is keep-playing 1))
+      (gfx-pump)
+      (when (> (gfx-should-close) 0) (= keep-playing 0))
+      (gfx-sleep-ms 16))
+    ; Cooldown elapsed — flash up the "PRESS ANY KEY" prompt.
+    (when (is keep-playing 1)
+      (= show-restart-prompt 1)
+      (render))
+    ; Drain held inputs: don't auto-restart if the player was holding a
+    ; direction or jump when they died.
+    (= keys-released 0)
+    (while (and (is keys-released 0) (is keep-playing 1))
+      (gfx-pump)
+      (when (> (gfx-should-close) 0) (= keep-playing 0))
+      (when (and (is (gfx-left) 0) (is (gfx-right) 0) (is (gfx-jump) 0))
+        (= keys-released 1))
+      (when (is keys-released 0) (gfx-sleep-ms 16)))
+    ; Any-key-to-restart prompt.
+    (= want-restart 0)
+    (while (and (is want-restart 0) (is keep-playing 1))
+      (gfx-pump)
+      (when (> (gfx-should-close) 0) (= keep-playing 0))
+      (when (or (> (gfx-jump) 0) (> (gfx-left) 0) (> (gfx-right) 0))
+        (= want-restart 1))
+      (when (is want-restart 0) (gfx-sleep-ms 16)))
+    (when (and (is want-restart 1) (is keep-playing 1))
+      (reset-game)
+      (= running 1)
+      (= last-ms (gfx-now-ms)))))
 
 (gfx-music-stop)
 (gfx-music-unload-file)
