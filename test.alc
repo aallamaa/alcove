@@ -1082,3 +1082,147 @@
 (assert "blob?: no args"            (blob?)                    nil)
 (assert "dict?: no args"            (dict?)                    nil)
 (assert "deque?: no args"           (deque?)                   nil)
+
+
+;; ============================================================
+;; Benchmark algorithms — correctness asserts on the same inputs
+;; the perf suite (benchmark/*.alc) uses. The bodies are verbatim
+;; from those files (with renamed top-level functions where the
+;; benchmarks collide on common names like `safe?` / `try-cols`).
+;; ============================================================
+
+;; ---------- fib ----------
+;; benchmark/fib.alc — runs (fib 33).
+(def bm-fib (n)
+  (if (< n 2)
+      n
+      (+ (bm-fib (- n 1)) (bm-fib (- n 2)))))
+(assert "bench fib 33"              (bm-fib 33)                3524578)
+
+;; ---------- fact ----------
+;; benchmark/fact.alc — runs (fact 19) in a tight loop. 19! is the
+;; largest factorial that fits in a 61-bit fixnum.
+(def bm-fact (n)
+  (if (< n 2) 1 (* n (bm-fact (- n 1)))))
+(assert "bench fact 19"             (bm-fact 19)               121645100408832000)
+
+;; ---------- countdown ----------
+;; benchmark/countdown.alc — calls (countdown 1000) repeatedly; returns
+;; n once n <= 0.
+(def bm-countdown (n)
+  (if (> n 0) (bm-countdown (- n 1)) n))
+(assert "bench countdown 1000"      (bm-countdown 1000)        0)
+
+;; ---------- ackermann ----------
+;; benchmark/ackermann.alc — runs (ack 3 9) = 4093 with a fresh stack.
+;; In test.alc the heavy prior state pushes us close to the default 8 MB
+;; C stack, so we test (ack 3 7) = 1021 instead — same recursion shape,
+;; fits in the stack budget. The benchmark itself still runs ack 3 9.
+(def bm-ack (m n)
+  (if (is m 0) (+ n 1)
+      (if (is n 0) (bm-ack (- m 1) 1)
+          (bm-ack (- m 1) (bm-ack m (- n 1))))))
+(assert "bench ackermann 3 7"       (bm-ack 3 7)               1021)
+
+;; ---------- forsum ----------
+;; benchmark/forsum.alc — increments s by 1 in a for-loop n times.
+(def bm-forsum (n)
+  (let s 0
+    (for i 1 n (= s (+ s 1)))))
+(assert "bench forsum 1000000"      (bm-forsum 1000000)        1000000)
+
+;; ---------- listsum ----------
+;; benchmark/listsum.alc — sum of 1..N built into a cons list, reduced.
+(def bm-build (i n acc) (if (> i n) acc (bm-build (+ i 1) n (cons i acc))))
+(assert "bench listsum 1..100000"
+        (reduce (fn (a b) (+ a b)) 0 (bm-build 1 100000 (list)))
+        5000050000)
+
+;; ---------- nqueens (cons-list version) ----------
+;; benchmark/nqueens.alc — counts solutions on an N×N board.
+(def nq-safe? (c qs offset)
+  (if (no qs) t
+      (if (is c (car qs)) nil
+          (if (is (+ c offset) (car qs)) nil
+              (if (is (- c offset) (car qs)) nil
+                  (nq-safe? c (cdr qs) (+ offset 1)))))))
+(def nq-try-cols (n c qs row-acc)
+  (if (> c n) row-acc
+      (nq-try-cols n (+ c 1) qs
+        (if (nq-safe? c qs 1)
+            (+ row-acc (nq-solve n (cons c qs)))
+            row-acc))))
+(def nq-solve (n qs)
+  (if (is (length qs) n) 1
+      (nq-try-cols n 1 qs 0)))
+(assert "bench nqueens 10"          (nq-solve 10 (list))       724)
+
+;; ---------- nqueens-vec ----------
+;; benchmark/nqueens-vec.alc — same algorithm via a fixed-size vec.
+;; With the typed-vec refactor (vec 10 0) → VEC_KIND_I64 and stays
+;; that way because every vec-set! stores a fixnum.
+(def nqv-safe? (col qs row offset)
+  (if (>= offset row) t
+      (if (is col (vec-ref qs offset)) nil
+          (if (is (- col (- row offset)) (vec-ref qs offset)) nil
+              (if (is (+ col (- row offset)) (vec-ref qs offset)) nil
+                  (nqv-safe? col qs row (+ offset 1)))))))
+(def nqv-try-cols (n row col qs count)
+  (if (>= col n) count
+      (if (nqv-safe? col qs row 0)
+          (do (vec-set! qs row col)
+              (nqv-try-cols n row (+ col 1) qs (+ count (nqv-solve n (+ row 1) qs))))
+          (nqv-try-cols n row (+ col 1) qs count))))
+(def nqv-solve (n row qs)
+  (if (>= row n) 1
+      (nqv-try-cols n row 0 qs 0)))
+(assert "bench nqueens-vec 10"      (nqv-solve 10 0 (vec 10 0)) 724)
+
+;; ---------- sieve (trial-division on cons list) ----------
+;; benchmark/sieve.alc — counts primes up to 5000 via cons-list filter.
+(def sv-is-prime-given (acc i)
+  (if (no acc) t
+      (if (is (mod i (car acc)) 0) nil
+          (sv-is-prime-given (cdr acc) i))))
+(def sv-primes-up-to (i n acc)
+  (if (> i n) acc
+      (if (sv-is-prime-given acc i)
+          (sv-primes-up-to (+ i 1) n (cons i acc))
+          (sv-primes-up-to (+ i 1) n acc))))
+(assert "bench sieve up to 5000"
+        (length (sv-primes-up-to 2 5000 (list)))            669)
+
+;; ---------- sieve-fast (mark-composites on vec) ----------
+;; benchmark/sieve-fast.alc — counts primes up to 100000 via marker
+;; vec. Hits the JIT shape try_jit_mark_from + try_jit_count_primes
+;; (the kind-check guards added in the typed-vec refactor must let
+;; this through, since marks is VEC_KIND_GEN — fill = `t` heap exp_t).
+(def sf-mark-composites (i n marks)
+  (if (> (* i i) n) nil
+      (do (if (vec-ref marks i)
+              (sf-mark-from i (* i i) n marks)
+              nil)
+          (sf-mark-composites (+ i 1) n marks))))
+(def sf-mark-from (step j n marks)
+  (if (> j n) nil
+      (do (vec-set! marks j nil)
+          (sf-mark-from step (+ j step) n marks))))
+(def sf-count-primes (i n marks acc)
+  (if (> i n) acc
+      (sf-count-primes (+ i 1) n marks
+                       (if (vec-ref marks i) (+ acc 1) acc))))
+(= sf-n 100000)
+(= sf-marks (vec (+ sf-n 1) t))
+(sf-mark-composites 2 sf-n sf-marks)
+(assert "bench sieve-fast up to 100000"
+        (sf-count-primes 2 sf-n sf-marks 0)                 9592)
+
+;; ---------- tak ----------
+;; benchmark/tak.alc — Knuth's tak(24, 16, 8) = 9. Heavy recursion.
+(def bm-tak (x y z)
+  (if (no (< y x))
+      z
+      (bm-tak (bm-tak (- x 1) y z)
+              (bm-tak (- y 1) z x)
+              (bm-tak (- z 1) x y))))
+(assert "bench tak 24 16 8"         (bm-tak 24 16 8)           9)
