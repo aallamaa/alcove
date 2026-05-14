@@ -66,3 +66,4 @@ benchmark/bin/
 # Local prototype scratch (superseded by lfkv.{c,h}).
 lockfree-bench/
 benchmark/resp-bench-c
+alcove_asan
