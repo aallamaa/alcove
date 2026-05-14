@@ -185,6 +185,20 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
    set, so the atomic macros run instead. Cleared on fresh exps. */
 #define FLAG_SHARED 8
 
+/* For EXP_VECTOR only: element kind, encoded in bits 4-5 of exp_t->flags.
+   GEN keeps the old behavior — each slot is an owning exp_t* ref. I64/F64
+   store raw 8-byte numerics inline, skipping per-cell heap exp_t boxing.
+   Inference at construction (see make_vector / vectorcmd) picks the
+   tightest kind; vec-set! of a mismatched type triggers an in-place
+   promotion to GEN (see vec_promote_to_gen). Single-shard only: a vec
+   that gets FLAG_SHARED must NOT be promoted or reallocated, since
+   readers on another shard would observe torn metadata. */
+#define VEC_KIND_GEN  (0u << 4)
+#define VEC_KIND_I64  (1u << 4)
+#define VEC_KIND_F64  (2u << 4)
+#define VEC_KIND_MASK (3u << 4)
+#define vec_kind(e)   ((unsigned)((e)->flags & VEC_KIND_MASK))
+
 struct bytecode_t;
 
 typedef struct exp_t {
@@ -199,16 +213,25 @@ typedef struct exp_t {
     expfloat f;
     lispCmd *fnc;
   };
-  struct keyval_t *meta; /* 8 bytes — overloaded by node role:
+  union {                /* 8 bytes — overloaded by node role:
                               - on the lambda/macro head: strdup'd name
-                                (free'd in unrefexp)
+                                in `meta` (free'd in unrefexp)
                               - on the body wrapper (e->next of a
-                                lambda/macro): captured env_t* for
-                                closures (released via destroy_env)
+                                lambda/macro): captured env_t* in `meta`
+                                for closures (released via destroy_env)
                               - on cached-symbol exp_t's: keyval_t*
-                                back-pointer for the symbol cache. */
+                                back-pointer in `meta`
+                              - on EXP_VECTOR: `vec_win` holds the live
+                                window {start, end} into the storage
+                                pointed at by `ptr`. `len = end - start`.
+                                Reading `meta` on a vec yields garbage —
+                                gate every `->meta` access on type. */
+    struct keyval_t *meta;
+    struct { int32_t start, end; } vec_win;
+  };
   struct exp_t *next;    /* 8 bytes */
 } exp_t;                 /* 32 bytes */
+_Static_assert(sizeof(exp_t) == 32, "exp_t layout changed — audit JIT and refcount paths");
 
 /* ---------------- Bytecode VM ----------------
    Lambda bodies that use only supported forms (fixnum arithmetic,
@@ -285,13 +308,38 @@ typedef enum {
 } alc_op;
 
 /* Mutable random-access array. Held by exp_t->ptr when type==EXP_VECTOR.
-   Each slot holds an owning ref to its element; freed in unrefexp by
-   walking data[0..len). The flexible-array member sits inline so one
-   calloc gives both header and data. */
+   Storage layout: an 8-byte header followed by `cap` cells of 8 bytes.
+   Cell payload type depends on vec_kind(exp_t):
+     VEC_KIND_GEN: cells are owning exp_t* (heterogeneous fallback)
+     VEC_KIND_I64: cells are raw int64_t (no boxing)
+     VEC_KIND_F64: cells are raw double  (no boxing)
+   The live window into the storage is on the parent exp_t — vec_win.start
+   and vec_win.end. len = end - start. cap >= end always. Pop-front and
+   pop-back move the window without shifting; only push beyond cap (or
+   front-grow when start==0) reallocates.
+
+   The cells are NOT inline as a flex-array — that lets the JIT mark-from
+   shape compute &cell[i] = (ptr) + sizeof(alc_vec_t) + 8*i with the same
+   +8 offset the old {int64_t len; data[]} layout used, so the existing
+   JIT instruction streams keep their address arithmetic intact. */
 typedef struct {
-  int64_t len;
-  struct exp_t *data[];
+  int32_t cap;     /* cells allocated (always 8 bytes each) */
+  int32_t hdr_pad; /* reserved; keeps payload 8-byte aligned + named so
+                      future use of this slot is documented */
 } alc_vec_t;
+
+/* Cell accessors. e is the exp_t*, i is 0-based logical index (within the
+   window [0, vec_len(e))). All three kinds share the same byte layout
+   (8B/cell at offset sizeof(alc_vec_t)). */
+#define vec_len(e)    ((int64_t)((e)->vec_win.end - (e)->vec_win.start))
+#define vec_cap(e)    ((int64_t)((alc_vec_t *)(e)->ptr)->cap)
+#define vec_base(e)   ((char *)(e)->ptr + sizeof(alc_vec_t))
+#define vec_gen_at(e, i) \
+  (((struct exp_t **)vec_base(e))[(e)->vec_win.start + (i)])
+#define vec_i64_at(e, i) \
+  (((int64_t *)vec_base(e))[(e)->vec_win.start + (i)])
+#define vec_f64_at(e, i) \
+  (((double *)vec_base(e))[(e)->vec_win.start + (i)])
 
 /* Inline binding slots per env. The bytecode VM uses slot indices to
    bypass the per-name dict lookup; bytecode_t.param_keys mirrors the

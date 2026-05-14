@@ -161,6 +161,13 @@ lispProc lispProcList[] = {
     LISPCMD("vec-relu!", vecrelucmd, doc_vecrelu),
     LISPCMD("vec-argmax", vecargmaxcmd, doc_vecargmax),
     LISPCMD("vec-max", vecmaxcmd, doc_vecmax),
+    /* Deque ops on vec — amortised O(1) push/pop at both ends via the
+       cap/start/end window. Growth: 1.5x on realloc; slide-left when
+       start >= cap/4 instead of reallocating; recenter on unshift-grow. */
+    LISPCMD("vec-push!", vecpushcmd, doc_vecpush),
+    LISPCMD("vec-pop!", vecpopcmd, doc_vecpop),
+    LISPCMD("vec-unshift!", vecunshiftcmd, doc_vecunshift),
+    LISPCMD("vec-shift!", vecshiftcmd, doc_vecshift),
     /* Functions and binding */
     LISPCMD("def", defcmd, doc_def),
     LISPCMD("fn", fncmd, doc_fn),
@@ -469,11 +476,16 @@ inline int unrefexp(exp_t *e) {
       extern void alc_ffi_free(void *ptr); /* defined alongside ffi_call */
       alc_ffi_free(e->ptr);
     } else if (e->type == EXP_VECTOR && e->ptr) {
-      alc_vec_t *v = (alc_vec_t *)e->ptr;
-      int64_t i;
-      for (i = 0; i < v->len; i++)
-        unrefexp(v->data[i]);
-      free(v);
+      /* For VEC_KIND_GEN, each live cell owns a ref — walk and release.
+         For typed kinds (i64/f64), cells are raw scalars — no ownership
+         to drop, just free the storage. */
+      if (vec_kind(e) == VEC_KIND_GEN) {
+        int64_t n = vec_len(e);
+        int64_t i;
+        for (i = 0; i < n; i++)
+          unrefexp(vec_gen_at(e, i));
+      }
+      free(e->ptr);
     } else if (e->type == EXP_BLOB) {
       free(e->ptr); /* alc_blob_t is a single flex-array alloc */
     } else if (e->type == EXP_DICT && e->ptr) {
@@ -1143,13 +1155,19 @@ void print_node(exp_t *node) {
   else if (node->type == EXP_FLOAT)
     printf("\x1B[92m%lf\x1B[39m", node->f);
   else if (node->type == EXP_VECTOR) {
-    alc_vec_t *v = (alc_vec_t *)node->ptr;
+    int64_t n = vec_len(node);
     printf("#[");
-    int64_t i;
-    for (i = 0; i < v->len; i++) {
+    unsigned k = vec_kind(node);
+    for (int64_t i = 0; i < n; i++) {
       if (i)
         printf(" ");
-      print_node(v->data[i]);
+      if (k == VEC_KIND_GEN) {
+        print_node(vec_gen_at(node, i));
+      } else if (k == VEC_KIND_I64) {
+        printf("\x1B[92m%lld\x1B[39m", (long long)vec_i64_at(node, i));
+      } else { /* VEC_KIND_F64 */
+        printf("\x1B[92m%lf\x1B[39m", vec_f64_at(node, i));
+      }
     }
     printf("]");
   } else if (node->type == EXP_BLOB) {
@@ -1705,41 +1723,143 @@ exp_t *load_macro(exp_t *e, FILE *stream) {
   return e;
 }
 
-/* EXP_VECTOR — length-prefixed recursive dump (each element through
-   __DUMP__, so heterogeneous element types round-trip). 32-bit length
-   cap (matches make_vector's 1<<32 sanity bound). */
+/* Forward decls for the vec helpers defined alongside make_vector. */
+static exp_t *vec_get_boxed(exp_t *vexp, int64_t i);
+static exp_t **vec_gen_cells(exp_t *vexp);
+static alc_vec_t *vec_alloc_storage(int64_t cap);
+static int vec_tighten(exp_t *vexp);
+
+/* Set by alcove_load_unified to the version read from the file header;
+   read by load_vec to choose between v1/v2 record layouts. Single
+   loader at a time — there's no concurrent loadu path. Initialised to
+   2 (current version) so any dump path that bypasses the header-read
+   still writes/reads v2-compatible records. */
+static int alcove_load_dump_version = 2;
+
+/* EXP_VECTOR — v2 record (dump_vec always writes v2):
+     [u8 kind][u32 len][payload]
+       kind == VEC_KIND_GEN >> 4: len × __DUMP__(exp_t*)
+       kind == VEC_KIND_I64 >> 4: len × int64_t (raw little-endian)
+       kind == VEC_KIND_F64 >> 4: len × double  (raw little-endian)
+
+   v1 dumps are still read by load_vec via load_vec_v1 (boxed cells,
+   reconstructs as GEN). The kind on the wire is the bit pattern shifted
+   right by 4 so it stays compact (0/1/2) and stable across future flag
+   layouts. */
 exp_t *dump_vec(exp_t *e, FILE *stream) {
   if (dumptype(stream, &e->type) <= 0)
     return NULL;
-  alc_vec_t *v = (alc_vec_t *)e->ptr;
-  uint32_t n = (uint32_t)v->len;
+  unsigned k = vec_kind(e);
+  uint8_t kind_tag = (uint8_t)(k >> 4);
+  if (fwrite(&kind_tag, 1, 1, stream) != 1)
+    return NULL;
+  uint32_t n = (uint32_t)vec_len(e);
   if (fwrite(&n, sizeof(n), 1, stream) != 1)
     return NULL;
-  for (uint32_t i = 0; i < n; i++)
-    if (!__DUMP__(v->data[i], stream))
+  if (k == VEC_KIND_GEN) {
+    for (uint32_t i = 0; i < n; i++)
+      if (!__DUMP__(vec_gen_at(e, i), stream))
+        return NULL;
+  } else if (k == VEC_KIND_I64) {
+    int64_t *cells = (int64_t *)((char *)e->ptr + sizeof(alc_vec_t)) +
+                     e->vec_win.start;
+    if (n > 0 && fwrite(cells, sizeof(int64_t), n, stream) != n)
       return NULL;
+  } else { /* VEC_KIND_F64 */
+    double *cells =
+        (double *)((char *)e->ptr + sizeof(alc_vec_t)) + e->vec_win.start;
+    if (n > 0 && fwrite(cells, sizeof(double), n, stream) != n)
+      return NULL;
+  }
   return e;
 }
-exp_t *load_vec(exp_t *e, FILE *stream) {
-  if (e)
-    unrefexp(e);
+
+/* v1 reader: [u32 len][__DUMP__ × len]. Reconstructs as a GEN vec, then
+   calls vec_tighten() to specialise to I64/F64 when the cells are
+   homogeneously numeric. Pre-refactor dumps preserve their original
+   semantics this way — e.g., mlp's train-y stays integer-comparable
+   for `(is label 0)`, while train-X[k] becomes F64 for the tensor-op
+   fast path. */
+static exp_t *load_vec_v1(FILE *stream) {
   uint32_t n;
   if (fread(&n, sizeof(n), 1, stream) != 1)
     return NULL;
   exp_t *v = make_vector((int64_t)n, NIL_EXP);
   if (!v)
     return NULL;
-  alc_vec_t *vv = (alc_vec_t *)v->ptr;
   for (uint32_t i = 0; i < n; i++) {
-    unrefexp(vv->data[i]); /* drop the NIL placeholder */
-    vv->data[i] = load_exp_t(stream);
-    if (!vv->data[i]) {
-      vv->len = (int64_t)i; /* truncate so unrefexp doesn't walk past */
+    unrefexp(vec_gen_at(v, i));
+    exp_t *cell = load_exp_t(stream);
+    if (!cell) {
+      v->vec_win.end = (int32_t)i;
       unrefexp(v);
       return NULL;
     }
+    vec_gen_at(v, i) = cell;
   }
+  vec_tighten(v);
   return v;
+}
+
+/* v2 reader: [u8 kind][u32 len][payload]. */
+static exp_t *load_vec_v2(FILE *stream) {
+  uint8_t kind_tag;
+  if (fread(&kind_tag, 1, 1, stream) != 1)
+    return NULL;
+  if (kind_tag > 2)
+    return NULL;
+  uint32_t n;
+  if (fread(&n, sizeof(n), 1, stream) != 1)
+    return NULL;
+  /* Pre-size storage; we'll overwrite cells per-kind below. */
+  alc_vec_t *v = vec_alloc_storage((int64_t)n);
+  if (!v)
+    return NULL;
+  exp_t *e = make_nil();
+  e->type = EXP_VECTOR;
+  e->flags = (unsigned short)((unsigned)kind_tag << 4);
+  e->ptr = v;
+  e->vec_win.start = 0;
+  e->vec_win.end = (int32_t)n;
+  if (kind_tag == 0) { /* GEN */
+    exp_t **cells = (exp_t **)((char *)v + sizeof(alc_vec_t));
+    /* Pre-init to nil so a partial load leaves the live prefix safe to
+       walk during unrefexp(e). */
+    for (uint32_t i = 0; i < n; i++)
+      cells[i] = refexp(NIL_EXP);
+    for (uint32_t i = 0; i < n; i++) {
+      unrefexp(cells[i]);
+      exp_t *cell = load_exp_t(stream);
+      if (!cell) {
+        e->vec_win.end = (int32_t)i;
+        unrefexp(e);
+        return NULL;
+      }
+      cells[i] = cell;
+    }
+  } else if (kind_tag == 1) { /* I64 */
+    int64_t *cells = (int64_t *)((char *)v + sizeof(alc_vec_t));
+    if (n > 0 && fread(cells, sizeof(int64_t), n, stream) != n) {
+      e->vec_win.end = 0;
+      unrefexp(e);
+      return NULL;
+    }
+  } else { /* F64 */
+    double *cells = (double *)((char *)v + sizeof(alc_vec_t));
+    if (n > 0 && fread(cells, sizeof(double), n, stream) != n) {
+      e->vec_win.end = 0;
+      unrefexp(e);
+      return NULL;
+    }
+  }
+  return e;
+}
+
+exp_t *load_vec(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  return alcove_load_dump_version >= 2 ? load_vec_v2(stream)
+                                       : load_vec_v1(stream);
 }
 
 exp_t *make_atom_from_token(token_t *token) {
@@ -2206,7 +2326,7 @@ inline int istrue(exp_t *e) {
   if (e->type == EXP_BLOB)
     return (e->ptr && ((alc_blob_t *)e->ptr)->len > 0);
   if (e->type == EXP_VECTOR)
-    return (e->ptr && ((alc_vec_t *)e->ptr)->len > 0);
+    return (e->ptr && vec_len(e) > 0);
   if (e->type == EXP_LIST)
     return (e->ptr && ((alc_list_t *)e->ptr)->len > 0);
   if (e->type == EXP_DICT) {
@@ -2740,11 +2860,23 @@ const char *alcove_db_path = "db.dump";
 
 /* Unified-dump format magic + version. Files starting with "ALCV"
    carry both the Lisp env and the RESP keyspace; files without the
-   magic fall through to the legacy dump_dict reader (env-only). */
+   magic fall through to the legacy dump_dict reader (env-only).
+
+   v1: vec records are [u32 len][__DUMP__ per element] — every cell
+       round-trips through the generic boxer.
+   v2: vec records carry a u8 kind tag + raw payload for typed kinds:
+       [u8 kind][u32 len] then for GEN repeats __DUMP__ per element, for
+       I64 writes len*int64 raw, for F64 writes len*double raw. v1 dumps
+       still load (load_vec_v1); dump_vec always writes v2. */
 #define ALCOVE_DUMP_MAGIC "ALCV"
-#define ALCOVE_DUMP_VERSION 1
+#define ALCOVE_DUMP_VERSION 2
+#define ALCOVE_DUMP_VERSION_MIN 1
 #define ALCOVE_SEC_LISP 'L'
 #define ALCOVE_SEC_RESP 'R'
+
+/* alcove_load_dump_version: declared earlier (forward decl near
+   dump_vec / load_vec). Initialised to ALCOVE_DUMP_VERSION so v2 is the
+   default for "dump without prior load" paths. */
 
 /* Forward decls — resp.c (#included near the bottom of this file)
    exposes the live RESP keyspace pointer for persistence. resp_kv_get
@@ -2962,10 +3094,11 @@ int alcove_load_unified(env_t *global, struct lfkv *kv, FILE *stream,
   uint16_t ver;
   if (fread(&ver, 2, 1, stream) != 1)
     return -1;
-  if (ver != ALCOVE_DUMP_VERSION) {
+  if (ver < ALCOVE_DUMP_VERSION_MIN || ver > ALCOVE_DUMP_VERSION) {
     fprintf(stderr, "loaddb: unsupported alcove.dump version %u\n", ver);
     return -1;
   }
+  alcove_load_dump_version = (int)ver;
   env_t *root = global;
   while (root && root->root)
     root = root->root;
@@ -3371,35 +3504,310 @@ exp_t *sqrtcmd(exp_t *e, env_t *env) {
 }
 
 /* ---------------- Vectors ----------------
-   Mutable, O(1) random-access array of exp_t*. Layout:
-     e->type = EXP_VECTOR
-     e->ptr  = alc_vec_t* with header { len } + data[len]
-   Each element holds an owning ref. Refcount + free walk all elements
-   in unrefexp. The slow-sieve trial-division benchmark wins from this
-   because we can use a sqrt-cutoff on smallest-first vector iteration
-   instead of cdr-walking a largest-first cons list.
-   alc_vec_t is now declared in alcove.h. */
+   Mutable, O(1) random-access array. Storage layout:
+     e->type    = EXP_VECTOR
+     e->flags   = ... | vec_kind (bits 4-5: GEN / I64 / F64)
+     e->ptr     = alc_vec_t* — 8-byte header {cap, hdr_pad} + cap cells
+                  of 8 bytes each (kind determines cell interpretation)
+     e->vec_win = {start, end} — live window; len = end - start
+   For VEC_KIND_GEN each cell holds an owning exp_t* ref (released by
+   the unrefexp walk above). I64/F64 cells are raw scalars — no
+   refcount accounting. The slow-sieve trial-division benchmark wins
+   from this because we use a sqrt-cutoff on smallest-first vector
+   iteration instead of cdr-walking a largest-first cons list.
+   alc_vec_t and the vec_* accessors are declared in alcove.h. */
 
-exp_t *make_vector(int64_t n, exp_t *fill) {
-  /* Hard cap to keep `(size_t)n * sizeof(exp_t*)` from wrapping. With
-     int61 fixnums n can reach 2^60; n * 8 wraps modulo SIZE_MAX and
-     hands us a tiny alloc that the loop then writes terabytes past.
-     1<<32 elements (32 GiB of pointers) is well past any sane vector;
-     anything bigger we refuse rather than guess. */
-  if (n < 0 || n > ((int64_t)1 << 32))
+/* Allocate the alc_vec_t storage block with `cap` cells of 8 bytes. The
+   caller fills cells / sets exp_t->ptr / sets the window. Returns NULL
+   on overflow or alloc failure. memalloc zero-initialises the payload,
+   so cells outside the window read as zero (not garbage). */
+static alc_vec_t *vec_alloc_storage(int64_t cap) {
+  if (cap < 0 || cap > ((int64_t)1 << 31))
     return NULL;
-  size_t bytes = sizeof(alc_vec_t) + (size_t)n * sizeof(exp_t *);
+  size_t bytes = sizeof(alc_vec_t) + (size_t)cap * 8u;
   alc_vec_t *v = (alc_vec_t *)memalloc(1, bytes);
   if (!v)
     return NULL;
-  v->len = n;
-  int64_t i;
-  for (i = 0; i < n; i++)
-    v->data[i] = refexp(fill);
+  v->cap = (int32_t)cap;
+  v->hdr_pad = 0;
+  return v;
+}
+
+exp_t *make_vector(int64_t n, exp_t *fill) {
+  /* Hard cap to keep `(size_t)n * 8` from wrapping. With int61 fixnums n
+     can reach 2^60; n*8 wraps modulo SIZE_MAX and hands us a tiny alloc
+     that the loop then writes terabytes past. 1<<31 cells (16 GiB at
+     8B/cell) is well past any sane vector; anything bigger we refuse
+     rather than guess. */
+  alc_vec_t *v = vec_alloc_storage(n);
+  if (!v)
+    return NULL;
+  /* Kind inference from fill's type. Numeric fillers get the typed fast
+     path; anything else (incl. nil) falls back to GEN. vec-set! later
+     auto-promotes to GEN on a type-mismatched write. */
+  unsigned kind = VEC_KIND_GEN;
+  if (isnumber(fill))
+    kind = VEC_KIND_I64;
+  else if (isfloat(fill))
+    kind = VEC_KIND_F64;
+
   exp_t *e = make_nil();
   e->type = EXP_VECTOR;
+  e->flags = (unsigned short)kind;
   e->ptr = v;
+  e->vec_win.start = 0;
+  e->vec_win.end = (int32_t)n;
+  char *base = (char *)v + sizeof(alc_vec_t);
+  if (kind == VEC_KIND_I64) {
+    int64_t fix = FIX_VAL(fill);
+    int64_t *cells = (int64_t *)base;
+    for (int64_t i = 0; i < n; i++)
+      cells[i] = fix;
+  } else if (kind == VEC_KIND_F64) {
+    double f = (double)fill->f;
+    double *cells = (double *)base;
+    for (int64_t i = 0; i < n; i++)
+      cells[i] = f;
+  } else {
+    exp_t **cells = (exp_t **)base;
+    for (int64_t i = 0; i < n; i++)
+      cells[i] = refexp(fill);
+  }
   return e;
+}
+
+/* Promote an I64 vec to F64 in place. Converts every cell (live window
+   only; cells outside [start, end) are uninitialized garbage and stay
+   that way). Tensor mutating ops call this when they need to store
+   non-integer results into a vec that was constructed integer-typed —
+   matches the pre-refactor behavior where `(vec 4 0)` then `(vec-scale!
+   v 0.5)` ended up holding floats. Single-shard only; asserts
+   FLAG_SHARED clear. Returns 1 on success. */
+static int vec_promote_i64_to_f64(exp_t *vexp) {
+  if (vec_kind(vexp) == VEC_KIND_F64)
+    return 1;
+  if (vec_kind(vexp) != VEC_KIND_I64)
+    return 0;
+  if (vexp->flags & FLAG_SHARED)
+    return 0;
+  alc_vec_t *old = (alc_vec_t *)vexp->ptr;
+  alc_vec_t *new_v = vec_alloc_storage(old->cap);
+  if (!new_v)
+    return 0;
+  int64_t *src = (int64_t *)((char *)old + sizeof(alc_vec_t));
+  double *dst = (double *)((char *)new_v + sizeof(alc_vec_t));
+  int32_t s = vexp->vec_win.start;
+  int32_t en = vexp->vec_win.end;
+  for (int32_t i = s; i < en; i++)
+    dst[i] = (double)src[i];
+  free(old);
+  vexp->ptr = new_v;
+  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | VEC_KIND_F64);
+  return 1;
+}
+
+/* Promote a typed (I64 or F64) vec to GEN in place. Boxes every live
+   cell into a fresh heap exp_t. Single-shard only — callers must check
+   FLAG_SHARED is clear (a shared typed vec must not realloc its
+   payload). Returns 1 on success, 0 on alloc failure or shared-vec.
+
+   Cells outside the live window [start, end) in the new buffer are left
+   uninitialized — the gen-walk in unrefexp only touches indices in the
+   window via vec_gen_at, so garbage outside is invisible. */
+static int vec_promote_to_gen(exp_t *vexp) {
+  if (vec_kind(vexp) == VEC_KIND_GEN)
+    return 1;
+  if (vexp->flags & FLAG_SHARED)
+    return 0;
+
+  alc_vec_t *old = (alc_vec_t *)vexp->ptr;
+  int32_t start = vexp->vec_win.start;
+  int64_t live = vexp->vec_win.end - start;
+  alc_vec_t *new_v = vec_alloc_storage(old->cap);
+  if (!new_v)
+    return 0;
+  exp_t **dst = (exp_t **)((char *)new_v + sizeof(alc_vec_t));
+  char *oldbase = (char *)old + sizeof(alc_vec_t);
+  if (vec_kind(vexp) == VEC_KIND_I64) {
+    int64_t *src = (int64_t *)oldbase;
+    for (int64_t i = 0; i < live; i++)
+      dst[start + i] = MAKE_FIX(src[start + i]); /* tagged immediate */
+  } else { /* VEC_KIND_F64 */
+    double *src = (double *)oldbase;
+    for (int64_t i = 0; i < live; i++)
+      dst[start + i] = make_floatf((expfloat)src[start + i]); /* fresh nref=1 */
+  }
+  free(old);
+  vexp->ptr = new_v;
+  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | VEC_KIND_GEN);
+  return 1;
+}
+
+/* Boxed read: returns an exp_t* (refcount-bumped or fresh) at index i,
+   regardless of vec kind. Caller has bounds-checked. The boxed value
+   for I64 is a tagged immediate (no refcount); for F64 it's a fresh
+   EXP_FLOAT with nref=1; for GEN it's refexp() of the existing slot. */
+static inline exp_t *vec_get_boxed(exp_t *vexp, int64_t i) {
+  char *base = (char *)vexp->ptr + sizeof(alc_vec_t);
+  int32_t off = vexp->vec_win.start + (int32_t)i;
+  switch (vec_kind(vexp)) {
+  case VEC_KIND_GEN:
+    return refexp(((exp_t **)base)[off]);
+  case VEC_KIND_I64:
+    return MAKE_FIX(((int64_t *)base)[off]);
+  case VEC_KIND_F64:
+    return make_floatf((expfloat)((double *)base)[off]);
+  }
+  return NIL_EXP; /* unreachable — vec_kind only returns one of the three */
+}
+
+/* Boxed write: stores val into index i. Caller transferred its ref. On
+   a kind match, val's ref is either kept (GEN) or released (I64/F64
+   extract the scalar and drop the box). On a kind mismatch, the vec
+   promotes to GEN first then retries. Returns 0 on alloc failure
+   (promotion failed); the caller's ref to val is released either way.
+
+   Quietly accepts a fixnum into an F64 vec (converts to double) — this
+   matches the existing vec_elem_set_double semantics that the MLP
+   relies on for scalar inits like `(vec-fill! v 0)`. */
+static int vec_set_boxed(exp_t *vexp, int64_t i, exp_t *val) {
+  char *base = (char *)vexp->ptr + sizeof(alc_vec_t);
+  int32_t off = vexp->vec_win.start + (int32_t)i;
+  unsigned k = vec_kind(vexp);
+  if (k == VEC_KIND_GEN) {
+    unrefexp(((exp_t **)base)[off]);
+    ((exp_t **)base)[off] = val; /* ownership transferred */
+    return 1;
+  }
+  if (k == VEC_KIND_I64 && isnumber(val)) {
+    ((int64_t *)base)[off] = FIX_VAL(val);
+    /* val is a tagged immediate — no ref to release. */
+    return 1;
+  }
+  if (k == VEC_KIND_F64) {
+    if (isfloat(val)) {
+      ((double *)base)[off] = (double)val->f;
+      unrefexp(val);
+      return 1;
+    }
+    if (isnumber(val)) {
+      ((double *)base)[off] = (double)FIX_VAL(val);
+      return 1; /* tagged immediate, no unref */
+    }
+  }
+  /* Kind mismatch — promote to GEN then retry. */
+  if (!vec_promote_to_gen(vexp)) {
+    unrefexp(val);
+    return 0;
+  }
+  /* After promotion vexp is GEN; recurse handles the GEN store. */
+  return vec_set_boxed(vexp, i, val);
+}
+
+/* Read element i as a double, regardless of kind. Sets *err on a GEN
+   non-numeric element. Caller has bounds-checked. */
+static inline double vec_read_double(exp_t *vexp, int64_t i, int *err) {
+  char *base = (char *)vexp->ptr + sizeof(alc_vec_t);
+  int32_t off = vexp->vec_win.start + (int32_t)i;
+  switch (vec_kind(vexp)) {
+  case VEC_KIND_F64:
+    return ((double *)base)[off];
+  case VEC_KIND_I64:
+    return (double)((int64_t *)base)[off];
+  case VEC_KIND_GEN: {
+    exp_t *e = ((exp_t **)base)[off];
+    if (isnumber(e))
+      return (double)FIX_VAL(e);
+    if (isfloat(e))
+      return e->f;
+    *err = 1;
+    return 0.0;
+  }
+  }
+  *err = 1;
+  return 0.0;
+}
+
+/* Write a double into element i. If the vec is F64, raw store. I64
+   truncates to int64. GEN goes through the in-place EXP_FLOAT fast path
+   (preserved from the old vec_elem_set_double). Caller has bounds-
+   checked. Returns 0 on failure (e.g., GEN promotion not possible). */
+static inline int vec_write_double(exp_t *vexp, int64_t i, double x) {
+  char *base = (char *)vexp->ptr + sizeof(alc_vec_t);
+  int32_t off = vexp->vec_win.start + (int32_t)i;
+  switch (vec_kind(vexp)) {
+  case VEC_KIND_F64:
+    ((double *)base)[off] = x;
+    return 1;
+  case VEC_KIND_I64:
+    ((int64_t *)base)[off] = (int64_t)x;
+    return 1;
+  case VEC_KIND_GEN: {
+    exp_t **cells = (exp_t **)base;
+    exp_t *cur = cells[off];
+    if (is_ptr(cur) && cur->type == EXP_FLOAT && cur->nref == 1 &&
+        !(cur->flags & FLAG_SHARED)) {
+      cur->f = (expfloat)x;
+      return 1;
+    }
+    unrefexp(cur);
+    cells[off] = make_floatf((expfloat)x);
+    return 1;
+  }
+  }
+  return 0;
+}
+
+/* Inspect a freshly-built GEN vec; if all cells are homogeneous numeric,
+   replace its storage with a typed I64 or F64 buffer in place. Used by
+   vectorcmd / the #[...] reader to pick the tightest kind for literals.
+   Asserts start==0 (always true for fresh vectorcmd output). Returns 1
+   if the vec was tightened, 0 if it stays GEN. */
+static int vec_tighten(exp_t *vexp) {
+  if (vec_kind(vexp) != VEC_KIND_GEN)
+    return 1;
+  int64_t n = vec_len(vexp);
+  if (n == 0)
+    return 0; /* nothing to infer from */
+  exp_t **cells = vec_gen_cells(vexp);
+  int all_fix = 1, all_num = 1;
+  for (int64_t i = 0; i < n; i++) {
+    exp_t *c = cells[i];
+    if (!isnumber(c))
+      all_fix = 0;
+    if (!isnumber(c) && !isfloat(c)) {
+      all_num = 0;
+      break;
+    }
+  }
+  if (!all_num)
+    return 0;
+  alc_vec_t *old = (alc_vec_t *)vexp->ptr;
+  alc_vec_t *new_v = vec_alloc_storage(old->cap);
+  if (!new_v)
+    return 0;
+  char *newbase = (char *)new_v + sizeof(alc_vec_t);
+  unsigned newkind;
+  if (all_fix) {
+    int64_t *dst = (int64_t *)newbase;
+    for (int64_t i = 0; i < n; i++)
+      dst[i] = FIX_VAL(cells[i]); /* tagged immediates, no unref */
+    newkind = VEC_KIND_I64;
+  } else {
+    double *dst = (double *)newbase;
+    for (int64_t i = 0; i < n; i++) {
+      exp_t *c = cells[i];
+      dst[i] = isfloat(c) ? (double)c->f : (double)FIX_VAL(c);
+      unrefexp(c); /* drop the box we no longer need */
+    }
+    newkind = VEC_KIND_F64;
+  }
+  free(old);
+  vexp->ptr = new_v;
+  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | newkind);
+  vexp->vec_win.start = 0;
+  vexp->vec_win.end = (int32_t)n;
+  return 1;
 }
 
 const char doc_vec[] = "(vec n init) — fixed-size vector of n cells "
@@ -3452,14 +3860,13 @@ exp_t *vecrefcmd(exp_t *e, env_t *env) {
         vexp, iexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args"));
 
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
-  if (i < 0 || i >= v->len)
+  if (i < 0 || i >= vec_len(vexp))
     CLEAN_RETURN_2(
         vexp, iexp,
         error(ERROR_INDEX_OUT_OF_RANGE, e, env, "vec-ref: index out of range"));
 
-  exp_t *ret = refexp(v->data[i]);
+  exp_t *ret = vec_get_boxed(vexp, i);
   CLEAN_RETURN_2(vexp, iexp, ret);
 }
 
@@ -3473,21 +3880,22 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
         vexp, iexp, valexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args"));
 
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
-  if (i < 0 || i >= v->len)
+  if (i < 0 || i >= vec_len(vexp))
     CLEAN_RETURN_3(vexp, iexp, valexp,
                    error(ERROR_INDEX_OUT_OF_RANGE, e, env,
                          "vec-set!: index out of range"));
 
-  /* Replace the slot — drop old ref, install new (transfer valexp's). */
-  unrefexp(v->data[i]);
-  v->data[i] = valexp; /* ownership transferred */
-
-  exp_t *ret = refexp(v->data[i]); /* return the value, like (= ...) */
-  CLEAN_RETURN_2(
-      vexp, iexp,
-      ret); /* valexp is already owned by vector slot, don't clean it! */
+  /* Refcount the return value before vec_set_boxed eats valexp's ref. */
+  exp_t *ret = refexp(valexp);
+  if (!vec_set_boxed(vexp, i, valexp)) {
+    unrefexp(ret);
+    CLEAN_RETURN_2(vexp, iexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-set!: alloc failure or shared vec promote"));
+  }
+  /* valexp ownership consumed by vec_set_boxed — don't clean it. */
+  CLEAN_RETURN_2(vexp, iexp, ret);
 }
 
 const char doc_veclen[] = "(vec-len v) — number of cells in vector v.";
@@ -3505,7 +3913,7 @@ exp_t *veclencmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-len v): not a vector");
   }
-  int64_t n = ((alc_vec_t *)vexp->ptr)->len;
+  int64_t n = vec_len(vexp);
   unrefexp(vexp);
   unrefexp(e);
   return MAKE_FIX(n);
@@ -3525,10 +3933,21 @@ exp_t *veclencmd(exp_t *e, env_t *env) {
    tracking would be racy and the alloc savings are marginal compared
    to the multiply count). */
 
-/* Read element i of v as a double. Caller has bounds-checked. Returns
-   0.0 (and sets *err) on a non-number element. */
-static double vec_elem_as_double(alc_vec_t *v, int64_t i, int *err) {
-  exp_t *e = v->data[i];
+/* Resolve the live cell array for a VEC_KIND_GEN vec — pointer to the
+   first valid cell (accounting for vec_win.start). Cached once outside
+   the hot loop so the compiler doesn't reload vexp->ptr / vec_win.start
+   on every iteration (unrefexp / make_floatf are non-aliasing in
+   practice, but the compiler can't prove it). */
+static inline exp_t **vec_gen_cells(exp_t *vexp) {
+  return (exp_t **)((char *)vexp->ptr + sizeof(alc_vec_t)) +
+         vexp->vec_win.start;
+}
+
+/* Read cell[i] (within the resolved cell view) as a double. Returns
+   0.0 + sets *err on a non-numeric GEN element. Used by the GEN-GEN
+   fast path in tensor ops; typed kinds skip this and read raw. */
+static inline double gen_cell_as_double(exp_t **cells, int64_t i, int *err) {
+  exp_t *e = cells[i];
   if (isnumber(e))
     return (double)FIX_VAL(e);
   if (isfloat(e))
@@ -3537,25 +3956,21 @@ static double vec_elem_as_double(alc_vec_t *v, int64_t i, int *err) {
   return 0.0;
 }
 
-/* Write a double into slot i of v. Fast path when the existing slot
-   holds a uniquely-owned EXP_FLOAT: just overwrite its `f` field —
-   no alloc, no refcount round-trip. This is safe because:
-     1. nref == 1 means nothing else can observe this exp_t,
-     2. EXP_FLOAT carries its value inline in the union (no `ptr`
-        ownership to free),
-     3. type/flags don't need updating since we're writing a float
-        into what's already a float.
-   FLAG_SHARED isn't a concern for single-shard ML workloads, but we
-   still check it to keep the multi-shard refcount story honest. */
-static inline void vec_elem_set_double(alc_vec_t *v, int64_t i, double x) {
-  exp_t *cur = v->data[i];
+/* Write a double into cells[i]. Fast path: when the existing slot holds
+   a uniquely-owned EXP_FLOAT, just overwrite its `f` field — no alloc,
+   no refcount round-trip. Safe because:
+     1. nref == 1 means nothing else observes the exp_t,
+     2. EXP_FLOAT's value lives inline in the union (no ptr to release),
+     3. type/flags don't move since we're rewriting float as float. */
+static inline void gen_cell_set_double(exp_t **cells, int64_t i, double x) {
+  exp_t *cur = cells[i];
   if (is_ptr(cur) && cur->type == EXP_FLOAT && cur->nref == 1 &&
       !(cur->flags & FLAG_SHARED)) {
     cur->f = (expfloat)x;
     return;
   }
   unrefexp(cur);
-  v->data[i] = make_floatf((expfloat)x);
+  cells[i] = make_floatf((expfloat)x);
 }
 
 const char doc_vecdot[] =
@@ -3567,17 +3982,54 @@ exp_t *vecdotcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(aexp, bexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "(vec-dot a b): both args must be vectors"));
-  alc_vec_t *a = (alc_vec_t *)aexp->ptr;
-  alc_vec_t *b = (alc_vec_t *)bexp->ptr;
-  if (a->len != b->len)
+  int64_t na = vec_len(aexp), nb = vec_len(bexp);
+  if (na != nb)
     CLEAN_RETURN_2(aexp, bexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "vec-dot: length mismatch (%lld vs %lld)",
-                         (long long)a->len, (long long)b->len));
+                         (long long)na, (long long)nb));
   int err = 0;
   double s = 0.0;
-  for (int64_t i = 0; i < a->len; i++)
-    s += vec_elem_as_double(a, i, &err) * vec_elem_as_double(b, i, &err);
+  unsigned ka = vec_kind(aexp), kb = vec_kind(bexp);
+  /* Hoisted fast paths cover the practical cases:
+       F64-F64: raw double dot product (MLP hot path);
+       GEN-GEN: hoisted exp_t* cells + boxed read (heterogeneous vecs
+                like sieve-fast or untyped data);
+       I64-F64 / F64-I64: integer→double convert on the typed side.
+     Anything else (GEN mixed with typed, etc.) goes through the per-
+     element kind switch — same correctness, slower. */
+  if (ka == VEC_KIND_F64 && kb == VEC_KIND_F64) {
+    double *acells =
+        (double *)((char *)aexp->ptr + sizeof(alc_vec_t)) + aexp->vec_win.start;
+    double *bcells =
+        (double *)((char *)bexp->ptr + sizeof(alc_vec_t)) + bexp->vec_win.start;
+    for (int64_t i = 0; i < na; i++)
+      s += acells[i] * bcells[i];
+  } else if (ka == VEC_KIND_GEN && kb == VEC_KIND_GEN) {
+    exp_t **acells = vec_gen_cells(aexp);
+    exp_t **bcells = vec_gen_cells(bexp);
+    for (int64_t i = 0; i < na; i++)
+      s += gen_cell_as_double(acells, i, &err) *
+           gen_cell_as_double(bcells, i, &err);
+  } else if (ka == VEC_KIND_I64 && kb == VEC_KIND_F64) {
+    int64_t *acells = (int64_t *)((char *)aexp->ptr + sizeof(alc_vec_t)) +
+                      aexp->vec_win.start;
+    double *bcells =
+        (double *)((char *)bexp->ptr + sizeof(alc_vec_t)) + bexp->vec_win.start;
+    for (int64_t i = 0; i < na; i++)
+      s += (double)acells[i] * bcells[i];
+  } else if (ka == VEC_KIND_F64 && kb == VEC_KIND_I64) {
+    double *acells =
+        (double *)((char *)aexp->ptr + sizeof(alc_vec_t)) + aexp->vec_win.start;
+    int64_t *bcells = (int64_t *)((char *)bexp->ptr + sizeof(alc_vec_t)) +
+                      bexp->vec_win.start;
+    for (int64_t i = 0; i < na; i++)
+      s += acells[i] * (double)bcells[i];
+  } else {
+    /* GEN mixed with typed, or I64-I64 — kind-uniform fallback. */
+    for (int64_t i = 0; i < na; i++)
+      s += vec_read_double(aexp, i, &err) * vec_read_double(bexp, i, &err);
+  }
   if (err)
     CLEAN_RETURN_2(aexp, bexp,
                    error(ERROR_NUMBER_EXPECTED, e, env,
@@ -3595,20 +4047,33 @@ exp_t *vecaxpycmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_3(yexp, aexp, xexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "(vec-axpy! y a x): y, x vecs and a scalar"));
-  alc_vec_t *y = (alc_vec_t *)yexp->ptr;
-  alc_vec_t *x = (alc_vec_t *)xexp->ptr;
-  if (y->len != x->len)
+  int64_t ny = vec_len(yexp);
+  if (ny != vec_len(xexp))
     CLEAN_RETURN_3(yexp, aexp, xexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "vec-axpy!: length mismatch"));
   double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
+  /* Tensor ops produce floats. Promote I64 → F64 so the result holds
+     the math exactly (matches pre-refactor behavior where each cell
+     was boxed as an EXP_FLOAT). */
+  if (vec_kind(yexp) == VEC_KIND_I64)
+    vec_promote_i64_to_f64(yexp);
   int err = 0;
-  for (int64_t i = 0; i < y->len; i++) {
-    double yv = vec_elem_as_double(y, i, &err);
-    double xv = vec_elem_as_double(x, i, &err);
-    if (err)
-      break;
-    vec_elem_set_double(y, i, yv + a * xv);
+  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
+    double *ycells =
+        (double *)((char *)yexp->ptr + sizeof(alc_vec_t)) + yexp->vec_win.start;
+    double *xcells =
+        (double *)((char *)xexp->ptr + sizeof(alc_vec_t)) + xexp->vec_win.start;
+    for (int64_t i = 0; i < ny; i++)
+      ycells[i] += a * xcells[i];
+  } else {
+    for (int64_t i = 0; i < ny; i++) {
+      double yv = vec_read_double(yexp, i, &err);
+      double xv = vec_read_double(xexp, i, &err);
+      if (err)
+        break;
+      vec_write_double(yexp, i, yv + a * xv);
+    }
   }
   if (err)
     CLEAN_RETURN_3(yexp, aexp, xexp,
@@ -3626,14 +4091,23 @@ exp_t *vecscalecmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(vexp, aexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "(vec-scale! v a): vec + scalar"));
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
+  if (vec_kind(vexp) == VEC_KIND_I64)
+    vec_promote_i64_to_f64(vexp);
   int err = 0;
-  for (int64_t i = 0; i < v->len; i++) {
-    double vi = vec_elem_as_double(v, i, &err);
-    if (err)
-      break;
-    vec_elem_set_double(v, i, vi * a);
+  int64_t n = vec_len(vexp);
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells =
+        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+    for (int64_t i = 0; i < n; i++)
+      cells[i] *= a;
+  } else {
+    for (int64_t i = 0; i < n; i++) {
+      double vi = vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+      vec_write_double(vexp, i, vi * a);
+    }
   }
   if (err)
     CLEAN_RETURN_2(vexp, aexp,
@@ -3652,15 +4126,33 @@ exp_t *veccopycmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(dexp, sexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "(vec-copy! dst src): both must be vectors"));
-  alc_vec_t *d = (alc_vec_t *)dexp->ptr;
-  alc_vec_t *s = (alc_vec_t *)sexp->ptr;
-  if (d->len != s->len)
+  int64_t n = vec_len(dexp);
+  if (n != vec_len(sexp))
     CLEAN_RETURN_2(dexp, sexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "vec-copy!: length mismatch"));
-  for (int64_t i = 0; i < d->len; i++) {
-    unrefexp(d->data[i]);
-    d->data[i] = refexp(s->data[i]);
+  unsigned kd = vec_kind(dexp), ks = vec_kind(sexp);
+  if (kd == ks && kd != VEC_KIND_GEN) {
+    /* Same typed kind — raw memcpy of cells (8 bytes each, all kinds). */
+    char *dst = (char *)dexp->ptr + sizeof(alc_vec_t) + 8u * dexp->vec_win.start;
+    char *src = (char *)sexp->ptr + sizeof(alc_vec_t) + 8u * sexp->vec_win.start;
+    memcpy(dst, src, (size_t)n * 8u);
+  } else if (kd == VEC_KIND_GEN && ks == VEC_KIND_GEN) {
+    exp_t **dcells = vec_gen_cells(dexp);
+    exp_t **scells = vec_gen_cells(sexp);
+    for (int64_t i = 0; i < n; i++) {
+      unrefexp(dcells[i]);
+      dcells[i] = refexp(scells[i]);
+    }
+  } else {
+    /* Mixed kinds — fall back to box/unbox per element. */
+    for (int64_t i = 0; i < n; i++) {
+      exp_t *boxed = vec_get_boxed(sexp, i);
+      if (!vec_set_boxed(dexp, i, boxed))
+        CLEAN_RETURN_2(dexp, sexp,
+                       error(ERROR_ILLEGAL_VALUE, e, env,
+                             "vec-copy!: alloc failure"));
+    }
   }
   exp_t *ret = refexp(dexp);
   CLEAN_RETURN_2(dexp, sexp, ret);
@@ -3674,19 +4166,29 @@ exp_t *vecaddcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(yexp, xexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "(vec-add! y x): both must be vectors"));
-  alc_vec_t *y = (alc_vec_t *)yexp->ptr;
-  alc_vec_t *x = (alc_vec_t *)xexp->ptr;
-  if (y->len != x->len)
+  int64_t ny = vec_len(yexp);
+  if (ny != vec_len(xexp))
     CLEAN_RETURN_2(yexp, xexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "vec-add!: length mismatch"));
+  if (vec_kind(yexp) == VEC_KIND_I64)
+    vec_promote_i64_to_f64(yexp);
   int err = 0;
-  for (int64_t i = 0; i < y->len; i++) {
-    double yv = vec_elem_as_double(y, i, &err);
-    double xv = vec_elem_as_double(x, i, &err);
-    if (err)
-      break;
-    vec_elem_set_double(y, i, yv + xv);
+  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
+    double *ycells =
+        (double *)((char *)yexp->ptr + sizeof(alc_vec_t)) + yexp->vec_win.start;
+    double *xcells =
+        (double *)((char *)xexp->ptr + sizeof(alc_vec_t)) + xexp->vec_win.start;
+    for (int64_t i = 0; i < ny; i++)
+      ycells[i] += xcells[i];
+  } else {
+    for (int64_t i = 0; i < ny; i++) {
+      double yv = vec_read_double(yexp, i, &err);
+      double xv = vec_read_double(xexp, i, &err);
+      if (err)
+        break;
+      vec_write_double(yexp, i, yv + xv);
+    }
   }
   if (err)
     CLEAN_RETURN_2(yexp, xexp,
@@ -3703,10 +4205,19 @@ exp_t *vecfillcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(vexp, aexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "(vec-fill! v a): vec + scalar"));
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
-  for (int64_t i = 0; i < v->len; i++)
-    vec_elem_set_double(v, i, a);
+  if (vec_kind(vexp) == VEC_KIND_I64)
+    vec_promote_i64_to_f64(vexp);
+  int64_t n = vec_len(vexp);
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells =
+        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+    for (int64_t i = 0; i < n; i++)
+      cells[i] = a;
+  } else {
+    for (int64_t i = 0; i < n; i++)
+      vec_write_double(vexp, i, a);
+  }
   exp_t *ret = refexp(vexp);
   CLEAN_RETURN_2(vexp, aexp, ret);
 }
@@ -3727,15 +4238,24 @@ exp_t *vecrelucmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-relu! v): not a vector");
   }
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  if (vec_kind(vexp) == VEC_KIND_I64)
+    vec_promote_i64_to_f64(vexp);
   int err = 0;
-  for (int64_t i = 0; i < v->len; i++) {
-    double vi = vec_elem_as_double(v, i, &err);
-    if (err)
-      break;
-    if (vi < 0.0)
-      vec_elem_set_double(v, i, 0.0);
-    /* else: leave the existing exp_t alone, no new alloc */
+  int64_t n = vec_len(vexp);
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells =
+        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+    for (int64_t i = 0; i < n; i++)
+      if (cells[i] < 0.0)
+        cells[i] = 0.0;
+  } else {
+    for (int64_t i = 0; i < n; i++) {
+      double vi = vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+      if (vi < 0.0)
+        vec_write_double(vexp, i, 0.0);
+    }
   }
   if (err) {
     unrefexp(vexp);
@@ -3765,17 +4285,27 @@ exp_t *vecargmaxcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-argmax v): not a vector");
   }
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t best = -1;
   double bestv = 0.0;
   int err = 0;
-  for (int64_t i = 0; i < v->len; i++) {
-    double x = vec_elem_as_double(v, i, &err);
-    if (err)
-      break;
-    if (best < 0 || x > bestv) {
-      best = i;
-      bestv = x;
+  int64_t n = vec_len(vexp);
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells =
+        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+    for (int64_t i = 0; i < n; i++)
+      if (best < 0 || cells[i] > bestv) {
+        best = i;
+        bestv = cells[i];
+      }
+  } else {
+    for (int64_t i = 0; i < n; i++) {
+      double x = vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+      if (best < 0 || x > bestv) {
+        best = i;
+        bestv = x;
+      }
     }
   }
   unrefexp(vexp);
@@ -3802,20 +4332,30 @@ exp_t *vecmaxcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, e, env, "(vec-max v): not a vector");
   }
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
-  if (v->len == 0) {
+  int64_t n = vec_len(vexp);
+  if (n == 0) {
     unrefexp(vexp);
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, e, env, "vec-max: empty vector");
   }
   int err = 0;
-  double m = vec_elem_as_double(v, 0, &err);
-  for (int64_t i = 1; i < v->len; i++) {
-    double x = vec_elem_as_double(v, i, &err);
-    if (err)
-      break;
-    if (x > m)
-      m = x;
+  double m;
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells =
+        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+    m = cells[0];
+    for (int64_t i = 1; i < n; i++)
+      if (cells[i] > m)
+        m = cells[i];
+  } else {
+    m = vec_read_double(vexp, 0, &err);
+    for (int64_t i = 1; i < n; i++) {
+      double x = vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+      if (x > m)
+        m = x;
+    }
   }
   unrefexp(vexp);
   unrefexp(e);
@@ -3823,6 +4363,217 @@ exp_t *vecmaxcmd(exp_t *e, env_t *env) {
     return error(ERROR_NUMBER_EXPECTED, e, env,
                  "vec-max: non-numeric element");
   return make_floatf((expfloat)m);
+}
+
+/* ---------- deque ops ----------
+   vec-push! / vec-pop! at the back; vec-unshift! / vec-shift! at the
+   front. Amortised O(1) via the cap/start/end window — pops bump the
+   window without shifting; pushes grow only when the window hits a
+   boundary. Growth: 1.5x cap on realloc; slide-left when start >=
+   cap/4 (recovers headroom without reallocating); recenter on
+   unshift-grow so subsequent unshifts don't realloc. */
+
+/* Slide the live window down to position 0. Used when push hits the
+   back boundary but there's room at the front (start > 0). For typed
+   kinds the move is over raw int64/double bytes; for GEN the same
+   bytewise move is correct because the cells before start are
+   uninitialised garbage (the window is the source of truth for which
+   cells are owned). */
+static void vec_slide_left(exp_t *vexp) {
+  int32_t start = vexp->vec_win.start;
+  if (start == 0)
+    return;
+  int32_t live = vexp->vec_win.end - start;
+  char *base = (char *)vexp->ptr + sizeof(alc_vec_t);
+  if (live > 0)
+    memmove(base, base + (size_t)start * 8u, (size_t)live * 8u);
+  vexp->vec_win.start = 0;
+  vexp->vec_win.end = live;
+}
+
+/* Reallocate to `new_cap` cells, copying the live window to start at
+   `front_pad`. Old buffer freed; vexp->ptr replaced. Returns 0 on
+   alloc failure (vexp unchanged in that case). */
+static int vec_realloc(exp_t *vexp, int32_t new_cap, int32_t front_pad) {
+  alc_vec_t *old = (alc_vec_t *)vexp->ptr;
+  int32_t start = vexp->vec_win.start;
+  int32_t live = vexp->vec_win.end - start;
+  if (new_cap < live + front_pad)
+    return 0;
+  alc_vec_t *new_v = vec_alloc_storage(new_cap);
+  if (!new_v)
+    return 0;
+  if (live > 0) {
+    char *src = (char *)old + sizeof(alc_vec_t) + (size_t)start * 8u;
+    char *dst =
+        (char *)new_v + sizeof(alc_vec_t) + (size_t)front_pad * 8u;
+    memcpy(dst, src, (size_t)live * 8u);
+  }
+  free(old);
+  vexp->ptr = new_v;
+  vexp->vec_win.start = front_pad;
+  vexp->vec_win.end = front_pad + live;
+  return 1;
+}
+
+/* Ensure there's room at the back for one more push. Either slides
+   the window left (recovers headroom) or grows 1.5x. */
+static int vec_grow_back(exp_t *vexp) {
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  int32_t cap = v->cap;
+  if (cap > 0 && vexp->vec_win.start >= cap / 4) {
+    vec_slide_left(vexp);
+    return 1;
+  }
+  int32_t new_cap = cap < 4 ? 8 : cap + (cap >> 1);
+  return vec_realloc(vexp, new_cap, 0);
+}
+
+/* Ensure there's room at the front for one more unshift. Always
+   reallocates and recenters — front-grow without recentering would
+   force a fresh realloc on every subsequent unshift. */
+static int vec_grow_front(exp_t *vexp) {
+  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
+  int32_t cap = v->cap;
+  int32_t live = vexp->vec_win.end - vexp->vec_win.start;
+  int32_t new_cap = cap < 4 ? 8 : cap + (cap >> 1);
+  int32_t front_pad = (new_cap - live) / 2;
+  return vec_realloc(vexp, new_cap, front_pad);
+}
+
+const char doc_vecpush[] =
+    "(vec-push! v x) — append x to the back of v (amortised O(1)). "
+    "Returns x.";
+exp_t *vecpushcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(vexp, valexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_2(
+        vexp, valexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "(vec-push! v x): v must be a vec"));
+  if (vexp->flags & FLAG_SHARED)
+    CLEAN_RETURN_2(vexp, valexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-push!: cannot mutate a shared vec"));
+  if (vexp->vec_win.end == (int32_t)vec_cap(vexp)) {
+    if (!vec_grow_back(vexp))
+      CLEAN_RETURN_2(vexp, valexp,
+                     error(ERROR_ILLEGAL_VALUE, e, env,
+                           "vec-push!: grow failed"));
+  }
+  /* Extend the window by one. The new slot is uninitialised; for GEN
+     we pre-write NIL so vec_set_boxed's unrefexp doesn't read garbage. */
+  int32_t off = vexp->vec_win.end - vexp->vec_win.start; /* new logical idx */
+  vexp->vec_win.end++;
+  if (vec_kind(vexp) == VEC_KIND_GEN) {
+    exp_t **cells = (exp_t **)((char *)vexp->ptr + sizeof(alc_vec_t));
+    cells[vexp->vec_win.start + off] = refexp(NIL_EXP);
+  }
+  exp_t *ret = refexp(valexp);
+  if (!vec_set_boxed(vexp, off, valexp)) {
+    vexp->vec_win.end--; /* roll back */
+    unrefexp(ret);
+    unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "vec-push!: write failed");
+  }
+  /* valexp consumed by vec_set_boxed. */
+  unrefexp(vexp);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_vecpop[] = "(vec-pop! v) — remove and return the last "
+                          "element of v (O(1)). Errors on empty.";
+exp_t *vecpopcmd(exp_t *e, env_t *env) {
+  exp_t *vexp = NULL;
+  if (e->next)
+    vexp = EVAL(e->next->content, env);
+  if (iserror(vexp))
+    CLEAN_RETURN_1(e, vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(
+        vexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-pop! v): not a vec"));
+  if (vexp->flags & FLAG_SHARED)
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-pop!: cannot mutate a shared vec"));
+  int64_t n = vec_len(vexp);
+  if (n == 0)
+    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
+                               "vec-pop!: empty vec"));
+  exp_t *ret = vec_get_boxed(vexp, n - 1);
+  /* For GEN, the slot we're abandoning owns a ref — drop it. Typed
+     kinds hold raw scalars, no ref accounting. */
+  if (vec_kind(vexp) == VEC_KIND_GEN) {
+    exp_t **cells = vec_gen_cells(vexp);
+    unrefexp(cells[n - 1]);
+  }
+  vexp->vec_win.end--;
+  CLEAN_RETURN_1(vexp, ret);
+}
+
+const char doc_vecunshift[] =
+    "(vec-unshift! v x) — prepend x to the front of v (amortised O(1)). "
+    "Returns x.";
+exp_t *vecunshiftcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(vexp, valexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_2(vexp, valexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-unshift! v x): v must be a vec"));
+  if (vexp->flags & FLAG_SHARED)
+    CLEAN_RETURN_2(vexp, valexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-unshift!: cannot mutate a shared vec"));
+  if (vexp->vec_win.start == 0) {
+    if (!vec_grow_front(vexp))
+      CLEAN_RETURN_2(vexp, valexp,
+                     error(ERROR_ILLEGAL_VALUE, e, env,
+                           "vec-unshift!: grow failed"));
+  }
+  vexp->vec_win.start--;
+  if (vec_kind(vexp) == VEC_KIND_GEN) {
+    exp_t **cells = (exp_t **)((char *)vexp->ptr + sizeof(alc_vec_t));
+    cells[vexp->vec_win.start] = refexp(NIL_EXP);
+  }
+  exp_t *ret = refexp(valexp);
+  if (!vec_set_boxed(vexp, 0, valexp)) {
+    vexp->vec_win.start++; /* roll back */
+    unrefexp(ret);
+    unrefexp(vexp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "vec-unshift!: write failed");
+  }
+  unrefexp(vexp);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_vecshift[] = "(vec-shift! v) — remove and return the first "
+                            "element of v (O(1)). Errors on empty.";
+exp_t *vecshiftcmd(exp_t *e, env_t *env) {
+  exp_t *vexp = NULL;
+  if (e->next)
+    vexp = EVAL(e->next->content, env);
+  if (iserror(vexp))
+    CLEAN_RETURN_1(e, vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(
+        vexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-shift! v): not a vec"));
+  if (vexp->flags & FLAG_SHARED)
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-shift!: cannot mutate a shared vec"));
+  if (vec_len(vexp) == 0)
+    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
+                               "vec-shift!: empty vec"));
+  exp_t *ret = vec_get_boxed(vexp, 0);
+  if (vec_kind(vexp) == VEC_KIND_GEN) {
+    exp_t **cells = vec_gen_cells(vexp);
+    unrefexp(cells[0]);
+  }
+  vexp->vec_win.start++;
+  CLEAN_RETURN_1(vexp, ret);
 }
 
 /* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
@@ -7576,8 +8327,16 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_done = n;
   out[n++] = 0; /* b.gt done */
 
-  /* x3 = marks->ptr (alc_vec_t*) */
+  /* x3 = marks->ptr (alc_vec_t*).  Kind check: typed (I64/F64) vecs
+     store raw scalars, so the GEN cell read below would dereference
+     garbage as a pointer. Bail to bytecode VM if any kind bit is set. */
   out[n++] = arm64_ldr_imm(3, 0, off_marks);
+  int off_flags_cp = (int)offsetof(struct exp_t, flags);
+  out[n++] = arm64_ldrb_imm(7, 3, off_flags_cp);
+  int patch_kind_cp_a = n;
+  out[n++] = 0; /* tbnz w7,#4,deopt */
+  int patch_kind_cp_b = n;
+  out[n++] = 0; /* tbnz w7,#5,deopt */
   out[n++] = arm64_ldr_imm(3, 3, off_ptr);
 
   /* x4 = marks_ptr + i_tagged + 7;  x5 = *(x4) */
@@ -7620,6 +8379,8 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
   out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
   out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
+  out[patch_kind_cp_a] = arm64_tbnz(7, 4, deopt_pc - patch_kind_cp_a);
+  out[patch_kind_cp_b] = arm64_tbnz(7, 5, deopt_pc - patch_kind_cp_b);
   out[patch_skip_a] = arm64_cbz(5, skip_pc - patch_skip_a);
   out[patch_skip_b] = arm64_b_cond(0, skip_pc - patch_skip_b);
 
@@ -8203,8 +8964,16 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_done = n;
   out[n++] = 0; /* b.gt done */
 
-  /* x3 = marks (exp_t*), then x3 = marks->ptr (alc_vec_t*). */
+  /* x3 = marks (exp_t*), then x3 = marks->ptr (alc_vec_t*).  We assume
+     VEC_KIND_GEN (8-byte exp_t* cells); for typed kinds the JIT'd write
+     would corrupt int64/double payload. Check the flags byte and bail. */
   out[n++] = arm64_ldr_imm(3, 0, off_marks);
+  int off_flags_m = (int)offsetof(struct exp_t, flags);
+  out[n++] = arm64_ldrb_imm(7, 3, off_flags_m);
+  int patch_kind_m_a = n;
+  out[n++] = 0; /* tbnz w7,#4,deopt */
+  int patch_kind_m_b = n;
+  out[n++] = 0; /* tbnz w7,#5,deopt */
   out[n++] = arm64_ldr_imm(3, 3, off_ptr);
 
   /* x4 = marks_ptr + j_tagged + 7 = &data[j_untagged]. */
@@ -8240,6 +9009,8 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
   out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
   out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
+  out[patch_kind_m_a] = arm64_tbnz(7, 4, deopt_pc - patch_kind_m_a);
+  out[patch_kind_m_b] = arm64_tbnz(7, 5, deopt_pc - patch_kind_m_b);
 
   if (n > 64)
     return 0; /* JIT buffer guard (was assert) */
@@ -10637,6 +11408,16 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Read marks[i_untagged]. rdx = marks->ptr; rsi = marks[i] = [rdx + rax + 7].
    */
   n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDI, off_marks);
+  /* Kind check: this shape's emitted code assumes marks is a VEC_KIND_GEN
+     vec (8-byte exp_t* cells). Typed kinds (I64/F64) store raw scalars,
+     so loading marks[i] as a pointer would dereference garbage. Test the
+     kind bits at exp_t.flags (offset 0, low byte) and deopt to the
+     bytecode VM if any are set.  TEST byte [rdx], VEC_KIND_MASK ; JNZ deopt. */
+  buf[n++] = 0xF6;
+  buf[n++] = 0x02;
+  buf[n++] = (uint8_t)VEC_KIND_MASK;
+  int jnz_kind_a = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);
   n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDX, off_ptr);
   /* mov rsi, [rdx + rax*1 + 7] */
   buf[n++] = 0x48;
@@ -10692,6 +11473,7 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jg_done, 6, done_pc);
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
+  x64_patch_rel32(buf, jnz_kind_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_skip_inc, 6, skip_inc_pc);
   x64_patch_rel32(buf, je_skip_inc, 6, skip_inc_pc);
 
@@ -10821,6 +11603,12 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* rdx = marks (exp_t*), then rdx = marks->ptr (alc_vec_t*). */
   n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDI, off_marks);
+  /* Kind check (see twin shape's comment above). Bail if marks is typed. */
+  buf[n++] = 0xF6;
+  buf[n++] = 0x02;
+  buf[n++] = (uint8_t)VEC_KIND_MASK;
+  int jnz_kind_m = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);
   n += x64_mov_reg_mem(buf + n, X64_RDX, X64_RDX, off_ptr);
 
   /* rsi = nil_singleton. Loaded once per iteration; cheap (mov imm64). */
@@ -10876,6 +11664,7 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jg_done, 6, done_pc);
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
+  x64_patch_rel32(buf, jnz_kind_m, 6, deopt_pc);
 
   if (n > 200)
     return 0; /* JIT buffer guard (was assert) */
@@ -13424,14 +14213,13 @@ l_vec_ref: {
     unrefexp(vexp);
     RUNTIME_ERR("vec-ref: bad args");
   }
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
-  if (i < 0 || i >= v->len) {
+  if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(iexp);
     unrefexp(vexp);
     RUNTIME_ERR("vec-ref: index out of range");
   }
-  exp_t *r = refexp(v->data[i]);
+  exp_t *r = vec_get_boxed(vexp, i);
   unrefexp(iexp);
   unrefexp(vexp);
   PUSH(r);
@@ -13445,19 +14233,22 @@ l_vec_set: {
     unrefexp(vexp);
     RUNTIME_ERR("vec-set!: bad args");
   }
-  alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int64_t i = FIX_VAL(iexp);
-  if (i < 0 || i >= v->len) {
+  if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(valexp);
     unrefexp(iexp);
     unrefexp(vexp);
     RUNTIME_ERR("vec-set!: index out of range");
   }
-  unrefexp(v->data[i]);
-  v->data[i] = valexp; /* transfer */
-  /* Push the value back like (= ...) does. We borrow the slot, so refexp
-     to keep our own ref balanced after unrefexp(vexp) below. */
-  PUSH(refexp(v->data[i]));
+  /* Push the returned value before vec_set_boxed consumes valexp. */
+  exp_t *r = refexp(valexp);
+  if (!vec_set_boxed(vexp, i, valexp)) {
+    unrefexp(r);
+    unrefexp(iexp);
+    unrefexp(vexp);
+    RUNTIME_ERR("vec-set!: alloc failure or shared vec promote");
+  }
+  PUSH(r);
   unrefexp(iexp);
   unrefexp(vexp);
   NEXT;
@@ -13468,7 +14259,7 @@ l_vec_len: {
     unrefexp(vexp);
     RUNTIME_ERR("vec-len: not a vector");
   }
-  int64_t n = ((alc_vec_t *)vexp->ptr)->len;
+  int64_t n = vec_len(vexp);
   unrefexp(vexp);
   PUSH(MAKE_FIX(n));
   NEXT;
@@ -13523,7 +14314,7 @@ l_length: {
       cur = cur->next;
     }
   } else if (is_ptr(xs) && xs->type == EXP_VECTOR && xs->ptr) {
-    n = (int64_t)((alc_vec_t *)xs->ptr)->len;
+    n = vec_len(xs);
   } else if (isblob(xs)) {
     n = xs->ptr ? (int64_t)((alc_blob_t *)xs->ptr)->len : 0;
   } else if (islist(xs)) {
@@ -14643,7 +15434,7 @@ exp_t *countcmd(exp_t *e, env_t *env) {
   else if (isblob(x))
     n = (int64_t)((alc_blob_t *)x->ptr)->len;
   else if (is_ptr(x) && x->type == EXP_VECTOR && x->ptr)
-    n = ((alc_vec_t *)x->ptr)->len;
+    n = vec_len(x);
   else if (isstring(x))
     n = (int64_t)strlen((char *)x->ptr);
   else if (ispair(x)) {
@@ -14950,7 +15741,6 @@ exp_t *vectorcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "vector: alloc failed");
   }
-  alc_vec_t *vv = (alc_vec_t *)ret->ptr;
   long i = 0;
   for (exp_t *p = cdr(e); p; p = p->next, i++) {
     exp_t *v = EVAL(car(p), env);
@@ -14961,9 +15751,12 @@ exp_t *vectorcmd(exp_t *e, env_t *env) {
     }
     /* make_vector pre-filled with NIL (refcount bump per slot); release
        the placeholder before overwriting. */
-    unrefexp(vv->data[i]);
-    vv->data[i] = v; /* take ownership */
+    unrefexp(vec_gen_at(ret, i));
+    vec_gen_at(ret, i) = v; /* take ownership */
   }
+  /* Now that all elements are known, tighten to the narrowest kind:
+     all-fixnum → I64, all-numeric → F64, anything else stays GEN. */
+  vec_tighten(ret);
   unrefexp(e);
   return ret;
 }

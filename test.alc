@@ -995,6 +995,47 @@
 (assert "tensor combo: column-weighted sum via axpy"
         (vec->list cs-y)                                 (list -4.0 -4.0))
 
+;; ---------- deque ops on vec ----------
+;; push/pop at the back
+(= dq (vec 0 nil))
+(vec-push! dq 1) (vec-push! dq 2) (vec-push! dq 3)
+(assert "vec-push!: length after 3 pushes"  (vec-len dq) 3)
+(assert "vec-push!: contents"               (vec->list dq) (list 1 2 3))
+(assert "vec-pop!: returns last"            (vec-pop! dq) 3)
+(assert "vec-pop!: length decreases"        (vec-len dq) 2)
+(assert "vec-pop!: contents after pop"      (vec->list dq) (list 1 2))
+
+;; unshift/shift at the front
+(vec-unshift! dq 0)
+(assert "vec-unshift!: prepends"            (vec->list dq) (list 0 1 2))
+(assert "vec-shift!: returns first"         (vec-shift! dq) 0)
+(assert "vec-shift!: contents after shift"  (vec->list dq) (list 1 2))
+
+;; round-trip: push back, shift front, until empty
+(= dq2 (vec 0 nil))
+(vec-push! dq2 10) (vec-push! dq2 20) (vec-push! dq2 30)
+(assert "vec-shift! queue: first out"       (vec-shift! dq2) 10)
+(assert "vec-shift! queue: second out"      (vec-shift! dq2) 20)
+(assert "vec-shift! queue: third out"       (vec-shift! dq2) 30)
+(assert "vec-shift! queue: empty after"     (vec-len dq2) 0)
+
+;; many pushes — exercise the growth path (cap doubles, slide-left, etc.)
+(= dq4 (vec 0 nil))
+(for i 0 99 (vec-push! dq4 i))
+(assert "vec-push!: 100 pushes length"      (vec-len dq4) 100)
+(assert "vec-push!: first cell"             (vec-ref dq4 0) 0)
+(assert "vec-push!: last cell"              (vec-ref dq4 99) 99)
+
+;; alternating push/shift — exercises slide-left after start moves
+(= dq5 (vec 0 nil))
+(for i 0 49 (do (vec-push! dq5 i) (vec-shift! dq5) (vec-push! dq5 (+ i 1000))))
+(assert "vec-push!/shift! alternation"      (vec-len dq5) 50)
+
+;; deque on typed vecs — push i64 into i64 vec, push f64 into f64 vec
+(= dqi (vec 0 0))   ; GEN initially (fill nil-ish if 0 is fix)
+(vec-push! dqi 1) (vec-push! dqi 2)
+(assert "vec-push! on fixnum-init vec"      (vec-ref dqi 1) 2)
+
 ;; ---------- container type predicates ----------
 ;; vec?
 (assert "vec?: empty vec"           (vec? (vec 0 0))           t)

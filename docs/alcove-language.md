@@ -250,6 +250,22 @@ Vectors hold any `exp_t`. `(vec n init)` errors instead of segfaulting
 on absurdly large `n`. The literal form `#[1 2 3]` is shorthand for
 `(vector 1 2 3)`.
 
+**Element-kind inference (typed storage)** — `make_vector` and the
+`#[...]` reader pick the tightest cell representation based on the
+elements supplied: all-fixnum → `int64_t[]`, all-numeric (any float
+present) → `double[]`, otherwise a generic `exp_t*[]` fallback. The
+typed kinds skip per-cell `exp_t` boxing, which is what gives the MLP
+example its 30%-ish step-time gain over the pre-refactor build.
+Writing a value whose type doesn't match the cell kind transparently
+promotes the whole vec to the generic kind; mixing fixnums into an
+f64 vec quietly stores them as doubles.
+
+**Deque ops** — `(vec-push! v x)` appends at the back, `(vec-pop! v)`
+removes and returns the last element, `(vec-unshift! v x)` prepends at
+the front, `(vec-shift! v)` removes and returns the first. All
+amortised O(1) via a cap/start/end window; no mid-shift on pop, and
+grow is 1.5x with recentering on front-grow.
+
 **Tensor bulk ops** — for ML / numerical work, nine builtins walk a
 vec's underlying storage in C and do the math in raw `double`s instead
 of allocating an `EXP_FLOAT` per element. They accept vec elements

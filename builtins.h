@@ -51,6 +51,7 @@ extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
                   doc_vecfill[], doc_vecrelu[], doc_vecargmax[], doc_vecmax[],
                   doc_veccopy[];
 extern const char doc_vector[];
+extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
 /* Redis inspector builtins (only registered, only callable, when the
    process started under -R; otherwise resp_db is empty and they all
    return zero/nil/none). Defined below the `#include "resp.c"` line so
@@ -104,6 +105,10 @@ exp_t *vecargmaxcmd(exp_t *e, env_t *env);
 exp_t *vecmaxcmd(exp_t *e, env_t *env);
 exp_t *veccopycmd(exp_t *e, env_t *env);
 exp_t *vectorcmd(exp_t *e, env_t *env);
+exp_t *vecpushcmd(exp_t *e, env_t *env);
+exp_t *vecpopcmd(exp_t *e, env_t *env);
+exp_t *vecunshiftcmd(exp_t *e, env_t *env);
+exp_t *vecshiftcmd(exp_t *e, env_t *env);
 exp_t *rediscountcmd(exp_t *e, env_t *env);
 exp_t *rediskeyscmd(exp_t *e, env_t *env);
 exp_t *redistypecmd(exp_t *e, env_t *env);
