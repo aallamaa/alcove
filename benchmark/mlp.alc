@@ -1,0 +1,140 @@
+;;; MLP benchmark: 64-32-10 ReLU classifier on the UCI optdigits dataset,
+;;; trained with cross-entropy + SGD for 5 epochs. Same architecture as
+;;; the Python comparison (mlp.py). Tensor ops (vec-dot / vec-axpy! /
+;;; vec-relu! …) carry the inner loops in raw C.
+;;;
+;;; Self-contained — loads digits.bin directly (no --db needed).
+(= raw (read-bytes "../examples/mlp/digits.bin"))
+(if (no raw)
+    (do (prn "error: ../examples/mlp/digits.bin not found "
+             "(run `make -C ../examples/mlp data` first)")
+        (exit 1)))
+
+(def u32-at (b off)
+  (+ (blob-ref b off)
+     (* 256 (blob-ref b (+ off 1)))
+     (* 65536 (blob-ref b (+ off 2)))
+     (* 16777216 (blob-ref b (+ off 3)))))
+
+(= N-TRAIN    (u32-at raw 4))
+(= N-TEST     (u32-at raw 8))
+(= N-FEATURES (u32-at raw 12))
+(= N-CLASSES  (u32-at raw 16))
+
+(def slice->fvec (b off len)
+  (let v (vec len 0.0)
+    (do
+      (for i 0 (- len 1)
+        (vec-set! v i (/ (blob-ref b (+ off i)) 16.0)))
+      v)))
+
+(def unpack-examples (b off n d)
+  (let xs (vec n 0)
+    (do
+      (for k 0 (- n 1)
+        (vec-set! xs k (slice->fvec b (+ off (* k d)) d)))
+      xs)))
+
+(def unpack-labels (b off n)
+  (let ys (vec n 0)
+    (do
+      (for k 0 (- n 1)
+        (vec-set! ys k (blob-ref b (+ off k))))
+      ys)))
+
+(= train-X-off 20)
+(= train-y-off (+ train-X-off (* N-TRAIN N-FEATURES)))
+(= test-X-off  (+ train-y-off N-TRAIN))
+(= test-y-off  (+ test-X-off  (* N-TEST  N-FEATURES)))
+(= train-X (unpack-examples raw train-X-off N-TRAIN N-FEATURES))
+(= train-y (unpack-labels   raw train-y-off N-TRAIN))
+(= test-X  (unpack-examples raw test-X-off  N-TEST  N-FEATURES))
+(= test-y  (unpack-labels   raw test-y-off  N-TEST))
+
+(= HIDDEN 32)
+(= LR     0.05)
+(= EPOCHS 5)
+
+(def randf () (- (/ (random 1000000) 1000000.0) 0.5))
+
+(def init-mat (rows cols scale)
+  (let M (vec rows 0)
+    (do
+      (for r 0 (- rows 1)
+        (let row (vec cols 0.0)
+          (do
+            (for c 0 (- cols 1)
+              (vec-set! row c (* (randf) (* 2.0 scale))))
+            (vec-set! M r row))))
+      M)))
+
+(def zero-vec (n) (vec n 0.0))
+
+(= W1 (init-mat HIDDEN    N-FEATURES 0.125))
+(= b1 (zero-vec HIDDEN))
+(= W2 (init-mat N-CLASSES HIDDEN     0.177))
+(= b2 (zero-vec N-CLASSES))
+
+(= hidden-pre (zero-vec HIDDEN))
+(= hidden     (zero-vec HIDDEN))
+(= logits     (zero-vec N-CLASSES))
+(= probs      (zero-vec N-CLASSES))
+(= d-out      (zero-vec N-CLASSES))
+(= d-hidden   (zero-vec HIDDEN))
+
+(def forward (x)
+  (do
+    (for j 0 (- HIDDEN 1)
+      (vec-set! hidden-pre j
+                (+ (vec-dot (vec-ref W1 j) x) (vec-ref b1 j))))
+    (vec-copy! hidden hidden-pre)
+    (vec-relu! hidden)
+    (for k 0 (- N-CLASSES 1)
+      (vec-set! logits k
+                (+ (vec-dot (vec-ref W2 k) hidden) (vec-ref b2 k))))))
+
+(def softmax-logits ()
+  (let m (vec-max logits)
+    (let z 0.0
+      (do
+        (for k 0 (- N-CLASSES 1)
+          (let p (exp (- (vec-ref logits k) m))
+            (do
+              (vec-set! probs k p)
+              (= z (+ z p)))))
+        (vec-scale! probs (/ 1.0 z))))))
+
+(def predict (x) (do (forward x) (vec-argmax logits)))
+
+(def step (x target)
+  (do
+    (forward x)
+    (softmax-logits)
+    (vec-copy! d-out probs)
+    (vec-set! d-out target (- (vec-ref d-out target) 1.0))
+    (vec-fill! d-hidden 0.0)
+    (for k 0 (- N-CLASSES 1)
+      (vec-axpy! d-hidden (vec-ref d-out k) (vec-ref W2 k)))
+    (for j 0 (- HIDDEN 1)
+      (if (no (> (vec-ref hidden-pre j) 0.0))
+          (vec-set! d-hidden j 0.0)))
+    (for k 0 (- N-CLASSES 1)
+      (vec-axpy! (vec-ref W2 k) (* -1.0 LR (vec-ref d-out k)) hidden))
+    (vec-axpy! b2 (* -1.0 LR) d-out)
+    (for j 0 (- HIDDEN 1)
+      (vec-axpy! (vec-ref W1 j) (* -1.0 LR (vec-ref d-hidden j)) x))
+    (vec-axpy! b1 (* -1.0 LR) d-hidden)))
+
+(def accuracy (X y)
+  (let correct 0
+    (do
+      (for k 0 (- (vec-len X) 1)
+        (if (is (predict (vec-ref X k)) (vec-ref y k))
+            (= correct (+ correct 1))))
+      correct)))
+
+(for epoch 0 (- EPOCHS 1)
+  (for k 0 (- N-TRAIN 1)
+    (step (vec-ref train-X k) (vec-ref train-y k))))
+
+(prn (accuracy test-X test-y))

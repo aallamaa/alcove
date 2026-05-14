@@ -164,17 +164,18 @@ ifeq ($(FFI_OK),yes)
 	 && echo "ffi-examples: ok" \
 	 || (echo "ffi-examples: FAILED" && exit 1)
 endif
-benchmark: speed benchmark-mlp
+benchmark: speed
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.
-benchmark-mono: mono benchmark-mlp
+benchmark-mono: mono
 	./benchmark/run.sh
 # Run the bench against the fastest build (jit + mono refcount).
-benchmark-jit: jit-mono benchmark-mlp
+benchmark-jit: jit-mono
 	./benchmark/run.sh
-# MLP training benchmark — baseline (per-element loops) vs tensor ops
-# on the UCI optdigits dataset. Builds the dump if missing. Depends on
-# the alcove binary the parent target left in place (speed/mono/jit).
+# MLP-only: baseline (per-element interpreter loops) vs tensor ops, on
+# the UCI optdigits dataset. The main `make benchmark` already runs the
+# tensor-ops side against Python via benchmark/mlp.{alc,py}; this
+# target is the side-by-side internal comparison.
 benchmark-mlp:
 	@$(MAKE) -C examples/mlp benchmark
 # Rebuild both variants and compare numbers side-by-side.

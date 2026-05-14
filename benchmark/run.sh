@@ -3,7 +3,7 @@
 # Usage: ./benchmark/run.sh   (or: make benchmark)
 #
 # Reports best-of-15 wall-clock for each benchmark, plus median-of-20 startup,
-# plus a summary table with computed "net" (total minus startup) and slowdown.
+# plus a summary table with computed "net" (total minus startup) and speedup.
 
 set -u
 cd "$(dirname "$0")"
@@ -29,25 +29,36 @@ printf "python3 : %s\n\n" "$("$PYTHON" --version 2>&1)"
 echo "=== startup (median of 20) ==="
 STARTUP_ALC=$(median_of 20 "$ALCOVE"  empty.alc)
 STARTUP_PY=$(median_of 20 "$PYTHON"   empty.py)
-printf "  alcove   %5d ms\n"   "$STARTUP_ALC"
-printf "  python3  %5d ms\n\n" "$STARTUP_PY"
+printf "  alcove   %s\n"   "$(format_ms "$STARTUP_ALC")"
+printf "  python3  %s\n\n" "$(format_ms "$STARTUP_PY")"
 
-# the four benchmarks (best of 5)
+# the micro-benchmarks (best of 15)
 declare -a ROWS
 for prog in fib fact forsum countdown ackermann listsum sieve sieve-fast nqueens nqueens-vec tak; do
   echo "=== $prog (best of 15) ==="
   A=$(best_of 15 "$ALCOVE"  "$prog.alc")
   P=$(best_of 15 "$PYTHON"  "$prog.py")
-  printf "  alcove   %5d ms\n"   "$A"
-  printf "  python3  %5d ms\n"   "$P"
+  printf "  alcove   %s\n"   "$(format_ms "$A")"
+  printf "  python3  %s\n"   "$(format_ms "$P")"
+  ROWS+=( "$prog $A $P" )
+  echo ""
+done
+
+# heavy benchmarks (best of 3 — each run is hundreds of ms to seconds)
+for prog in mlp; do
+  echo "=== $prog (best of 3) ==="
+  A=$(best_of 3 "$ALCOVE"  "$prog.alc")
+  P=$(best_of 3 "$PYTHON"  "$prog.py")
+  printf "  alcove   %s\n"   "$(format_ms "$A")"
+  printf "  python3  %s\n"   "$(format_ms "$P")"
   ROWS+=( "$prog $A $P" )
   echo ""
 done
 
 # summary table
 echo "=== summary ==="
-printf "%-22s %10s %10s %10s %10s %12s\n" benchmark alcove python net_alc net_py "speedup"
-printf -- '-%.0s' {1..80}; echo
+printf "%-22s %14s %14s %14s %14s %12s\n" benchmark alcove python net_alc net_py "speedup"
+printf -- '-%.0s' {1..96}; echo
 for r in "${ROWS[@]}"; do
   set -- $r
   name=$1; a=$2; p=$3
@@ -58,6 +69,7 @@ for r in "${ROWS[@]}"; do
 r = $net_p / $net_a
 if r >= 1: print(f'{r:.1f}x alcove')
 else:      print(f'{1/r:.1f}x python')")
-  printf "%-22s %7d ms %7d ms %7d ms %7d ms %12s\n" \
-    "$name" "$a" "$p" "$net_a" "$net_p" "$speedup"
+  printf "%-22s %14s %14s %14s %14s %12s\n" \
+    "$name" "$(format_ms "$a")" "$(format_ms "$p")" \
+    "$(format_ms "$net_a")" "$(format_ms "$net_p")" "$speedup"
 done
