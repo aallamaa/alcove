@@ -310,7 +310,7 @@ static void resp_client_unlink(resp_client_t *c) {
   resp_client_free(c);
 }
 
-static void resp_write(resp_client_t *c, const char *p, size_t n) {
+static char *resp_write_reserve(resp_client_t *c, size_t n) {
   if (c->wlen + n > c->wcap) {
     /* Slide the live window down before paying for a realloc. Only
        firing when steady-state drains have fallen behind. */
@@ -327,8 +327,13 @@ static void resp_write(resp_client_t *c, const char *p, size_t n) {
       c->wcap = cap;
     }
   }
-  memcpy(c->wbuf + c->wlen, p, n);
+  char *dst = c->wbuf + c->wlen;
   c->wlen += n;
+  return dst;
+}
+
+static void resp_write(resp_client_t *c, const char *p, size_t n) {
+  memcpy(resp_write_reserve(c, n), p, n);
 }
 
 /* Drain a window's worth of pending output. Returns 1 to signal the
@@ -347,20 +352,22 @@ static inline int resp_client_drain_write(resp_client_t *c) {
   return 0;
 }
 
-static void resp_write_str(resp_client_t *c, const char *s) {
-  resp_write(c, s, strlen(s));
-}
-
 static void resp_write_simple(resp_client_t *c, const char *s) {
-  resp_write(c, "+", 1);
-  resp_write_str(c, s);
-  resp_write(c, "\r\n", 2);
+  size_t n = strlen(s);
+  char *dst = resp_write_reserve(c, n + 3);
+  dst[0] = '+';
+  memcpy(dst + 1, s, n);
+  dst[n + 1] = '\r';
+  dst[n + 2] = '\n';
 }
 
 static void resp_write_err(resp_client_t *c, const char *s) {
-  resp_write(c, "-", 1);
-  resp_write_str(c, s);
-  resp_write(c, "\r\n", 2);
+  size_t n = strlen(s);
+  char *dst = resp_write_reserve(c, n + 3);
+  dst[0] = '-';
+  memcpy(dst + 1, s, n);
+  dst[n + 1] = '\r';
+  dst[n + 2] = '\n';
 }
 
 /* Fast unsigned-to-decimal — snprintf was the #1 hotspot under load
@@ -382,12 +389,12 @@ static int resp_i64_to_ascii(char *out, int64_t v) {
 }
 
 static void resp_write_int(resp_client_t *c, long long v) {
-  char buf[32];
+  char *buf = resp_write_reserve(c, 32);
   buf[0] = ':';
   int n = 1 + resp_i64_to_ascii(buf + 1, (int64_t)v);
   buf[n++] = '\r';
   buf[n++] = '\n';
-  resp_write(c, buf, (size_t)n);
+  c->wlen -= (size_t)(32 - n);
 }
 
 static void resp_write_bulk(resp_client_t *c, const char *p, size_t n) {
@@ -396,20 +403,22 @@ static void resp_write_bulk(resp_client_t *c, const char *p, size_t n) {
   int hn = 1 + resp_u64_to_ascii(hdr + 1, (uint64_t)n);
   hdr[hn++] = '\r';
   hdr[hn++] = '\n';
-  resp_write(c, hdr, (size_t)hn);
-  resp_write(c, p, n);
-  resp_write(c, "\r\n", 2);
+  char *dst = resp_write_reserve(c, (size_t)hn + n + 2);
+  memcpy(dst, hdr, (size_t)hn);
+  memcpy(dst + hn, p, n);
+  dst[hn + n] = '\r';
+  dst[hn + n + 1] = '\n';
 }
 
 static void resp_write_nil(resp_client_t *c) { resp_write(c, "$-1\r\n", 5); }
 
 static void resp_write_array_hdr(resp_client_t *c, long long n) {
-  char hdr[32];
+  char *hdr = resp_write_reserve(c, 32);
   hdr[0] = '*';
   int hn = 1 + resp_i64_to_ascii(hdr + 1, (int64_t)n);
   hdr[hn++] = '\r';
   hdr[hn++] = '\n';
-  resp_write(c, hdr, (size_t)hn);
+  c->wlen -= (size_t)(32 - hn);
 }
 
 static void resp_write_wrongtype(resp_client_t *c) {
@@ -962,6 +971,18 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
+  if (!nx && !xx && expire_us == 0 && resp_kv) {
+    exp_t *cur = resp_kv_peek(k, klen);
+    if (cur && isblob(cur)) {
+      alc_blob_t *b = (alc_blob_t *)cur->ptr;
+      if (b->len == (size_t)argl[2] &&
+          (b->len == 0 || memcmp(b->bytes, argv[2], b->len) == 0) &&
+          lfkv_touch_if_value(resp_kv, k, klen, cur, 0)) {
+        resp_write_simple(c, "OK");
+        return;
+      }
+    }
+  }
   exp_t *fresh = make_blob(argv[2], (size_t)argl[2]);
   resp_kv_ensure();
   if (nx || xx) {
@@ -1541,6 +1562,16 @@ static void resp_cmd_table_init(void) {
 /* Returns the kind for a built-in command, or 0 if not found. */
 static int resp_cmd_lookup(const char *cmd, long clen) {
   if (clen <= 0 || clen > RESP_CMD_NAMEMAX) return 0;
+  if (clen == 3) {
+    char a = cmd[0], b = cmd[1], d = cmd[2];
+    if (a >= 'a' && a <= 'z') a -= 32;
+    if (b >= 'a' && b <= 'z') b -= 32;
+    if (d >= 'a' && d <= 'z') d -= 32;
+    if (a == 'G' && b == 'E' && d == 'T') return HK_GET;
+    if (a == 'S' && b == 'E' && d == 'T') return HK_SET;
+    if (a == 'D' && b == 'E' && d == 'L') return HK_DEL;
+    if (a == 'T' && b == 'T' && d == 'L') return HK_TTL_S;
+  }
   /* Single pass: case-fold into up[] and hash simultaneously. */
   char up[RESP_CMD_NAMEMAX];
   uint32_t h = 2166136261u;

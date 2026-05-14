@@ -217,6 +217,20 @@ int lfkv_set_expiry(lfkv_t *kv, const char *k, size_t klen, int64_t ts_us) {
   return 1;
 }
 
+int lfkv_touch_if_value(lfkv_t *kv, const char *k, size_t klen,
+                        exp_t *expected, int64_t expiry_us) {
+  if (!expected) return 0;
+  LFKV_PROBE(kv, k, klen, h, i, tomb, s);
+  if (!s) return 0;
+  exp_t *cur = expected;
+  if (!atomic_compare_exchange_strong_explicit(
+          &s->val, &cur, expected,
+          memory_order_acq_rel, memory_order_acquire))
+    return 0;
+  atomic_store_explicit(&s->expiry_us, expiry_us, memory_order_release);
+  return 1;
+}
+
 int64_t lfkv_get_expiry(lfkv_t *kv, const char *k, size_t klen) {
   LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return -1;

@@ -115,6 +115,13 @@ int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, struct exp_t *val);
 int lfkv_cas(lfkv_t *kv, const char *k, size_t klen,
              struct exp_t *expected, struct exp_t *new_val);
 
+/* Touch-if-current: if the key's current value pointer is still
+ * `expected`, update its expiry and return 1 without changing the value
+ * refcount. Used by SET of identical string bytes to linearize the
+ * command without allocating/replacing an equivalent blob. */
+int lfkv_touch_if_value(lfkv_t *kv, const char *k, size_t klen,
+                        struct exp_t *expected, int64_t expiry_us);
+
 /* Iteration: caller-supplied callback invoked for each live entry
  * (val != NULL, not expired). Acquire-loads each slot; values handed
  * to the callback are NOT refexp-bumped — the callback runs in the
