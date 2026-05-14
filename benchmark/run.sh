@@ -27,7 +27,7 @@ printf "python3 : %s\n\n" "$("$PYTHON" --version 2>&1)"
 
 # startup (empty script)
 echo "=== startup (median of 20) ==="
-STARTUP_ALC=$(median_of 20 "$ALCOVE"  empty.alc)
+STARTUP_ALC=$(median_of 20 "$ALCOVE" --noload empty.alc)
 STARTUP_PY=$(median_of 20 "$PYTHON"   empty.py)
 printf "  alcove   %s\n"   "$(format_ms "$STARTUP_ALC")"
 printf "  python3  %s\n\n" "$(format_ms "$STARTUP_PY")"
@@ -36,7 +36,7 @@ printf "  python3  %s\n\n" "$(format_ms "$STARTUP_PY")"
 declare -a ROWS
 for prog in fib fact forsum countdown ackermann listsum sieve sieve-fast nqueens nqueens-vec tak; do
   echo "=== $prog (best of 15) ==="
-  A=$(best_of 15 "$ALCOVE"  "$prog.alc")
+  A=$(best_of 15 "$ALCOVE" --noload "$prog.alc")
   P=$(best_of 15 "$PYTHON"  "$prog.py")
   printf "  alcove   %s\n"   "$(format_ms "$A")"
   printf "  python3  %s\n"   "$(format_ms "$P")"
@@ -47,7 +47,7 @@ done
 # heavy benchmarks (best of 3 — each run is hundreds of ms to seconds)
 for prog in mlp; do
   echo "=== $prog (best of 3) ==="
-  A=$(best_of 3 "$ALCOVE"  "$prog.alc")
+  A=$(best_of 3 "$ALCOVE" --noload "$prog.alc")
   P=$(best_of 3 "$PYTHON"  "$prog.py")
   printf "  alcove   %s\n"   "$(format_ms "$A")"
   printf "  python3  %s\n"   "$(format_ms "$P")"
