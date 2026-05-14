@@ -164,14 +164,19 @@ ifeq ($(FFI_OK),yes)
 	 && echo "ffi-examples: ok" \
 	 || (echo "ffi-examples: FAILED" && exit 1)
 endif
-benchmark: speed
+benchmark: speed benchmark-mlp
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.
-benchmark-mono: mono
+benchmark-mono: mono benchmark-mlp
 	./benchmark/run.sh
 # Run the bench against the fastest build (jit + mono refcount).
-benchmark-jit: jit-mono
+benchmark-jit: jit-mono benchmark-mlp
 	./benchmark/run.sh
+# MLP training benchmark — baseline (per-element loops) vs tensor ops
+# on the UCI optdigits dataset. Builds the dump if missing. Depends on
+# the alcove binary the parent target left in place (speed/mono/jit).
+benchmark-mlp:
+	@$(MAKE) -C examples/mlp benchmark
 # Rebuild both variants and compare numbers side-by-side.
 benchmark-compare:
 	@./benchmark/compare.sh
@@ -212,4 +217,4 @@ clean:
 	rm -f alcove mpsc_test mpsc_test_tsan
 	rm -f web/alcove-core.js web/alcove-core.wasm
 
-.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
+.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean

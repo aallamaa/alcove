@@ -12,7 +12,13 @@
 ALCOVE := $(abspath ../../alcove)
 PY     := python3
 
-.PHONY: all data db train clean distclean
+.PHONY: all data db train benchmark clean distclean
+
+# Rebuild via the parent Makefile if the binary is missing — make's
+# implicit rule would otherwise try `cc alcove.c -o alcove` without
+# -lm / -lffi / -lreadline and fail at link.
+$(ALCOVE):
+	@$(MAKE) -C $(dir $(ALCOVE)) jit
 
 all: train
 
