@@ -84,12 +84,14 @@
   }
 
   function emit(str, kind) {
-    const clean = stripAnsi(str);
     if (userSink) {
-      userSink(clean, kind);
+      /* Hand the user the raw stream (with ANSI codes intact). Callers
+         can ansiToHtml it for color, or stripAnsi it for plain text —
+         both are exposed on the Alcove object below. */
+      userSink(str, kind);
     } else {
       defaultDomSink(str, kind);
-      (kind === "stderr" ? console.error : console.log)(clean);
+      (kind === "stderr" ? console.error : console.log)(stripAnsi(str));
     }
   }
 
@@ -138,6 +140,11 @@
     setOutput(fn) {
       userSink = typeof fn === "function" ? fn : null;
     },
+    /* Helpers for sinks: convert ANSI SGR sequences into safe HTML, or
+       drop them entirely. Exposed because setOutput now passes the raw
+       stream — pages can pick their rendering style. */
+    ansiToHtml,
+    stripAnsi,
     async eval(src) {
       await ready;
       alcoveWebEval(src);

@@ -15610,8 +15610,13 @@ __attribute__((used)) int alcove_web_eval(const char *src) {
     }
     exp_t *strf = evaluate(stre, g_global_env);
     if (strf) {
-      print_node(strf);
-      printf("\n");
+      /* Match the script-execution convention: don't echo nil results.
+         (prn ...) returns nil, and printing "nil" after every print
+         call in a REPL session is just noise. */
+      if (strf != NIL_EXP) {
+        print_node(strf);
+        printf("\n");
+      }
       unrefexp(strf);
     }
     forms++;
