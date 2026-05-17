@@ -35,12 +35,18 @@ if [ ! -x "$ALCOVE" ]; then
   exit 1
 fi
 
+# macOS ships bash 3.2, which lacks negative array indexing (${arr[-1]},
+# bash 4.3+). We track the current server PID in a scalar instead of
+# indexing the array, and keep PIDS append-only purely for the cleanup
+# trap. The ${arr[@]+...} guards keep `set -u` from aborting on an
+# empty array (also a bash 3.2 quirk).
 PIDS=()
 LOGS=()
+SERVER_PID=""
 cleanup() {
-  for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done
-  for p in "${PIDS[@]}"; do wait "$p" 2>/dev/null; done
-  for l in "${LOGS[@]}"; do rm -f "$l"; done
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null; done
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do wait "$p" 2>/dev/null; done
+  for l in ${LOGS[@]+"${LOGS[@]}"}; do rm -f "$l"; done
 }
 trap cleanup EXIT
 
@@ -96,6 +102,7 @@ start_redis() {
   LOGS+=("$log")
   redis-server --save '' --appendonly no --bind 127.0.0.1 --port "$port" \
                --daemonize no >"$log" 2>&1 &
+  SERVER_PID=$!
   PIDS+=($!)
   wait_port "$port"
 }
@@ -106,6 +113,7 @@ start_alcove() {
   log=$(mktemp -t resp-bench-alcove.XXXXXX.log)
   LOGS+=("$log")
   "$ALCOVE" -r "$port" --noload --threads "$threads" >"$log" 2>&1 &
+  SERVER_PID=$!
   PIDS+=($!)
   wait_alcove_reactors "$port" "$threads" "$log"
 }
@@ -113,13 +121,11 @@ start_alcove() {
 port=17160
 start_redis "$port"
 sweep "redis $(redis-server --version 2>&1 | grep -oE 'v=[^ ]+' | head -1)" "$port"
-kill "${PIDS[-1]}" 2>/dev/null; wait "${PIDS[-1]}" 2>/dev/null
-unset 'PIDS[${#PIDS[@]}-1]'
+kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null
 
 for t in $ALCOVE_THREADS; do
   port=$((port + 1))
   start_alcove "$port" "$t"
   sweep "alcove --threads $t" "$port"
-  kill "${PIDS[-1]}" 2>/dev/null; wait "${PIDS[-1]}" 2>/dev/null
-  unset 'PIDS[${#PIDS[@]}-1]'
+  kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null
 done
