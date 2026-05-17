@@ -133,7 +133,12 @@ Exposes a Lisp hook for custom commands:
 (redis-defcmd "MIRROR" (fn (args) (reverse args)))
 ```
 
-Then from any redis-cli: `> MIRROR 1 2 3` → `(3 2 1)`.
+Command arguments arrive as binary-safe `EXP_BLOB` values, and Lisp
+can write the RESP keyspace directly with existing containers:
+`(redis-set "queue" (deque "a" "b"))` stores a Redis list, while
+`(redis-set "h" (hash-map "field" "value"))` stores a Redis hash, and
+`(redis-set "v" (vector 1 2 3))` keeps an Alcove `EXP_VECTOR` available
+to Lisp through `(redis-val "v")`.
 
 ### 4. FFI to any C library
 
@@ -173,6 +178,102 @@ and lambda (re-compiled on load).
 Inspect with `(disasm f)` — it prints the bytecode plus the JIT
 install status.
 
+### 7. Alcove Script — a Python-like surface syntax
+
+`make als` builds `./alcoves`: the full runtime plus a whitespace /
+`:`-block reader. It is *not* a new language — the reader turns
+indentation into ordinary Lisp forms *before* macro-expansion, so it
+stays fully homoiconic. A line is a list; a trailing `:` opens a
+block; `name(args)` is sugar for `name (args)`; `'x` is `(quote x)`.
+
+**Idiomatic — recursion, loops, locals:**
+
+```python
+def fact (n):
+  if (< n 2):
+    1
+    * n (fact (- n 1))
+
+def sum-to (n):
+  with (s 0):
+    for i 1 n:
+      = s (+ s i)
+    s
+```
+
+**Macros, without the parens** (`macro`/`set` map to
+`defmacro`/`=`; quasiquote is built with `list` + `'`):
+
+```python
+defmacro inc (v):
+  list '= v (list '+ v 1)
+
+def demo ():
+  = x 10
+  inc x
+  inc x          # x is now 12
+  prn x
+```
+
+**Everything is a block.** Because `:` just "appends the indented
+forms to this list", any parenthesised argument can be unfolded into
+a deeper block. All three of these read into the *identical* Lisp
+form `(def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))`:
+
+```python
+def fib (n):                 # inline
+  if (< n 2):
+    n
+    + (fib (- n 1)) (fib (- n 2))
+
+def fib (n):                 # ladder the + call
+  if (< n 2):
+    n
+    +:
+      fib (- n 1)
+      fib (- n 2)
+
+def fib (n):                 # ladder all the way down
+  if (< n 2):
+    n
+    +:
+      fib:
+        - n 1
+      fib:
+        - n 2
+```
+
+**The REPL is block-aware** — continuation prompt, auto-indent after
+`:`, blank line submits, live syntax highlighting + history. And
+`(source f)` prints the definition *back as Alcove Script*, normalised
+to the idiomatic form (homoiconicity, round-tripped):
+
+```
+In [4]: def fib(n):
+   ...:   if (< n 2):
+   ...:     n
+   ...:     +:
+   ...:       fib:
+   ...:         - n 1
+   ...:       fib:
+   ...:         - n 2
+   ...:
+Out[4]: #<procedure:fib>
+In [5]: fib 10
+Out[5]: 55
+In [6]: source fib
+def fib (n):
+  if (< n 2):
+    n
+    + (fib (- n 1)) (fib (- n 2))
+```
+
+Alcove Script is accepted at the prompt, in `.als` files, piped
+stdin, and `-e`; `./alcove` itself is unchanged. `als.py` (forward)
+and `alc2als.py` (`.alc` → `.als`, with builder laddering) are
+offline tools. See [`examples/alcove-script/`](examples/alcove-script/)
+and [`alcove-script-spec.md`](alcove-script-spec.md).
+
 ---
 
 ## Examples
@@ -183,6 +284,7 @@ install status.
 | [`examples/mlp/`](examples/mlp/) | MLP digit classifier on UCI optdigits — full pipeline with `make data && make train`. |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
 | [`ffi-examples/`](ffi-examples/) | libm, libc strings, sleeping via usleep, a custom .so for everything FFI can call. |
+| [`examples/alcove-script/`](examples/alcove-script/) | Alcove Script (`.als`) — Python-like indentation syntax over the same Lisp forms; `make als` → `./alcoves`. |
 
 ---
 
@@ -196,6 +298,7 @@ history, paren-match, color), `libffi` (the `(ffi-fn …)` builtin).
 make              # → ./alcove, JIT enabled (default goal)
 make nojit        # JIT off; bytecode only
 make jit-mono     # JIT + single-threaded refcounts (fastest)
+make als          # → ./alcoves (Alcove Script front end)
 make parser       # debug build with -g3
 make test         # run test.alc (currently 400+ asserts) + ffi-examples
 make benchmark    # alcove vs python3 microbenchmarks (incl. mlp)
@@ -226,6 +329,10 @@ The default `make` writes `./alcove`. Use it like:
   refcount duality.
 - **Feature proposals**: [`docs/specs/proposals.md`](docs/specs/proposals.md)
   — open language ideas (string-buf, try/catch, unquote-splicing).
+- **Alcove Script**: [`alcove-script-spec.md`](alcove-script-spec.md)
+  — the indentation reader spec, plus
+  [`examples/alcove-script/README.md`](examples/alcove-script/README.md)
+  for the `./alcoves` REPL, `.als` files, and the offline tools.
 - **Editor support**: [`editor/`](editor/README.md) — syntax
   highlighting for vim and emacs (drop-in files + install steps).
 

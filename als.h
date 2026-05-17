@@ -1,0 +1,374 @@
+/* als.h — alcove script -> alcove S-expression transpiler, in C.
+ *
+ * A self-contained port of als.py. One entry point:
+ *
+ *     char *als_to_sexpr(const char *src);   // malloc'd; caller frees
+ *
+ * It turns the whitespace/`:`-block syntax into ordinary alcove
+ * s-expression text, which alcove's existing reader then parses. No
+ * alcove headers are needed here; this is pure string -> string.
+ *
+ * Reader rules (see alcove-script-spec.md):
+ *   - bare word = symbol; "..." string (escapes verbatim); numbers ride
+ *     through verbatim.
+ *   - inline (...) are normal lists and nest.
+ *   - `name(a b)` == `name (a b)` ; `name()` == `(name)`.
+ *   - a line of one atom  -> that value; one list -> as-is;
+ *     many forms -> (f f ...).
+ *   - a line ending in `:` opens a block; the more-indented lines below
+ *     are appended as further elements of that line's list.
+ *   - `'x` -> (quote x). `# ...` is a comment (not `#\` , not in str).
+ *   - true->t, false->nil; head macro->defmacro, head set->=.
+ */
+#ifndef ALCOVE_ALS_H
+#define ALCOVE_ALS_H
+
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+/* ---- growable byte buffer ---- */
+typedef struct {
+  char *p;
+  size_t len, cap;
+} als_buf;
+
+static void als_buf_init(als_buf *b) {
+  b->cap = 256;
+  b->len = 0;
+  b->p = (char *)malloc(b->cap);
+  b->p[0] = 0;
+}
+static void als_buf_putn(als_buf *b, const char *s, size_t n) {
+  if (b->len + n + 1 > b->cap) {
+    while (b->len + n + 1 > b->cap)
+      b->cap *= 2;
+    b->p = (char *)realloc(b->p, b->cap);
+  }
+  memcpy(b->p + b->len, s, n);
+  b->len += n;
+  b->p[b->len] = 0;
+}
+static void als_buf_puts(als_buf *b, const char *s) {
+  als_buf_putn(b, s, strlen(s));
+}
+static void als_buf_putc(als_buf *b, char c) { als_buf_putn(b, &c, 1); }
+
+/* ---- form model: ATOM (raw text) or LIST (children) ---- */
+typedef struct als_node {
+  int is_list;
+  char *atom;               /* when !is_list — owned */
+  struct als_node **kid;
+  int n, cap;
+} als_node;
+
+static als_node *als_atom(const char *s, size_t n) {
+  als_node *x = (als_node *)calloc(1, sizeof *x);
+  /* alcove-target literal mapping */
+  if (n == 4 && !strncmp(s, "true", 4)) {
+    x->atom = strdup("t");
+  } else if (n == 5 && !strncmp(s, "false", 5)) {
+    x->atom = strdup("nil");
+  } else {
+    x->atom = (char *)malloc(n + 1);
+    memcpy(x->atom, s, n);
+    x->atom[n] = 0;
+  }
+  return x;
+}
+static als_node *als_list(void) {
+  als_node *x = (als_node *)calloc(1, sizeof *x);
+  x->is_list = 1;
+  return x;
+}
+static void als_push(als_node *L, als_node *c) {
+  if (L->n == L->cap) {
+    L->cap = L->cap ? L->cap * 2 : 4;
+    L->kid = (als_node **)realloc(L->kid, L->cap * sizeof *L->kid);
+  }
+  L->kid[L->n++] = c;
+}
+static void als_free(als_node *x) {
+  if (!x)
+    return;
+  if (x->is_list) {
+    for (int i = 0; i < x->n; i++)
+      als_free(x->kid[i]);
+    free(x->kid);
+  } else
+    free(x->atom);
+  free(x);
+}
+
+/* ---- inline reader: one comment/colon-stripped line -> forms ---- */
+typedef struct {
+  const char *s;
+  size_t i, n;
+} als_lr;
+
+static int als_is_delim(char c) {
+  return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' ||
+         c == '\'';
+}
+
+static als_node *als_read_one(als_lr *r);
+
+/* read forms until end (term==0) or until `term` char consumed */
+static void als_read_forms(als_lr *r, char term, als_node *out) {
+  for (;;) {
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+      r->i++;
+    if (r->i >= r->n)
+      return;
+    char c = r->s[r->i];
+    if (term && c == term) {
+      r->i++;
+      return;
+    }
+    als_node *f = als_read_one(r);
+    /* call sugar: a symbol atom immediately followed by '(' */
+    if (f && !f->is_list && r->i < r->n && r->s[r->i] == '(') {
+      r->i++; /* consume ( */
+      als_node *args = als_list();
+      als_read_forms(r, ')', args);
+      if (args->n == 0) {            /* name()  -> (name) */
+        als_node *call = als_list();
+        als_push(call, f);
+        als_free(args);
+        als_push(out, call);
+      } else {                       /* name(a b) -> name (a b) */
+        als_push(out, f);
+        als_push(out, args);
+      }
+      continue;
+    }
+    als_push(out, f);
+  }
+}
+
+static als_node *als_read_one(als_lr *r) {
+  char c = r->s[r->i];
+  if (c == '(') {
+    r->i++;
+    als_node *L = als_list();
+    als_read_forms(r, ')', L);
+    return L;
+  }
+  if (c == '"') { /* string: keep quotes + escapes verbatim */
+    size_t start = r->i++;
+    while (r->i < r->n) {
+      if (r->s[r->i] == '\\') {
+        r->i += 2;
+        continue;
+      }
+      if (r->s[r->i] == '"') {
+        r->i++;
+        break;
+      }
+      r->i++;
+    }
+    return als_atom(r->s + start, r->i - start);
+  }
+  if (c == '\'') {
+    r->i++;
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+      r->i++;
+    als_node *q = als_list();
+    als_push(q, als_atom("quote", 5));
+    als_push(q, als_read_one(r));
+    return q;
+  }
+  /* alcove char literal #\X — take exactly the 3 bytes */
+  if (c == '#' && r->i + 2 < r->n && r->s[r->i + 1] == '\\') {
+    als_node *a = als_atom(r->s + r->i, 3);
+    r->i += 3;
+    return a;
+  }
+  size_t start = r->i;
+  while (r->i < r->n && !als_is_delim(r->s[r->i]))
+    r->i++;
+  if (r->i == start) /* lone delimiter we don't special-case: take 1 */
+    r->i++;
+  return als_atom(r->s + start, r->i - start);
+}
+
+/* one line's text -> the node it denotes (pragmatic lone-atom rule) */
+static als_node *als_line_node(const char *text) {
+  als_lr r = {text, 0, strlen(text)};
+  als_node *forms = als_list();
+  als_read_forms(&r, 0, forms);
+  if (forms->n == 1) {
+    als_node *only = forms->kid[0];
+    forms->kid[0] = NULL;
+    als_free(forms);
+    return only; /* lone atom -> value; lone list -> as-is */
+  }
+  return forms; /* many -> (f f ...) */
+}
+
+/* ---- comment / colon handling ---- */
+
+/* copy `line` minus a `#` comment (not `#\`, not inside a string) */
+static char *als_strip_comment(const char *line) {
+  size_t n = strlen(line);
+  char *out = (char *)malloc(n + 1);
+  size_t o = 0;
+  int in_str = 0;
+  for (size_t i = 0; i < n; i++) {
+    char c = line[i];
+    if (in_str) {
+      out[o++] = c;
+      if (c == '\\' && i + 1 < n) {
+        out[o++] = line[++i];
+        continue;
+      }
+      if (c == '"')
+        in_str = 0;
+    } else {
+      if (c == '#' && line[i + 1] != '\\')
+        break;
+      out[o++] = c;
+      if (c == '"')
+        in_str = 1;
+    }
+  }
+  out[o] = 0;
+  return out;
+}
+
+/* does the trimmed text open a block? returns 1 and trims the ':' */
+static int als_opens_block(char *t) {
+  size_t n = strlen(t);
+  if (n == 0 || t[n - 1] != ':')
+    return 0;
+  int in_str = 0;
+  for (size_t i = 0; i + 1 < n; i++) {
+    if (t[i] == '\\' && in_str) {
+      i++;
+      continue;
+    }
+    if (t[i] == '"')
+      in_str = !in_str;
+  }
+  if (in_str)
+    return 0;
+  t[n - 1] = 0;
+  /* rstrip */
+  for (size_t i = strlen(t); i > 0 && (t[i - 1] == ' ' || t[i - 1] == '\t');)
+    t[--i] = 0;
+  return 1;
+}
+
+/* head-symbol remap: macro -> defmacro, set -> = */
+static void als_head_remap(als_node *node) {
+  if (!node->is_list || node->n == 0)
+    return;
+  als_node *h = node->kid[0];
+  if (h->is_list || !h->atom)
+    return;
+  if (!strcmp(h->atom, "macro")) {
+    free(h->atom);
+    h->atom = strdup("defmacro");
+  } else if (!strcmp(h->atom, "set")) {
+    free(h->atom);
+    h->atom = strdup("=");
+  }
+}
+
+/* ---- serialize node -> s-expression text ---- */
+static void als_emit(als_node *x, als_buf *b) {
+  if (!x)
+    return;
+  if (!x->is_list) {
+    als_buf_puts(b, x->atom);
+    return;
+  }
+  als_buf_putc(b, '(');
+  for (int i = 0; i < x->n; i++) {
+    if (i)
+      als_buf_putc(b, ' ');
+    als_emit(x->kid[i], b);
+  }
+  als_buf_putc(b, ')');
+}
+
+/* ---- top level: src -> s-expr string ---- */
+char *als_to_sexpr(const char *src) {
+  /* split into lines (keep leading whitespace for indent calc) */
+  size_t slen = strlen(src);
+  als_buf out;
+  als_buf_init(&out);
+
+  /* indentation stack: parent list to append children into */
+  enum { MAXD = 256 };
+  int ind_stack[MAXD];
+  als_node *node_stack[MAXD];
+  int sp = 0;
+  als_node *roots = als_list();
+
+  size_t i = 0;
+  while (i <= slen) {
+    size_t j = i;
+    while (j < slen && src[j] != '\n')
+      j++;
+    /* raw line src[i..j) */
+    size_t rawlen = j - i;
+    char *raw = (char *)malloc(rawlen + 1);
+    memcpy(raw, src + i, rawlen);
+    raw[rawlen] = 0;
+    i = j + 1;
+
+    char *nocom = als_strip_comment(raw);
+    free(raw);
+    /* indent = leading spaces/tabs of nocom */
+    int indent = 0;
+    while (nocom[indent] == ' ' || nocom[indent] == '\t')
+      indent++;
+    /* trim both ends into `body` */
+    char *body = strdup(nocom + indent);
+    for (size_t k = strlen(body); k > 0 && (body[k - 1] == ' ' ||
+                                            body[k - 1] == '\t' ||
+                                            body[k - 1] == '\r');)
+      body[--k] = 0;
+    free(nocom);
+    if (body[0] == 0) { /* blank */
+      free(body);
+      continue;
+    }
+
+    int block = als_opens_block(body);
+    als_node *node = als_line_node(body);
+    free(body);
+
+    if (block && !node->is_list) {
+      als_node *L = als_list();
+      als_push(L, node);
+      node = L;
+    }
+    als_head_remap(node);
+
+    while (sp > 0 && indent <= ind_stack[sp - 1])
+      sp--;
+
+    if (sp > 0) {
+      als_push(node_stack[sp - 1], node);
+    } else {
+      als_push(roots, node); /* defer emit until tree is complete */
+    }
+
+    if (block && sp < MAXD) {
+      ind_stack[sp] = indent;
+      node_stack[sp] = node;
+      sp++;
+    }
+  }
+
+  for (int k = 0; k < roots->n; k++) {
+    als_emit(roots->kid[k], &out);
+    als_buf_putc(&out, '\n');
+  }
+  als_free(roots);
+  return out.p;
+}
+
+#endif /* ALCOVE_ALS_H */

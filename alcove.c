@@ -28,6 +28,12 @@
 #include <sys/time.h>
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
+#ifdef ALCOVE_ALS
+/* alcove script front end: a string->string transpiler that turns the
+   whitespace/`:`-block surface syntax into ordinary alcove
+   s-expressions before they reach reader(). */
+#include "als.h"
+#endif
 #ifdef ALCOVE_WEB
 #include <emscripten/emscripten.h>
 #endif
@@ -246,14 +252,17 @@ lispProc lispProcList[] = {
      */
     LISPCMD("vector", vectorcmd, doc_vector),
 #ifndef ALCOVE_WEB
-    /* Redis inspector commands — only meaningful under -R (combined REPL
-       + RESP). Outside -R, redis-keys/count return empty/0 since the
-       resp_db is never populated. Excluded from the web build since
+    /* Redis keyspace bridge. Under -R these inspect/mutate the live RESP
+       server; in normal Lisp runs they use the same in-process exp_t-backed
+       keyspace without opening a socket. Excluded from the web build since
        resp.c (pthread/epoll/socket) doesn't compile under emscripten. */
     LISPCMD("redis-count", rediscountcmd, doc_redis_count),
     LISPCMD("redis-keys", rediskeyscmd, doc_redis_keys),
     LISPCMD("redis-type", redistypecmd, doc_redis_type),
     LISPCMD("redis-get", redisgetcmd, doc_redis_get),
+    LISPCMD("redis-val", redisvalcmd, doc_redis_val),
+    LISPCMD("redis-set", redissetcmd, doc_redis_set),
+    LISPCMD("redis-del", redisdelcmd, doc_redis_del),
     LISPCMD("redis-flush", redisflushcmd, doc_redis_flush),
     LISPCMD("redis-port", redisportcmd, doc_redis_port),
     LISPCMD("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
@@ -1279,10 +1288,14 @@ inline exp_t *make_quote(exp_t *node) {
    nref=1; unrefexp's free-path knows how to drop them (see line ~365). */
 
 exp_t *make_blob(const char *bytes, size_t len) {
-  alc_blob_t *b = (alc_blob_t *)memalloc(1, sizeof(alc_blob_t) + len);
+  alc_blob_t *b = (alc_blob_t *)malloc(sizeof(alc_blob_t) + len);
+  if (!b)
+    graceful_shutdown("Fatal error: Out of memory");
   b->len = len;
   if (len && bytes)
     memcpy(b->bytes, bytes, len);
+  else if (len)
+    memset(b->bytes, 0, len);
   MAKE_TYPED(cur, EXP_BLOB, b);
   return cur;
 }
@@ -6902,6 +6915,125 @@ static void pp_form(exp_t *e, int indent) {
    the name; for anonymous lambdas it's `fn` or `mac`.  Closures get
    a "; closure over <env>" comment so the user knows the body's
    free vars resolve against a captured environment. */
+#ifdef ALCOVE_ALS
+/* ---- alcove-script source rendering ------------------------------
+   Render a lambda/macro as alcove script: drop outer parens at
+   statement position, open `:`-blocks for body-bearing special forms,
+   ladder trailing list/cons builders, shorten (quote x) to 'x. */
+static int als_len(exp_t *x) {
+  int n = 0;
+  for (exp_t *p = x; p && ispair(p) && istrue(p); p = p->next)
+    n++;
+  return n;
+}
+static int als_harity(const char *s) {
+  if (!s)
+    return 0;
+  if (!strcmp(s, "def") || !strcmp(s, "defmacro") || !strcmp(s, "mac") ||
+      !strcmp(s, "let"))
+    return 3;
+  if (!strcmp(s, "for"))
+    return 4;
+  if (!strcmp(s, "fn") || !strcmp(s, "with") || !strcmp(s, "each") ||
+      !strcmp(s, "if") || !strcmp(s, "when") || !strcmp(s, "unless") ||
+      !strcmp(s, "while") || !strcmp(s, "case"))
+    return 2;
+  if (!strcmp(s, "do"))
+    return 1;
+  return 0;
+}
+static int als_is_builder(const char *s) {
+  return s && (!strcmp(s, "list") || !strcmp(s, "cons") ||
+               !strcmp(s, "append") || !strcmp(s, "quasiquote"));
+}
+/* a list whose head is list/cons/append/quasiquote */
+static int als_builder_node(exp_t *e) {
+  return e && ispair(e) && istrue(e) && issymbol(e->content) &&
+         als_is_builder((char *)e->content->ptr);
+}
+static void als_expr(exp_t *x);
+static int als_is_quote(exp_t *x) {
+  return x && ispair(x) && istrue(x) && als_len(x) == 2 &&
+         issymbol(x->content) && !strcmp((char *)x->content->ptr, "quote");
+}
+static void als_expr(exp_t *x) { /* argument position: keep parens */
+  if (!x || !ispair(x) || !istrue(x)) {
+    print_node(x);
+    return;
+  }
+  if (als_is_quote(x)) {
+    putchar('\'');
+    als_expr(x->next->content);
+    return;
+  }
+  putchar('(');
+  int first = 1;
+  for (exp_t *p = x; p && ispair(p) && istrue(p); p = p->next) {
+    if (!first)
+      putchar(' ');
+    als_expr(p->content);
+    first = 0;
+  }
+  putchar(')');
+}
+static void als_stmt(exp_t *x, int ind) { /* statement position */
+  if (!x || !ispair(x) || !istrue(x)) {
+    print_node(x);
+    return;
+  }
+  int len = als_len(x);
+  exp_t *head = x->content;
+  const char *hs = issymbol(head) ? (const char *)head->ptr : NULL;
+  if (als_is_quote(x)) {
+    putchar('\'');
+    als_expr(x->next->content);
+    return;
+  }
+  if (len == 1 && hs) {
+    printf("%s()", hs);
+    return;
+  }
+  int ha = als_harity(hs), k = 0;
+  if (ha && len > ha) {
+    k = ha;
+  } else if (als_is_builder(hs)) {
+    /* ladder the maximal trailing run of nested builder calls */
+    int last_non = 0, i = 0;
+    for (exp_t *p = x; p && ispair(p) && istrue(p); p = p->next, i++)
+      if (!als_builder_node(p->content))
+        last_non = i;
+    if (last_non + 1 < len)
+      k = last_non + 1;
+  }
+  if (k > 0) { /* header line + indented child statements */
+    int i = 0;
+    for (exp_t *p = x; p && ispair(p) && istrue(p) && i < k;
+         p = p->next, i++) {
+      if (i)
+        putchar(' ');
+      als_expr(p->content);
+    }
+    putchar(':');
+    i = 0;
+    for (exp_t *p = x; p && ispair(p) && istrue(p); p = p->next, i++) {
+      if (i < k)
+        continue;
+      putchar('\n');
+      pp_indent(ind + 2);
+      als_stmt(p->content, ind + 2);
+    }
+    return;
+  }
+  int first = 1; /* plain statement: unwrapped head + operands */
+  for (exp_t *p = x; p && ispair(p) && istrue(p); p = p->next) {
+    if (!first)
+      putchar(' ');
+    als_expr(p->content);
+    first = 0;
+  }
+}
+#endif /* ALCOVE_ALS */
+
 const char doc_source[] = "(source fn) — print the original (params) + body "
                           "for a user-defined function.";
 exp_t *sourcecmd(exp_t *e, env_t *env) {
@@ -6922,6 +7054,41 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
      real closure, just the default scope. */
   env_t *cap = (env_t *)(arg->next ? arg->next->meta : NULL);
   int captured = (cap && cap != g_global_env) ? 1 : 0;
+#ifdef ALCOVE_ALS
+  /* alcove-script rendering: `def NAME (params):` then the body as
+     indented statements (no outer parens, `:`-blocks, 'quote). */
+  {
+    const char *kw = arg->meta ? (is_macro ? "defmacro" : "def")
+                               : (is_macro ? "mac" : "fn");
+    printf("\x1B[1;35m%s\x1B[22;39m ", kw);
+    if (arg->meta)
+      printf("\x1B[36m%s\x1B[39m ", (char *)arg->meta);
+    exp_t *params = lambda_params(arg);
+    if (params && ispair(params) && istrue(params))
+      als_expr(params);
+    else
+      printf("()"); /* no-arg list, not the symbol nil */
+    printf(":");
+    /* defmacrocmd stores the macro's single body form directly at
+       arg->next->content; defcmd/fncmd store a list-of-forms there. */
+    exp_t *bd = arg->next ? arg->next->content : NULL;
+    if (is_macro) {
+      printf("\n  ");
+      als_stmt(bd, 2);
+    } else {
+      for (exp_t *b = bd; b; b = b->next) {
+        printf("\n  ");
+        als_stmt(b->content, 2);
+      }
+    }
+    if (captured)
+      printf("  \x1B[90m; closure over env %p\x1B[39m", (void *)cap);
+    printf("\n");
+    unrefexp(arg);
+    unrefexp(e);
+    return NULL;
+  }
+#endif
   /* Print the header inline (def NAME PARAMS or fn PARAMS), then
      pretty-print each body form on its own indented line. */
   if (arg->meta) {
@@ -15370,24 +15537,113 @@ static void alc_print_prompt_stripped(const char *p, FILE *out) {
     if (*p != '\001' && *p != '\002')
       fputc(*p, out);
 }
+
+/* Visible (on-screen) width of a prompt: skip the \001..\002 spans and
+   any CSI escape sequences inside them — those render zero-width. */
+static int alc_prompt_vwidth(const char *p) {
+  int w = 0;
+  for (size_t i = 0; p && p[i];) {
+    if (p[i] == '\001') {
+      while (p[i] && p[i] != '\002')
+        i++;
+      if (p[i])
+        i++;
+      continue;
+    }
+    if (p[i] == '\002') {
+      i++;
+      continue;
+    }
+    if (p[i] == '\x1B') {
+      i++;
+      if (p[i] == '[') {
+        i++;
+        while (p[i] && !(p[i] >= '@' && p[i] <= '~'))
+          i++;
+        if (p[i])
+          i++;
+      }
+      continue;
+    }
+    w++;
+    i++;
+  }
+  return w;
+}
+
+/* Cursor's row offset within the current readline render. Reset to 0
+   before every readline() call so the first paint starts clean. */
+static int g_rd_crow = 0;
+
+/* Multi-line-aware colored redisplay. A recalled history entry (or any
+   accumulated form) may contain '\n' and span several screen rows;
+   instead of the old single-line "\r\x1B[K" (which reprinted row 0 on
+   every keystroke — see the history-recall cascade bug) we walk up to
+   the render's first row, clear downward, repaint prompt + colored
+   buffer, then place the cursor at rl_point's (row,col). Self-contained
+   (never mixes with readline's own redisplay), so no screen desync. */
 static void alcove_colored_redisplay(void) {
-  if (rl_end > 256) {
+  if (rl_end > 256) { /* pathological line: let readline cope */
     rl_redisplay();
     return;
   }
-  fputs("\r\x1B[K", rl_outstream);
-  alc_print_prompt_stripped(rl_display_prompt ? rl_display_prompt : rl_prompt,
-                            rl_outstream);
-  alc_print_colored(rl_line_buffer, rl_end, rl_outstream);
-  int back = rl_end - rl_point;
-  if (back > 0)
-    fprintf(rl_outstream, "\x1B[%dD", back);
-  fflush(rl_outstream);
+  FILE *o = rl_outstream;
+  const char *pr = rl_display_prompt ? rl_display_prompt : rl_prompt;
+  fputc('\r', o);
+  if (g_rd_crow > 0)
+    fprintf(o, "\x1B[%dA", g_rd_crow); /* up to row 0 of our render */
+  fputs("\x1B[J", o);                  /* clear from here to end of screen */
+  /* Row 0 gets the real prompt; a multi-line buffer (recalled history
+     entry) gets the "    ... " continuation prompt on each later row so
+     it looks the same as it did when typed. The prompt is display-only
+     — it is never part of rl_line_buffer / the evaluated text. */
+  static const char *CONT = "    ... ";
+  const int CONT_W = 8;
+  alc_print_prompt_stripped(pr, o);
+  for (int start = 0, i = 0; i <= rl_end; i++) {
+    if (i == rl_end || rl_line_buffer[i] == '\n') {
+      alc_print_colored(rl_line_buffer + start, i - start, o);
+      if (i < rl_end) {
+        fputc('\n', o);
+        fputs(CONT, o);
+        start = i + 1;
+      }
+    }
+  }
+
+  int pw = alc_prompt_vwidth(pr);
+  int prow = 0, pcol = pw, erow = 0;
+  for (int i = 0; i < rl_point; i++) {
+    if (rl_line_buffer[i] == '\n') {
+      prow++;
+      pcol = CONT_W; /* next row starts past the continuation prompt */
+    } else
+      pcol++;
+  }
+  for (int i = 0; i < rl_end; i++)
+    if (rl_line_buffer[i] == '\n')
+      erow++;
+  /* cursor is at (erow, end). Walk it back to (prow, pcol). */
+  if (erow > prow)
+    fprintf(o, "\x1B[%dA", erow - prow);
+  fputc('\r', o);
+  if (pcol > 0)
+    fprintf(o, "\x1B[%dC", pcol);
+  g_rd_crow = prow;
+  fflush(o);
+}
+
+/* Every prompt starts a fresh render, so the cursor-row tracker must
+   reset before each readline(). */
+static char *alc_readline(const char *prompt) {
+  g_rd_crow = 0;
+  return readline(prompt);
 }
 
 /* Read one complete top-level form from the terminal. Continues
    prompting (with a continuation prompt) until paren balance hits 0.
    Returned string is malloc'd. NULL on EOF. */
+#ifndef ALCOVE_ALS /* superseded by als_rl_read_form in the alcove-script build */
 static char *rl_read_form(int idx) {
   char prompt[64];
   /* Wrap escape codes with \001/\002 (RL_PROMPT_START_IGNORE /
@@ -15398,7 +15654,7 @@ static char *rl_read_form(int idx) {
            "\001\x1B[34m\002In "
            "[\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ",
            idx);
-  char *line = readline(prompt);
+  char *line = alc_readline(prompt);
   /* The custom redisplay (alcove_colored_redisplay) leaves the cursor
      inside the input line — readline's default redisplay would emit a
      trailing \r\n itself, but our hook doesn't, so the eval result
@@ -15412,7 +15668,7 @@ static char *rl_read_form(int idx) {
   memcpy(acc, line, len + 1);
   free(line);
   while (rl_paren_depth(acc) > 0) {
-    char *more = readline("    ... ");
+    char *more = alc_readline("    ... ");
     putchar('\n'); /* same fix for continuation lines */
     if (!more)
       break;
@@ -15429,6 +15685,153 @@ static char *rl_read_form(int idx) {
     add_history(acc);
   return acc;
 }
+#endif /* !ALCOVE_ALS */
+
+#ifdef ALCOVE_ALS
+/* True if `line` (after dropping a `#` comment) ends in a block-opening
+   colon. Used to decide whether the REPL needs continuation lines. */
+static int als_line_opens_block(const char *line) {
+  char *nc = als_strip_comment(line);
+  size_t n = strlen(nc);
+  while (n > 0 && (nc[n - 1] == ' ' || nc[n - 1] == '\t' ||
+                   nc[n - 1] == '\r'))
+    nc[--n] = 0;
+  int r = (n > 0 && nc[n - 1] == ':');
+  free(nc);
+  return r;
+}
+
+/* Auto-indent: how many leading spaces the *next* continuation line
+   should start with, given everything entered so far. It is the indent
+   of the last non-blank line, plus one level (2) if that line opens a
+   block. So `def f (x):<enter>` lands you indented under the def. */
+static int als_next_indent(const char *acc) {
+  const char *line_start = acc, *last = NULL;
+  for (const char *p = acc;; p++) {
+    if (*p == '\n' || *p == 0) {
+      int blank = 1;
+      for (const char *q = line_start; q < p; q++)
+        if (*q != ' ' && *q != '\t') {
+          blank = 0;
+          break;
+        }
+      if (!blank)
+        last = line_start;
+      if (*p == 0)
+        break;
+      line_start = p + 1;
+    }
+  }
+  if (!last)
+    return 0;
+  const char *e = last;
+  while (*e && *e != '\n')
+    e++;
+  int indent = 0;
+  while (last[indent] == ' ' || last[indent] == '\t')
+    indent++;
+  size_t llen = (size_t)(e - last);
+  char *buf = (char *)malloc(llen + 1);
+  memcpy(buf, last, llen);
+  buf[llen] = 0;
+  int ob = als_line_opens_block(buf);
+  free(buf);
+  return indent + (ob ? 2 : 0);
+}
+
+/* readline startup hook: seeds the line buffer with the pending
+   auto-indent. Using rl_startup_hook (not rl_pre_input_hook) means the
+   text is inserted *before* the first prompt paint, so the indent +
+   cursor show immediately with no manual rl_redisplay() (which would
+   double the prompt under our custom redisplay function). */
+static int als_pending_indent = 0;
+static int als_preinput(void) {
+  if (als_pending_indent > 0) {
+    char sp[128];
+    int n = als_pending_indent < (int)sizeof sp - 1 ? als_pending_indent
+                                                    : (int)sizeof sp - 1;
+    memset(sp, ' ', (size_t)n);
+    sp[n] = 0;
+    rl_insert_text(sp);
+  }
+  return 0;
+}
+
+/* alcove-script-aware form reader for the interactive prompt. A one-line
+   form (balanced parens, no trailing `:`) submits on Enter. Anything
+   that opens a block or has unbalanced parens enters continuation mode
+   ("    ... " prompt, auto-indented) and submits on a whitespace-only
+   line once parens balance. Returns the raw text (malloc'd); NULL EOF. */
+static char *als_rl_read_form(int idx) {
+  char prompt[64];
+  snprintf(prompt, sizeof prompt,
+           "\001\x1B[34m\002In "
+           "[\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ",
+           idx);
+  char *line = alc_readline(prompt);
+  putchar('\n');
+  if (!line)
+    return NULL;
+  size_t len = strlen(line);
+  size_t cap = len + 256;
+  char *acc = malloc(cap);
+  memcpy(acc, line, len + 1);
+  free(line);
+  /* A recalled (or pasted) history entry arrives from the first
+     readline() as one buffer that already contains '\n'. Treat that as
+     an open block too, so the user lands back in continuation mode and
+     can append lines / submit with a blank line — same as fresh input.
+     Without this, recalling a multi-line form and hitting Enter would
+     submit immediately instead of letting it be extended. */
+  int multiline = (rl_paren_depth(acc) > 0) || als_line_opens_block(acc) ||
+                   memchr(acc, '\n', len) != NULL;
+  if (multiline) {
+    for (;;) {
+      als_pending_indent = als_next_indent(acc);
+      rl_startup_hook = als_preinput;
+      char *more = alc_readline("    ... ");
+      rl_startup_hook = NULL;
+      putchar('\n');
+      if (!more)
+        break; /* Ctrl-D ends the block early */
+      int blank = 1;
+      for (char *q = more; *q; q++)
+        if (*q != ' ' && *q != '\t') {
+          blank = 0;
+          break;
+        }
+      if (blank && rl_paren_depth(acc) <= 0) {
+        free(more); /* whitespace-only line + balanced parens -> submit */
+        break;
+      }
+      size_t need = strlen(acc) + strlen(more) + 2;
+      if (need > cap) {
+        cap = need * 2;
+        acc = realloc(acc, cap);
+      }
+      strcat(acc, "\n");
+      strcat(acc, more);
+      free(more);
+    }
+  }
+  if (acc[0])
+    add_history(acc);
+  return acc;
+}
+
+/* alcove script is whitespace-significant, so TAB at the start of a line
+   (point is at column 0 or only whitespace precedes it) inserts one
+   indent level instead of triggering completion. With real tokens to
+   the left it still completes, so `(fi<TAB>` etc. keep working. */
+#define ALS_INDENT "  " /* one indent level = 2 spaces */
+static int als_smart_tab(int count, int key) {
+  for (int i = 0; i < rl_point; i++)
+    if (rl_line_buffer[i] != ' ' && rl_line_buffer[i] != '\t')
+      return rl_complete(count, key); /* a token precedes -> complete */
+  rl_insert_text(ALS_INDENT);
+  return 0;
+}
+#endif /* ALCOVE_ALS */
 #endif /* ALCOVE_READLINE */
 
 /* Help / discovery — both implemented at file scope so they can scan
@@ -16474,6 +16877,28 @@ int main(int argc, char *argv[]) {
   } else
     stream = stdin;
 
+#ifdef ALCOVE_ALS
+  /* Non-interactive input (file arg, piped stdin, -e) is alcove script:
+     slurp it, transpile to s-expressions, and hand reader() a memstream
+     of the result. Interactive tty input is handled block-wise in the
+     readline path below, so skip the slurp there (it would block). */
+  if (!(stream == stdin && isatty(fileno(stdin)))) {
+    als_buf slurp;
+    als_buf_init(&slurp);
+    char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof chunk, stream)) > 0)
+      als_buf_putn(&slurp, chunk, got);
+    if (stream != stdin)
+      fclose(stream);
+    char *sx = als_to_sexpr(slurp.p);
+    free(slurp.p);
+    stream = fmemopen(sx, strlen(sx), "r");
+    /* sx intentionally outlives this scope: it backs `stream` for the
+       remainder of the run and is reclaimed by the OS at exit. */
+  }
+#endif
+
 #ifdef ALCOVE_READLINE
   /* Enable line editing + tab completion + history when stdin is a tty.
      Non-interactive (pipe / file redirect / scripted) stays on the plain
@@ -16482,6 +16907,11 @@ int main(int argc, char *argv[]) {
   if (rl_active) {
     g_global_env = global;
     rl_attempted_completion_function = alcove_rl_completer;
+#ifdef ALCOVE_ALS
+    /* Whitespace-significant surface syntax: TAB indents on a fresh /
+       indentation-only line, completes otherwise. */
+    rl_bind_key('\t', als_smart_tab);
+#endif
     /* Use space as the only word separator so e.g. (fib|TAB completes
        the symbol "fib" with "(" left of cursor counted as boundary. */
     rl_basic_word_break_characters = " \t\n()'`,;\"";
@@ -16506,7 +16936,16 @@ int main(int argc, char *argv[]) {
        the file path against the memstream. */
     while (1) {
       idx++;
+#ifdef ALCOVE_ALS
+      char *line = als_rl_read_form(idx);
+      if (line && line[0]) {
+        char *sx = als_to_sexpr(line);
+        free(line);
+        line = sx; /* feed transpiled s-expr to the reader below */
+      }
+#else
       char *line = rl_read_form(idx);
+#endif
       if (!line) {
         printf("\n");
         goto endcleanly;
@@ -16647,6 +17086,11 @@ endcleanly:
   if (nil_singleton) {
     nil_singleton = NULL;
   }
+#ifdef ALCOVE_ALS
+  /* main was renamed via #define, so the compiler no longer grants the
+     implicit `return 0` it special-cases for `main`. */
+  return 0;
+#endif
 }
 
 #ifdef ALCOVE_WEB

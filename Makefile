@@ -145,6 +145,15 @@ ifeq ($(JIT_OK),)
 endif
 	$(CC) -Wall -W  -O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
+
+# alcove script build: the full JIT runtime + the .als front end, emitted
+# as ./alcoves (./alcove is untouched). alcoves.c #includes alcove.c.
+als:
+ifeq ($(JIT_OK),)
+	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
+endif
+	$(CC) -Wall -W  -O3 $(JIT_FLAGS) -o alcoves  alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(print_dep_hints)
 # -Os removed
 
 # Print just the dependency status without rebuilding. Handy when a user
