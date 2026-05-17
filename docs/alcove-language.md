@@ -448,7 +448,12 @@ Two features unique to alcove that are easy to overlook:
    across restarts. Skip with `--noload`.
 2. RESP2 server mode (`-r 6379`) — `redis-cli` clients can talk to
    the live alcove process. `(redis-defcmd "MYCMD" (fn (args) …))`
-   exposes a Lisp function as a Redis command. The full command set
+   exposes a Lisp function as a Redis command; `args` is a list of
+   binary-safe blobs. `(redis-set k v)` stores existing alcove values
+   into the RESP keyspace: strings/blobs/numbers/chars become Redis
+   strings, deques become Redis lists, and hash-maps become Redis
+   hashes. Vectors stay `EXP_VECTOR` and can be read back with
+   `(redis-val k)` for tensor/vector builtins. The full command set
    (SET / GET / INCR / LPUSH / HSET / LRANGE / TTL sweep, etc.) runs
    at 80–99 % of redis-server's throughput with ~5× lower memory.
 

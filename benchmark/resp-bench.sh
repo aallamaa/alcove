@@ -53,6 +53,22 @@ wait_port() {
   return 1
 }
 
+wait_alcove_reactors() {
+  local port="$1" threads="$2" log="$3"
+  for _ in $(seq 1 100); do
+    local listeners
+    listeners=$(grep -c "listening on" "$log" 2>/dev/null || true)
+    if [ "$listeners" -ge "$threads" ] &&
+       redis-cli -p "$port" PING >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "error: alcove $port didn't start $threads reactors" >&2
+  cat "$log" >&2
+  return 1
+}
+
 extract() {
   echo "$1" | sed -nE "s/^$2: ([0-9.]+) requests per second.*p50=([0-9.]+) msec.*/\1 \2/p"
 }
@@ -91,7 +107,7 @@ start_alcove() {
   LOGS+=("$log")
   "$ALCOVE" -r "$port" --noload --threads "$threads" >"$log" 2>&1 &
   PIDS+=($!)
-  wait_port "$port"
+  wait_alcove_reactors "$port" "$threads" "$log"
 }
 
 port=17160

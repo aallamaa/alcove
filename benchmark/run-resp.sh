@@ -36,7 +36,7 @@ LOG="$(mktemp -t alcove-resp.XXXXXX.log)"
 SRV=$!
 trap 'kill -INT $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -f "$LOG"' EXIT
 
-if ! wait_listening "$LOG"; then
+if ! wait_listening "$LOG" "$THREADS"; then
   echo "alcove failed to start; log:"; cat "$LOG"; exit 1
 fi
 

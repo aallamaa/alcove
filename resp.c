@@ -4,20 +4,22 @@
    above main()). Lets us call file-static helpers (gettimeusec,
    bernstein_hash, ...) without exporting them.
 
-   Threading model: single-threaded select() loop. `./alcove -r` does
-   NOT start the REPL; the process is the server. The interpreter's
-   global env is untouched — RESP keys live in a dedicated table.
+   Threading model: `./alcove -r` runs one or more event reactors
+   (epoll on Linux, kqueue on macOS/BSD, select fallback elsewhere).
+   The REPL is not started in that mode; `./alcove -R` runs a combined
+   single-reactor REPL + RESP server for inspection/custom commands.
 
    Build requirement: atomic refcounts (the default `make` / `make jit`
    path). Refuses to start if alcove was built with
    -DALCOVE_SINGLE_THREADED=1.
 
-   Storage is a private hash table (NOT alcove's dict_t) so values can
-   be binary-safe (arbitrary bytes, including embedded NULs). The
-   table maps `char* key` → `resp_val_t*` which is a tagged union:
-   string, list (doubly-linked), or hash (small chained table). Each
-   top-level entry also carries an absolute microsecond expiry — 0
-   means "never". Expiry is checked lazily on every key touch.
+   Storage uses the existing exp_t value model:
+     Redis string -> EXP_BLOB
+     Redis list   -> EXP_LIST of EXP_BLOB elements
+     Redis hash   -> EXP_DICT with EXP_BLOB field values
+   The top-level keyspace is a lock-free binary-safe map because the
+   normal Lisp dict_t uses strlen() keys and is not safe for concurrent
+   RESP reactors. Values themselves are ordinary exp_t objects.
 
    Commands implemented:
      server : PING ECHO QUIT COMMAND SELECT DBSIZE FLUSHDB FLUSHALL
@@ -35,8 +37,17 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <signal.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#define RESP_HAVE_EPOLL 1
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+    defined(__NetBSD__) || defined(__DragonFly__)
+#include <sys/event.h>
+#define RESP_HAVE_KQUEUE 1
+#endif
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -94,6 +105,7 @@ typedef struct resp_client {
   char **argv_pool;
   long *argl_pool;
   int argv_cap;
+  int poll_mask;
   struct resp_client *next;
 } resp_client_t;
 
@@ -111,8 +123,8 @@ static lfkv_t *g_resp_kv = NULL;
    load at <60% fill factor. Tune via RESP_KV_SLOTS env var if needed. */
 #define RESP_KV_DEFAULT_SLOTS (1u << 20)
 #define resp_kv (current_shard->kv)
-#define resp_last_sweep_us (current_shard->db_last_sweep_us)
 static volatile sig_atomic_t resp_stop = 0;
+static _Atomic int64_t resp_last_sweep_us = 0;
 /* Set by resp_serve / resp_repl_serve once bind succeeds; read by the
    (redis-port) builtin so REPL code can discover the listening port
    without out-of-band coordination. 0 means "no server running". */
@@ -201,10 +213,22 @@ lfkv_t *resp_kv_init(void) {
   return fresh;
 }
 
+static inline lfkv_t *resp_kv_current(void) {
+  lfkv_t *kv = resp_kv;
+  if (!kv) {
+    kv = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                              memory_order_acquire);
+    if (kv)
+      current_shard->kv = kv;
+  }
+  return kv;
+}
+
 /* Lookup: returns refexp-bumped value or NULL. Caller MUST unrefexp.
    Lazy expiry handled inside lfkv_get. */
 static inline exp_t *resp_kv_lookup(const char *key, size_t klen) {
-  return resp_kv ? lfkv_get(resp_kv, key, klen) : NULL;
+  lfkv_t *kv = resp_kv_current();
+  return kv ? lfkv_get(kv, key, klen) : NULL;
 }
 
 /* Borrowed-pointer lookup — no refcount bump. Pointer valid only
@@ -213,7 +237,8 @@ static inline exp_t *resp_kv_lookup(const char *key, size_t klen) {
    and return; never on paths that escape to the Lisp evaluator or
    schedule async work. */
 static inline exp_t *resp_kv_peek(const char *key, size_t klen) {
-  return resp_kv ? lfkv_peek(resp_kv, key, klen) : NULL;
+  lfkv_t *kv = resp_kv_current();
+  return kv ? lfkv_peek(kv, key, klen) : NULL;
 }
 
 /* SET-style write: consumes the caller's `val` ref, clears prior TTL. */
@@ -226,35 +251,41 @@ static inline void resp_kv_set(const char *key, size_t klen, exp_t *val) {
 }
 
 static inline int resp_kv_del(const char *key, size_t klen) {
-  return resp_kv ? lfkv_del(resp_kv, key, klen) : 0;
+  lfkv_t *kv = resp_kv_current();
+  return kv ? lfkv_del(kv, key, klen) : 0;
 }
 
 /* FLUSHDB: tombstone every live slot, retire all values. Slot records
    stay allocated until process exit (keys recycle on re-insert). */
 static inline void resp_kv_clear(void) {
-  if (resp_kv) lfkv_clear(resp_kv);
+  lfkv_t *kv = resp_kv_current();
+  if (kv) lfkv_clear(kv);
 }
 
 /* TTL helpers — preserve API names of the old keyval_t-based wrappers
    so handlers stay close to their original shape. */
 static inline int64_t resp_kv_get_expiry(const char *key, size_t klen) {
-  if (!resp_kv) return -1;
-  return lfkv_get_expiry(resp_kv, key, klen);
+  lfkv_t *kv = resp_kv_current();
+  if (!kv) return -1;
+  return lfkv_get_expiry(kv, key, klen);
 }
 static inline int resp_kv_set_expiry(const char *key, size_t klen,
                                      int64_t expire_at_us) {
-  if (!resp_kv) return 0;
-  return lfkv_set_expiry(resp_kv, key, klen, expire_at_us);
+  lfkv_t *kv = resp_kv_current();
+  if (!kv) return 0;
+  return lfkv_set_expiry(kv, key, klen, expire_at_us);
 }
 
 static inline size_t resp_kv_count(void) {
-  return resp_kv ? lfkv_count(resp_kv) : 0;
+  lfkv_t *kv = resp_kv_current();
+  return kv ? lfkv_count(kv) : 0;
 }
 
 /* Evict every expired entry in one pass. KEYS * + count-exact paths
    call this so the array header matches the emitted count. */
 static inline void resp_kv_evict_expired(void) {
-  if (resp_kv) (void)lfkv_evict_expired(resp_kv);
+  lfkv_t *kv = resp_kv_current();
+  if (kv) (void)lfkv_evict_expired(kv);
 }
 
 /* Throttled background sweep — called from the reactor's top-of-loop
@@ -263,10 +294,16 @@ static inline void resp_kv_evict_expired(void) {
    server still ticks the sweep at the same cadence. */
 #define RESP_SWEEP_INTERVAL_US 1000000
 static void resp_kv_maybe_sweep(void) {
-  if (!resp_kv) return;
+  if (!resp_kv_current()) return;
+  if (resp_kv_count() == 0) return;
   int64_t now = resp_now_us();
-  if (now - resp_last_sweep_us < RESP_SWEEP_INTERVAL_US) return;
-  resp_last_sweep_us = now;
+  int64_t last = atomic_load_explicit(&resp_last_sweep_us,
+                                      memory_order_relaxed);
+  if (now - last < RESP_SWEEP_INTERVAL_US) return;
+  if (!atomic_compare_exchange_strong_explicit(
+          &resp_last_sweep_us, &last, now,
+          memory_order_relaxed, memory_order_relaxed))
+    return;
   resp_kv_evict_expired();
 }
 
@@ -687,10 +724,11 @@ static void cmd_keys_star(resp_client_t *c, char **argv, long *argl,
     resp_write_err(c, "ERR alcove RESP server only supports KEYS *");
     return;
   }
-  if (!resp_kv) { resp_write_array_hdr(c, 0); return; }
+  lfkv_t *kv = resp_kv_current();
+  if (!kv) { resp_write_array_hdr(c, 0); return; }
   resp_kv_evict_expired();
   resp_keys_snap_t s = {0};
-  lfkv_foreach(resp_kv, resp_keys_snap_cb, &s);
+  lfkv_foreach(kv, resp_keys_snap_cb, &s);
   resp_write_array_hdr(c, (long long)s.n);
   for (size_t i = 0; i < s.n; i++)
     resp_write_bulk(c, s.bytes + s.off[i], s.len[i]);
@@ -702,6 +740,7 @@ static const char *resp_type_name(exp_t *v) {
   if (isblob(v)) return "string";
   if (islist(v)) return "list";
   if (isdict(v)) return "hash";
+  if (isvector(v)) return "vector";
   return "none";
 }
 
@@ -971,13 +1010,14 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
-  if (!nx && !xx && expire_us == 0 && resp_kv) {
+  lfkv_t *kv = resp_kv_current();
+  if (!nx && !xx && expire_us == 0 && kv) {
     exp_t *cur = resp_kv_peek(k, klen);
     if (cur && isblob(cur)) {
       alc_blob_t *b = (alc_blob_t *)cur->ptr;
       if (b->len == (size_t)argl[2] &&
           (b->len == 0 || memcmp(b->bytes, argv[2], b->len) == 0) &&
-          lfkv_touch_if_value(resp_kv, k, klen, cur, 0)) {
+          lfkv_touch_if_value(kv, k, klen, cur, 0)) {
         resp_write_simple(c, "OK");
         return;
       }
@@ -1694,6 +1734,8 @@ static int resp_set_nonblock(int fd) {
    must only run on the reactor thread that owns that list. */
 static resp_client_t *resp_client_new(int cfd) {
   if (resp_set_nonblock(cfd) < 0) { close(cfd); return NULL; }
+  int yes = 1;
+  (void)setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof yes);
   resp_client_t *cl = calloc(1, sizeof *cl);
   if (!cl) { close(cfd); return NULL; }
   cl->fd = cfd;
@@ -1714,32 +1756,16 @@ static resp_client_t *resp_client_new(int cfd) {
   return cl;
 }
 
-/* Drain pending accepts on a non-blocking listen socket, capped at
-   RESP_ACCEPT_BURST. EAGAIN/EWOULDBLOCK is the normal exit (queue empty,
-   or under SO_REUSEPORT a peer reactor grabbed the connection). EMFILE/
-   ENFILE are real fd-exhaustion problems we want surfaced. */
-static void resp_accept_drain(int srv) {
-  for (int i = 0; i < RESP_ACCEPT_BURST; i++) {
-    int cfd = accept(srv, NULL, NULL);
-    if (cfd < 0) {
-      if (errno == EINTR) continue;
-      if (errno != EAGAIN && errno != EWOULDBLOCK) perror("accept");
-      break;
-    }
-    (void)resp_client_new(cfd);
-  }
-}
-
 /* Per-client IO step: slide-and-grow rbuf, read, dispatch, opportunistic
-   flush, then drain wbuf if select said writeable. Returns 1 if the
+   flush, then drain wbuf if the reactor said writeable. Returns 1 if the
    client should be dropped (EOF, hard error, or buffer ceiling hit).
    Both reactor loops (resp_serve and the combined REPL+RESP loop) call
    this — keeps the read/flush/write logic in one place. Inline so the
    per-iteration call cost stays at zero in the hot loop. */
-static inline int resp_client_handle_io(resp_client_t *cur,
-                                        fd_set *rfds, fd_set *wfds) {
+static inline int resp_client_handle_events(resp_client_t *cur,
+                                            int readable, int writable) {
   int drop = 0;
-  if (FD_ISSET(cur->fd, rfds)) {
+  if (readable) {
     /* Slide before grow: reclaiming a parsed prefix is far cheaper
        than doubling the buffer. */
     if (cur->rlen + 4096 > cur->rcap && cur->rhead > 0) {
@@ -1776,9 +1802,16 @@ static inline int resp_client_handle_io(resp_client_t *cur,
       }
     }
   }
-  if (!drop && FD_ISSET(cur->fd, wfds) && cur->wlen > cur->whead)
+  if (!drop && writable && cur->wlen > cur->whead)
     drop = resp_client_drain_write(cur);
   return drop;
+}
+
+static inline int resp_client_handle_io(resp_client_t *cur,
+                                        fd_set *rfds, fd_set *wfds) {
+  return resp_client_handle_events(cur,
+                                   FD_ISSET(cur->fd, rfds),
+                                   FD_ISSET(cur->fd, wfds));
 }
 
 /* Bind/listen/nonblock on 127.0.0.1:port, returning the listen fd or -1.
@@ -1818,6 +1851,276 @@ static void resp_install_signals(void) {
   signal(SIGPIPE, SIG_IGN);
   signal(SIGINT, resp_sigint);
   signal(SIGTERM, resp_sigint);
+}
+
+/* ---------- scalable RESP reactor backend (-r hot path) ---------- */
+
+#define RESP_POLL_READ  1
+#define RESP_POLL_WRITE 2
+#define RESP_EVENT_BATCH 1024
+
+typedef enum {
+  RESP_BACKEND_SELECT = 0,
+  RESP_BACKEND_EPOLL,
+  RESP_BACKEND_KQUEUE
+} resp_backend_kind_t;
+
+typedef struct {
+  void *ptr;
+  int mask;
+} resp_ready_t;
+
+typedef struct {
+  resp_backend_kind_t kind;
+  int fd;
+  resp_ready_t ready[RESP_EVENT_BATCH];
+#if RESP_HAVE_EPOLL
+  struct epoll_event ep_events[RESP_EVENT_BATCH];
+#endif
+#if RESP_HAVE_KQUEUE
+  struct kevent kq_events[RESP_EVENT_BATCH];
+#endif
+} resp_backend_t;
+
+static char resp_listener_marker;
+static char resp_wake_marker;
+
+static void resp_ready_add(resp_backend_t *b, void *ptr, int mask, int *n) {
+  if (!ptr || !mask) return;
+  for (int i = 0; i < *n; i++) {
+    if (b->ready[i].ptr == ptr) {
+      b->ready[i].mask |= mask;
+      return;
+    }
+  }
+  if (*n < RESP_EVENT_BATCH) {
+    b->ready[*n].ptr = ptr;
+    b->ready[*n].mask = mask;
+    (*n)++;
+  }
+}
+
+static int resp_backend_init(resp_backend_t *b, int srv, int wakefd) {
+  memset(b, 0, sizeof *b);
+  b->kind = RESP_BACKEND_SELECT;
+  b->fd = -1;
+  const char *backend = getenv("RESP_BACKEND");
+  if (backend && strcmp(backend, "select") == 0) {
+    (void)srv;
+    (void)wakefd;
+    return 0;
+  }
+#if RESP_HAVE_EPOLL
+  int ep = epoll_create1(EPOLL_CLOEXEC);
+  if (ep < 0) {
+    perror("epoll_create1");
+    return 0;
+  }
+  b->kind = RESP_BACKEND_EPOLL;
+  b->fd = ep;
+  struct epoll_event ev;
+  memset(&ev, 0, sizeof ev);
+  ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+  ev.data.ptr = &resp_listener_marker;
+  if (epoll_ctl(ep, EPOLL_CTL_ADD, srv, &ev) < 0) {
+    perror("epoll_ctl listen");
+    close(ep);
+    b->kind = RESP_BACKEND_SELECT;
+    b->fd = -1;
+    return 0;
+  }
+  if (wakefd >= 0) {
+    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+    ev.data.ptr = &resp_wake_marker;
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, wakefd, &ev) < 0)
+      perror("epoll_ctl wake");
+  }
+  return 0;
+#elif RESP_HAVE_KQUEUE
+  int kq = kqueue();
+  if (kq < 0) {
+    perror("kqueue");
+    return 0;
+  }
+  b->kind = RESP_BACKEND_KQUEUE;
+  b->fd = kq;
+  struct kevent ch[2];
+  int n = 0;
+  EV_SET(&ch[n++], srv, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0,
+         &resp_listener_marker);
+  if (wakefd >= 0)
+    EV_SET(&ch[n++], wakefd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0,
+           &resp_wake_marker);
+  if (kevent(kq, ch, n, NULL, 0, NULL) < 0) {
+    perror("kevent init");
+    close(kq);
+    b->kind = RESP_BACKEND_SELECT;
+    b->fd = -1;
+  }
+  return 0;
+#else
+  (void)srv;
+  (void)wakefd;
+  return 0;
+#endif
+}
+
+static void resp_backend_close(resp_backend_t *b) {
+  if (b->fd >= 0) close(b->fd);
+  b->fd = -1;
+  b->kind = RESP_BACKEND_SELECT;
+}
+
+static int resp_backend_active(resp_backend_t *b) {
+  return b && b->kind != RESP_BACKEND_SELECT && b->fd >= 0;
+}
+
+static int resp_backend_add_client(resp_backend_t *b, resp_client_t *c) {
+  if (!resp_backend_active(b)) return 0;
+  c->poll_mask = RESP_POLL_READ;
+#if RESP_HAVE_EPOLL
+  if (b->kind == RESP_BACKEND_EPOLL) {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+    ev.data.ptr = c;
+    if (epoll_ctl(b->fd, EPOLL_CTL_ADD, c->fd, &ev) < 0) {
+      perror("epoll_ctl client add");
+      return -1;
+    }
+    return 0;
+  }
+#endif
+#if RESP_HAVE_KQUEUE
+  if (b->kind == RESP_BACKEND_KQUEUE) {
+    struct kevent ch[2];
+    EV_SET(&ch[0], c->fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, c);
+    EV_SET(&ch[1], c->fd, EVFILT_WRITE, EV_ADD | EV_DISABLE, 0, 0, c);
+    if (kevent(b->fd, ch, 2, NULL, 0, NULL) < 0) {
+      perror("kevent client add");
+      return -1;
+    }
+    return 0;
+  }
+#endif
+  return 0;
+}
+
+static void resp_backend_del_client(resp_backend_t *b, resp_client_t *c) {
+  if (!resp_backend_active(b)) return;
+#if RESP_HAVE_EPOLL
+  if (b->kind == RESP_BACKEND_EPOLL) {
+    (void)epoll_ctl(b->fd, EPOLL_CTL_DEL, c->fd, NULL);
+    return;
+  }
+#endif
+#if RESP_HAVE_KQUEUE
+  if (b->kind == RESP_BACKEND_KQUEUE) {
+    struct kevent ch[2];
+    EV_SET(&ch[0], c->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    EV_SET(&ch[1], c->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    (void)kevent(b->fd, ch, 2, NULL, 0, NULL);
+    return;
+  }
+#endif
+}
+
+static void resp_backend_update_client(resp_backend_t *b, resp_client_t *c) {
+  if (!resp_backend_active(b)) return;
+  int want = RESP_POLL_READ |
+             ((c->wlen > c->whead) ? RESP_POLL_WRITE : 0);
+  if (want == c->poll_mask) return;
+  c->poll_mask = want;
+#if RESP_HAVE_EPOLL
+  if (b->kind == RESP_BACKEND_EPOLL) {
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+    if (want & RESP_POLL_WRITE) ev.events |= EPOLLOUT;
+    ev.data.ptr = c;
+    if (epoll_ctl(b->fd, EPOLL_CTL_MOD, c->fd, &ev) < 0)
+      perror("epoll_ctl client mod");
+    return;
+  }
+#endif
+#if RESP_HAVE_KQUEUE
+  if (b->kind == RESP_BACKEND_KQUEUE) {
+    struct kevent ch;
+    EV_SET(&ch, c->fd, EVFILT_WRITE,
+           (want & RESP_POLL_WRITE) ? EV_ENABLE : EV_DISABLE, 0, 0, c);
+    if (kevent(b->fd, &ch, 1, NULL, 0, NULL) < 0)
+      perror("kevent client mod");
+    return;
+  }
+#endif
+}
+
+static int resp_backend_wait(resp_backend_t *b, int timeout_ms) {
+  if (!resp_backend_active(b)) return 0;
+  int nready = 0;
+#if RESP_HAVE_EPOLL
+  if (b->kind == RESP_BACKEND_EPOLL) {
+    int n = epoll_wait(b->fd, b->ep_events, RESP_EVENT_BATCH, timeout_ms);
+    if (n < 0) {
+      if (errno == EINTR) return -2;
+      perror("epoll_wait");
+      return -1;
+    }
+    for (int i = 0; i < n; i++) {
+      uint32_t e = b->ep_events[i].events;
+      int mask = 0;
+      if (e & (EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP))
+        mask |= RESP_POLL_READ;
+      if (e & (EPOLLOUT | EPOLLERR | EPOLLHUP | EPOLLRDHUP))
+        mask |= RESP_POLL_WRITE;
+      resp_ready_add(b, b->ep_events[i].data.ptr, mask, &nready);
+    }
+    return nready;
+  }
+#endif
+#if RESP_HAVE_KQUEUE
+  if (b->kind == RESP_BACKEND_KQUEUE) {
+    struct timespec ts;
+    ts.tv_sec = timeout_ms / 1000;
+    ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+    int n = kevent(b->fd, NULL, 0, b->kq_events, RESP_EVENT_BATCH, &ts);
+    if (n < 0) {
+      if (errno == EINTR) return -2;
+      perror("kevent wait");
+      return -1;
+    }
+    for (int i = 0; i < n; i++) {
+      int mask = 0;
+      if (b->kq_events[i].filter == EVFILT_READ ||
+          (b->kq_events[i].flags & (EV_EOF | EV_ERROR)))
+        mask |= RESP_POLL_READ;
+      if (b->kq_events[i].filter == EVFILT_WRITE ||
+          (b->kq_events[i].flags & (EV_EOF | EV_ERROR)))
+        mask |= RESP_POLL_WRITE;
+      resp_ready_add(b, b->kq_events[i].udata, mask, &nready);
+    }
+    return nready;
+  }
+#endif
+  return 0;
+}
+
+/* Drain pending accepts on a non-blocking listen socket, capped at
+   RESP_ACCEPT_BURST. EAGAIN/EWOULDBLOCK is the normal exit (queue empty,
+   or under SO_REUSEPORT a peer reactor grabbed the connection). EMFILE/
+   ENFILE are real fd-exhaustion problems we want surfaced. */
+static void resp_accept_drain(int srv, resp_backend_t *backend) {
+  for (int i = 0; i < RESP_ACCEPT_BURST; i++) {
+    int cfd = accept(srv, NULL, NULL);
+    if (cfd < 0) {
+      if (errno == EINTR) continue;
+      if (errno != EAGAIN && errno != EWOULDBLOCK) perror("accept");
+      break;
+    }
+    resp_client_t *cl = resp_client_new(cfd);
+    if (cl && resp_backend_add_client(backend, cl) < 0)
+      resp_client_unlink(cl);
+  }
 }
 
 /* Common fdset build: rfds gets srv + extra_rfd (if >= 0) + every
@@ -1899,6 +2202,8 @@ int resp_serve(int port) {
      from another thread. */
   shard_t *sh = current_shard;
   int wakefd = sh->runtime_ready == 1 ? alc_wake_fd(&sh->wake) : -1;
+  resp_backend_t backend;
+  resp_backend_init(&backend, srv, wakefd);
 
   /* Reactor must register with the epoch system so lock-free retire
      lists know about us. epoch_tick at the top of each select() iter
@@ -1910,27 +2215,54 @@ int resp_serve(int port) {
     epoch_tick();
     resp_kv_maybe_sweep();
     resp_bgsave_poll();
-    fd_set rfds, wfds;
-    int maxfd = resp_build_fdset(srv, wakefd, &rfds, &wfds);
-    struct timeval tv = {1, 0};
-    int r = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
-    if (r < 0) {
-      if (errno == EINTR) continue;
-      perror("select");
-      break;
+
+    if (resp_backend_active(&backend)) {
+      int n = resp_backend_wait(&backend, 1000);
+      if (n == -2) continue; /* EINTR */
+      if (n < 0) break;
+      for (int i = 0; i < n; i++) {
+        void *ptr = backend.ready[i].ptr;
+        int mask = backend.ready[i].mask;
+        if (ptr == &resp_listener_marker) {
+          resp_accept_drain(srv, &backend);
+        } else if (ptr == &resp_wake_marker) {
+          alc_wake_drain(&sh->wake);
+        } else {
+          resp_client_t *cl = (resp_client_t *)ptr;
+          if (resp_client_handle_events(cl,
+                                        (mask & RESP_POLL_READ) != 0,
+                                        (mask & RESP_POLL_WRITE) != 0)) {
+            resp_backend_del_client(&backend, cl);
+            resp_client_unlink(cl);
+          } else {
+            resp_backend_update_client(&backend, cl);
+          }
+        }
+      }
+    } else {
+      fd_set rfds, wfds;
+      int maxfd = resp_build_fdset(srv, wakefd, &rfds, &wfds);
+      struct timeval tv = {1, 0};
+      int r = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
+      if (r < 0) {
+        if (errno == EINTR) continue;
+        perror("select");
+        break;
+      }
+
+      /* Drain the wake fd if signalled. TODO(step-2.5): when cross-shard
+         ops add a real inbox producer, also drain sh->inbox here and
+         dispatch each message before resuming client I/O. */
+      if (wakefd >= 0 && FD_ISSET(wakefd, &rfds)) alc_wake_drain(&sh->wake);
+
+      if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv, NULL);
+
+      resp_drive_clients(&rfds, &wfds);
     }
-
-    /* Drain the wake fd if signalled. TODO(step-2.5): when cross-shard
-       ops add a real inbox producer, also drain sh->inbox here and
-       dispatch each message before resuming client I/O. */
-    if (wakefd >= 0 && FD_ISSET(wakefd, &rfds)) alc_wake_drain(&sh->wake);
-
-    if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv);
-
-    resp_drive_clients(&rfds, &wfds);
   }
 
   printf("\nalcove: shutting down RESP server\n");
+  resp_backend_close(&backend);
   resp_reactor_teardown(srv);
   return 0;
 #endif
@@ -2113,7 +2445,7 @@ int resp_repl_serve(int port, env_t *global) {
     }
 
     /* --- listen socket --- */
-    if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv);
+    if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv, NULL);
 
     /* --- per-client read/write --- */
     resp_drive_clients(&rfds, &wfds);
@@ -2129,8 +2461,8 @@ int resp_repl_serve(int port, env_t *global) {
    Redis inspector builtins — read resp_kv from REPL (-R only).
    ============================================================
    These run on whichever reactor evaluates Lisp, but resp_kv is the
-   global lock-free table so it's safe regardless. Outside -R mode,
-   resp_kv is NULL → keys=nil, count=0, get/type=nil/"none". */
+   global lock-free table so it's safe regardless. A read-only reactor
+   lazily mirrors g_resp_kv into its TLS shard pointer on first touch. */
 
 const char doc_redis_count[] = "(redis-count) — number of keys in the running RESP server's db.";
 exp_t *rediscountcmd(exp_t *e, env_t *env) {
@@ -2158,13 +2490,14 @@ const char doc_redis_keys[] = "(redis-keys) — list of all keys (as strings) in
 exp_t *rediskeyscmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
-  if (!resp_kv) return NIL_EXP;
+  lfkv_t *kv = resp_kv_current();
+  if (!kv) return NIL_EXP;
   resp_keys_lisp_ctx_t ctx = {NULL, NULL};
-  lfkv_foreach(resp_kv, resp_keys_lisp_cb, &ctx);
+  lfkv_foreach(kv, resp_keys_lisp_cb, &ctx);
   return ctx.head ? ctx.head : NIL_EXP;
 }
 
-const char doc_redis_type[] = "(redis-type k) — RESP type of key k as a string: \"string\", \"list\", \"hash\", or \"none\".";
+const char doc_redis_type[] = "(redis-type k) — RESP type of key k as a string: \"string\", \"list\", \"hash\", \"vector\", or \"none\".";
 exp_t *redistypecmd(exp_t *e, env_t *env) {
   exp_t *kx = EVAL(cadr(e), env);
   if (iserror(kx)) { unrefexp(e); return kx; }
@@ -2184,7 +2517,7 @@ exp_t *redistypecmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_redis_get[] = "(redis-get k) — value of key k. Strings → blob (binary-safe); lists/hashes → nil (use redis-cli for those types).";
+const char doc_redis_get[] = "(redis-get k) — Redis-string value of key k as a blob. Non-string containers return nil; use redis-val for raw exp_t containers.";
 exp_t *redisgetcmd(exp_t *e, env_t *env) {
   exp_t *kx = EVAL(cadr(e), env);
   if (iserror(kx)) { unrefexp(e); return kx; }
@@ -2207,6 +2540,233 @@ exp_t *redisgetcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+static exp_t *resp_exp_clone_for_lisp(exp_t *v, int depth) {
+  if (!v)
+    return NIL_EXP;
+  if (!is_ptr(v))
+    return refexp(v);
+  if (depth > 64)
+    return NULL;
+  if (v == NIL_EXP || v == TRUE_EXP)
+    return refexp(v);
+  if (isblob(v)) {
+    alc_blob_t *b = (alc_blob_t *)v->ptr;
+    return make_blob(b->bytes, b->len);
+  }
+  if (isstring(v))
+    return make_string((char *)v->ptr, (int)strlen((char *)v->ptr));
+  if (isfloat(v))
+    return make_floatf(v->f);
+  if (isvector(v)) {
+    int64_t n = vec_len(v);
+    exp_t *dst = NULL;
+    unsigned k = vec_kind(v);
+    if (k == VEC_KIND_I64) {
+      dst = make_vector(n, MAKE_FIX(0));
+      if (!dst) return NULL;
+      for (int64_t i = 0; i < n; i++)
+        vec_i64_at(dst, i) = vec_i64_at(v, i);
+      return dst;
+    }
+    if (k == VEC_KIND_F64) {
+      exp_t *zero = make_floatf(0.0);
+      dst = make_vector(n, zero);
+      unrefexp(zero);
+      if (!dst) return NULL;
+      for (int64_t i = 0; i < n; i++)
+        vec_f64_at(dst, i) = vec_f64_at(v, i);
+      return dst;
+    }
+    dst = make_vector(n, NIL_EXP);
+    if (!dst) return NULL;
+    for (int64_t i = 0; i < n; i++) {
+      exp_t *cell = resp_exp_clone_for_lisp(vec_gen_at(v, i), depth + 1);
+      if (!cell) {
+        unrefexp(dst);
+        return NULL;
+      }
+      unrefexp(vec_gen_at(dst, i));
+      vec_gen_at(dst, i) = cell;
+    }
+    return dst;
+  }
+  if (islist(v)) {
+    exp_t *dst_exp = make_list_exp();
+    alc_list_t *src = (alc_list_t *)v->ptr;
+    alc_list_t *dst = (alc_list_t *)dst_exp->ptr;
+    for (alc_listnode_t *n = src ? src->head : NULL; n; n = n->next) {
+      exp_t *cell = resp_exp_clone_for_lisp(n->val, depth + 1);
+      if (!cell) {
+        unrefexp(dst_exp);
+        return NULL;
+      }
+      alc_list_push_right(dst, cell);
+    }
+    return dst_exp;
+  }
+  if (isdict(v)) {
+    exp_t *dst_exp = make_dict_exp();
+    dict_t *src = (dict_t *)v->ptr;
+    dict_t *dst = (dict_t *)dst_exp->ptr;
+    for (int h = 0; h < 2; h++) {
+      if (!src || !src->ht[h].size)
+        continue;
+      for (unsigned long b = 0; b < src->ht[h].size; b++) {
+        for (keyval_t *kv = src->ht[h].table[b]; kv; kv = kv->next) {
+          exp_t *cell = resp_exp_clone_for_lisp(kv->val, depth + 1);
+          if (!cell) {
+            unrefexp(dst_exp);
+            return NULL;
+          }
+          set_get_keyval_dict(dst, (char *)kv->key, cell);
+          unrefexp(cell);
+        }
+      }
+    }
+    return dst_exp;
+  }
+  return refexp(v);
+}
+
+const char doc_redis_val[] =
+    "(redis-val k) — copy the raw exp_t value stored in the RESP db. "
+    "Returns blobs, deques, hash-maps, vectors, or nil when missing.";
+exp_t *redisvalcmd(exp_t *e, env_t *env) {
+  exp_t *kx = EVAL(cadr(e), env);
+  if (iserror(kx)) { unrefexp(e); return kx; }
+  if (!isstring(kx) && !isblob(kx)) {
+    unrefexp(kx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-val: key must be a string or blob");
+  }
+  const char *ks; size_t klen;
+  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
+  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  exp_t *v = resp_kv_lookup(ks, klen);
+  exp_t *ret = v ? resp_exp_clone_for_lisp(v, 0) : NIL_EXP;
+  if (v) unrefexp(v);
+  unrefexp(kx); unrefexp(e);
+  return ret ? ret : error(ERROR_ILLEGAL_VALUE, NULL, env,
+                           "redis-val: value too deeply nested or unsupported");
+}
+
+static exp_t *resp_lisp_to_blob(exp_t *v) {
+  if (isblob(v))
+    return refexp(v);
+  if (isstring(v))
+    return make_blob((const char *)v->ptr, strlen((const char *)v->ptr));
+  if (isnumber(v)) {
+    char buf[32];
+    int n = resp_i64_to_ascii(buf, (int64_t)FIX_VAL(v));
+    return make_blob(buf, (size_t)n);
+  }
+  if (isfloat(v)) {
+    char buf[64];
+    int n = snprintf(buf, sizeof buf, "%.17g", (double)v->f);
+    if (n < 0) return NULL;
+    if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+    return make_blob(buf, (size_t)n);
+  }
+  if (ischar(v)) {
+    char ch = (char)FIX_VAL(v);
+    return make_blob(&ch, 1);
+  }
+  return NULL;
+}
+
+static exp_t *resp_lisp_to_store_value(exp_t *v) {
+  exp_t *bulk = resp_lisp_to_blob(v);
+  if (bulk)
+    return bulk;
+  if (isvector(v))
+    return resp_exp_clone_for_lisp(v, 0);
+  if (islist(v)) {
+    exp_t *dst_exp = make_list_exp();
+    alc_list_t *src = (alc_list_t *)v->ptr;
+    alc_list_t *dst = (alc_list_t *)dst_exp->ptr;
+    for (alc_listnode_t *n = src ? src->head : NULL; n; n = n->next) {
+      exp_t *item = resp_lisp_to_blob(n->val);
+      if (!item) {
+        unrefexp(dst_exp);
+        return NULL;
+      }
+      alc_list_push_right(dst, item);
+    }
+    return dst_exp;
+  }
+  if (isdict(v)) {
+    exp_t *dst_exp = make_dict_exp();
+    dict_t *src = (dict_t *)v->ptr;
+    dict_t *dst = (dict_t *)dst_exp->ptr;
+    for (int h = 0; h < 2; h++) {
+      if (!src || !src->ht[h].size)
+        continue;
+      for (unsigned long b = 0; b < src->ht[h].size; b++) {
+        for (keyval_t *kv = src->ht[h].table[b]; kv; kv = kv->next) {
+          exp_t *item = resp_lisp_to_blob(kv->val);
+          if (!item) {
+            unrefexp(dst_exp);
+            return NULL;
+          }
+          set_get_keyval_dict(dst, (char *)kv->key, item);
+          unrefexp(item);
+        }
+      }
+    }
+    return dst_exp;
+  }
+  return NULL;
+}
+
+const char doc_redis_set[] =
+    "(redis-set k v) — store v in the RESP db using exp_t containers: "
+    "string/blob/number/char become a Redis string; deque becomes a Redis "
+    "list; hash-map becomes a Redis hash; vector stays an Alcove vector. "
+    "Deque/hash members are normalized to blobs.";
+exp_t *redissetcmd(exp_t *e, env_t *env) {
+  exp_t *kx = EVAL(cadr(e), env);
+  if (iserror(kx)) { unrefexp(e); return kx; }
+  if (!isstring(kx) && !isblob(kx)) {
+    unrefexp(kx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-set: key must be a string or blob");
+  }
+  exp_t *vx = EVAL(caddr(e), env);
+  if (iserror(vx)) { unrefexp(kx); unrefexp(e); return vx; }
+  exp_t *stored = resp_lisp_to_store_value(vx);
+  if (!stored) {
+    unrefexp(vx); unrefexp(kx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-set: value must be string/blob/number/char, "
+                 "or a deque/hash-map containing those scalar values");
+  }
+  const char *ks; size_t klen;
+  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
+  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  resp_kv_ensure();
+  resp_kv_set(ks, klen, stored); /* consumes stored */
+  unrefexp(vx); unrefexp(kx); unrefexp(e);
+  return TRUE_EXP;
+}
+
+const char doc_redis_del[] =
+    "(redis-del k) — delete key k from the RESP db. Returns 1 if removed, 0 otherwise.";
+exp_t *redisdelcmd(exp_t *e, env_t *env) {
+  exp_t *kx = EVAL(cadr(e), env);
+  if (iserror(kx)) { unrefexp(e); return kx; }
+  if (!isstring(kx) && !isblob(kx)) {
+    unrefexp(kx); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-del: key must be a string or blob");
+  }
+  const char *ks; size_t klen;
+  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
+  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  int removed = resp_kv_del(ks, klen);
+  unrefexp(kx); unrefexp(e);
+  return MAKE_FIX(removed ? 1 : 0);
+}
+
 const char doc_redis_flush[] = "(redis-flush) — remove every key from the RESP db (FLUSHDB). Returns t.";
 exp_t *redisflushcmd(exp_t *e, env_t *env) {
   (void)env;
@@ -2226,7 +2786,7 @@ exp_t *redisportcmd(exp_t *e, env_t *env) {
    (redis-defcmd "NAME" fn) registers `fn` under uppercase NAME so that
    `redis-cli NAME ...` invokes it. fn is a 1-arity lambda; its single
    parameter receives the RESP bulk arguments after the command name as
-   a Lisp pair-list of strings (nil if none). The lambda's return value
+   a Lisp pair-list of blobs (nil if none). The lambda's return value
    is encoded back to RESP:
      nil       → $-1            (null bulk)
      t         → +OK
@@ -2291,6 +2851,16 @@ static void resp_user_encode(resp_client_t *c, exp_t *v) {
     resp_write_bulk(c, &ch, 1);
     return;
   }
+  if (isvector(v)) {
+    int64_t n = vec_len(v);
+    resp_write_array_hdr(c, n);
+    for (int64_t i = 0; i < n; i++) {
+      exp_t *cell = vec_get_boxed(v, i);
+      resp_user_encode(c, cell);
+      unrefexp(cell);
+    }
+    return;
+  }
   if (ispair(v)) {
     long n = 0;
     exp_t *p;
@@ -2304,6 +2874,22 @@ static void resp_user_encode(resp_client_t *c, exp_t *v) {
     resp_write_array_hdr(c, l->len);
     for (alc_listnode_t *n = l->head; n; n = n->next)
       resp_user_encode(c, n->val);
+    return;
+  }
+  if (isdict(v)) {
+    dict_t *d = (dict_t *)v->ptr;
+    resp_write_array_hdr(c, (long long)dict_count(d) * 2);
+    for (int h = 0; h < 2; h++) {
+      if (!d || !d->ht[h].size)
+        continue;
+      for (unsigned long b = 0; b < d->ht[h].size; b++) {
+        for (keyval_t *kv = d->ht[h].table[b]; kv; kv = kv->next) {
+          const char *k = (const char *)kv->key;
+          resp_write_bulk(c, k, strlen(k));
+          resp_user_encode(c, kv->val);
+        }
+      }
+    }
     return;
   }
   /* Fallback — fold to a printable bulk via the same path print_node uses
@@ -2326,11 +2912,11 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
 
   /* Marshal RESP bulks as a single Lisp pair-list bound to the lambda's
      one parameter. So `(def myfn (args) ...)` sees `args` = the list of
-     strings. Empty arg lists pass NIL_EXP. */
+     binary-safe blobs. Empty arg lists pass NIL_EXP. */
   exp_t *arglist = NIL_EXP, *cur = NULL;
   int rargc = argc - 1;
   for (int i = 0; i < rargc; i++) {
-    exp_t *s = make_string(argv[i + 1], (int)argl[i + 1]);
+    exp_t *s = make_blob(argv[i + 1], (size_t)argl[i + 1]);
     exp_t *node = make_node(s);
     if (cur) cur = cur->next = node;
     else { arglist = cur = node; }
@@ -2344,7 +2930,7 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
   return 1;
 }
 
-const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of strings (nil if none). Returns t.";
+const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of blobs (nil if none). Returns t.";
 exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
   exp_t *nx = EVAL(cadr(e), env);
   if (iserror(nx)) { unrefexp(e); return nx; }

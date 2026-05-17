@@ -52,12 +52,11 @@ extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
                   doc_veccopy[];
 extern const char doc_vector[];
 extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
-/* Redis inspector builtins (only registered, only callable, when the
-   process started under -R; otherwise resp_db is empty and they all
-   return zero/nil/none). Defined below the `#include "resp.c"` line so
-   they can read the resp_db static directly. */
+/* Redis keyspace bridge builtins. Defined below the `#include "resp.c"`
+   line so they can use the RESP exp_t-backed keyspace directly. */
 extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
-                  doc_redis_get[], doc_redis_flush[], doc_redis_port[],
+                  doc_redis_get[], doc_redis_val[], doc_redis_set[],
+                  doc_redis_del[], doc_redis_flush[], doc_redis_port[],
                   doc_redis_defcmd[], doc_redis_undefcmd[], doc_redis_cmds[];
 
 /* Forward decls for cmds defined below the table — every callee must be
@@ -113,6 +112,9 @@ exp_t *rediscountcmd(exp_t *e, env_t *env);
 exp_t *rediskeyscmd(exp_t *e, env_t *env);
 exp_t *redistypecmd(exp_t *e, env_t *env);
 exp_t *redisgetcmd(exp_t *e, env_t *env);
+exp_t *redisvalcmd(exp_t *e, env_t *env);
+exp_t *redissetcmd(exp_t *e, env_t *env);
+exp_t *redisdelcmd(exp_t *e, env_t *env);
 exp_t *redisflushcmd(exp_t *e, env_t *env);
 exp_t *redisportcmd(exp_t *e, env_t *env);
 exp_t *rediscmddefcmd(exp_t *e, env_t *env);

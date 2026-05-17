@@ -1105,6 +1105,46 @@
 (assert "blob?: vec"                (blob? (vec 1 0))          nil)
 (assert "blob?: list"               (blob? (list 1))           nil)
 
+;; RESP keyspace from Lisp — values are stored as existing exp_t containers
+;; normalized to Redis-safe blobs/list/hash payloads.
+(redis-flush)
+(assert "redis-set string -> blob"
+        (do (redis-set "alcove:test:string" "abc")
+            (blob->string (redis-get "alcove:test:string")))
+        "abc")
+(assert "redis-set number -> blob"
+        (do (redis-set "alcove:test:number" 42)
+            (blob->string (redis-get "alcove:test:number")))
+        "42")
+(assert "redis-set deque type"
+        (do (redis-set "alcove:test:list" (deque "a" (string->blob "b") 3))
+            (redis-type "alcove:test:list"))
+        "list")
+(assert "redis-set hash-map type"
+        (do (redis-set "alcove:test:hash" (hash-map "a" "b" "n" 9))
+            (redis-type "alcove:test:hash"))
+        "hash")
+(assert "redis-val hash-map container"
+        (dict? (redis-val "alcove:test:hash"))
+        t)
+(assert "redis-set vector type"
+        (do (redis-set "alcove:test:vec" (vector 1 2 3))
+            (redis-type "alcove:test:vec"))
+        "vector")
+(assert "redis-val vector container"
+        (vec? (redis-val "alcove:test:vec"))
+        t)
+(assert "redis-val vector works with vec-dot"
+        (vec-dot (redis-val "alcove:test:vec") (vector 1 1 1))
+        6.0)
+(assert "redis-del removes key"
+        (redis-del "alcove:test:string")
+        1)
+(assert "redis-del missing"
+        (redis-del "alcove:test:string")
+        0)
+(redis-flush)
+
 ;; dict?
 (assert "dict?: empty hash-map"     (dict? (hash-map))         t)
 (assert "dict?: populated hash-map" (dict? (hash-map "k" 1))   t)

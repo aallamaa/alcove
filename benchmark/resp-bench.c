@@ -6,8 +6,8 @@
  * across `clients` parallel pipelined connections. Reports wall-clock
  * rps for SET and GET separately.
  *
- *   Build:  cc -O3 -pthread -o resp-bench resp-bench.c
- *           (or: make -C benchmark resp-bench)
+ *   Build:  make benchmark/resp-bench-c
+ *           (or: cc -O3 -pthread -o resp-bench-c resp-bench.c)
  *
  *   Usage:  ./resp-bench [--host H] [--port P] [--clients C]
  *                        [--pipeline N] [--keyspace K] [--ops O]

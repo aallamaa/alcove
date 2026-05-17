@@ -8,11 +8,15 @@ reap_port() {
   lsof -ti :"$1" 2>/dev/null | xargs kill -9 2>/dev/null || true
 }
 
-# Poll $2 (log file) for "listening on" up to ~2.5s. Returns 0 if seen.
+# Poll $1 (log file) for N "listening on" lines. The optional second
+# arg is the expected listener count, and the optional third arg is the
+# retry count. Multi-reactor RESP benchmarks need this because
+# SO_REUSEPORT only balances connections across listeners that already
+# exist when clients connect.
 wait_listening() {
-  local log="$1" tries="${2:-50}"
+  local log="$1" expected="${2:-1}" tries="${3:-50}"
   for _ in $(seq 1 "$tries"); do
-    grep -q "listening on" "$log" && return 0
+    [ "$(grep -c "listening on" "$log" 2>/dev/null || true)" -ge "$expected" ] && return 0
     sleep 0.05
   done
   return 1

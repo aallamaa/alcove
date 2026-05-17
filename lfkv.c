@@ -222,12 +222,17 @@ int lfkv_touch_if_value(lfkv_t *kv, const char *k, size_t klen,
   if (!expected) return 0;
   LFKV_PROBE(kv, k, klen, h, i, tomb, s);
   if (!s) return 0;
-  exp_t *cur = expected;
+  exp_t *cur = atomic_load_explicit(&s->val, memory_order_acquire);
+  if (cur != expected) return 0;
+  if (expiry_us == 0 &&
+      atomic_load_explicit(&s->expiry_us, memory_order_relaxed) == 0)
+    return 1;
+  cur = expected;
   if (!atomic_compare_exchange_strong_explicit(
           &s->val, &cur, expected,
           memory_order_acq_rel, memory_order_acquire))
     return 0;
-  atomic_store_explicit(&s->expiry_us, expiry_us, memory_order_release);
+  atomic_store_explicit(&s->expiry_us, expiry_us, memory_order_relaxed);
   return 1;
 }
 
