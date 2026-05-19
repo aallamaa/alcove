@@ -577,7 +577,7 @@ There is no built-in. Either:
 
 So you do not waste time looking:
 
-- No `cond`, `progn` (use `do`), `let*` (use `with`), `setq`, `setf`,
+- No `cond`, `progn` (use `do`), `let*` (use `with`), `setf`,
   `destructuring-bind`.
 - No multiple return values, no continuations, no exceptions.
 - No full `format` or `printf`-style formatting. Use `str` or

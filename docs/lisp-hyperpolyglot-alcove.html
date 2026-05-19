@@ -443,11 +443,15 @@ Top-level/session binding
 <code>setq</code>, <code>defun</code>
 </td>
 <td>
-At file/REPL top level: <code>(= x 3)</code>,
-<code>(def f (x) …)</code>
+Explicit top-level/session variable binding: <code>(setq x 3)</code>.
+At file/REPL top level, <code>(= x 3)</code> also creates/updates a
+top-level binding. <code>(def f (x) …)</code> defines a top-level
+function.
 </td>
 <td>
-<pre><code>set x 3
+<pre><code>setq x 3
+
+set x 3        # top-level only
 
 def f (x):
   + x 1</code></pre>
@@ -504,8 +508,9 @@ is variable-only and falls back to a top-level session binding when no
 local binding exists.
 </td>
 <td>
-<code>set place value</code> maps to <code>=</code> with the same scope rules;
-<code>setq sym value</code> is available for top-level fallback.
+<code>set place value</code> maps to <code>=</code> with the same scope rules.
+Use <code>setq sym value</code> for variable assignment that falls back to a
+top-level session binding when no local binding exists.
 </td>
 </tr>
 <tr>
