@@ -33,6 +33,7 @@ enum {
   EXP_BLOB, /* binary-safe bytes; ptr → alc_blob_t (flex-array) */
   EXP_DICT, /* hash-map; ptr → dict_t* (alcove's own dict) */
   EXP_LIST, /* doubly-linked deque; ptr → alc_list_t (O(1) head & tail) */
+  EXP_SET,  /* hash set; ptr → dict_t* with canonical keys and t values */
 
   /* should always be the last */
   EXP_MAXSIZE
@@ -144,6 +145,7 @@ enum {
 #define isblob(e) (is_ptr(e) && (e)->type == EXP_BLOB)
 #define isdict(e) (is_ptr(e) && (e)->type == EXP_DICT)
 #define islist(e) (is_ptr(e) && (e)->type == EXP_LIST)
+#define isset(e) (is_ptr(e) && (e)->type == EXP_SET)
 #define isvector(e) (is_ptr(e) && (e)->type == EXP_VECTOR)
 /* Self-evaluating: tagged immediates, scalar atoms (≤ EXP_VECTOR), and
    the appended Clojure-style containers (blob/dict/list). The container
@@ -152,7 +154,7 @@ enum {
 #define isatom(e)                                                              \
   (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
                                ((e)->type >= EXP_BLOB &&                       \
-                                (e)->type <= EXP_LIST))))
+                                (e)->type <= EXP_SET))))
 
 /* Helper for fast-path refcounting */
 #define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton)
@@ -303,6 +305,9 @@ typedef enum {
   OP_VEC_NEW,  /* pop init, pop n → push (vec n init) */
   OP_SQRT_INT, /* pop n           → push (sqrt-int n) */
   OP_LENGTH,   /* pop list        → push (length list) — walk cons chain */
+  OP_SETQ_DYN, /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
+                  env, v) — nearest existing binding else top-level;
+                  push v back (setq returns the assigned value) */
 
   OP_MAX
 } alc_op;

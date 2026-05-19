@@ -9,6 +9,14 @@ to train an MLP digit classifier in pure Lisp.
 running under WebAssembly:
 **[aallamaa.github.io/alcove/mario.html](https://aallamaa.github.io/alcove/mario.html)**
 
+📚 **Learn alcove in the browser** — editable Alcove and Alcove Script
+examples with immediate output:
+**[aallamaa.github.io/alcove/learn.html](https://aallamaa.github.io/alcove/learn.html)**
+
+🧭 **Lisp comparison table** — Common Lisp, Racket, Clojure, Emacs Lisp,
+Alcove, and Alcove Script side by side:
+**[aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html)**
+
 > This README is the working overview as of 2026. The original 2014
 > project intro — back when alcove was an alpha experiment about a
 > code-as-data in-memory database — is preserved verbatim at the
@@ -34,7 +42,7 @@ running under WebAssembly:
 ;; Persistent variables (durable across restarts)
 (= score 1280)
 (persist 'score)
-(savedb)                             ; later: ./alcove auto-loads it
+(savedb)                             ; later: alcove auto-loads it
 
 ;; Vectors with tensor-style bulk ops
 (= a #[1 2 3 4]) (= b #[5 6 7 8])
@@ -105,7 +113,7 @@ per-element interpreter baseline: 35× speedup).
 
 ### 3. Embedded Redis-compatible server
 
-`./alcove -r 6379` boots a RESP2 server. `redis-cli` and any redis
+`alcove -r 6379` boots a RESP2 server. `redis-cli` and any redis
 client library talk to it unchanged. SET / GET / INCR / DEL / LPUSH /
 RPUSH / LRANGE / HSET / HGETALL / TTL with lazy expiry / SAVE / BGSAVE
 / CONFIG / PING / SELECT all work.
@@ -160,7 +168,7 @@ Mark any top-level binding as durable:
 (savedb "game.dump")     ; writes the binary dump
 ```
 
-Restart `./alcove --db game.dump` and `board` is back. The savedb
+Restart `alcove --db game.dump` and `board` is back. The savedb
 format round-trips fixnum, float, char, string, symbol, pair, blob,
 vec (including nested vec-of-vec with heterogeneous element types),
 and lambda (re-compiled on load).
@@ -180,7 +188,7 @@ install status.
 
 ### 7. Alcove Script — a Python-like surface syntax
 
-`make als` builds `./alcoves`: the full runtime plus a whitespace /
+`make als` builds `alcoves`: the full runtime plus a whitespace /
 `:`-block reader. It is *not* a new language — the reader turns
 indentation into ordinary Lisp forms *before* macro-expansion, so it
 stays fully homoiconic. A line is a list; a trailing `:` opens a
@@ -269,7 +277,7 @@ def fib (n):
 ```
 
 Alcove Script is accepted at the prompt, in `.als` files, piped
-stdin, and `-e`; `./alcove` itself is unchanged. `als.py` (forward)
+stdin, and `-e`; `alcove` itself is unchanged. `als.py` (forward)
 and `alc2als.py` (`.alc` → `.als`, with builder laddering) are
 offline tools. See [`examples/alcove-script/`](examples/alcove-script/)
 and [`alcove-script-spec.md`](alcove-script-spec.md).
@@ -281,10 +289,12 @@ and [`alcove-script-spec.md`](alcove-script-spec.md).
 | path | what |
 |---|---|
 | [`examples/mario/`](examples/mario/) | Side-scrolling platformer with SDL2 (native) and Canvas/WASM (web). See the [live demo](https://aallamaa.github.io/alcove/mario.html). |
+| [`web/learn.html`](web/learn.html) | Editable Rosetta-style examples for Alcove and Alcove Script. See the [live page](https://aallamaa.github.io/alcove/learn.html). |
+| [`docs/lisp-hyperpolyglot-alcove.html`](docs/lisp-hyperpolyglot-alcove.html) | Lisp comparison table extended with Alcove and Alcove Script. See the [live table](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html). |
 | [`examples/mlp/`](examples/mlp/) | MLP digit classifier on UCI optdigits — full pipeline with `make data && make train`. |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
 | [`ffi-examples/`](ffi-examples/) | libm, libc strings, sleeping via usleep, a custom .so for everything FFI can call. |
-| [`examples/alcove-script/`](examples/alcove-script/) | Alcove Script (`.als`) — Python-like indentation syntax over the same Lisp forms; `make als` → `./alcoves`. |
+| [`examples/alcove-script/`](examples/alcove-script/) | Alcove Script (`.als`) — Python-like indentation syntax over the same Lisp forms; `make als` → `alcoves`. |
 
 ---
 
@@ -295,25 +305,26 @@ history, paren-match, color), `libffi` (the `(ffi-fn …)` builtin).
 `make deps` prints what was auto-detected.
 
 ```sh
-make              # → ./alcove, JIT enabled (default goal)
+make              # build alcove, JIT enabled (default goal)
 make nojit        # JIT off; bytecode only
 make jit-mono     # JIT + single-threaded refcounts (fastest)
-make als          # → ./alcoves (Alcove Script front end)
+make als          # → alcoves (Alcove Script front end)
+make install      # install alcove and alcoves into ~/.local/bin by default
 make parser       # debug build with -g3
 make test         # run test.alc (currently 400+ asserts) + ffi-examples
 make benchmark    # alcove vs python3 microbenchmarks (incl. mlp)
 make web          # → web/alcove-core.{js,wasm} via Emscripten
 ```
 
-The default `make` writes `./alcove`. Use it like:
+After `make install`, use it like this. Make sure `~/.local/bin` is in `PATH`.
 
 ```sh
-./alcove                          # REPL (rlwrap recommended)
-./alcove file.alc                 # run script and exit
-./alcove --noload                 # skip auto-load of ./db.dump
-./alcove --db saved.dump file.alc # load vars from saved.dump first
-./alcove -e '(+ 1 2)'             # evaluate one expression
-./alcove -r 6379                  # RESP2 server mode
+alcove                          # REPL (rlwrap recommended)
+alcove file.alc                 # run script and exit
+alcove --noload                 # skip auto-load of ./db.dump
+alcove --db saved.dump file.alc # load vars from saved.dump first
+alcove -e '(+ 1 2)'             # evaluate one expression
+alcove -r 6379                  # RESP2 server mode
 ```
 
 ---
@@ -332,7 +343,7 @@ The default `make` writes `./alcove`. Use it like:
 - **Alcove Script**: [`alcove-script-spec.md`](alcove-script-spec.md)
   — the indentation reader spec, plus
   [`examples/alcove-script/README.md`](examples/alcove-script/README.md)
-  for the `./alcoves` REPL, `.als` files, and the offline tools.
+  for the `alcoves` REPL, `.als` files, and the offline tools.
 - **Editor support**: [`editor/`](editor/README.md) — syntax
   highlighting for vim and emacs (drop-in files + install steps).
 
@@ -412,11 +423,12 @@ Clojure. I will try to stick as much as possible to the ARC specs.
 
 ```
 make
-./alcove
+make install
+alcove
 ```
 
 I would advice to use rlwrap
 
 ```
-rlwrap ./alcove
+rlwrap alcove
 ```

@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alcove Rosetta</title>
+<style>
+  :root {
+    --bg: #f6f7f3;
+    --fg: #1d2220;
+    --muted: #65706c;
+    --line: #cfd8d2;
+    --panel: #ffffff;
+    --code: #111816;
+    --code-fg: #e8eee9;
+    --out: #0f1715;
+    --accent: #176f73;
+    --accent-2: #8f3d56;
+    --warn: #9a5a00;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header {
+    border-bottom: 1px solid var(--line);
+    background: #eaf0ec;
+    padding: 16px 24px;
+  }
+  .topbar {
+    max-width: 1680px;
+    margin: 0 auto;
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(24px, 4vw, 42px);
+    line-height: 1.05;
+    letter-spacing: 0;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin-top: 4px;
+    max-width: 840px;
+  }
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  nav a {
+    color: var(--accent);
+    text-decoration: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  main {
+    width: min(100%, 1680px);
+    margin: 0 auto;
+    padding: 18px 24px 40px;
+  }
+  .runtime {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .metric {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-height: 62px;
+  }
+  .metric strong { display: block; font-size: 13px; color: var(--muted); }
+  .metric span { display: block; margin-top: 3px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+  .example {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .example h2 {
+    margin: 0;
+    padding: 12px 14px 0;
+    font-size: 18px;
+    letter-spacing: 0;
+  }
+  .example .note {
+    margin: 3px 14px 10px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: 1px solid var(--line);
+  }
+  .runner + .runner { border-left: 1px solid var(--line); }
+  .runner-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 10px;
+    background: #f1f5f2;
+    border-bottom: 1px solid var(--line);
+    min-height: 40px;
+  }
+  .runner-title {
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .status {
+    color: var(--muted);
+    font: 12px/1.2 ui-monospace, Menlo, Consolas, monospace;
+    white-space: nowrap;
+  }
+  textarea {
+    width: 100%;
+    min-height: 178px;
+    display: block;
+    resize: vertical;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    outline: none;
+    padding: 12px;
+    background: var(--code);
+    color: var(--code-fg);
+    font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace;
+    tab-size: 2;
+  }
+  textarea:focus {
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  pre {
+    margin: 0;
+    min-height: 92px;
+    max-height: 220px;
+    overflow: auto;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #fbfcfa;
+    color: var(--out);
+    font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace;
+  }
+  .stderr { color: #b00020; }
+  .pending { color: var(--warn); }
+  .ok { color: var(--accent); }
+  @media (max-width: 1180px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    header { padding: 14px 12px; }
+    .topbar { align-items: stretch; flex-direction: column; }
+    nav { justify-content: flex-start; }
+    main { padding: 12px; }
+    .runtime, .pair { grid-template-columns: 1fr; }
+    .runner + .runner {
+      border-left: 0;
+      border-top: 1px solid var(--line);
+    }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="topbar">
+    <div>
+      <h1>Alcove Rosetta</h1>
+      <div class="subtitle">Editable examples running in WebAssembly through the Alcove and Alcove Script interpreters.</div>
+    </div>
+    <nav aria-label="web demos">
+      <a href="index.html">REPL</a>
+      <a href="../docs/lisp-hyperpolyglot-alcove.html">Lisp Table</a>
+      <a href="https://github.com/aallamaa/alcove">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="runtime" aria-label="runtime status">
+    <div class="metric"><strong>Alcove</strong><span id="alcove-ready">loading</span></div>
+    <div class="metric"><strong>Alcove Script</strong><span id="alcoves-ready">loading</span></div>
+    <div class="metric"><strong>Update Mode</strong><span>on input</span></div>
+  </section>
+  <section id="examples" class="grid"></section>
+</main>
+
+<script src="alcove.js"></script>
+<script src="alcoves.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const examples = [
+    {
+      title: "Hello And Arithmetic",
+      note: "Printing, return values, and prefix arithmetic.",
+      lisp: `(println "hello, alcove")
+(+ 40 2)`,
+      als: `println "hello, alcove"
++ 40 2`,
+    },
+    {
+      title: "Bindings",
+      note: "Mutable top-level session bindings and derived values.",
+      lisp: `(= radius 5)
+(= area (* 3.14159 (* radius radius)))
+area`,
+      als: `set radius 5
+set area (* 3.14159 (* radius radius))
+area`,
+    },
+    {
+      title: "Functions",
+      note: "Named functions and higher-order calls.",
+      lisp: `(def square (x) (* x x))
+(map square (list 1 2 3 4 5))`,
+      als: `def square (x):
+  * x x
+map square (list 1 2 3 4 5)`,
+    },
+    {
+      title: "Recursion",
+      note: "Classic factorial recursion.",
+      lisp: `(def fact (n)
+  (if (<= n 1) 1 (* n (fact (- n 1)))))
+(fact 6)`,
+      als: `def fact (n):
+  if (<= n 1) 1 (* n (fact (- n 1)))
+fact 6`,
+    },
+    {
+      title: "Conditionals",
+      note: "Nested branches are expressions.",
+      lisp: `(def grade (n)
+  (if (>= n 90) "A"
+    (if (>= n 80) "B"
+      (if (>= n 70) "C" "study"))))
+(grade 84)`,
+      als: `def grade (n):
+  if (>= n 90) "A" (if (>= n 80) "B" (if (>= n 70) "C" "study"))
+grade 84`,
+    },
+    {
+      title: "Loops",
+      note: "For loops and mutation.",
+      lisp: `(= total 0)
+(for i 1 10 (= total (+ total i)))
+total`,
+      als: `set total 0
+for i 1 10:
+  set total (+ total i)
+total`,
+    },
+    {
+      title: "Lists",
+      note: "Map, filter, and reduce over linked lists.",
+      lisp: `(= xs (list 1 2 3 4 5 6))
+(def sq-list (x) (* x x))
+(def gt3-list (x) (> x 3))
+(def add-list (a b) (+ a b))
+(list
+  (map sq-list xs)
+  (filter gt3-list xs)
+  (reduce add-list 0 xs))`,
+      als: `set xs (list 1 2 3 4 5 6)
+def sq-list (x):
+  * x x
+def gt3-list (x):
+  > x 3
+def add-list (a b):
+  + a b
+list:
+  (map sq-list xs)
+  (filter gt3-list xs)
+  (reduce add-list 0 xs)`,
+    },
+    {
+      title: "Vectors",
+      note: "Numeric vectors and vector kernels.",
+      lisp: `(= a (vec 1.0 2.0 3.0))
+(= b (vec 4.0 5.0 6.0))
+(list (vec-dot a b) (vec-argmax b))`,
+      als: `set a (vec 1.0 2.0 3.0)
+set b (vec 4.0 5.0 6.0)
+list (vec-dot a b) (vec-argmax b)`,
+    },
+    {
+      title: "Hash Maps",
+      note: "Dictionary construction and mutation.",
+      lisp: `(= person (hash-map "name" "Ada" :age 36))
+(assoc! person "field" "math")
+(list (get person "name") (contains? person :age) (keys person))`,
+      als: `set person (hash-map "name" "Ada" :age 36)
+assoc! person "field" "math"
+list (get person "name") (contains? person :age) (keys person)`,
+    },
+    {
+      title: "Sets",
+      note: "Hash sets, membership, and set algebra.",
+      lisp: `(= a (set 1 2 3 3 :x))
+(= b (set 3 4 :x))
+(list
+  (count a)
+  (set-has? a :x)
+  (set->list (set-intersection a b)))`,
+      als: `set a (hash-set 1 2 3 3 :x)
+set b (hash-set 3 4 :x)
+list:
+  (count a)
+  (set-has? a :x)
+  (set->list (set-intersection a b))`,
+    },
+    {
+      title: "Strings",
+      note: "String construction, slicing, splitting, joining, and case.",
+      lisp: `(= words (string-split "red,green,blue" ","))
+(list
+  (string-append "alc" "ove")
+  (substr "abcdef" 1 4)
+  (string-join words " / ")
+  (string-upcase "fast"))`,
+      als: `set words (string-split "red,green,blue" ",")
+list:
+  (string-append "alc" "ove")
+  (substr "abcdef" 1 4)
+  (string-join words " / ")
+  (string-upcase "fast")`,
+    },
+    {
+      title: "File IO",
+      note: "The browser build writes to its in-memory filesystem.",
+      lisp: `(write-string "/notes.txt" "one\\ntwo\\n")
+(append-string "/notes.txt" "three\\n")
+(read-lines "/notes.txt")`,
+      als: `write-string "/notes-script.txt" "one\\ntwo\\n"
+append-string "/notes-script.txt" "three\\n"
+read-lines "/notes-script.txt"`,
+    },
+    {
+      title: "Closures",
+      note: "Functions capture lexical bindings.",
+      lisp: `(def make-counter ()
+  (let n 0
+    (fn () (do (= n (+ n 1)) n))))
+(= counter (make-counter))
+(list (counter) (counter) (counter))`,
+      als: `def make-counter ():
+  let n 0:
+    fn ():
+      do (= n (+ n 1)) n
+set counter (make-counter)
+list (counter) (counter) (counter)`,
+    },
+    {
+      title: "Macros",
+      note: "Macros build Alcove forms before evaluation.",
+      lisp: `(defmacro unless (test body)
+  (list 'if test nil body))
+(unless nil (println "macro branch"))`,
+      als: `macro unless (test body):
+  list 'if test nil body
+unless nil (println "macro branch")`,
+    },
+    {
+      title: "Deques",
+      note: "Double-ended queues support O(1) ends.",
+      lisp: `(= q (deque "middle"))
+(push-left! q "first")
+(push-right! q "last")
+(list (peek-left q) (peek-right q) (count q))`,
+      als: `set q (deque "middle")
+push-left! q "first"
+push-right! q "last"
+list (peek-left q) (peek-right q) (count q)`,
+    },
+    {
+      title: "Blobs",
+      note: "Binary data is separate from strings.",
+      lisp: `(= blob (string->blob "abc"))
+(list (blob-len blob) (blob-ref blob 1) (blob->string blob))`,
+      als: `set blob (string->blob "abc")
+list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
+    },
+  ];
+
+  const root = document.getElementById("examples");
+  const queues = { alcove: Promise.resolve(), alcoves: Promise.resolve() };
+  const runtimes = {
+    alcove: {
+      name: "Alcove",
+      api: () => window.Alcove,
+      readyId: "alcove-ready",
+    },
+    alcoves: {
+      name: "Alcove Script",
+      api: () => window.AlcoveScript,
+      readyId: "alcoves-ready",
+    },
+  };
+
+  function esc(s) {
+    return s.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function makeRunner(engine, code) {
+    const runtime = runtimes[engine];
+    const runner = document.createElement("div");
+    runner.className = "runner";
+    runner.dataset.engine = engine;
+    runner.innerHTML = `
+      <div class="runner-head">
+        <div class="runner-title">${runtime.name}</div>
+        <div class="status pending">queued</div>
+      </div>
+      <textarea spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+      <pre aria-live="polite"></pre>`;
+    runner.querySelector("textarea").value = code;
+    return runner;
+  }
+
+  function render() {
+    for (const ex of examples) {
+      const article = document.createElement("article");
+      article.className = "example";
+      article.innerHTML = `<h2>${esc(ex.title)}</h2><div class="note">${esc(ex.note)}</div><div class="pair"></div>`;
+      const pair = article.querySelector(".pair");
+      pair.appendChild(makeRunner("alcove", ex.lisp));
+      pair.appendChild(makeRunner("alcoves", ex.als));
+      root.appendChild(article);
+    }
+  }
+
+  function setStatus(runner, text, cls) {
+    const s = runner.querySelector(".status");
+    s.textContent = text;
+    s.className = "status " + (cls || "");
+  }
+
+  function runRunner(runner) {
+    const engine = runner.dataset.engine;
+    const runtime = runtimes[engine].api();
+    const textarea = runner.querySelector("textarea");
+    const out = runner.querySelector("pre");
+    const src = textarea.value;
+
+    setStatus(runner, "running", "pending");
+    out.textContent = "";
+
+    queues[engine] = queues[engine].then(async () => {
+      const api = runtimes[engine].api();
+      try {
+        await api.ready;
+        api.setOutput((text, kind) => {
+          const span = document.createElement("span");
+          if (kind === "stderr") span.className = "stderr";
+          span.innerHTML = api.ansiToHtml(text) + "\n";
+          out.appendChild(span);
+        });
+        await api.eval(src);
+        api.setOutput(null);
+        if (!out.textContent.trim()) out.textContent = "nil\n";
+        setStatus(runner, "ok", "ok");
+      } catch (err) {
+        try { api && api.setOutput && api.setOutput(null); } catch (_) {}
+        out.textContent = String(err && err.message ? err.message : err);
+        setStatus(runner, "error", "");
+      }
+    });
+  }
+
+  function debounce(fn, ms) {
+    let timer = 0;
+    return function () {
+      clearTimeout(timer);
+      timer = setTimeout(fn, ms);
+    };
+  }
+
+  async function boot() {
+    render();
+    for (const key of Object.keys(runtimes)) {
+      const el = document.getElementById(runtimes[key].readyId);
+      try {
+        await runtimes[key].api().ready;
+        el.textContent = "ready";
+      } catch (err) {
+        el.textContent = "failed";
+      }
+    }
+    for (const runner of document.querySelectorAll(".runner")) {
+      const trigger = debounce(() => runRunner(runner), 120);
+      runner.querySelector("textarea").addEventListener("input", trigger);
+      runRunner(runner);
+    }
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

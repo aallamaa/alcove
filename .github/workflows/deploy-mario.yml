@@ -1,4 +1,4 @@
-name: Deploy Mario Web to GitHub Pages
+name: Deploy Web Demos to GitHub Pages
 
 on:
   push:
@@ -24,10 +24,21 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Build Web
+      - name: Build Alcove Web
+        run: make web
+
+      - name: Build Mario Web
         run: |
           cd examples/mario
           make web
+
+      - name: Stage Pages
+        run: |
+          mkdir -p public/docs
+          cp -R web/. public/
+          cp -R examples/mario/web/. public/
+          cp docs/lisp-hyperpolyglot-alcove.html public/docs/
+          sed -i 's#../docs/lisp-hyperpolyglot-alcove.html#docs/lisp-hyperpolyglot-alcove.html#g' public/learn.html
           
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -35,7 +46,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './examples/mario/web'
+          path: './public'
 
   deploy:
     environment:

@@ -13,7 +13,7 @@ Scheme), it is called out explicitly.
 ## 1. What alcove is
 
 alcove is a Lisp-1 modeled after **Arc** (Paul Graham) with influences
-from Clojure. It ships as a single C binary (`./alcove`) that combines:
+from Clojure. It ships as a single C binary (`alcove`) that combines:
 
 - a **REPL / script runner**,
 - a **persistent key-value store** (`db.dump` is auto-loaded on
@@ -39,14 +39,15 @@ CPython 3.13 by 1.6×–60×.
 ### Running it
 
 ```sh
-make                  # build ./alcove (JIT by default; `make nojit` opts out)
-./alcove              # REPL (use rlwrap for line editing)
-./alcove file.alc     # run a script and exit
-./alcove --noload     # skip loading db.dump at startup
-./alcove --db foo.dump file.alc      # load persistent vars from foo.dump
-./alcove --no-init    # skip running .init.alc on startup
-./alcove -e '(+ 1 2)' # evaluate expression and exit
-./alcove -r 6379      # RESP2 server on port 6379
+make                  # build alcove (JIT by default; `make nojit` opts out)
+make install          # install alcove and alcoves into ~/.local/bin by default
+alcove              # REPL (use rlwrap for line editing)
+alcove file.alc     # run a script and exit
+alcove --noload     # skip loading db.dump at startup
+alcove --db foo.dump file.alc      # load persistent vars from foo.dump
+alcove --no-init    # skip running .init.alc on startup
+alcove -e '(+ 1 2)' # evaluate expression and exit
+alcove -r 6379      # RESP2 server on port 6379
 ```
 
 Script execution prints the value of each top-level form unless it is
@@ -119,17 +120,30 @@ Container types follow the same emptiness rule: an empty `vec`,
 (= place val)                          ; assignment — see below
 ```
 
-### `(= place val)` — the only assignment form
+### `(= place val)` and `(setq sym val)` — assignment
 
-There is no `set!`, no `inc!`, no `setq`. Everything mutates through
-`=`. The left-hand side may be:
+There is no `set!`, no `inc!`, no generalized `setf`. Most mutation
+uses `=`. The left-hand side may be:
 
 - a bare symbol — `(= x 5)` binds or rebinds the symbol in the
-  innermost scope where it is bound; if it is unbound, it becomes a
-  global.
+  innermost scope where it is bound. At the REPL or file top level this
+  creates a top-level session binding. Inside a function, unbound names
+  are local to that call unless a surrounding binding is captured.
 - `(s i)` where `s` is a string — writes the byte at index `i`.
 - `(v i)` where `v` is a vector — writes that slot.
 - `(car xs)` / `(cdr xs)` — replaces the cell of a pair.
+
+`(setq sym val [sym val ...])` is the Emacs-style variable-only form:
+it updates the nearest existing lexical binding, but if the name is
+unbound it creates/updates a top-level session binding even when called
+inside a function. Alcove Script can call it directly:
+
+```text
+setq x 10
+```
+
+Use `=`/`set` when you want function-local unbound assignment; use
+`setq` when you explicitly want top-level fallback.
 
 ### `if` is cond-style
 
@@ -170,12 +184,12 @@ captures and mutable captured state work:
 (c) (c) (c)             ; 1, 2, 3 — captured n persists per closure
 ```
 
-Mutating a captured var via `(= var …)` walks up the scope chain and
-updates the originating slot — separate calls to `make-counter`
-produce independent counters because each call has its own `let`
-binding. Globals captured by `fn` also work but live in the single
-global env, so they're shared across every closure that refers to
-them.
+Mutating a captured var via `(= var …)` walks up the lexical scope
+chain and updates the originating slot — separate calls to
+`make-counter` produce independent counters because each call has its
+own `let` binding. Top-level session bindings can also be referenced by
+functions, but parameters and function-local names do not leak back to
+the REPL.
 
 `def` is sugar for `(= name (fn (params…) body…))` — `def` and `fn`
 produce the same kind of object. There is no separate `lambda` form;
@@ -233,9 +247,21 @@ truthy under `(no (no e))`, which is how the regression suite traps it.
 ### Strings & chars
 
 Strings index with `(s i)` returning `#\c`. Mutate with `(= (s i) ch)`.
-That is the entire surface. There is no `substring`, no `concat`. To
-build a string up character by character, allocate the full buffer as a
-literal of spaces and overwrite slots.
+
+Common whole-string helpers:
+
+```
+(str "x=" 42)
+(substr "abcdef" 1 4)            ; "bcd"
+(string-append "alc" "ove")
+(string-split "a,b,c" ",")
+(string-join (list "a" "b") "/")
+(string-trim "  hi  ")
+(string-upcase "fast")
+(string-downcase "LOUD")
+```
+
+There is no full formatting function yet.
 
 ### Vectors
 
@@ -313,6 +339,28 @@ to derive the key, so `:foo`, `"foo"`, and `'foo` all hash the same):
 `(hash-map "k1" v1 "k2" v2 …)` builds a populated dict. Iteration
 order is hash-bucket order, not insertion order.
 
+### Sets
+
+Hash-backed sets store unique scalar values by typed identity. Fixnums,
+floats, chars, strings, symbols, blobs, `nil`, and `t` are supported.
+Different types do not collide, so `1`, `"1"`, and `'1` are distinct set
+elements, and `set->list` preserves the original element types.
+
+```
+(= s (set 1 2 2 "a" :kw))
+(set? s)                         ; t
+(set-has? s :kw)                 ; t
+(set-add! s 3)                   ; mutates, returns s
+(set-del! s 1)                   ; mutates, returns s
+(set->list s)                    ; order undefined
+(set-union s (set 3 4))
+(set-intersection s (set :kw 9))
+(set-difference s (set "a"))
+```
+
+Alcove Script reserves `set` for assignment, so use `hash-set` there:
+`set s (hash-set 1 2 3)`.
+
 ### Deques
 
 Doubly-linked deque with O(1) ends:
@@ -356,10 +404,22 @@ use FFI.
 `prn x y z` — same but trailing newline. `print` and `println` exist as
 aliases.
 
-File reading: `(read-bytes "path")` returns a blob (see above) or
-`nil` on missing/unreadable. There is **no `read-line` or
-`read-char`** — keyboard input requires the FFI route described
-below, and writing to files goes through FFI too.
+Whole-file helpers:
+
+```
+(read-bytes "path")              ; blob
+(write-bytes "path" blob)
+(read-string "path")             ; string
+(write-string "path" "text")
+(append-string "path" "more")
+(read-lines "path")              ; list of strings
+(file-exists? "path")
+(load "lib.alc")                 ; evaluate Alcove forms from a file
+```
+
+There is **no `read-line`, `read-char`, or stream/port object** yet.
+Keyboard input and custom stream handling require the FFI route
+described below.
 
 ### Time, randomness, persistence
 
@@ -373,7 +433,8 @@ below, and writing to files goes through FFI too.
   (source-form), blob, and vec (including nested vec-of-vec with
   heterogeneous element types). Dict and deque do not yet round-
   trip — `savedb` prints `skipping <name> — type X has no dump fn`.
-- `(eval form)` evaluates a quoted form in the global environment.
+- `(eval form)` evaluates a quoted form in the current evaluator
+  environment.
 
 ---
 
@@ -519,7 +580,8 @@ So you do not waste time looking:
 - No `cond`, `progn` (use `do`), `let*` (use `with`), `setq`, `setf`,
   `destructuring-bind`.
 - No multiple return values, no continuations, no exceptions.
-- No `string-append`, `format`, `printf`-style formatting.
+- No full `format` or `printf`-style formatting. Use `str` or
+  `string-append` for simple string construction.
 - No floating-point formatting controls — `(prn 1.0)` prints
   `1.000000`.
 - No bignums; integers wider than 60 bits silently become floats.
@@ -527,9 +589,10 @@ So you do not waste time looking:
   reactors internally but those shards do not expose user-facing
   primitives. There is no `future`, `agent`, `go`, `spawn`.
 - No regex, no JSON, no HTTP. Use FFI.
-- No module system. Top-level `def`s land in the single global env.
-  `(load "file.alc")` does not exist either — use the shell:
-  `cat lib.alc main.alc | ./alcove`.
+- No module system. Top-level `def`s land in the current top-level
+  session environment.
+  `(load "file.alc")` exists, but there is no namespace/import/export
+  layer yet.
 
 When in doubt, search `alcove.c` for the symbol; if it is not in the
 reserved-symbol table it is not a builtin.

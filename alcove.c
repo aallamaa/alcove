@@ -65,6 +65,8 @@ exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
 /* Canonical singletons — pointer set at main() startup. */
 exp_t *nil_singleton = NULL;
 exp_t *true_singleton = NULL;
+static exp_t *alc_cstr_to_key(const char *k);
+static int set_insert_value(dict_t *d, exp_t *v);
 
 /* Global env handle for the readline tab-completion callback (which
    takes no user-data param). Set in main() before the REPL loop. */
@@ -181,6 +183,7 @@ lispProc lispProcList[] = {
     LISPCMD("macroexpand-1", expandmacrocmd, doc_macroexpand),
     LISPCMD("eval", evalcmd, doc_eval),
     LISPCMD("apply", applycmd, doc_apply),
+    LISPCMD("setq", setqcmd, doc_setq),
     /* Higher-order */
     LISPCMD("map", mapcmd, doc_map),
     LISPCMD("filter", filtercmd, doc_filter),
@@ -197,11 +200,28 @@ lispProc lispProcList[] = {
     LISPCMD("blob?", blobpcmd, doc_blobp),
     LISPCMD("dict?", dictpcmd, doc_dictp),
     LISPCMD("deque?", dequepcmd, doc_dequep),
+    LISPCMD("set?", setpcmd, doc_setp),
     /* I/O */
     LISPCMD("pr", prcmd, doc_pr),
     LISPCMD("print", prcmd, doc_pr),
     LISPCMD("prn", prncmd, doc_prn),
     LISPCMD("println", prncmd, doc_prn),
+    /* Strings and whole-file I/O */
+    LISPCMD("str", strcmd, doc_str),
+    LISPCMD("substr", substrcmd, doc_substr),
+    LISPCMD("string-append", stringappendcmd, doc_stringappend),
+    LISPCMD("string-split", stringsplitcmd, doc_stringsplit),
+    LISPCMD("string-join", stringjoincmd, doc_stringjoin),
+    LISPCMD("string-trim", stringtrimcmd, doc_stringtrim),
+    LISPCMD("string-upcase", stringupcasecmd, doc_stringupcase),
+    LISPCMD("string-downcase", stringdowncasecmd, doc_stringdowncase),
+    LISPCMD("read-string", readstringcmd, doc_readstring),
+    LISPCMD("write-string", writestringcmd, doc_writestring),
+    LISPCMD("append-string", appendstringcmd, doc_appendstring),
+    LISPCMD("read-lines", readlinescmd, doc_readlines),
+    LISPCMD("file-exists?", fileexistspcmd, doc_fileexistsp),
+    LISPCMD("write-bytes", writebytescmd, doc_writebytes),
+    LISPCMD("load", loadcmd, doc_load),
     /* Persistence */
     LISPCMD("persist", persistcmd, doc_persist),
     LISPCMD("forget", forgetcmd, doc_forget),
@@ -241,6 +261,16 @@ lispProc lispProcList[] = {
     LISPCMD("pop-left!", popleftbangcmd, doc_popleftbang),
     LISPCMD("peek-left", peekleftcmd, doc_peekleft),
     LISPCMD("peek-right", peekrightcmd, doc_peekright),
+    /* Hash sets */
+    LISPCMD("set", setcmd, doc_set),
+    LISPCMD("hash-set", hashsetcmd, doc_hashset),
+    LISPCMD("set-add!", setaddbangcmd, doc_setaddbang),
+    LISPCMD("set-del!", setdelbangcmd, doc_setdelbang),
+    LISPCMD("set-has?", sethaspcmd, doc_sethasp),
+    LISPCMD("set-union", setunioncmd, doc_setunion),
+    LISPCMD("set-intersection", setintersectioncmd, doc_setintersection),
+    LISPCMD("set-difference", setdifferencecmd, doc_setdifference),
+    LISPCMD("set->list", setlistcmd, doc_setlist),
     /* Binary-safe blobs (EXP_BLOB) */
     LISPCMD("make-blob", makeblobcmd, doc_makeblob),
     LISPCMD("blob-len", bloblencmd, doc_bloblen),
@@ -501,7 +531,7 @@ inline int unrefexp(exp_t *e) {
       free(e->ptr);
     } else if (e->type == EXP_BLOB) {
       free(e->ptr); /* alc_blob_t is a single flex-array alloc */
-    } else if (e->type == EXP_DICT && e->ptr) {
+    } else if ((e->type == EXP_DICT || e->type == EXP_SET) && e->ptr) {
       destroy_dict((dict_t *)e->ptr); /* unrefs every value internally */
     } else if (e->type == EXP_LIST && e->ptr) {
       alc_list_t *l = (alc_list_t *)e->ptr;
@@ -1214,6 +1244,23 @@ void print_node(exp_t *node) {
       }
     }
     printf("}");
+  } else if (node->type == EXP_SET) {
+    dict_t *d = (dict_t *)node->ptr;
+    printf("#{");
+    int first = 1;
+    if (d) {
+      for (unsigned int i = 0; i < d->ht[0].size; i++) {
+        keyval_t *k = d->ht[0].table[i];
+        while (k) {
+          if (!first)
+            printf(" ");
+          first = 0;
+          print_node(k->val);
+          k = k->next;
+        }
+      }
+    }
+    printf("}");
   } else if (node->type == EXP_LIST) {
     alc_list_t *l = (alc_list_t *)node->ptr;
     printf("(");
@@ -1302,6 +1349,11 @@ exp_t *make_blob(const char *bytes, size_t len) {
 
 exp_t *make_dict_exp(void) {
   MAKE_TYPED(cur, EXP_DICT, create_dict());
+  return cur;
+}
+
+exp_t *make_set_exp(void) {
+  MAKE_TYPED(cur, EXP_SET, create_dict());
   return cur;
 }
 
@@ -1502,6 +1554,45 @@ static int load_strn(char **pptr, size_t *plen, FILE *stream) {
   *pptr = p;
   *plen = n;
   return 1;
+}
+
+exp_t *dump_set(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  dict_t *d = (dict_t *)e->ptr;
+  size_t n = d ? (size_t)d->ht[0].used : 0;
+  if (dumpsize_t(stream, &n) <= 0)
+    return NULL;
+  if (!d)
+    return e;
+  for (unsigned int i = 0; i < d->ht[0].size; i++) {
+    for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
+      if (!k->val || !__DUMPABLE__(k->val) || !__DUMP__(k->val, stream))
+        return NULL;
+    }
+  }
+  return e;
+}
+
+exp_t *load_set(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  size_t n = 0;
+  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
+    return NULL;
+  exp_t *ret = make_set_exp();
+  dict_t *d = (dict_t *)ret->ptr;
+  for (size_t i = 0; i < n; i++) {
+    exp_t *val = load_exp_t(stream);
+    if (!val || !set_insert_value(d, val)) {
+      if (val)
+        unrefexp(val);
+      unrefexp(ret);
+      return NULL;
+    }
+    unrefexp(val);
+  }
+  return ret;
 }
 
 /* EXP_BLOB serializer — alc_blob_t is {len, bytes[]} (binary-safe).
@@ -2346,9 +2437,9 @@ inline int istrue(exp_t *e) {
     return (e->ptr && vec_len(e) > 0);
   if (e->type == EXP_LIST)
     return (e->ptr && ((alc_list_t *)e->ptr)->len > 0);
-  if (e->type == EXP_DICT) {
+  if (e->type == EXP_SET || e->type == EXP_DICT) {
     dict_t *d = (dict_t *)e->ptr;
-    return (d && (d->ht[0].used + d->ht[1].used) > 0);
+    return (d && d->ht[0].used > 0);
   }
   if isatom (e) {
     if isstring (e)
@@ -2769,6 +2860,79 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
   }
 }
 
+static exp_t *setq_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
+  env_t *cur = env, *root = env;
+  while (root && root->root)
+    root = root->root;
+
+  while (cur) {
+    for (int i = 0; i < cur->n_inline; i++) {
+      const char *k = cur->inline_keys[i];
+      if (k && strcmp(k, sym->ptr) == 0) {
+        unrefexp(cur->inline_vals[i]);
+        cur->inline_vals[i] = refexp(val);
+        return val;
+      }
+    }
+    if (cur->d) {
+      keyval_t *kv = set_get_keyval_dict(cur->d, sym->ptr, NULL);
+      if (kv) {
+        GEN_BUMP();
+        unrefexp(kv->val);
+        kv->val = refexp(val);
+        return val;
+      }
+    }
+    cur = cur->root;
+  }
+
+  if (!root)
+    root = env;
+  if (!(root->d))
+    root->d = create_dict();
+  set_get_keyval_dict(root->d, sym->ptr, val);
+  GEN_BUMP();
+  return val;
+}
+
+const char doc_setq[] =
+    "(setq sym val [sym val ...]) — Emacs-style variable assignment: update "
+    "the nearest existing binding, or create a top-level session binding if "
+    "none exists.";
+exp_t *setqcmd(exp_t *e, env_t *env) {
+  exp_t *args = cdr(e);
+  if (!args) {
+    unrefexp(e);
+    return NIL_EXP;
+  }
+
+  exp_t *ret = NIL_EXP;
+  for (exp_t *a = args; a; a = cddr(a)) {
+    exp_t *sym = car(a);
+    if (!issymbol(sym)) {
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "setq: variable name must be a symbol");
+    }
+    if (!cdr(a)) {
+      unrefexp(e);
+      return error(ERROR_MISSING_PARAMETER, NULL, env,
+                   "setq: missing value for symbol");
+    }
+    exp_t *val = EVAL(cadr(a), env);
+    if (iserror(val)) {
+      unrefexp(e);
+      return val;
+    }
+    if (ret != NIL_EXP)
+      unrefexp(ret);
+    ret = val;
+    setq_store_symbol(sym, env, val);
+  }
+  unrefexp(e);
+  return ret;
+}
+
 const char doc_eq[] =
     "(= place val) — assign val to place. Place can be a symbol, (car/cdr "
     "...), or (str i) for in-place char update.";
@@ -2784,7 +2948,7 @@ exp_t *equalcmd(exp_t *e, env_t *env) {
   /* to be unrefed tmpkey in case of evaluate */
 }
 
-const char doc_persist[] = "(persist sym) — mark sym so its current binding "
+const char doc_persist[] = "(persist sym) — mark sym's top-level binding so it "
                            "survives savedb / loaddb (db.dump).";
 exp_t *persistcmd(exp_t *e, env_t *env) {
   exp_t *tmpkey = refexp(cadr(e));
@@ -2797,7 +2961,10 @@ exp_t *persistcmd(exp_t *e, env_t *env) {
   if iserror (tmpkey) {
     return tmpkey;
   }
-  ret = set_keyval_dict_timestamp(env->d, tmpkey->ptr, gettimeusec());
+  env_t *cur = env;
+  while (cur->root)
+    cur = cur->root;
+  ret = set_keyval_dict_timestamp(cur->d, tmpkey->ptr, gettimeusec());
   unrefexp(tmpkey);
   return ret;
 }
@@ -2813,7 +2980,10 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   unrefexp(e);
   if iserror (tmpkey)
     return tmpkey;
-  ret = get_keyval_dict_timestamp(env->d, tmpkey->ptr);
+  env_t *cur = env;
+  while (cur->root)
+    cur = cur->root;
+  ret = get_keyval_dict_timestamp(cur->d, tmpkey->ptr);
   unrefexp(tmpkey);
   /* Only positive timestamps are persist marks. Negative values encode
      RESP TTL (absolute-µs expire-at) and must NOT report as persistent. */
@@ -2864,7 +3034,10 @@ exp_t *unpersistcmd(exp_t *e, env_t *env) {
   unrefexp(e);
   if iserror (tmpkey)
     return tmpkey;
-  ret = set_keyval_dict_timestamp(env->d, tmpkey->ptr, 0);
+  env_t *cur = env;
+  while (cur->root)
+    cur = cur->root;
+  ret = set_keyval_dict_timestamp(cur->d, tmpkey->ptr, 0);
   unrefexp(tmpkey);
   return ret;
 }
@@ -4770,6 +4943,397 @@ exp_t *prncmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+static const char *inspect_type_name(int t);
+
+static void str_buf_put(char **buf, size_t *len, size_t *cap, const char *s,
+                        size_t n) {
+  if (*len + n + 1 > *cap) {
+    while (*len + n + 1 > *cap)
+      *cap *= 2;
+    char *p = realloc(*buf, *cap);
+    if (!p)
+      graceful_shutdown("Fatal error: Out of memory");
+    *buf = p;
+  }
+  if (n)
+    memcpy(*buf + *len, s, n);
+  *len += n;
+  (*buf)[*len] = 0;
+}
+
+static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
+  char tmp[128];
+  if (!v || v == NIL_EXP) {
+    str_buf_put(buf, len, cap, "nil", 3);
+  } else if (isnumber(v)) {
+    int n = snprintf(tmp, sizeof tmp, "%lld", (long long)FIX_VAL(v));
+    str_buf_put(buf, len, cap, tmp, (size_t)n);
+  } else if (ischar(v)) {
+    unsigned int c = (unsigned int)CHAR_VAL(v);
+    if (c <= 0x7f) {
+      char ch = (char)c;
+      str_buf_put(buf, len, cap, &ch, 1);
+    }
+  } else if (isstring(v) || issymbol(v)) {
+    str_buf_put(buf, len, cap, (char *)v->ptr, strlen((char *)v->ptr));
+  } else if (isfloat(v)) {
+    int n = snprintf(tmp, sizeof tmp, "%g", v->f);
+    str_buf_put(buf, len, cap, tmp, (size_t)n);
+  } else if (isblob(v)) {
+    alc_blob_t *b = (alc_blob_t *)v->ptr;
+    if (b && b->len)
+      str_buf_put(buf, len, cap, b->bytes, b->len);
+  } else {
+    int n = snprintf(tmp, sizeof tmp, "#<%s@%p>",
+                     is_ptr(v) ? inspect_type_name(v->type) : "value",
+                     (void *)v);
+    str_buf_put(buf, len, cap, tmp, (size_t)n);
+  }
+}
+
+const char doc_str[] = "(str x ...) — concatenate printable string forms.";
+exp_t *strcmd(exp_t *e, env_t *env) {
+  size_t cap = 64, len = 0;
+  char *buf = memalloc(cap, 1);
+  for (exp_t *a = cdr(e); a; a = a->next) {
+    exp_t *v = EVAL(car(a), env);
+    if (iserror(v)) {
+      free(buf);
+      unrefexp(e);
+      return v;
+    }
+    exp_to_string_buf(v, &buf, &len, &cap);
+    unrefexp(v);
+  }
+  exp_t *ret = make_string(buf, (int)len);
+  free(buf);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_stringappend[] =
+    "(string-append s ...) — concatenate strings. Non-strings are errors.";
+exp_t *stringappendcmd(exp_t *e, env_t *env) {
+  size_t cap = 64, len = 0;
+  char *buf = memalloc(cap, 1);
+  for (exp_t *a = cdr(e); a; a = a->next) {
+    exp_t *v = EVAL(car(a), env);
+    if (iserror(v)) {
+      free(buf);
+      unrefexp(e);
+      return v;
+    }
+    if (!isstring(v)) {
+      unrefexp(v);
+      free(buf);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "string-append: args must be strings");
+    }
+    str_buf_put(&buf, &len, &cap, (char *)v->ptr, strlen((char *)v->ptr));
+    unrefexp(v);
+  }
+  exp_t *ret = make_string(buf, (int)len);
+  free(buf);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_substr[] = "(substr s start end) — substring [start,end).";
+exp_t *substrcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(s, start, end);
+  if (!isstring(s) || !isnumber(start) || !isnumber(end))
+    CLEAN_RETURN_3(s, start, end,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "substr: expected string and numeric bounds"));
+  int64_t n = (int64_t)strlen((char *)s->ptr);
+  int64_t a = FIX_VAL(start), b = FIX_VAL(end);
+  if (a < 0)
+    a = 0;
+  if (b < a)
+    b = a;
+  if (b > n)
+    b = n;
+  exp_t *ret = make_string((char *)s->ptr + a, (int)(b - a));
+  CLEAN_RETURN_3(s, start, end, ret);
+}
+
+static exp_t *list_append_owned(exp_t **ret, exp_t **tail, exp_t *v) {
+  exp_t *node = make_node(v);
+  if (*tail)
+    *tail = (*tail)->next = node;
+  else
+    *ret = *tail = node;
+  return node;
+}
+
+const char doc_stringsplit[] =
+    "(string-split s sep) — split s on literal separator sep.";
+exp_t *stringsplitcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, sep);
+  if (!isstring(s) || !isstring(sep))
+    CLEAN_RETURN_2(s, sep,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "string-split: args must be strings"));
+  const char *str = (const char *)s->ptr;
+  const char *needle = (const char *)sep->ptr;
+  size_t nlen = strlen(needle);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  if (nlen == 0) {
+    for (size_t i = 0; str[i]; i++)
+      list_append_owned(&ret, &tail, make_string((char *)str + i, 1));
+  } else {
+    const char *p = str;
+    const char *hit;
+    while ((hit = strstr(p, needle))) {
+      list_append_owned(&ret, &tail, make_string((char *)p, (int)(hit - p)));
+      p = hit + nlen;
+    }
+    list_append_owned(&ret, &tail, make_string((char *)p, (int)strlen(p)));
+  }
+  CLEAN_RETURN_2(s, sep, ret);
+}
+
+const char doc_stringjoin[] =
+    "(string-join xs sep) — join a list of strings with sep.";
+exp_t *stringjoincmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(xs, sep);
+  if (!isstring(sep))
+    CLEAN_RETURN_2(xs, sep,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "string-join: separator must be a string"));
+  size_t cap = 64, len = 0;
+  char *buf = memalloc(cap, 1);
+  int first = 1;
+  exp_t *p = xs;
+  while (p && istrue(p)) {
+    if (!ispair(p) || !isstring(car(p))) {
+      free(buf);
+      CLEAN_RETURN_2(xs, sep,
+                     error(ERROR_ILLEGAL_VALUE, NULL, env,
+                           "string-join: xs must be a list of strings"));
+    }
+    if (!first)
+      str_buf_put(&buf, &len, &cap, (char *)sep->ptr, strlen((char *)sep->ptr));
+    first = 0;
+    str_buf_put(&buf, &len, &cap, (char *)car(p)->ptr,
+                strlen((char *)car(p)->ptr));
+    p = cdr(p);
+  }
+  exp_t *ret = make_string(buf, (int)len);
+  free(buf);
+  CLEAN_RETURN_2(xs, sep, ret);
+}
+
+const char doc_stringtrim[] =
+    "(string-trim s) — trim leading and trailing ASCII whitespace.";
+exp_t *stringtrimcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(s);
+  if (!isstring(s))
+    CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "string-trim: arg must be a string"));
+  char *p = (char *)s->ptr;
+  size_t n = strlen(p), a = 0, b = n;
+  while (a < n && isspace((unsigned char)p[a]))
+    a++;
+  while (b > a && isspace((unsigned char)p[b - 1]))
+    b--;
+  exp_t *ret = make_string(p + a, (int)(b - a));
+  CLEAN_RETURN_1(s, ret);
+}
+
+#define STRING_CASE_CMD(fname, docname, cname, fn)                             \
+  const char docname[] = cname;                                                \
+  exp_t *fname(exp_t *e, env_t *env) {                                         \
+    EVAL_ARG_1(s);                                                             \
+    if (!isstring(s))                                                          \
+      CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,                  \
+                              cname ": arg must be a string"));                \
+    size_t n = strlen((char *)s->ptr);                                         \
+    char *buf = memalloc(n + 1, 1);                                            \
+    for (size_t i = 0; i < n; i++)                                             \
+      buf[i] = (char)fn((unsigned char)((char *)s->ptr)[i]);                   \
+    exp_t *ret = make_string(buf, (int)n);                                     \
+    free(buf);                                                                 \
+    CLEAN_RETURN_1(s, ret);                                                    \
+  }
+
+STRING_CASE_CMD(stringupcasecmd, doc_stringupcase,
+                "(string-upcase s) — uppercase ASCII letters", toupper)
+STRING_CASE_CMD(stringdowncasecmd, doc_stringdowncase,
+                "(string-downcase s) — lowercase ASCII letters", tolower)
+
+static exp_t *slurp_file_as_string(const char *path) {
+  FILE *fp = fopen(path, "rb");
+  if (!fp)
+    return NIL_EXP;
+  if (fseek(fp, 0, SEEK_END) != 0) {
+    fclose(fp);
+    return NIL_EXP;
+  }
+  long sz = ftell(fp);
+  if (sz < 0 || sz > (long)(1L << 30)) {
+    fclose(fp);
+    return NIL_EXP;
+  }
+  rewind(fp);
+  char *buf = memalloc((size_t)sz + 1, 1);
+  if (sz > 0 && fread(buf, 1, (size_t)sz, fp) != (size_t)sz) {
+    free(buf);
+    fclose(fp);
+    return NIL_EXP;
+  }
+  fclose(fp);
+  exp_t *ret = make_string(buf, (int)sz);
+  free(buf);
+  return ret;
+}
+
+static exp_t *eval_file_forms(const char *path, env_t *env) {
+  FILE *fp = fopen(path, "r");
+  if (!fp)
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot open '%s'",
+                 path);
+  for (;;) {
+    exp_t *form = reader(fp, 0, 0);
+    if (!form)
+      break;
+    if (iserror(form)) {
+      if (form->flags == EXP_ERROR_PARSING_EOF) {
+        unrefexp(form);
+        break;
+      }
+      fclose(fp);
+      return form;
+    }
+    exp_t *ret = evaluate(form, env);
+    if (iserror(ret)) {
+      fclose(fp);
+      return ret;
+    }
+    unrefexp(ret);
+  }
+  fclose(fp);
+  return TRUE_EXP;
+}
+
+const char doc_readstring[] =
+    "(read-string path) — read the whole file as a string, or nil.";
+exp_t *readstringcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(path);
+  if (!isstring(path))
+    CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "read-string: path must be a string"));
+  exp_t *ret = slurp_file_as_string((char *)path->ptr);
+  CLEAN_RETURN_1(path, ret);
+}
+
+static exp_t *write_string_mode(exp_t *e, env_t *env, const char *mode,
+                                const char *name) {
+  EVAL_ARG_2(path, text);
+  if (!isstring(path) || !isstring(text))
+    CLEAN_RETURN_2(path, text,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "%s: path and text must be strings", (char *)name));
+  FILE *fp = fopen((char *)path->ptr, mode);
+  if (!fp)
+    CLEAN_RETURN_2(path, text,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "%s: cannot open '%s'", (char *)name,
+                         (char *)path->ptr));
+  size_t n = strlen((char *)text->ptr);
+  int ok = (n == 0 || fwrite((char *)text->ptr, 1, n, fp) == n);
+  fclose(fp);
+  if (!ok)
+    CLEAN_RETURN_2(path, text,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "%s: write failed", (char *)name));
+  CLEAN_RETURN_2(path, text, TRUE_EXP);
+}
+
+const char doc_writestring[] =
+    "(write-string path text) — overwrite path with text. Returns t.";
+exp_t *writestringcmd(exp_t *e, env_t *env) {
+  return write_string_mode(e, env, "wb", "write-string");
+}
+
+const char doc_appendstring[] =
+    "(append-string path text) — append text to path. Returns t.";
+exp_t *appendstringcmd(exp_t *e, env_t *env) {
+  return write_string_mode(e, env, "ab", "append-string");
+}
+
+const char doc_readlines[] =
+    "(read-lines path) — read file into a list of line strings.";
+exp_t *readlinescmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(path);
+  if (!isstring(path))
+    CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "read-lines: path must be a string"));
+  exp_t *s = slurp_file_as_string((char *)path->ptr);
+  if (s == NIL_EXP)
+    CLEAN_RETURN_1(path, NIL_EXP);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  char *p = (char *)s->ptr;
+  char *start = p;
+  for (; *p; p++) {
+    if (*p == '\n') {
+      size_t n = (size_t)(p - start);
+      if (n && start[n - 1] == '\r')
+        n--;
+      list_append_owned(&ret, &tail, make_string(start, (int)n));
+      start = p + 1;
+    }
+  }
+  if (*start)
+    list_append_owned(&ret, &tail, make_string(start, (int)strlen(start)));
+  unrefexp(s);
+  CLEAN_RETURN_1(path, ret);
+}
+
+const char doc_fileexistsp[] = "(file-exists? path) — t if path exists.";
+exp_t *fileexistspcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(path);
+  if (!isstring(path))
+    CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "file-exists?: path must be a string"));
+  exp_t *ret = (access((char *)path->ptr, F_OK) == 0) ? TRUE_EXP : NIL_EXP;
+  CLEAN_RETURN_1(path, ret);
+}
+
+const char doc_writebytes[] =
+    "(write-bytes path blob) — overwrite path with blob bytes. Returns t.";
+exp_t *writebytescmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(path, blob);
+  if (!isstring(path) || !isblob(blob))
+    CLEAN_RETURN_2(path, blob,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "write-bytes: expected path string and blob"));
+  FILE *fp = fopen((char *)path->ptr, "wb");
+  if (!fp)
+    CLEAN_RETURN_2(path, blob,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "write-bytes: cannot open '%s'", (char *)path->ptr));
+  alc_blob_t *b = (alc_blob_t *)blob->ptr;
+  int ok = (!b || b->len == 0 || fwrite(b->bytes, 1, b->len, fp) == b->len);
+  fclose(fp);
+  if (!ok)
+    CLEAN_RETURN_2(path, blob,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "write-bytes: write failed"));
+  CLEAN_RETURN_2(path, blob, TRUE_EXP);
+}
+
+const char doc_load[] = "(load path) — read and evaluate an Alcove file.";
+exp_t *loadcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(path);
+  if (!isstring(path))
+    CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "load: path must be a string"));
+  exp_t *ret = eval_file_forms((char *)path->ptr, env);
+  CLEAN_RETURN_1(path, ret);
+}
+
 /* Forward decl needed by applycmd below; defined further down. */
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
 
@@ -5551,6 +6115,7 @@ const char doc_vecp[] = "(vec? x) — t if x is a vector.";
 const char doc_blobp[] = "(blob? x) — t if x is a blob.";
 const char doc_dictp[] = "(dict? x) — t if x is a hash-map.";
 const char doc_dequep[] = "(deque? x) — t if x is a deque.";
+const char doc_setp[] = "(set? x) — t if x is a hash-set.";
 PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
 PRED_CMD(stringpcmd, isstring(a))
 PRED_CMD(symbolpcmd, issymbol(a))
@@ -5560,6 +6125,7 @@ PRED_CMD(vecpcmd, isvector(a))
 PRED_CMD(blobpcmd, isblob(a))
 PRED_CMD(dictpcmd, isdict(a))
 PRED_CMD(dequepcmd, islist(a))
+PRED_CMD(setpcmd, isset(a))
 #undef PRED_CMD
 
 /* (exit) / (exit code) — terminate the process. */
@@ -6412,6 +6978,14 @@ static const char *inspect_type_name(int t) {
     return "builtin";
   case EXP_MACRO:
     return "macro";
+  case EXP_BLOB:
+    return "blob";
+  case EXP_DICT:
+    return "dict";
+  case EXP_LIST:
+    return "deque";
+  case EXP_SET:
+    return "set";
   default:
     return "?";
   }
@@ -7368,6 +7942,8 @@ static const char *bc_opname(uint8_t op) {
     return "LOAD_SLOT";
   case OP_LOAD_GLOBAL:
     return "LOAD_GLOBAL";
+  case OP_SETQ_DYN:
+    return "SETQ_DYN";
   case OP_STORE_SLOT:
     return "STORE_SLOT";
   case OP_BIND_SLOT:
@@ -7494,6 +8070,7 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
   case OP_LOAD_CONST:
   case OP_LOAD_SLOT:
   case OP_LOAD_GLOBAL:
+  case OP_SETQ_DYN:
   case OP_STORE_SLOT:
   case OP_BIND_SLOT:
   case OP_UNBIND_SLOT:
@@ -13684,6 +14261,39 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       compile_assign(c, e, tail);
       return;
     }
+    if (!strcmp(s, "setq")) {
+      exp_t *args = cdr(e);
+      if (!args) { /* (setq) -> nil; let the tree-walker handle it */
+        c->failed = 1;
+        return;
+      }
+      for (exp_t *a = args; a; a = cddr(a)) {
+        exp_t *sym = car(a);
+        if (!issymbol(sym) || !cdr(a)) { /* malformed: defer to evaluator */
+          c->failed = 1;
+          return;
+        }
+        compile_expr(c, cadr(a), 0);
+        if (c->failed)
+          return;
+        int slot = find_slot(c, sym->ptr);
+        if (slot >= 0) {
+          emit_u8(c, OP_STORE_SLOT);
+          emit_u8(c, (uint8_t)slot);
+        } else {
+          int k = add_const(c, sym);
+          if (c->failed)
+            return;
+          emit_u8(c, OP_SETQ_DYN);
+          emit_u8(c, (uint8_t)k);
+        }
+        /* Each pair leaves its value on the stack; setq's result is the
+           last pair's value, so discard the earlier ones. */
+        if (cddr(a))
+          emit_u8(c, OP_POP);
+      }
+      return;
+    }
     if (!strcmp(s, "do")) {
       /* Sequential eval, return last value. Same shape as the body
          walk in compile_lambda — emit each expr, POP between, last
@@ -14061,6 +14671,7 @@ tail_reentry:
       [OP_VEC_NEW] = &&l_vec_new,
       [OP_SQRT_INT] = &&l_sqrt_int,
       [OP_LENGTH] = &&l_length,
+      [OP_SETQ_DYN] = &&l_setq_dyn,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -14137,6 +14748,18 @@ l_store_slot: {
   /* Leave the updated value on the stack as the expression's result.
      (= ...) returns the assigned value. */
   PUSH(refexp(v));
+  NEXT;
+}
+l_setq_dyn: {
+  /* (setq sym val) for a non-local target: walk the env chain at
+     runtime (nearest existing binding, else create top-level). */
+  uint8_t idx = READ_U8;
+  exp_t *v = POP();
+  /* setq_store_symbol takes its own ref on v (refexp into the binding)
+     and does not consume ours — same contract setqcmd relies on — so
+     our popped ref becomes the on-stack result. */
+  setq_store_symbol(consts[idx], env, v);
+  PUSH(v);
   NEXT;
 }
 l_bind_slot: {
@@ -16087,8 +16710,8 @@ DICT_ITER_CMD(keyscmd, "keys", alc_cstr_to_key((char *)k->key))
 const char doc_vals[] = "(vals d) — list of values in d (order matches keys).";
 DICT_ITER_CMD(valscmd, "vals", refexp(k->val))
 
-const char doc_count[] = "(count x) — element count for hash-maps, deques, "
-                         "vectors, strings, blobs, and lists.";
+const char doc_count[] = "(count x) — element count for hash-maps, sets, "
+                         "deques, vectors, strings, blobs, and lists.";
 exp_t *countcmd(exp_t *e, env_t *env) {
   exp_t *x = EVAL(cadr(e), env);
   if (iserror(x)) {
@@ -16096,9 +16719,10 @@ exp_t *countcmd(exp_t *e, env_t *env) {
     return x;
   }
   int64_t n = 0;
-  if (isdict(x))
-    n = (int64_t)((dict_t *)x->ptr)->ht[0].used;
-  else if (islist(x))
+  if (isdict(x) || isset(x)) {
+    dict_t *d = (dict_t *)x->ptr;
+    n = d ? (int64_t)d->ht[0].used : 0;
+  } else if (islist(x))
     n = ((alc_list_t *)x->ptr)->len;
   else if (isblob(x))
     n = (int64_t)((alc_blob_t *)x->ptr)->len;
@@ -16120,6 +16744,289 @@ exp_t *countcmd(exp_t *e, env_t *env) {
   unrefexp(x);
   unrefexp(e);
   return MAKE_FIX(n);
+}
+
+/* ---------- hash-set / EXP_SET ops ---------- */
+
+static void set_key_hex_append(char **buf, size_t *len, size_t *cap,
+                               const unsigned char *bytes, size_t n) {
+  static const char hexdigits[] = "0123456789abcdef";
+  if (*len + n * 2 + 1 > *cap) {
+    while (*len + n * 2 + 1 > *cap)
+      *cap *= 2;
+    char *p = realloc(*buf, *cap);
+    if (!p)
+      graceful_shutdown("Fatal error: Out of memory");
+    *buf = p;
+  }
+  for (size_t i = 0; i < n; i++) {
+    (*buf)[(*len)++] = hexdigits[bytes[i] >> 4];
+    (*buf)[(*len)++] = hexdigits[bytes[i] & 0x0f];
+  }
+  (*buf)[*len] = 0;
+}
+
+static void set_key_put(char **buf, size_t *len, size_t *cap, const char *s) {
+  str_buf_put(buf, len, cap, s, strlen(s));
+}
+
+static char *set_key_for_value(exp_t *v) {
+  char tmp[128];
+  size_t cap = 64, len = 0;
+  char *buf = memalloc(cap, 1);
+  buf[0] = 0;
+
+  if (!v || v == NIL_EXP || (is_ptr(v) && ispair(v) && !istrue(v))) {
+    set_key_put(&buf, &len, &cap, "N:");
+    return buf;
+  }
+  if (v == TRUE_EXP) {
+    set_key_put(&buf, &len, &cap, "T:");
+    return buf;
+  }
+  if (isnumber(v)) {
+    snprintf(tmp, sizeof tmp, "I:%lld", (long long)FIX_VAL(v));
+    set_key_put(&buf, &len, &cap, tmp);
+    return buf;
+  }
+  if (ischar(v)) {
+    snprintf(tmp, sizeof tmp, "C:%u", (unsigned int)CHAR_VAL(v));
+    set_key_put(&buf, &len, &cap, tmp);
+    return buf;
+  }
+  if (isfloat(v)) {
+    uint64_t bits = 0;
+    memcpy(&bits, &v->f, sizeof bits);
+    snprintf(tmp, sizeof tmp, "F:%016llx", (unsigned long long)bits);
+    set_key_put(&buf, &len, &cap, tmp);
+    return buf;
+  }
+  if (isstring(v) || issymbol(v)) {
+    set_key_put(&buf, &len, &cap, isstring(v) ? "S:" : "Y:");
+    set_key_hex_append(&buf, &len, &cap, (const unsigned char *)v->ptr,
+                       strlen((char *)v->ptr));
+    return buf;
+  }
+  if (isblob(v)) {
+    alc_blob_t *b = (alc_blob_t *)v->ptr;
+    set_key_put(&buf, &len, &cap, "B:");
+    if (b && b->len)
+      set_key_hex_append(&buf, &len, &cap, (const unsigned char *)b->bytes,
+                         b->len);
+    return buf;
+  }
+
+  free(buf);
+  return NULL;
+}
+
+static exp_t *set_value_clone(exp_t *v) {
+  if (!v || v == NIL_EXP || (is_ptr(v) && ispair(v) && !istrue(v)))
+    return refexp(NIL_EXP);
+  if (v == TRUE_EXP)
+    return refexp(TRUE_EXP);
+  if (isnumber(v) || ischar(v))
+    return refexp(v);
+  if (isfloat(v))
+    return make_floatf(v->f);
+  if (isstring(v))
+    return make_string((char *)v->ptr, strlen((char *)v->ptr));
+  if (issymbol(v))
+    return make_symbol((char *)v->ptr, strlen((char *)v->ptr));
+  if (isblob(v)) {
+    alc_blob_t *b = (alc_blob_t *)v->ptr;
+    return make_blob((b && b->len) ? b->bytes : "", b ? b->len : 0);
+  }
+  return NULL;
+}
+
+static int set_insert_value(dict_t *d, exp_t *v) {
+  char *ks = set_key_for_value(v);
+  if (!ks)
+    return 0;
+  exp_t *stored = set_value_clone(v);
+  if (!stored) {
+    free(ks);
+    return 0;
+  }
+  set_get_keyval_dict(d, ks, stored);
+  unrefexp(stored);
+  free(ks);
+  return 1;
+}
+
+const char doc_set[] =
+    "(set x ...) — build an EXP_SET with unique scalar elements.";
+exp_t *setcmd(exp_t *e, env_t *env) {
+  exp_t *ret = make_set_exp();
+  dict_t *d = (dict_t *)ret->ptr;
+  for (exp_t *a = cdr(e); a; a = a->next) {
+    exp_t *v = EVAL(car(a), env);
+    if (iserror(v)) {
+      unrefexp(ret);
+      unrefexp(e);
+      return v;
+    }
+    if (!set_insert_value(d, v)) {
+      unrefexp(v);
+      unrefexp(ret);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "set: unsupported element type");
+    }
+    unrefexp(v);
+  }
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_hashset[] = "(hash-set x ...) — alias for set.";
+exp_t *hashsetcmd(exp_t *e, env_t *env) { return setcmd(e, env); }
+
+#define SET_VALUE_SETUP(err_name)                                              \
+  exp_t *s = EVAL(cadr(e), env);                                               \
+  if (iserror(s)) {                                                            \
+    unrefexp(e);                                                               \
+    return s;                                                                  \
+  }                                                                            \
+  if (!isset(s)) {                                                             \
+    unrefexp(s);                                                               \
+    unrefexp(e);                                                               \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,                               \
+                 err_name ": first arg must be a set");                       \
+  }                                                                            \
+  exp_t *v = EVAL(caddr(e), env);                                              \
+  if (iserror(v)) {                                                            \
+    unrefexp(s);                                                               \
+    unrefexp(e);                                                               \
+    return v;                                                                  \
+  }                                                                            \
+  char *ks = set_key_for_value(v);
+
+const char doc_setaddbang[] =
+    "(set-add! s x) — add x to set s in place; returns s.";
+exp_t *setaddbangcmd(exp_t *e, env_t *env) {
+  SET_VALUE_SETUP("set-add!")
+  if (!ks)
+    CLEAN_RETURN_2(
+        s, v, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                    "set-add!: unsupported element type"));
+  exp_t *stored = set_value_clone(v);
+  if (!stored) {
+    free(ks);
+    CLEAN_RETURN_2(
+        s, v, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                    "set-add!: unsupported element type"));
+  }
+  set_get_keyval_dict((dict_t *)s->ptr, ks, stored);
+  unrefexp(stored);
+  free(ks);
+  CLEAN_RETURN_1(v, s);
+}
+
+const char doc_setdelbang[] =
+    "(set-del! s x) — remove x from set s in place; returns s.";
+exp_t *setdelbangcmd(exp_t *e, env_t *env) {
+  SET_VALUE_SETUP("set-del!")
+  if (ks) {
+    del_keyval_dict((dict_t *)s->ptr, ks);
+    free(ks);
+  }
+  CLEAN_RETURN_1(v, s);
+}
+
+const char doc_sethasp[] = "(set-has? s x) — t if s contains x, else nil.";
+exp_t *sethaspcmd(exp_t *e, env_t *env) {
+  SET_VALUE_SETUP("set-has?")
+  exp_t *ret = NIL_EXP;
+  if (ks && set_get_keyval_dict((dict_t *)s->ptr, ks, NULL))
+    ret = TRUE_EXP;
+  if (ks)
+    free(ks);
+  CLEAN_RETURN_2(s, v, ret);
+}
+
+static exp_t *set_copy_exp(exp_t *src) {
+  exp_t *ret = make_set_exp();
+  dict_t *rd = (dict_t *)ret->ptr;
+  dict_t *sd = (dict_t *)src->ptr;
+  if (sd)
+    for (unsigned int i = 0; i < sd->ht[0].size; i++)
+      for (keyval_t *k = sd->ht[0].table[i]; k; k = k->next)
+        set_insert_value(rd, k->val);
+  return ret;
+}
+
+static int set_contains_key(exp_t *s, char *key) {
+  return set_get_keyval_dict((dict_t *)s->ptr, key, NULL) != NULL;
+}
+
+const char doc_setunion[] = "(set-union a b) — new set with elements of a or b.";
+exp_t *setunioncmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(a, b);
+  if (!isset(a) || !isset(b))
+    CLEAN_RETURN_2(a, b, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "set-union: args must be sets"));
+  exp_t *ret = set_copy_exp(a);
+  dict_t *rd = (dict_t *)ret->ptr;
+  dict_t *bd = (dict_t *)b->ptr;
+  if (bd)
+    for (unsigned int i = 0; i < bd->ht[0].size; i++)
+      for (keyval_t *k = bd->ht[0].table[i]; k; k = k->next)
+        set_insert_value(rd, k->val);
+  CLEAN_RETURN_2(a, b, ret);
+}
+
+const char doc_setintersection[] =
+    "(set-intersection a b) — new set with elements common to a and b.";
+exp_t *setintersectioncmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(a, b);
+  if (!isset(a) || !isset(b))
+    CLEAN_RETURN_2(a, b, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "set-intersection: args must be sets"));
+  exp_t *ret = make_set_exp();
+  dict_t *rd = (dict_t *)ret->ptr;
+  dict_t *ad = (dict_t *)a->ptr;
+  if (ad)
+    for (unsigned int i = 0; i < ad->ht[0].size; i++)
+      for (keyval_t *k = ad->ht[0].table[i]; k; k = k->next)
+        if (set_contains_key(b, k->key))
+          set_insert_value(rd, k->val);
+  CLEAN_RETURN_2(a, b, ret);
+}
+
+const char doc_setdifference[] =
+    "(set-difference a b) — new set with elements in a but not b.";
+exp_t *setdifferencecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(a, b);
+  if (!isset(a) || !isset(b))
+    CLEAN_RETURN_2(a, b, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "set-difference: args must be sets"));
+  exp_t *ret = make_set_exp();
+  dict_t *rd = (dict_t *)ret->ptr;
+  dict_t *ad = (dict_t *)a->ptr;
+  if (ad)
+    for (unsigned int i = 0; i < ad->ht[0].size; i++)
+      for (keyval_t *k = ad->ht[0].table[i]; k; k = k->next)
+        if (!set_contains_key(b, k->key))
+          set_insert_value(rd, k->val);
+  CLEAN_RETURN_2(a, b, ret);
+}
+
+const char doc_setlist[] =
+    "(set->list s) — list of set elements (order undefined).";
+exp_t *setlistcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(s);
+  if (!isset(s))
+    CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "set->list: arg must be a set"));
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  dict_t *d = (dict_t *)s->ptr;
+  if (d)
+    for (unsigned int i = 0; i < d->ht[0].size; i++)
+      for (keyval_t *k = d->ht[0].table[i]; k; k = k->next)
+        list_append_owned(&ret, &tail, set_value_clone(k->val));
+  CLEAN_RETURN_1(s, ret);
 }
 
 /* ---------- deque / EXP_LIST ops ---------- */
@@ -16691,6 +17598,9 @@ int main(int argc, char *argv[]) {
   exp_tfuncList[EXP_VECTOR] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_VECTOR]->load = load_vec;
   exp_tfuncList[EXP_VECTOR]->dump = dump_vec;
+  exp_tfuncList[EXP_SET] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_SET]->load = load_set;
+  exp_tfuncList[EXP_SET]->dump = dump_set;
 
   reserved_symbol = create_dict();
   /* Allocate immortal singletons before any other code references them. */
@@ -17072,6 +17982,9 @@ endcleanly:
   free(exp_tfuncList[EXP_PAIR]);
   free(exp_tfuncList[EXP_LAMBDA]);
   free(exp_tfuncList[EXP_MACRO]);
+  free(exp_tfuncList[EXP_BLOB]);
+  free(exp_tfuncList[EXP_VECTOR]);
+  free(exp_tfuncList[EXP_SET]);
   unrefexp(t);
   unrefexp(nil);
   /* Immortal singletons. We can't free() the exp_t pointer itself
@@ -17101,9 +18014,20 @@ endcleanly:
 __attribute__((used)) int alcove_web_eval(const char *src) {
   if (!src || !*src || !g_global_env)
     return 0;
-  FILE *stream = fmemopen((void *)src, strlen(src), "r");
-  if (!stream)
+#ifdef ALCOVE_ALS
+  char *translated = als_to_sexpr(src);
+  if (!translated)
     return 0;
+  FILE *stream = fmemopen((void *)translated, strlen(translated), "r");
+#else
+  FILE *stream = fmemopen((void *)src, strlen(src), "r");
+#endif
+  if (!stream) {
+#ifdef ALCOVE_ALS
+    free(translated);
+#endif
+    return 0;
+  }
   int forms = 0;
   while (1) {
     exp_t *stre = reader(stream, 0, 0);
@@ -17125,6 +18049,9 @@ __attribute__((used)) int alcove_web_eval(const char *src) {
     forms++;
   }
   fclose(stream);
+#ifdef ALCOVE_ALS
+  free(translated);
+#endif
   fflush(stdout);
   return forms;
 }

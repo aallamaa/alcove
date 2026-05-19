@@ -2,6 +2,8 @@
 # the jit/jit-mono targets fall back to a non-JIT build.
 ARCH         := $(shell uname -m)
 JIT_OK       := $(filter aarch64 arm64 x86_64 amd64,$(ARCH))
+PREFIX       ?= $(HOME)/.local
+BINDIR       ?= $(PREFIX)/bin
 ifneq ($(JIT_OK),)
   JIT_FLAGS  := -DALCOVE_JIT=1
 else
@@ -147,13 +149,21 @@ endif
 	$(print_dep_hints)
 
 # alcove script build: the full JIT runtime + the .als front end, emitted
-# as ./alcoves (./alcove is untouched). alcoves.c #includes alcove.c.
+# as the local alcoves binary. alcoves.c #includes alcove.c.
 als:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
 	$(CC) -Wall -W  -O3 $(JIT_FLAGS) -o alcoves  alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
+
+install: jit als
+	install -d "$(DESTDIR)$(BINDIR)"
+	install -m 755 alcove "$(DESTDIR)$(BINDIR)/alcove"
+	install -m 755 alcoves "$(DESTDIR)$(BINDIR)/alcoves"
+
+uninstall:
+	rm -f "$(DESTDIR)$(BINDIR)/alcove" "$(DESTDIR)$(BINDIR)/alcoves"
 # -Os removed
 
 # Print just the dependency status without rebuilding. Handy when a user
@@ -209,9 +219,10 @@ mpsc-test-tsan:
 	  || echo "tsan unavailable on this toolchain — skipping"
 
 # WebAssembly build via Emscripten. Produces web/alcove-core.{js,wasm}
-# wrapped by web/alcove.js. Excludes JIT, FFI, readline, and the RESP
-# server (all unavailable in the browser). See web/README.md for the
-# script-tag API and the runnable demo at web/index.html.
+# and web/alcoves-core.{js,wasm}, wrapped by web/alcove.js and
+# web/alcoves.js. Excludes JIT, FFI, readline, and the RESP server
+# (all unavailable in the browser). See the runnable demos at
+# web/index.html and web/learn.html.
 EMCC ?= emcc
 web:
 	@command -v $(EMCC) >/dev/null 2>&1 || \
@@ -227,9 +238,19 @@ web:
 	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
 	  -sALLOW_TABLE_GROWTH=1 \
 	  -o web/alcove-core.js alcove.c -lm
+	$(EMCC) -O2 -Wall -W \
+	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
+	  -sNO_EXIT_RUNTIME=1 \
+	  -sALLOW_MEMORY_GROWTH=1 \
+	  -sMODULARIZE=1 \
+	  -sEXPORT_NAME=createAlcoveScriptModule \
+	  -sEXPORTED_FUNCTIONS=_main,_alcove_web_eval,_alcove_register_cmd,_alcove_arg_int,_alcove_arg_string,_alcove_make_int \
+	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
+	  -sALLOW_TABLE_GROWTH=1 \
+	  -o web/alcoves-core.js alcoves.c -lm
 
 clean:
-	rm -f alcove mpsc_test mpsc_test_tsan
-	rm -f web/alcove-core.js web/alcove-core.wasm
+	rm -f alcove alcoves mpsc_test mpsc_test_tsan
+	rm -f web/alcove-core.js web/alcove-core.wasm web/alcoves-core.js web/alcoves-core.wasm
 
-.PHONY: parser speed nojit mono jit jit-mono deps test benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
+.PHONY: parser speed nojit mono jit jit-mono als install uninstall deps test benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean

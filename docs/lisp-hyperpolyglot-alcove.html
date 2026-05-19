@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Lisp Comparison With Alcove</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: none;
+      padding-left: 24px;
+      padding-right: 24px;
+      padding-top: 28px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    table {
+      border-collapse: collapse;
+      display: block;
+      max-width: 100%;
+      overflow-x: auto;
+      white-space: normal;
+      margin: 1.2em 0 2em;
+      font-size: 0.92rem;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #f3f4f6;
+      z-index: 2;
+    }
+    th, td {
+      border: 1px solid #d0d7de;
+      padding: 0.55rem 0.7rem;
+      vertical-align: top;
+      min-width: 11rem;
+    }
+    th:first-child,
+    td:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: #fff;
+      min-width: 9rem;
+      font-weight: 600;
+    }
+    thead th:first-child {
+      z-index: 3;
+      background: #f3f4f6;
+    }
+    pre {
+      margin: 0;
+      padding: 0.45rem 0.55rem;
+      background: #f6f8fa;
+      border-radius: 4px;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    code {
+      white-space: pre;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Lisp Comparison With Alcove</h1>
+</header>
+<h1 id="lisp-comparison-with-alcove">Lisp Comparison With Alcove</h1>
+<p>This is an Alcove-focused side-by-side Lisp reference inspired by <a
+href="https://hyperpolyglot.org/lisp">Hyperpolyglot’s Lisp
+comparison</a>. It is not a copy of that page: the rows are reorganized
+for Alcove, and the Alcove columns cover the current implementation in
+this repository.</p>
+<p>Alcove Script is a surface reader for Alcove forms. Canonical Alcove
+Script omits the outer parentheses for calls (<code>is a b</code>, not
+<code>(is a b)</code>), while inline parenthesized Lisp remains valid
+where useful. Its block syntax is indentation-sensitive; multiline table
+examples use preformatted code blocks.</p>
+<h2 id="runtime-and-syntax">Runtime And Syntax</h2>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Topic</th>
+<th>Common Lisp</th>
+<th>Racket</th>
+<th>Clojure</th>
+<th>Emacs Lisp</th>
+<th>Alcove</th>
+<th>Alcove Script</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Typical file</td>
+<td><code>.lisp</code>, <code>.cl</code></td>
+<td><code>.rkt</code></td>
+<td><code>.clj</code></td>
+<td><code>.el</code></td>
+<td><code>.alc</code></td>
+<td><code>.als</code></td>
+</tr>
+<tr class="even">
+<td>Run script</td>
+<td><code>sbcl --script file.lisp</code></td>
+<td><code>racket file.rkt</code></td>
+<td><code>clojure file.clj</code></td>
+<td><code>emacs --script file.el</code></td>
+<td><code>alcove file.alc</code></td>
+<td><code>alcoves file.als</code> when built with <code>make als</code>;
+<code>als.py file.als \| alcove</code></td>
+</tr>
+<tr class="odd">
+<td>REPL</td>
+<td><code>sbcl</code>, implementation REPL</td>
+<td><code>racket</code></td>
+<td><code>clj</code>, <code>clojure</code></td>
+<td><code>ielm</code></td>
+<td><code>alcove</code></td>
+<td><code>alcoves</code>; ALS input is enabled in the ALS build</td>
+</tr>
+<tr class="even">
+<td>One expression</td>
+<td>implementation option such as <code>--eval</code></td>
+<td><code>racket -e</code></td>
+<td><code>clojure -e</code></td>
+<td><code>emacs --eval</code></td>
+<td><code>alcove -e '(+ 1 2)'</code></td>
+<td><code>alcoves -e '+ 1 2'</code> in ALS builds</td>
+</tr>
+<tr class="odd">
+<td>Compiler</td>
+<td>implementation dependent</td>
+<td><code>raco make</code></td>
+<td>JVM bytecode via Clojure/JVM</td>
+<td>byte compiler</td>
+<td>built-in tree walker, bytecode VM, and JIT selected internally</td>
+<td>transpiles to Alcove forms before evaluation</td>
+</tr>
+<tr class="even">
+<td>Comments</td>
+<td><code>;</code>, block comments in most implementations</td>
+<td><code>;</code>, block comments</td>
+<td><code>;</code>, reader comment forms</td>
+<td><code>;</code></td>
+<td><code>;</code> line comments</td>
+<td><code>#</code> line comments, except <code>#\c</code> char
+literals</td>
+</tr>
+<tr class="odd">
+<td>Separators</td>
+<td>whitespace</td>
+<td>whitespace</td>
+<td>whitespace, commas as whitespace</td>
+<td>whitespace</td>
+<td>whitespace</td>
+<td>whitespace, indentation, trailing <code>:</code> for blocks</td>
+</tr>
+<tr class="even">
+<td>Quote</td>
+<td><code>'x</code>, <code>(quote x)</code></td>
+<td>same</td>
+<td>same</td>
+<td>same</td>
+<td><code>'x</code>, <code>(quote x)</code></td>
+<td><code>'x</code>; emitted as <code>(quote x)</code></td>
+</tr>
+<tr class="odd">
+<td>Quasiquote</td>
+<td>backquote and comma</td>
+<td>backquote and comma</td>
+<td>syntax quote/unquote</td>
+<td>backquote and comma</td>
+<td>backquote and comma</td>
+<td>backquote and comma reader forms</td>
+</tr>
+<tr class="even">
+<td>Booleans</td>
+<td><code>t</code>, <code>nil</code></td>
+<td><code>#t</code>, <code>#f</code></td>
+<td><code>true</code>, <code>false</code>, <code>nil</code></td>
+<td><code>t</code>, <code>nil</code></td>
+<td><code>t</code>, <code>nil</code></td>
+<td><code>true</code> maps to <code>t</code>; <code>false</code> maps to
+<code>nil</code></td>
+</tr>
+<tr class="odd">
+<td>False values</td>
+<td><code>nil</code></td>
+<td><code>#f</code></td>
+<td><code>false</code>, <code>nil</code></td>
+<td><code>nil</code></td>
+<td><code>nil</code>, empty list, empty string, numeric <code>0</code>,
+empty containers</td>
+<td><code>nil</code>, <code>false</code>, empty values</td>
+</tr>
+<tr class="even">
+<td>Character literal</td>
+<td><code>#\a</code></td>
+<td><code>#\a</code></td>
+<td><code>\a</code></td>
+<td><code>?a</code></td>
+<td><code>#\a</code>, <code>#\</code></td>
+<td><code>#\a</code>, <code>#\</code></td>
+</tr>
+<tr class="odd">
+<td>Vector literal</td>
+<td>implementation array syntax</td>
+<td><code>#(...)</code>, vectors</td>
+<td><code>[1 2 3]</code></td>
+<td><code>[1 2 3]</code></td>
+<td><code>#[1 2 3]</code>, <code>(vector 1 2 3)</code></td>
+<td><code>#[1 2 3]</code> or <code>vector 1 2 3</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="names-binding-and-assignment">Names, Binding, And
+Assignment</h2>
+<table>
+<thead>
+<tr>
+<th>
+Topic
+</th>
+<th>
+Common Lisp
+</th>
+<th>
+Racket
+</th>
+<th>
+Clojure
+</th>
+<th>
+Emacs Lisp
+</th>
+<th>
+Alcove
+</th>
+<th>
+Alcove Script
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+Function namespace
+</td>
+<td>
+Lisp-2
+</td>
+<td>
+Lisp-1
+</td>
+<td>
+Lisp-1
+</td>
+<td>
+Lisp-2 in traditional use
+</td>
+<td>
+Lisp-1
+</td>
+<td>
+Lisp-1
+</td>
+</tr>
+<tr>
+<td>
+Top-level/session binding
+</td>
+<td>
+<code>defvar</code>, <code>defparameter</code>, <code>defun</code>
+</td>
+<td>
+<code>define</code>
+</td>
+<td>
+<code>def</code>, <code>defn</code>
+</td>
+<td>
+<code>setq</code>, <code>defun</code>
+</td>
+<td>
+At file/REPL top level: <code>(= x 3)</code>,
+<code>(def f (x) …)</code>
+</td>
+<td>
+<pre><code>set x 3
+
+def f (x):
+  + x 1</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Local binding
+</td>
+<td>
+<code>let</code>, <code>let*</code>
+</td>
+<td>
+<code>let</code>, <code>let*</code>
+</td>
+<td>
+<code>let</code>
+</td>
+<td>
+<code>let</code>, <code>let*</code>, <code>lexical-let</code>
+</td>
+<td>
+<code>(let x v body…)</code>, <code>(with (x v y w) body…)</code>
+</td>
+<td>
+<pre><code>let x 10:
+  + x 5
+
+with (x 3 y 4):
+  sqrt (+ (* x x) (* y y))</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Assignment
+</td>
+<td>
+<code>setf</code>, <code>setq</code>
+</td>
+<td>
+<code>set!</code>
+</td>
+<td>
+vars/atoms/refs depending on target
+</td>
+<td>
+<code>setq</code>, <code>setf</code>
+</td>
+<td>
+<code>(= place value)</code> updates the nearest existing lexical binding.
+At top level it creates/updates a session binding; inside a function an
+unbound symbol becomes local to that call. <code>(setq sym value)</code>
+is variable-only and falls back to a top-level session binding when no
+local binding exists.
+</td>
+<td>
+<code>set place value</code> maps to <code>=</code> with the same scope rules;
+<code>setq sym value</code> is available for top-level fallback.
+</td>
+</tr>
+<tr>
+<td>
+Remove binding
+</td>
+<td>
+<code>makunbound</code>
+</td>
+<td>
+namespace mutation
+</td>
+<td>
+<code>ns-unmap</code>
+</td>
+<td>
+<code>makunbound</code>
+</td>
+<td>
+<code>(forget ’x)</code> removes the top-level session binding
+</td>
+<td>
+<code>forget ’x</code>
+</td>
+</tr>
+<tr>
+<td>
+Persistent binding
+</td>
+<td>
+implementation-specific libraries
+</td>
+<td>
+serialize or custodian-managed state
+</td>
+<td>
+atoms/files/database libraries
+</td>
+<td>
+file variables, custom save
+</td>
+<td>
+<code>(persist ’x)</code>, <code>(unpersist ’x)</code>,
+<code>(savedb)</code>, <code>(loaddb)</code> for dumpable values
+</td>
+<td>
+<pre><code>persist 'x
+unpersist 'x
+savedb
+loaddb</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Symbol predicate
+</td>
+<td>
+<code>symbolp</code>
+</td>
+<td>
+<code>symbol?</code>
+</td>
+<td>
+<code>symbol?</code>
+</td>
+<td>
+<code>symbolp</code>
+</td>
+<td>
+<code>(symbol? x)</code>
+</td>
+<td>
+<code>symbol? x</code>
+</td>
+</tr>
+<tr>
+<td>
+Function predicate
+</td>
+<td>
+<code>functionp</code>
+</td>
+<td>
+<code>procedure?</code>
+</td>
+<td>
+<code>fn?</code>, <code>ifn?</code>
+</td>
+<td>
+<code>functionp</code>
+</td>
+<td>
+<code>(fn? x)</code>
+</td>
+<td>
+<code>fn? x</code>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="equality-logic-and-numbers">Equality, Logic, And Numbers</h2>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Topic</th>
+<th>Common Lisp</th>
+<th>Racket</th>
+<th>Clojure</th>
+<th>Emacs Lisp</th>
+<th>Alcove</th>
+<th>Alcove Script</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Identity</td>
+<td><code>eq</code>, <code>eql</code></td>
+<td><code>eq?</code>, <code>eqv?</code></td>
+<td><code>identical?</code></td>
+<td><code>eq</code></td>
+<td><code>(is a b)</code></td>
+<td><code>is a b</code></td>
+</tr>
+<tr class="even">
+<td>Structural equality</td>
+<td><code>equal</code>, <code>equalp</code></td>
+<td><code>equal?</code></td>
+<td><code>=</code></td>
+<td><code>equal</code></td>
+<td><code>(iso a b)</code></td>
+<td><code>iso a b</code></td>
+</tr>
+<tr class="odd">
+<td>Numeric equality and assignment token</td>
+<td><code>=</code> for numbers, <code>setf</code> for assignment</td>
+<td><code>=</code> for numbers, <code>set!</code> for assignment</td>
+<td><code>=</code></td>
+<td><code>=</code> for numbers</td>
+<td><code>(= place value)</code> assigns; <code>(iso ...)</code> or
+comparisons for tests</td>
+<td><code>set</code> maps to assignment</td>
+</tr>
+<tr class="even">
+<td>Comparisons</td>
+<td><code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>,
+<code>&gt;=</code></td>
+<td>same</td>
+<td>same</td>
+<td>same</td>
+<td><code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>,
+<code>&gt;=</code> chained</td>
+<td><code>&lt; a b</code>, <code>&gt;= a b c</code></td>
+</tr>
+<tr class="odd">
+<td>Logic</td>
+<td><code>and</code>, <code>or</code>, <code>not</code></td>
+<td><code>and</code>, <code>or</code>, <code>not</code></td>
+<td><code>and</code>, <code>or</code>, <code>not</code></td>
+<td><code>and</code>, <code>or</code>, <code>not</code></td>
+<td><code>(and ...)</code>, <code>(or ...)</code>,
+<code>(no x)</code></td>
+<td><code>and x y</code>, <code>or x y</code>, <code>no x</code></td>
+</tr>
+<tr class="even">
+<td>Arithmetic</td>
+<td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
+<code>mod</code></td>
+<td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
+<code>modulo</code></td>
+<td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
+<code>mod</code></td>
+<td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
+<code>%</code></td>
+<td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
+<code>mod</code></td>
+<td><code>+ a b</code>, <code>mod a b</code></td>
+</tr>
+<tr class="odd">
+<td>Math</td>
+<td>broad standard math library</td>
+<td>broad standard math library</td>
+<td>Java math interop</td>
+<td>common numeric functions</td>
+<td><code>abs</code>, <code>min</code>, <code>max</code>,
+<code>sqrt</code>, <code>sqrt-int</code>, <code>exp</code>,
+<code>expt</code>, <code>**</code>, <code>random</code>,
+<code>odd</code></td>
+<td><code>sqrt x</code>, <code>expt b e</code>,
+<code>random n</code></td>
+</tr>
+<tr class="even">
+<td>Bitwise</td>
+<td><code>logand</code>, <code>logior</code>, <code>logxor</code>,
+<code>lognot</code>, <code>ash</code></td>
+<td>bitwise library</td>
+<td><code>bit-and</code>, <code>bit-or</code>, shifts</td>
+<td><code>logand</code>, <code>lsh</code></td>
+<td><code>bit-and</code>/<code>&amp;</code>,
+<code>bit-or</code>/<code>|</code>, <code>bit-xor</code>/<code>^</code>,
+<code>bit-not</code>/<code>~</code>, <code>&lt;&lt;</code>,
+<code>&gt;&gt;</code></td>
+<td><code>bit-and a b</code>, <code>&lt;&lt; x n</code></td>
+</tr>
+<tr class="odd">
+<td>Number tower</td>
+<td>bignums, ratios, complex numbers</td>
+<td>bignums, ratios, complex numbers</td>
+<td>JVM numeric tower</td>
+<td>integers/floats vary</td>
+<td>fixnums and floats; no bignums, ratios, or complex numbers</td>
+<td>runtime types unchanged; ALS only changes source spelling</td>
+</tr>
+</tbody>
+</table>
+<h2 id="collections">Collections</h2>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Topic</th>
+<th>Common Lisp</th>
+<th>Racket</th>
+<th>Clojure</th>
+<th>Emacs Lisp</th>
+<th>Alcove</th>
+<th>Alcove Script</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>List construction</td>
+<td><code>cons</code>, <code>list</code></td>
+<td><code>cons</code>, <code>list</code></td>
+<td><code>cons</code>, <code>list</code></td>
+<td><code>cons</code>, <code>list</code></td>
+<td><code>cons</code>, <code>list</code></td>
+<td><code>cons x xs</code>, <code>list a b c</code></td>
+</tr>
+<tr class="even">
+<td>List access</td>
+<td><code>car</code>, <code>cdr</code>, <code>nth</code></td>
+<td><code>car</code>, <code>cdr</code>, <code>list-ref</code></td>
+<td><code>first</code>, <code>rest</code>, <code>nth</code></td>
+<td><code>car</code>, <code>cdr</code>, <code>nth</code></td>
+<td><code>car</code>, <code>cdr</code>, <code>nth</code></td>
+<td><code>car xs</code>, <code>nth xs 0</code></td>
+</tr>
+<tr class="odd">
+<td>List transforms</td>
+<td><code>mapcar</code>, <code>remove-if-not</code>,
+<code>reduce</code></td>
+<td><code>map</code>, <code>filter</code>, <code>foldl</code></td>
+<td><code>map</code>, <code>filter</code>, <code>reduce</code></td>
+<td><code>mapcar</code>, <code>seq-filter</code>,
+<code>cl-reduce</code></td>
+<td><code>map</code>, <code>filter</code>, <code>reduce</code>,
+<code>reverse</code>, <code>append</code>, <code>length</code></td>
+<td><code>map f xs</code>, <code>reduce f init xs</code></td>
+</tr>
+<tr class="even">
+<td>Sequence predicates</td>
+<td>many type predicates</td>
+<td>many type predicates</td>
+<td>seq predicates</td>
+<td>many predicates</td>
+<td><code>pair?</code>, <code>vec?</code>, <code>dict?</code>,
+<code>deque?</code>, <code>blob?</code>, <code>string?</code>,
+<code>number?</code></td>
+<td><code>pair? x</code>, <code>vec? x</code>, <code>dict? x</code></td>
+</tr>
+<tr class="odd">
+<td>Fixed array/vector</td>
+<td>arrays, vectors</td>
+<td>vectors</td>
+<td>vectors</td>
+<td>vectors</td>
+<td><code>(vec n init)</code>, <code>(vector ...)</code>,
+<code>#[...]</code></td>
+<td><code>vec n init</code>, <code>vector a b c</code>,
+<code>#[...]</code></td>
+</tr>
+<tr class="even">
+<td>Vector access</td>
+<td><code>aref</code>, <code>setf</code></td>
+<td><code>vector-ref</code>, <code>vector-set!</code></td>
+<td><code>nth</code>, <code>assoc</code></td>
+<td><code>aref</code>, <code>aset</code></td>
+<td><code>vec-ref</code>, <code>vec-set!</code>, call syntax
+<code>(v i)</code>, assignment <code>(= (v i) x)</code></td>
+<td><code>vec-ref v i</code>, <code>set (v i) x</code></td>
+</tr>
+<tr class="odd">
+<td>Vector length</td>
+<td><code>length</code></td>
+<td><code>vector-length</code></td>
+<td><code>count</code></td>
+<td><code>length</code></td>
+<td><code>vec-len</code>, <code>length</code>, <code>count</code></td>
+<td><code>vec-len v</code>, <code>count v</code></td>
+</tr>
+<tr class="even">
+<td>Vector deque window</td>
+<td>libraries</td>
+<td>libraries</td>
+<td>vectors/queues</td>
+<td>lists/ring library</td>
+<td><code>vec-push!</code>, <code>vec-pop!</code>,
+<code>vec-unshift!</code>, <code>vec-shift!</code></td>
+<td><code>vec-push! v x</code>, <code>vec-shift! v</code></td>
+</tr>
+<tr class="odd">
+<td>Hash map</td>
+<td>hash tables</td>
+<td>hash tables</td>
+<td>maps</td>
+<td>hash tables</td>
+<td><code>hash-map</code>, <code>assoc!</code>, <code>dissoc!</code>,
+<code>get</code>, <code>contains?</code>, <code>keys</code>,
+<code>vals</code>, <code>count</code></td>
+<td><code>hash-map "k" v</code>, <code>get d "k"</code></td>
+</tr>
+<tr class="even">
+<td>Deque</td>
+<td>library queue</td>
+<td>queue libraries</td>
+<td><code>PersistentQueue</code>, Java queues</td>
+<td>lists/ring library</td>
+<td><code>deque</code>, <code>push-right!</code>,
+<code>push-left!</code>, <code>pop-right!</code>,
+<code>pop-left!</code>, <code>peek-right</code>,
+<code>peek-left</code></td>
+<td><code>deque a b</code>, <code>push-right! q x</code></td>
+</tr>
+<tr class="odd">
+<td>Binary data</td>
+<td>byte arrays</td>
+<td>bytes</td>
+<td>byte arrays</td>
+<td>unibyte strings</td>
+<td><code>make-blob</code>, <code>blob-len</code>,
+<code>blob-ref</code>, <code>blob-&gt;string</code>,
+<code>string-&gt;blob</code>, <code>read-bytes</code></td>
+<td><code>make-blob n</code>, <code>read-bytes path</code></td>
+</tr>
+<tr class="even">
+<td>Sets</td>
+<td>hash table conventions or libraries</td>
+<td>sets</td>
+<td>sets</td>
+<td>hash tables/libraries</td>
+<td><code>(set 1 2 3)</code>, <code>set?</code>,
+<code>set-add!</code>, <code>set-del!</code>,
+<code>set-has?</code>, <code>set-union</code>,
+<code>set-intersection</code>, <code>set-difference</code>,
+<code>set-&gt;list</code>; typed identity for fixnums, floats, chars,
+strings, symbols, blobs, <code>nil</code>, and <code>t</code></td>
+<td><code>hash-set 1 2 3</code>, <code>set-has? s x</code>;
+<code>set</code> is assignment syntax in Alcove Script</td>
+</tr>
+</tbody>
+</table>
+<h2 id="strings-bytes-regex-and-time">Strings, Bytes, Regex, And
+Time</h2>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Topic</th>
+<th>Common Lisp</th>
+<th>Racket</th>
+<th>Clojure</th>
+<th>Emacs Lisp</th>
+<th>Alcove</th>
+<th>Alcove Script</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>String predicate</td>
+<td><code>stringp</code></td>
+<td><code>string?</code></td>
+<td><code>string?</code></td>
+<td><code>stringp</code></td>
+<td><code>string?</code></td>
+<td><code>string? x</code></td>
+</tr>
+<tr class="even">
+<td>String length</td>
+<td><code>length</code></td>
+<td><code>string-length</code></td>
+<td><code>.length</code></td>
+<td><code>length</code></td>
+<td><code>length</code></td>
+<td><code>length s</code></td>
+</tr>
+<tr class="odd">
+<td>Character lookup</td>
+<td><code>char</code></td>
+<td><code>string-ref</code></td>
+<td><code>.charAt</code></td>
+<td><code>aref</code></td>
+<td><code>(nth s i)</code> or <code>(s i)</code></td>
+<td><code>nth s i</code> or <code>(s i)</code></td>
+</tr>
+<tr class="even">
+<td>String mutation</td>
+<td>adjustable arrays / <code>setf</code></td>
+<td>mutable strings</td>
+<td>Java strings immutable</td>
+<td><code>aset</code></td>
+<td><code>(= (s i) #\X)</code> mutates</td>
+<td><code>set (s i) #\X</code></td>
+</tr>
+<tr class="odd">
+<td>Concatenate</td>
+<td><code>concatenate</code></td>
+<td><code>string-append</code></td>
+<td><code>str</code></td>
+<td><code>concat</code></td>
+<td><code>str</code>, <code>string-append</code></td>
+<td><code>str a b</code>, <code>string-append a b</code></td>
+</tr>
+<tr class="even">
+<td>Format</td>
+<td><code>format</code></td>
+<td><code>format</code></td>
+<td><code>format</code>, <code>String/format</code></td>
+<td><code>format</code></td>
+<td>not built in; use <code>str</code> for simple conversion</td>
+<td>not built in; use <code>str</code></td>
+</tr>
+<tr class="odd">
+<td>Split/join</td>
+<td>libraries or sequence utilities</td>
+<td>string libraries</td>
+<td><code>clojure.string</code></td>
+<td><code>split-string</code>, <code>string-join</code></td>
+<td><code>string-split</code>, <code>string-join</code>,
+<code>string-trim</code>, <code>string-upcase</code>,
+<code>string-downcase</code></td>
+<td><code>string-split s sep</code>, <code>string-join xs sep</code></td>
+</tr>
+<tr class="even">
+<td>Regex</td>
+<td>CL-PPCRE or implementation libraries</td>
+<td><code>regexp</code>, <code>pregexp</code></td>
+<td>Java regex literals</td>
+<td>native regex functions</td>
+<td>not built in; use FFI</td>
+<td>not built in</td>
+</tr>
+<tr class="odd">
+<td>Date/time</td>
+<td>implementation time APIs</td>
+<td>time/date libraries</td>
+<td>Java time libraries</td>
+<td>time APIs</td>
+<td><code>(time expr)</code> measures elapsed time; no date type</td>
+<td><code>time expr</code></td>
+</tr>
+<tr class="even">
+<td>Sleep</td>
+<td>implementation dependent</td>
+<td><code>sleep</code></td>
+<td><code>Thread/sleep</code></td>
+<td><code>sleep-for</code></td>
+<td><code>(sleep-ms n)</code></td>
+<td><code>sleep-ms n</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="functions-macros-and-control">Functions, Macros, And
+Control</h2>
+<table>
+<thead>
+<tr>
+<th>
+Topic
+</th>
+<th>
+Common Lisp
+</th>
+<th>
+Racket
+</th>
+<th>
+Clojure
+</th>
+<th>
+Emacs Lisp
+</th>
+<th>
+Alcove
+</th>
+<th>
+Alcove Script
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+Named function
+</td>
+<td>
+<code>defun</code>
+</td>
+<td>
+<code>define</code>
+</td>
+<td>
+<code>defn</code>
+</td>
+<td>
+<code>defun</code>
+</td>
+<td>
+<code>(def name (args…) body…)</code>
+</td>
+<td>
+<pre><code>def name (args):
+  body</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Anonymous function
+</td>
+<td>
+<code>lambda</code>
+</td>
+<td>
+<code>lambda</code>
+</td>
+<td>
+<code>fn</code>
+</td>
+<td>
+<code>lambda</code>
+</td>
+<td>
+<code>(fn (args…) body…)</code>
+</td>
+<td>
+inline Lisp form, e.g. <code>(fn (x) (+ x 1))</code>
+</td>
+</tr>
+<tr>
+<td>
+Apply
+</td>
+<td>
+<code>apply</code>
+</td>
+<td>
+<code>apply</code>
+</td>
+<td>
+<code>apply</code>
+</td>
+<td>
+<code>apply</code>
+</td>
+<td>
+<code>apply</code>
+</td>
+<td>
+<code>apply f args</code>
+</td>
+</tr>
+<tr>
+<td>
+Map/filter/reduce
+</td>
+<td>
+<code>mapcar</code>, libraries
+</td>
+<td>
+<code>map</code>, <code>filter</code>, folds
+</td>
+<td>
+<code>map</code>, <code>filter</code>, <code>reduce</code>
+</td>
+<td>
+<code>mapcar</code>, seq libraries
+</td>
+<td>
+<code>map</code>, <code>filter</code>, <code>reduce</code>,
+<code>any?</code>, <code>all?</code>
+</td>
+<td>
+<pre><code>map f xs
+filter pred xs
+reduce f init xs</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Sequence body
+</td>
+<td>
+<code>progn</code>
+</td>
+<td>
+<code>begin</code>
+</td>
+<td>
+<code>do</code>
+</td>
+<td>
+<code>progn</code>
+</td>
+<td>
+<code>do</code>
+</td>
+<td>
+trailing <code>:</code> blocks naturally group body forms
+</td>
+</tr>
+<tr>
+<td>
+Conditional
+</td>
+<td>
+<code>if</code>, <code>cond</code>, <code>case</code>
+</td>
+<td>
+<code>if</code>, <code>cond</code>, <code>case</code>
+</td>
+<td>
+<code>if</code>, <code>cond</code>, <code>case</code>
+</td>
+<td>
+<code>if</code>, <code>cond</code>
+</td>
+<td>
+cond-style <code>if</code>, <code>when</code>, flat <code>case</code>
+</td>
+<td>
+<pre><code>if (&lt; n 2):
+  n
+  + (fib (- n 1)) (fib (- n 2))</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Loops
+</td>
+<td>
+<code>loop</code>, <code>dotimes</code>, <code>dolist</code>
+</td>
+<td>
+<code>for</code>, recursion
+</td>
+<td>
+<code>loop</code>, sequence ops
+</td>
+<td>
+<code>while</code>, <code>dotimes</code>, <code>dolist</code>
+</td>
+<td>
+<code>while</code>, <code>repeat</code>, integer <code>for</code>,
+collection <code>each</code>
+</td>
+<td>
+<pre><code>for i 1 10:
+  prn i
+
+while test:
+  body</code></pre>
+</td>
+</tr>
+<tr>
+<td>
+Exceptions
+</td>
+<td>
+<code>handler-case</code>, restarts
+</td>
+<td>
+<code>with-handlers</code>
+</td>
+<td>
+<code>try</code>/<code>catch</code>
+</td>
+<td>
+<code>condition-case</code>
+</td>
+<td>
+no user-level exceptions
+</td>
+<td>
+no user-level exceptions
+</td>
+</tr>
+<tr>
+<td>
+Macros
+</td>
+<td>
+<code>defmacro</code>
+</td>
+<td>
+<code>define-syntax</code> family
+</td>
+<td>
+<code>defmacro</code>
+</td>
+<td>
+<code>defmacro</code>
+</td>
+<td>
+<code>defmacro</code>, <code>macroexpand-1</code>, <code>eval</code>
+</td>
+<td>
+<code>macro</code> maps to <code>defmacro</code>; quoted forms are
+ordinary data
+</td>
+</tr>
+<tr>
+<td>
+Source and disassembly
+</td>
+<td>
+implementation dependent
+</td>
+<td>
+tools
+</td>
+<td>
+tools
+</td>
+<td>
+<code>symbol-function</code>, byte compiler tools
+</td>
+<td>
+<code>source</code>, <code>disasm</code>, <code>inspect</code>,
+<code>dir</code>, <code>doc</code>, <code>help</code>
+</td>
+<td>
+<code>source f</code>, <code>disasm f</code>, <code>doc name</code>,
+<code>help</code>
+</td>
+</tr>
+</tbody>
+</table>
+<h2 id="files-namespaces-and-interop">Files, Namespaces, And
+Interop</h2>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Topic</th>
+<th>Common Lisp</th>
+<th>Racket</th>
+<th>Clojure</th>
+<th>Emacs Lisp</th>
+<th>Alcove</th>
+<th>Alcove Script</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Load file</td>
+<td><code>load</code></td>
+<td><code>require</code>, <code>load</code></td>
+<td><code>require</code>, <code>load-file</code></td>
+<td><code>load</code></td>
+<td><code>(load "file.alc")</code></td>
+<td><code>load "file.alc"</code></td>
+</tr>
+<tr class="even">
+<td>Modules/packages</td>
+<td>packages, ASDF systems</td>
+<td>modules</td>
+<td>namespaces</td>
+<td>features/provide</td>
+<td>no module system; one top-level session environment</td>
+<td>no module syntax</td>
+</tr>
+<tr class="odd">
+<td>Streams</td>
+<td>standard stream system</td>
+<td>ports</td>
+<td>Java streams/readers</td>
+<td>buffers/processes/files</td>
+<td>no general stream API</td>
+<td>no general stream API</td>
+</tr>
+<tr class="even">
+<td>Read whole file bytes</td>
+<td><code>read-sequence</code> over byte array</td>
+<td><code>file-&gt;bytes</code></td>
+<td>Java/NIO helpers</td>
+<td>literal insert or unibyte strings</td>
+<td><code>(read-bytes "path")</code>, <code>read-string</code>,
+<code>read-lines</code>, <code>file-exists?</code></td>
+<td><code>read-bytes "path"</code>, <code>read-string "path"</code>,
+<code>read-lines "path"</code></td>
+</tr>
+<tr class="odd">
+<td>Write file</td>
+<td>standard output streams</td>
+<td>ports</td>
+<td><code>spit</code>, Java IO</td>
+<td><code>write-region</code></td>
+<td><code>write-string</code>, <code>append-string</code>,
+<code>write-bytes</code></td>
+<td><code>write-string path text</code>, <code>append-string path text</code>,
+<code>write-bytes path blob</code></td>
+</tr>
+<tr class="even">
+<td>FFI</td>
+<td>CFFI or implementation FFI</td>
+<td>Racket FFI</td>
+<td>JNI/JNA/Java interop</td>
+<td>dynamic modules/modules</td>
+<td><code>(ffi-fn lib symbol ret arg...)</code></td>
+<td><code>ffi-fn lib symbol ret arg...</code></td>
+</tr>
+<tr class="odd">
+<td>Java interop</td>
+<td>implementation-specific</td>
+<td>JVM variants only</td>
+<td>native JVM interop</td>
+<td>none</td>
+<td>none</td>
+<td>none</td>
+</tr>
+<tr class="even">
+<td>Objects</td>
+<td>CLOS</td>
+<td>classes/structs</td>
+<td>records/protocols/classes</td>
+<td>EIEIO/cl-defstruct</td>
+<td>no object system; use lists, dicts, vectors, deques</td>
+<td>no object syntax; use <code>hash-map</code>, <code>vector</code>,
+<code>deque</code></td>
+</tr>
+<tr class="odd">
+<td>RESP/Redis server</td>
+<td>library territory</td>
+<td>library territory</td>
+<td>library territory</td>
+<td>library territory</td>
+<td>built-in RESP2 server and in-process Redis bridge</td>
+<td><code>redis-set k v</code>, <code>redis-get k</code>,
+<code>redis-defcmd name fn</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="alcove-full-builtin-inventory">Alcove Full Builtin
+Inventory</h2>
+<p>This section lists the current builtin command surface so
+Alcove-specific forms that do not appear in the Hyperpolyglot-style rows
+are still documented.</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Alcove group</th>
+<th>Alcove commands</th>
+<th>Rough equivalents elsewhere</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Special forms/control</td>
+<td><code>quote</code>, <code>if</code>, <code>do</code>,
+<code>when</code>, <code>while</code>, <code>repeat</code>,
+<code>and</code>, <code>or</code>, <code>case</code>, <code>for</code>,
+<code>each</code>, <code>let</code>, <code>with</code></td>
+<td>CL/Racket/Clojure/Emacs all have conditionals and local binding;
+<code>repeat</code>, integer <code>for</code>, and <code>each</code> map
+to loop libraries or sequence functions</td>
+</tr>
+<tr class="even">
+<td>Comparison/equality</td>
+<td><code>=</code>, <code>&lt;</code>, <code>&gt;</code>,
+<code>&lt;=</code>, <code>&gt;=</code>, <code>is</code>,
+<code>iso</code>, <code>in</code>, <code>no</code></td>
+<td><code>eq</code>/<code>equal</code> families; membership functions;
+<code>not</code></td>
+</tr>
+<tr class="odd">
+<td>Arithmetic/math</td>
+<td><code>+</code>, <code>*</code>, <code>-</code>, <code>/</code>,
+<code>mod</code>, <code>abs</code>, <code>max</code>, <code>min</code>,
+<code>odd</code>, <code>sqrt</code>, <code>sqrt-int</code>,
+<code>exp</code>, <code>expt</code>, <code>**</code>,
+<code>random</code></td>
+<td>Standard numeric functions; <code>sqrt-int</code> often requires a
+helper/library</td>
+</tr>
+<tr class="even">
+<td>Bitwise</td>
+<td><code>bit-and</code>, <code>&amp;</code>, <code>bit-or</code>,
+<code>|</code>, <code>bit-xor</code>, <code>^</code>,
+<code>bit-not</code>, <code>~</code>, <code>&lt;&lt;</code>,
+<code>&gt;&gt;</code></td>
+<td>CL <code>logand</code>/<code>ash</code>; Racket bitwise functions;
+Clojure bit functions; Emacs <code>logand</code>/<code>lsh</code></td>
+</tr>
+<tr class="odd">
+<td>Pairs/lists</td>
+<td><code>cons</code>, <code>car</code>, <code>cdr</code>,
+<code>list</code>, <code>length</code>, <code>nth</code>,
+<code>reverse</code>, <code>append</code></td>
+<td>Standard list APIs</td>
+</tr>
+<tr class="even">
+<td>Vectors</td>
+<td><code>vec</code>, <code>vector</code>, <code>vec-ref</code>,
+<code>vec-set!</code>, <code>vec-len</code></td>
+<td>CL arrays/vectors; Racket vectors; Clojure vectors; Emacs
+vectors</td>
+</tr>
+<tr class="odd">
+<td>Numeric vector kernels</td>
+<td><code>vec-dot</code>, <code>vec-axpy!</code>,
+<code>vec-scale!</code>, <code>vec-add!</code>, <code>vec-copy!</code>,
+<code>vec-fill!</code>, <code>vec-relu!</code>, <code>vec-argmax</code>,
+<code>vec-max</code></td>
+<td>BLAS/math libraries in CL/Racket/Clojure; no common Emacs
+equivalent</td>
+</tr>
+<tr class="even">
+<td>Vector deque window</td>
+<td><code>vec-push!</code>, <code>vec-pop!</code>,
+<code>vec-unshift!</code>, <code>vec-shift!</code></td>
+<td>queue/deque libraries; Clojure persistent queues or Java deques</td>
+</tr>
+<tr class="odd">
+<td>Functions/macros/eval</td>
+<td><code>def</code>, <code>fn</code>, <code>defmacro</code>,
+<code>macroexpand-1</code>, <code>eval</code>, <code>apply</code></td>
+<td>Standard Lisp function and macro facilities, with syntax
+differences</td>
+</tr>
+<tr class="even">
+<td>Higher order</td>
+<td><code>map</code>, <code>filter</code>, <code>reduce</code>,
+<code>any?</code>, <code>all?</code></td>
+<td>Sequence libraries or core functions</td>
+</tr>
+<tr class="odd">
+<td>Predicates</td>
+<td><code>number?</code>, <code>string?</code>, <code>symbol?</code>,
+<code>pair?</code>, <code>fn?</code>, <code>vec?</code>,
+<code>blob?</code>, <code>dict?</code>, <code>deque?</code></td>
+<td>Standard type predicates; <code>blob?</code>, <code>dict?</code>,
+<code>deque?</code> are Alcove-specific data types</td>
+</tr>
+<tr class="even">
+<td>Printing</td>
+<td><code>pr</code>, <code>print</code>, <code>prn</code>,
+<code>println</code></td>
+<td>CL <code>princ</code>/<code>print</code>/<code>format</code>; Racket
+<code>display</code>/<code>write</code>; Clojure
+<code>print</code>/<code>println</code>; Emacs
+<code>princ</code>/<code>message</code></td>
+</tr>
+<tr class="odd">
+<td>Persistence</td>
+<td><code>persist</code>, <code>forget</code>, <code>unpersist</code>,
+<code>savedb</code>, <code>loaddb</code>, <code>ispersistent</code></td>
+<td>No direct standard equivalent; serialize variables or use
+images/databases. Current dump support covers scalars, symbols,
+pairs/lists, lambdas/macros by source form, blobs, vectors, sets, and RESP
+values; dict/deque persistence is still a feature gap.</td>
+</tr>
+<tr class="even">
+<td>Introspection/utilities</td>
+<td><code>inspect</code>, <code>disasm</code>, <code>source</code>,
+<code>dir</code>, <code>time</code>, <code>web?</code>,
+<code>sleep-ms</code>, <code>exit</code>, <code>quit</code>,
+<code>doc</code>, <code>help</code></td>
+<td>Implementation tools; <code>web?</code> is Alcove/WASM-specific</td>
+</tr>
+<tr class="odd">
+<td>FFI</td>
+<td><code>ffi-fn</code></td>
+<td>CL CFFI/implementation FFI; Racket FFI; Clojure JNI/JNA; Emacs
+modules</td>
+</tr>
+<tr class="even">
+<td>Hash maps</td>
+<td><code>hash-map</code>, <code>assoc!</code>, <code>dissoc!</code>,
+<code>get</code>, <code>contains?</code>, <code>keys</code>,
+<code>vals</code>, <code>count</code></td>
+<td>Hash tables/maps</td>
+</tr>
+<tr class="odd">
+<td>Deques</td>
+<td><code>deque</code>, <code>push-right!</code>,
+<code>push-left!</code>, <code>pop-right!</code>,
+<code>pop-left!</code>, <code>peek-left</code>,
+<code>peek-right</code></td>
+<td>Queue/deque libraries</td>
+</tr>
+<tr class="even">
+<td>Blobs</td>
+<td><code>make-blob</code>, <code>blob-len</code>,
+<code>blob-ref</code>, <code>blob-&gt;string</code>,
+<code>string-&gt;blob</code>, <code>read-bytes</code></td>
+<td>Byte arrays/bytes/unibyte strings</td>
+</tr>
+<tr class="odd">
+<td>RESP bridge</td>
+<td><code>redis-count</code>, <code>redis-keys</code>,
+<code>redis-type</code>, <code>redis-get</code>, <code>redis-val</code>,
+<code>redis-set</code>, <code>redis-del</code>,
+<code>redis-flush</code>, <code>redis-port</code>,
+<code>redis-defcmd</code>, <code>redis-undefcmd</code>,
+<code>redis-cmds</code></td>
+<td>Redis client/server libraries; not a standard Lisp feature</td>
+</tr>
+</tbody>
+</table>
+<h2 id="resp-commands-implemented-by-alcove">RESP Commands Implemented
+By Alcove</h2>
+<p>When started with <code>-r PORT</code>, Alcove also exposes a RESP2
+server. The command set currently includes core Redis-like commands:
+<code>PING</code>, <code>ECHO</code>, <code>QUIT</code>,
+<code>COMMAND</code>, <code>SELECT</code>, <code>DBSIZE</code>,
+<code>FLUSHDB</code>, <code>FLUSHALL</code>, <code>KEYS</code>,
+<code>TYPE</code>, <code>DEL</code>, <code>UNLINK</code>,
+<code>EXISTS</code>, <code>EXPIRE</code>, <code>PEXPIRE</code>,
+<code>TTL</code>, <code>PTTL</code>, <code>PERSIST</code>,
+<code>GET</code>, <code>SET</code>, <code>STRLEN</code>,
+<code>INCR</code>, <code>DECR</code>, <code>INCRBY</code>,
+<code>DECRBY</code>, <code>APPEND</code>, <code>LPUSH</code>,
+<code>RPUSH</code>, <code>LPOP</code>, <code>RPOP</code>,
+<code>LLEN</code>, <code>LINDEX</code>, <code>LRANGE</code>,
+<code>HSET</code>, <code>HGET</code>, <code>HDEL</code>,
+<code>HEXISTS</code>, <code>HLEN</code>, <code>HKEYS</code>,
+<code>HVALS</code>, <code>HGETALL</code>, <code>SAVE</code>, and
+<code>BGSAVE</code>.</p>
+<p>User-defined RESP commands can be registered from Lisp with
+<code>redis-defcmd</code>.</p>
+</body>
+</html>

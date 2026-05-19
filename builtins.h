@@ -21,15 +21,22 @@ extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
 extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
 extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
 extern const char doc_def[], doc_fn[], doc_defmacro[], doc_macroexpand[];
-extern const char doc_eval[], doc_apply[];
+extern const char doc_eval[], doc_apply[], doc_setq[];
 extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
 extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
-extern const char doc_vecp[], doc_blobp[], doc_dictp[], doc_dequep[];
+extern const char doc_vecp[], doc_blobp[], doc_dictp[], doc_dequep[], doc_setp[];
 exp_t *vecpcmd(exp_t *e, env_t *env);
 exp_t *blobpcmd(exp_t *e, env_t *env);
 exp_t *dictpcmd(exp_t *e, env_t *env);
 exp_t *dequepcmd(exp_t *e, env_t *env);
+exp_t *setpcmd(exp_t *e, env_t *env);
 extern const char doc_pr[], doc_prn[];
+extern const char doc_str[], doc_substr[], doc_stringappend[],
+                  doc_stringsplit[], doc_stringjoin[], doc_stringtrim[],
+                  doc_stringupcase[], doc_stringdowncase[];
+extern const char doc_readstring[], doc_writestring[], doc_appendstring[],
+                  doc_readlines[], doc_fileexistsp[], doc_writebytes[],
+                  doc_load[];
 extern const char doc_persist[], doc_forget[], doc_unpersist[];
 extern const char doc_savedb[], doc_loaddb[];
 extern const char doc_ispersistent[];
@@ -45,6 +52,9 @@ extern const char doc_hashmap[], doc_assocbang[], doc_dissocbang[], doc_get[],
 extern const char doc_deque[], doc_pushrightbang[], doc_pushleftbang[],
                   doc_poprightbang[], doc_popleftbang[],
                   doc_peekleft[], doc_peekright[];
+extern const char doc_set[], doc_hashset[], doc_setaddbang[], doc_setdelbang[],
+                  doc_sethasp[], doc_setunion[], doc_setintersection[],
+                  doc_setdifference[], doc_setlist[];
 extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
                   doc_blob2string[], doc_string2blob[], doc_readbytes[];
 extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
@@ -81,6 +91,7 @@ exp_t *containspcmd(exp_t *e, env_t *env);
 exp_t *keyscmd(exp_t *e, env_t *env);
 exp_t *valscmd(exp_t *e, env_t *env);
 exp_t *countcmd(exp_t *e, env_t *env);
+exp_t *setqcmd(exp_t *e, env_t *env);
 exp_t *dequecmd(exp_t *e, env_t *env);
 exp_t *pushrightbangcmd(exp_t *e, env_t *env);
 exp_t *pushleftbangcmd(exp_t *e, env_t *env);
@@ -88,12 +99,36 @@ exp_t *poprightbangcmd(exp_t *e, env_t *env);
 exp_t *popleftbangcmd(exp_t *e, env_t *env);
 exp_t *peekleftcmd(exp_t *e, env_t *env);
 exp_t *peekrightcmd(exp_t *e, env_t *env);
+exp_t *setcmd(exp_t *e, env_t *env);
+exp_t *hashsetcmd(exp_t *e, env_t *env);
+exp_t *setaddbangcmd(exp_t *e, env_t *env);
+exp_t *setdelbangcmd(exp_t *e, env_t *env);
+exp_t *sethaspcmd(exp_t *e, env_t *env);
+exp_t *setunioncmd(exp_t *e, env_t *env);
+exp_t *setintersectioncmd(exp_t *e, env_t *env);
+exp_t *setdifferencecmd(exp_t *e, env_t *env);
+exp_t *setlistcmd(exp_t *e, env_t *env);
 exp_t *makeblobcmd(exp_t *e, env_t *env);
 exp_t *bloblencmd(exp_t *e, env_t *env);
 exp_t *blobrefcmd(exp_t *e, env_t *env);
 exp_t *blob2stringcmd(exp_t *e, env_t *env);
 exp_t *string2blobcmd(exp_t *e, env_t *env);
 exp_t *readbytescmd(exp_t *e, env_t *env);
+exp_t *strcmd(exp_t *e, env_t *env);
+exp_t *substrcmd(exp_t *e, env_t *env);
+exp_t *stringappendcmd(exp_t *e, env_t *env);
+exp_t *stringsplitcmd(exp_t *e, env_t *env);
+exp_t *stringjoincmd(exp_t *e, env_t *env);
+exp_t *stringtrimcmd(exp_t *e, env_t *env);
+exp_t *stringupcasecmd(exp_t *e, env_t *env);
+exp_t *stringdowncasecmd(exp_t *e, env_t *env);
+exp_t *readstringcmd(exp_t *e, env_t *env);
+exp_t *writestringcmd(exp_t *e, env_t *env);
+exp_t *appendstringcmd(exp_t *e, env_t *env);
+exp_t *readlinescmd(exp_t *e, env_t *env);
+exp_t *fileexistspcmd(exp_t *e, env_t *env);
+exp_t *writebytescmd(exp_t *e, env_t *env);
+exp_t *loadcmd(exp_t *e, env_t *env);
 exp_t *vecdotcmd(exp_t *e, env_t *env);
 exp_t *vecaxpycmd(exp_t *e, env_t *env);
 exp_t *vecscalecmd(exp_t *e, env_t *env);

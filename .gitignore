@@ -1,5 +1,7 @@
 # Build artifacts (the default `make` target produces ./alcove).
 alcove
+alcoves
+alcoveil
 
 # Cross-compile / benchmark A-B comparison binaries (alcove.jemalloc,
 # alcove.dbg, alcove.asan, alcove-prestep23, alcove.tip, …).
@@ -51,6 +53,8 @@ examples/mario/theme.ogg
 # copies of mario.alc / theme.ogg into web/ do not.
 web/alcove-core.js
 web/alcove-core.wasm
+web/alcoves-core.js
+web/alcoves-core.wasm
 examples/mario/web/mario-core.js
 examples/mario/web/mario-core.wasm
 examples/mario/web/mario.alc
