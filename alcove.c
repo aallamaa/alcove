@@ -106,6 +106,7 @@ lispProc lispProcList[] = {
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
     LISPCMD("let", letcmd, doc_let),
+    LISPCMD("let*", letstar_cmd, doc_letstar),
     LISPCMD("with", withcmd, doc_with),
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
@@ -8520,6 +8521,47 @@ exp_t *withcmd(exp_t *e, env_t *env) {
   }
 
   ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in with");
+finish:
+  destroy_env(newenv);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_letstar[] =
+    "(let* v1 val1 v2 val2 ... body) — sequential bindings: each val is "
+    "evaluated in the scope that includes all preceding bindings. "
+    "Equivalent to nested (let v1 val1 (let v2 val2 ... body)).";
+exp_t *letstar_cmd(exp_t *e, env_t *env) {
+  /* Walk pairs (var val) until only one element remains (the body). */
+  exp_t *cur = cdr(e);
+  /* Need at least (v val body) = 3 elements */
+  if (!cur || !cur->next || !cur->next->next) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env,
+                 "let*: need at least one binding and a body");
+  }
+  env_t *newenv = make_env(env);
+  if (!newenv->d) newenv->d = create_dict();
+  exp_t *ret = NULL;
+  while (cur && cur->next && cur->next->next) {
+    exp_t *var = cur->content;
+    exp_t *val_node = cur->next;
+    if (!issymbol(var)) {
+      ret = error(ERROR_ILLEGAL_VALUE, NULL, newenv, "let*: binding name must be a symbol");
+      goto finish;
+    }
+    ret = EVAL(val_node->content, newenv);
+    if (iserror(ret)) goto finish;
+    set_get_keyval_dict(newenv->d, var->ptr, ret);
+    unrefexp(ret);
+    ret = NULL;
+    cur = val_node->next; /* advance by 2 */
+  }
+  /* cur now points at the body */
+  if (cur)
+    ret = EVAL(cur->content, newenv);
+  else
+    ret = NIL_EXP;
 finish:
   destroy_env(newenv);
   unrefexp(e);
