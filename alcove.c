@@ -15950,6 +15950,7 @@ finisht:
 #ifdef ALCOVE_READLINE
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <sys/stat.h> /* chmod(0600) on the persisted history file */
 
 /* Iterate over a dict and emit names matching `prefix` into the
    readline-allocated match list. Each match must be malloc'd; readline
@@ -17659,6 +17660,8 @@ int main(int argc, char *argv[]) {
      passes flags first, last, or in the middle. */
   int auto_load = 1;
   int run_init = 1;
+  int save_history = 1;
+  char alc_hist_path[1024] = {0}; /* set in the rl_active block below */
   char *eval_string = NULL;
 #ifndef ALCOVE_WEB
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
@@ -17674,6 +17677,9 @@ int main(int argc, char *argv[]) {
       } else if (strcmp(argv[src], "--no-init") == 0 ||
                  strcmp(argv[src], "--noinit") == 0) {
         run_init = 0;
+      } else if (strcmp(argv[src], "--no-history") == 0 ||
+                 strcmp(argv[src], "--nohistory") == 0) {
+        save_history = 0;
       } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
@@ -17842,6 +17848,22 @@ int main(int argc, char *argv[]) {
     rl_redisplay_function = alcove_colored_redisplay;
     using_history();
     stifle_history(1000);
+    if (save_history) {
+      const char *home = getenv("HOME");
+#ifdef ALCOVE_ALS
+      const char *hist_name = "/.alcoves_history";
+#else
+      const char *hist_name = "/.alcove_history";
+#endif
+      if (home && snprintf(alc_hist_path, sizeof alc_hist_path,
+                           "%s%s", home, hist_name) > 0
+                  && (size_t)snprintf(NULL, 0, "%s%s", home, hist_name)
+                       < sizeof alc_hist_path) {
+        read_history(alc_hist_path); /* missing file on first run is fine */
+      } else {
+        alc_hist_path[0] = 0; /* path too long — disable persistence */
+      }
+    }
   }
 #endif
 
@@ -17978,6 +18000,13 @@ int main(int argc, char *argv[]) {
     }
   }
 endcleanly:
+#ifdef ALCOVE_READLINE
+  if (alc_hist_path[0]) {
+    write_history(alc_hist_path);
+    history_truncate_file(alc_hist_path, 1000);
+    chmod(alc_hist_path, 0600); /* may have pasted secrets */
+  }
+#endif
   destroy_dict(dict);
   destroy_env(global);
   destroy_dict(reserved_symbol);
