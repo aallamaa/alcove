@@ -5234,6 +5234,7 @@ exp_t *strcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+#define FMT_SPEC_MAX 32
 const char doc_fmt[] =
     "(fmt template arg ...) — format string with {} placeholders. Use {} for "
     "default rendering or {:<spec>} for printf-style: {:.2f} {:%d} {:x} {:s}. "
@@ -5255,9 +5256,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       str_buf_put(&buf, &len, &cap, tmpl + i, 1);
       continue;
     }
-    /* '{' found — check what follows */
     if (tmpl[i + 1] == '}') {
-      /* bare {} — default rendering */
       i++;
       if (!cur) continue;
       exp_t *v = EVAL(car(cur), env);
@@ -5266,34 +5265,33 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       unrefexp(v);
       cur = cur->next;
     } else if (tmpl[i + 1] == ':') {
-      /* {:<spec>} — find closing } */
       size_t j = i + 2;
       while (tmpl[j] && tmpl[j] != '}') j++;
       size_t spec_len = j - (i + 2);
-      if (!tmpl[j] || spec_len == 0 || spec_len >= 32) {
-        /* malformed — emit '{' literally */
+      if (!tmpl[j] || spec_len == 0 || spec_len >= FMT_SPEC_MAX) {
         str_buf_put(&buf, &len, &cap, "{", 1);
         continue;
       }
-      /* build printf format: '%' + spec */
-      char printf_fmt[34];
+      char printf_fmt[FMT_SPEC_MAX + 2]; /* '%' + spec + '\0' */
       printf_fmt[0] = '%';
       memcpy(printf_fmt + 1, tmpl + i + 2, spec_len);
       printf_fmt[spec_len + 1] = '\0';
-      char ftype = printf_fmt[spec_len]; /* last char = conversion letter */
-      i = j; /* advance past closing '}' */
+      char ftype = printf_fmt[spec_len];
+      i = j;
       if (!cur) continue;
       exp_t *v = EVAL(car(cur), env);
       if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
       char tmp[256];
+      char *out = tmp;
+      char *heap = NULL;
       int n = 0;
       if (ftype == 'd' || ftype == 'i' || ftype == 'o' ||
           ftype == 'u' || ftype == 'x' || ftype == 'X') {
         int64_t iv = isnumber(v) ? FIX_VAL(v) :
                      isfloat(v)  ? (int64_t)v->f : 0LL;
-        /* insert 'll' before type for int64_t */
-        char safe_fmt[36];
-        memcpy(safe_fmt, printf_fmt, spec_len); /* '%' + spec without type */
+        /* int64_t needs 'll' length modifier before the type letter */
+        char safe_fmt[FMT_SPEC_MAX + 4]; /* '%' + spec + 'll' + '\0' */
+        memcpy(safe_fmt, printf_fmt, spec_len);
         safe_fmt[spec_len]     = 'l';
         safe_fmt[spec_len + 1] = 'l';
         safe_fmt[spec_len + 2] = ftype;
@@ -5307,15 +5305,24 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       } else if (ftype == 's') {
         const char *sv = isstring(v) ? (char *)v->ptr : "";
         n = snprintf(tmp, sizeof(tmp), printf_fmt, sv);
+        /* %s with width or long strings can exceed tmp; retry on heap */
+        if (n >= (int)sizeof(tmp)) {
+          heap = memalloc((size_t)n + 1, 1);
+          n = snprintf(heap, (size_t)n + 1, printf_fmt, sv);
+          out = heap;
+        }
       } else {
         exp_to_string_buf(v, &buf, &len, &cap);
       }
       if (n > 0)
-        str_buf_put(&buf, &len, &cap, tmp, (size_t)(n < (int)sizeof(tmp) ? n : (int)sizeof(tmp) - 1));
+        str_buf_put(&buf, &len, &cap, out,
+                    (size_t)(n < (int)sizeof(tmp) || out == heap
+                                 ? n
+                                 : (int)sizeof(tmp) - 1));
+      if (heap) free(heap);
       unrefexp(v);
       cur = cur->next;
     } else {
-      /* '{' not followed by ':' or '}' — emit literally */
       str_buf_put(&buf, &len, &cap, "{", 1);
     }
   }
@@ -6827,8 +6834,9 @@ const char doc_withgensyms[] =
 exp_t *withgensymscmd(exp_t *e, env_t *env) {
   exp_t *names_node = e->next;
   exp_t *body_start = names_node ? names_node->next : NULL;
+  /* names_node->content is either a pair (non-empty list) or nil (()) */
   if (!names_node || !body_start ||
-      !(ispair(names_node->content) || istrue(names_node->content) == 0)) {
+      (!ispair(names_node->content) && istrue(names_node->content))) {
     unrefexp(e);
     return error(ERROR_MISSING_PARAMETER, NULL, env,
                  "with-gensyms: expected (name-list body...)");
@@ -8542,7 +8550,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
       if (!(newenv->d))
         newenv->d = create_dict();
 
-      in_tail_position = 0; /* val is not in tail position */
+      in_tail_position = 0;
       if (issymbol(curvar->content)) {
         if ((ret = EVAL(curval->content, env)) == NULL)
           ret = NIL_EXP;
@@ -8568,12 +8576,11 @@ exp_t *letcmd(exp_t *e, env_t *env) {
                         "let: destructuring name must be a symbol");
             goto finish;
           }
-          exp_t *v = (dvals && ispair(dvals) && istrue(dvals))
-                         ? dvals->content
-                         : NIL_EXP;
-          set_get_keyval_dict(newenv->d, nm->ptr, v);
+          int have_val = dvals && ispair(dvals) && istrue(dvals);
+          set_get_keyval_dict(newenv->d, nm->ptr,
+                              have_val ? dvals->content : NIL_EXP);
           dnames = dnames->next;
-          if (dvals && ispair(dvals) && istrue(dvals)) dvals = dvals->next;
+          if (have_val) dvals = dvals->next;
         }
         unrefexp(ret);
         ret = NULL;
@@ -8582,7 +8589,6 @@ exp_t *letcmd(exp_t *e, env_t *env) {
         goto finish;
       }
       if (curval->next) {
-        /* evaluate all body forms; last inherits outer tail position */
         exp_t *body = curval->next;
         while (body->next) {
           in_tail_position = 0;
@@ -8627,7 +8633,7 @@ exp_t *withcmd(exp_t *e, env_t *env) {
         if (!(newenv->d))
           newenv->d = create_dict();
 
-        in_tail_position = 0; /* val exprs are not in tail position */
+        in_tail_position = 0;
         while (curvar && curval) {
           if (issymbol(curvar->content)) {
             ret = EVAL(curval->content, env);
@@ -8652,7 +8658,6 @@ exp_t *withcmd(exp_t *e, env_t *env) {
           }
         }
 
-        /* evaluate all body forms; last inherits outer tail position */
         while (curex->next) {
           in_tail_position = 0;
           ret = EVAL(curex->content, newenv);
@@ -8692,7 +8697,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   if (!newenv->d) newenv->d = create_dict();
   exp_t *ret = NULL;
-  in_tail_position = 0; /* val exprs are not in tail position */
+  in_tail_position = 0;
   while (cur && cur->next && cur->next->next) {
     exp_t *var = cur->content;
     exp_t *val_node = cur->next;
@@ -8707,7 +8712,6 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
     ret = NULL;
     cur = val_node->next; /* advance by 2 */
   }
-  /* cur now points at the body — inherits outer tail position */
   in_tail_position = outer_tail;
   if (cur)
     ret = EVAL(cur->content, newenv);
