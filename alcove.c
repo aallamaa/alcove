@@ -8569,6 +8569,8 @@ exp_t *evalcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+static void var2env_bind(char *name, exp_t *val, env_t *env);
+
 const char doc_let[] =
     "(let var val body) — bind var to val in body; (let (a b) val body) — "
     "destructure val as a list, binding each name to the corresponding "
@@ -8582,17 +8584,13 @@ exp_t *letcmd(exp_t *e, env_t *env) {
 
   if ((curvar = e->next)) {
     if ((curval = curvar->next)) {
-      if (!(newenv->d))
-        newenv->d = create_dict();
-
       in_tail_position = 0;
       if (issymbol(curvar->content)) {
         if ((ret = EVAL(curval->content, env)) == NULL)
           ret = NIL_EXP;
         if iserror (ret)
           goto finish;
-        set_get_keyval_dict(newenv->d, curvar->content->ptr, ret);
-        unrefexp(ret);
+        var2env_bind(curvar->content->ptr, ret, newenv);
         ret = NULL;
       } else if (ispair(curvar->content)) {
         /* Destructuring: (let (a b ...) val body)
@@ -8612,8 +8610,9 @@ exp_t *letcmd(exp_t *e, env_t *env) {
             goto finish;
           }
           int have_val = dvals && ispair(dvals) && istrue(dvals);
-          set_get_keyval_dict(newenv->d, nm->ptr,
-                              have_val ? dvals->content : NIL_EXP);
+          var2env_bind(nm->ptr,
+                       refexp(have_val ? dvals->content : NIL_EXP),
+                       newenv);
           dnames = dnames->next;
           if (have_val) dvals = dvals->next;
         }
@@ -8665,17 +8664,13 @@ exp_t *withcmd(exp_t *e, env_t *env) {
     if ((curex = curvar->next)) {
       curvar = curvar->content;
       if ((curval = curvar->next)) {
-        if (!(newenv->d))
-          newenv->d = create_dict();
-
         in_tail_position = 0;
         while (curvar && curval) {
           if (issymbol(curvar->content)) {
             ret = EVAL(curval->content, env);
             if iserror (ret)
               goto finish;
-            set_get_keyval_dict(newenv->d, curvar->content->ptr, ret);
-            unrefexp(ret);
+            var2env_bind(curvar->content->ptr, ret, newenv);
             ret = NULL;
           }
 
@@ -8730,7 +8725,6 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
                  "let*: need at least one binding and a body");
   }
   env_t *newenv = make_env(env);
-  if (!newenv->d) newenv->d = create_dict();
   exp_t *ret = NULL;
   in_tail_position = 0;
   while (cur && cur->next && cur->next->next) {
@@ -8742,8 +8736,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
     }
     ret = EVAL(val_node->content, newenv);
     if (iserror(ret)) goto finish;
-    set_get_keyval_dict(newenv->d, var->ptr, ret);
-    unrefexp(ret);
+    var2env_bind(var->ptr, ret, newenv);
     ret = NULL;
     cur = val_node->next; /* advance by 2 */
   }
