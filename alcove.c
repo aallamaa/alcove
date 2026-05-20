@@ -224,6 +224,7 @@ lispProc lispProcList[] = {
     LISPCMD("println", prncmd, doc_prn),
     /* Strings and whole-file I/O */
     LISPCMD("str", strcmd, doc_str),
+    LISPCMD("fmt", fmtcmd, doc_fmt),
     LISPCMD("substr", substrcmd, doc_substr),
     LISPCMD("string-append", stringappendcmd, doc_stringappend),
     LISPCMD("string-split", stringsplitcmd, doc_stringsplit),
@@ -5135,6 +5136,17 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
     if (b && b->len)
       str_buf_put(buf, len, cap, b->bytes, b->len);
+  } else if (ispair(v)) {
+    str_buf_put(buf, len, cap, "(", 1);
+    exp_t *n = v;
+    int first = 1;
+    while (n && ispair(n) && istrue(n)) {
+      if (!first) str_buf_put(buf, len, cap, " ", 1);
+      first = 0;
+      exp_to_string_buf(n->content, buf, len, cap);
+      n = n->next;
+    }
+    str_buf_put(buf, len, cap, ")", 1);
   } else {
     int n = snprintf(tmp, sizeof tmp, "#<%s@%p>",
                      is_ptr(v) ? inspect_type_name(v->type) : "value",
@@ -5159,6 +5171,50 @@ exp_t *strcmd(exp_t *e, env_t *env) {
   }
   exp_t *ret = make_string(buf, (int)len);
   free(buf);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_fmt[] =
+    "(fmt template arg ...) — format string with {} placeholders. Each {} is "
+    "replaced by the printed representation of the next argument. "
+    "Example: (fmt \"{} + {} = {}\" 1 2 3) → \"1 + 2 = 3\".";
+exp_t *fmtcmd(exp_t *e, env_t *env) {
+  exp_t *fmtarg = EVAL(cadr(e), env);
+  if (iserror(fmtarg)) { unrefexp(e); return fmtarg; }
+  if (!isstring(fmtarg)) {
+    unrefexp(fmtarg); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "fmt: first arg must be a string template");
+  }
+  const char *tmpl = (const char *)fmtarg->ptr;
+  size_t cap = 128, len = 0;
+  char *buf = memalloc(cap, 1);
+  exp_t *cur = cddr(e); /* remaining args */
+  for (size_t i = 0; tmpl[i]; i++) {
+    if (tmpl[i] == '{' && tmpl[i + 1] == '}') {
+      i++; /* skip '}' */
+      if (cur) {
+        exp_t *v = EVAL(car(cur), env);
+        if (iserror(v)) {
+          free(buf); unrefexp(fmtarg); unrefexp(e); return v;
+        }
+        exp_to_string_buf(v, &buf, &len, &cap);
+        unrefexp(v);
+        cur = cur->next;
+      }
+    } else {
+      if (len + 1 >= cap) {
+        cap *= 2;
+        buf = realloc(buf, cap);
+      }
+      buf[len++] = tmpl[i];
+    }
+  }
+  buf[len] = 0;
+  exp_t *ret = make_string(buf, (int)len);
+  free(buf);
+  unrefexp(fmtarg);
   unrefexp(e);
   return ret;
 }

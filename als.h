@@ -136,9 +136,16 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
         als_push(call, f);
         als_free(args);
         als_push(out, call);
-      } else {                       /* name(a b) -> name (a b) */
-        als_push(out, f);
-        als_push(out, args);
+      } else {                       /* name(a b) -> (name a b) */
+        als_node *call = als_list();
+        als_push(call, f);
+        for (int i = 0; i < args->n; i++) {
+          als_node *kid = args->kid[i];
+          args->kid[i] = NULL;
+          als_push(call, kid);
+        }
+        als_free(args);
+        als_push(out, call);
       }
       continue;
     }
@@ -313,6 +320,12 @@ static void als_emit(als_node *x, als_buf *b) {
   als_buf_putc(b, ')');
 }
 
+/* Check if trimmed body starts with a keyword (null-terminated kwlen chars). */
+static int als_starts_with(const char *s, const char *kw, size_t kwlen) {
+  return strncmp(s, kw, kwlen) == 0 &&
+         (s[kwlen] == '\0' || s[kwlen] == ' ' || s[kwlen] == '\t');
+}
+
 /* ---- top level: src -> s-expr string ---- */
 char *als_to_sexpr(const char *src) {
   /* split into lines (keep leading whitespace for indent calc) */
@@ -324,7 +337,10 @@ char *als_to_sexpr(const char *src) {
   enum { MAXD = 256 };
   int ind_stack[MAXD];
   als_node *node_stack[MAXD];
+  /* if_stack: tracks the 'if' node at each indent for elif/else attachment */
+  als_node *if_stack[MAXD];
   int sp = 0;
+  memset(if_stack, 0, sizeof(if_stack));
   als_node *roots = als_list();
 
   size_t i = 0;
@@ -358,6 +374,37 @@ char *als_to_sexpr(const char *src) {
     }
 
     int block = als_opens_block(body);
+
+    /* Detect elif/else blocks — they extend the preceding 'if' node
+       at the same indent level rather than creating a new top-level form. */
+    int is_else = block && strcmp(body, "else") == 0;
+    int is_elif = block && als_starts_with(body, "elif", 4);
+
+    if (is_else || is_elif) {
+      /* Pop stack back to the level of the matching if */
+      while (sp > 0 && indent <= ind_stack[sp - 1])
+        sp--;
+      als_node *target = if_stack[indent];
+      if (target) {
+        if (is_elif) {
+          /* Append the elif condition to the existing if node */
+          char *cond_text = body + 4; /* skip "elif" */
+          while (*cond_text == ' ' || *cond_text == '\t') cond_text++;
+          als_node *cond = als_line_node(cond_text);
+          als_push(target, cond);
+        }
+        /* Continue appending body forms to the same if node */
+        if (sp < MAXD) {
+          ind_stack[sp] = indent;
+          node_stack[sp] = target;
+          sp++;
+        }
+        if (is_else) if_stack[indent] = NULL; /* else terminates the chain */
+      }
+      free(body);
+      continue;
+    }
+
     als_node *node = als_line_node(body);
     free(body);
 
@@ -370,6 +417,14 @@ char *als_to_sexpr(const char *src) {
 
     while (sp > 0 && indent <= ind_stack[sp - 1])
       sp--;
+
+    /* Track if/elif nodes for subsequent else/elif attachment */
+    if_stack[indent] = NULL;
+    if (block && node->is_list && node->n > 0 && !node->kid[0]->is_list) {
+      const char *head = node->kid[0]->atom;
+      if (head && strcmp(head, "if") == 0)
+        if_stack[indent] = node;
+    }
 
     if (sp > 0) {
       als_push(node_stack[sp - 1], node);

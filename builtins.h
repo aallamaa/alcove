@@ -52,7 +52,7 @@ exp_t *dictpcmd(exp_t *e, env_t *env);
 exp_t *dequepcmd(exp_t *e, env_t *env);
 exp_t *setpcmd(exp_t *e, env_t *env);
 extern const char doc_pr[], doc_prn[];
-extern const char doc_str[], doc_substr[], doc_stringappend[],
+extern const char doc_str[], doc_fmt[], doc_substr[], doc_stringappend[],
                   doc_stringsplit[], doc_stringjoin[], doc_stringtrim[],
                   doc_stringupcase[], doc_stringdowncase[];
 extern const char doc_readstring[], doc_writestring[], doc_appendstring[],
@@ -137,6 +137,7 @@ exp_t *blob2stringcmd(exp_t *e, env_t *env);
 exp_t *string2blobcmd(exp_t *e, env_t *env);
 exp_t *readbytescmd(exp_t *e, env_t *env);
 exp_t *strcmd(exp_t *e, env_t *env);
+exp_t *fmtcmd(exp_t *e, env_t *env);
 exp_t *substrcmd(exp_t *e, env_t *env);
 exp_t *stringappendcmd(exp_t *e, env_t *env);
 exp_t *stringsplitcmd(exp_t *e, env_t *env);
