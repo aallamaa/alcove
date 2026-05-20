@@ -133,6 +133,16 @@ lispProc lispProcList[] = {
     LISPCMD("expt", exptcmd, doc_expt),
     LISPCMD("**", exptcmd, doc_expt), /* Python-ish alias */
     LISPCMD("random", randomcmd, doc_random),
+    LISPCMD("round", roundcmd, doc_round),
+    LISPCMD("floor", floorcmd, doc_floor),
+    LISPCMD("ceil", ceilcmd, doc_ceil),
+    LISPCMD("truncate", truncatecmd, doc_truncate),
+    LISPCMD("log", logcmd, doc_log),
+    LISPCMD("sin", sincmd, doc_sin),
+    LISPCMD("cos", coscmd, doc_cos),
+    LISPCMD("tan", tancmd, doc_tan),
+    LISPCMD("float", floatcmd, doc_float),
+    LISPCMD("int", intcmd, doc_int),
     /* Bitwise — int-only. C-style spelling + Lisp-style aliases. */
     LISPCMD("bit-and", bitandcmd, doc_bitand),
     LISPCMD("&", bitandcmd, doc_bitand),
@@ -1216,7 +1226,7 @@ void print_node(exp_t *node) {
   else if (node->type == EXP_STRING)
     printf("\x1B[92m\"%s\"\x1B[39m", (char *)node->ptr);
   else if (node->type == EXP_FLOAT)
-    printf("\x1B[92m%lf\x1B[39m", node->f);
+    printf("\x1B[92m%g\x1B[39m", node->f);
   else if (node->type == EXP_VECTOR) {
     int64_t n = vec_len(node);
     printf("#[");
@@ -5063,6 +5073,53 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
   unrefexp(v2);
   unrefexp(e);
   return ret;
+}
+
+#define FLOAT_UNARY_CMD(cname, fname, docstr, cdoc_sym) \
+const char cdoc_sym[] = docstr; \
+exp_t *cname(exp_t *e, env_t *env) { \
+  exp_t *v = EVAL(cadr(e), env); \
+  if (iserror(v)) { unrefexp(e); return v; } \
+  exp_t *ret; \
+  if (isfloat(v)) ret = make_floatf(fname(v->f)); \
+  else if (isnumber(v)) ret = make_floatf(fname((double)FIX_VAL(v))); \
+  else { unrefexp(v); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, #cname ": arg must be a number"); } \
+  unrefexp(v); unrefexp(e); return ret; \
+}
+
+FLOAT_UNARY_CMD(roundcmd,  round,  "(round x) — round to nearest integer, as float.", doc_round)
+FLOAT_UNARY_CMD(floorcmd,  floor,  "(floor x) — largest integer not greater than x, as float.", doc_floor)
+FLOAT_UNARY_CMD(ceilcmd,   ceil,   "(ceil x) — smallest integer not less than x, as float.", doc_ceil)
+FLOAT_UNARY_CMD(truncatecmd, trunc, "(truncate x) — round toward zero, as float.", doc_truncate)
+FLOAT_UNARY_CMD(logcmd,    log,    "(log x) — natural logarithm of x.", doc_log)
+FLOAT_UNARY_CMD(sincmd,    sin,    "(sin x) — sine of x (radians).", doc_sin)
+FLOAT_UNARY_CMD(coscmd,    cos,    "(cos x) — cosine of x (radians).", doc_cos)
+FLOAT_UNARY_CMD(tancmd,    tan,    "(tan x) — tangent of x (radians).", doc_tan)
+#undef FLOAT_UNARY_CMD
+
+const char doc_float[] = "(float x) — coerce integer to floating-point.";
+exp_t *floatcmd(exp_t *e, env_t *env) {
+  exp_t *v = EVAL(cadr(e), env);
+  if (iserror(v)) { unrefexp(e); return v; }
+  exp_t *ret;
+  if (isfloat(v)) { ret = v; unrefexp(e); return ret; }
+  if (isnumber(v)) ret = make_floatf((double)FIX_VAL(v));
+  else { unrefexp(v); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "float: arg must be a number"); }
+  unrefexp(v); unrefexp(e); return ret;
+}
+
+const char doc_int[] = "(int x) — coerce float to integer by truncation.";
+exp_t *intcmd(exp_t *e, env_t *env) {
+  exp_t *v = EVAL(cadr(e), env);
+  if (iserror(v)) { unrefexp(e); return v; }
+  exp_t *ret;
+  if (isnumber(v)) { ret = v; unrefexp(e); return ret; }
+  if (isfloat(v)) ret = make_integeri((int64_t)v->f);
+  else { unrefexp(v); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "int: arg must be a number"); }
+  unrefexp(v); unrefexp(e); return ret;
 }
 
 /* prcmd backs both `pr` and `print`; prncmd backs `prn` and `println`. */
