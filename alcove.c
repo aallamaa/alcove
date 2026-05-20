@@ -105,9 +105,9 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("case", casecmd, doc_case),
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
-    LISPCMD("let", letcmd, doc_let),
-    LISPCMD("let*", letstar_cmd, doc_letstar),
-    LISPCMD("with", withcmd, doc_with),
+    LISPCMD_TAIL("let", letcmd, doc_let),
+    LISPCMD_TAIL("let*", letstar_cmd, doc_letstar),
+    LISPCMD_TAIL("with", withcmd, doc_with),
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
     LISPCMD("<", cmpcmd, doc_lt),
@@ -8531,6 +8531,7 @@ const char doc_let[] =
     "destructure val as a list, binding each name to the corresponding "
     "element (missing elements get nil). Binding is local to body.";
 exp_t *letcmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
   env_t *newenv = make_env(env);
   exp_t *ret;
   exp_t *curvar;
@@ -8541,6 +8542,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
       if (!(newenv->d))
         newenv->d = create_dict();
 
+      in_tail_position = 0; /* val is not in tail position */
       if (issymbol(curvar->content)) {
         if ((ret = EVAL(curval->content, env)) == NULL)
           ret = NIL_EXP;
@@ -8580,14 +8582,16 @@ exp_t *letcmd(exp_t *e, env_t *env) {
         goto finish;
       }
       if (curval->next) {
-        /* evaluate all body forms; return last */
+        /* evaluate all body forms; last inherits outer tail position */
         exp_t *body = curval->next;
         while (body->next) {
+          in_tail_position = 0;
           ret = EVAL(body->content, newenv);
           if (iserror(ret)) goto finish;
           unrefexp(ret); ret = NULL;
           body = body->next;
         }
+        in_tail_position = outer_tail;
         ret = EVAL(body->content, newenv);
         goto finish;
       }
@@ -8596,6 +8600,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
   ret = error(ERROR_MISSING_PARAMETER, e, env,
               "Missing parameter in let"); /* MISSING PARAMETER*/
 finish:
+  in_tail_position = outer_tail;
   destroy_env(newenv);
   unrefexp(e);
   return ret;
@@ -8604,6 +8609,7 @@ finish:
 const char doc_with[] = "(with (var1 val1 var2 val2 ...) body) — bind all "
                         "pairs in parallel, then evaluate body.";
 exp_t *withcmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
   env_t *newenv = make_env(env);
   exp_t *ret;
   exp_t *curvar;
@@ -8621,6 +8627,7 @@ exp_t *withcmd(exp_t *e, env_t *env) {
         if (!(newenv->d))
           newenv->d = create_dict();
 
+        in_tail_position = 0; /* val exprs are not in tail position */
         while (curvar && curval) {
           if (issymbol(curvar->content)) {
             ret = EVAL(curval->content, env);
@@ -8645,13 +8652,15 @@ exp_t *withcmd(exp_t *e, env_t *env) {
           }
         }
 
-        /* evaluate all body forms; return last */
+        /* evaluate all body forms; last inherits outer tail position */
         while (curex->next) {
+          in_tail_position = 0;
           ret = EVAL(curex->content, newenv);
           if (iserror(ret)) goto finish;
           unrefexp(ret); ret = NULL;
           curex = curex->next;
         }
+        in_tail_position = outer_tail;
         ret = EVAL(curex->content, newenv);
         goto finish;
       }
@@ -8660,6 +8669,7 @@ exp_t *withcmd(exp_t *e, env_t *env) {
 
   ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in with");
 finish:
+  in_tail_position = outer_tail;
   destroy_env(newenv);
   unrefexp(e);
   return ret;
@@ -8670,6 +8680,7 @@ const char doc_letstar[] =
     "evaluated in the scope that includes all preceding bindings. "
     "Equivalent to nested (let v1 val1 (let v2 val2 ... body)).";
 exp_t *letstar_cmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
   /* Walk pairs (var val) until only one element remains (the body). */
   exp_t *cur = cdr(e);
   /* Need at least (v val body) = 3 elements */
@@ -8681,6 +8692,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   if (!newenv->d) newenv->d = create_dict();
   exp_t *ret = NULL;
+  in_tail_position = 0; /* val exprs are not in tail position */
   while (cur && cur->next && cur->next->next) {
     exp_t *var = cur->content;
     exp_t *val_node = cur->next;
@@ -8695,12 +8707,14 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
     ret = NULL;
     cur = val_node->next; /* advance by 2 */
   }
-  /* cur now points at the body */
+  /* cur now points at the body — inherits outer tail position */
+  in_tail_position = outer_tail;
   if (cur)
     ret = EVAL(cur->content, newenv);
   else
     ret = NIL_EXP;
 finish:
+  in_tail_position = outer_tail;
   destroy_env(newenv);
   unrefexp(e);
   return ret;
