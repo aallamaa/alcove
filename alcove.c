@@ -190,11 +190,22 @@ lispProc lispProcList[] = {
     LISPCMD("reduce", reducecmd, doc_reduce),
     LISPCMD("any?", anypcmd, doc_any),
     LISPCMD("all?", allpcmd, doc_all),
+    LISPCMD("sort", sortcmd, doc_sort),
+    LISPCMD("sort-by", sortbycmd, doc_sortby),
+    /* List utilities */
+    LISPCMD("take", takecmd, doc_take),
+    LISPCMD("drop", dropcmd, doc_drop),
+    LISPCMD("range", rangecmd, doc_range),
+    LISPCMD("zip", zipcmd, doc_zip),
+    LISPCMD("flatten", flattencmd, doc_flatten),
+    LISPCMD("gensym", gensymcmd, doc_gensym),
     /* Predicates */
     LISPCMD("number?", numberpcmd, doc_numberp),
     LISPCMD("string?", stringpcmd, doc_stringp),
     LISPCMD("symbol?", symbolpcmd, doc_symbolp),
     LISPCMD("pair?", pairpcmd, doc_pairp),
+    LISPCMD("list?", listpcmd, doc_listp),
+    LISPCMD("null?", nullpcmd, doc_nullp),
     LISPCMD("fn?", fnpcmd, doc_fnp),
     LISPCMD("vec?", vecpcmd, doc_vecp),
     LISPCMD("blob?", blobpcmd, doc_blobp),
@@ -215,6 +226,9 @@ lispProc lispProcList[] = {
     LISPCMD("string-trim", stringtrimcmd, doc_stringtrim),
     LISPCMD("string-upcase", stringupcasecmd, doc_stringupcase),
     LISPCMD("string-downcase", stringdowncasecmd, doc_stringdowncase),
+    LISPCMD("string-contains?", stringcontainspcmd, doc_stringcontainsp),
+    LISPCMD("string-index", stringindexcmd, doc_stringindex),
+    LISPCMD("string-replace", stringreplacecmd, doc_stringreplace),
     LISPCMD("read-string", readstringcmd, doc_readstring),
     LISPCMD("write-string", writestringcmd, doc_writestring),
     LISPCMD("append-string", appendstringcmd, doc_appendstring),
@@ -6439,6 +6453,359 @@ exp_t *applycmd(exp_t *e, env_t *env) {
   unrefexp(e);
   return ret;
 }
+
+/* Call any callable (lambda or builtin) with a single pre-evaluated arg.
+   Builtins receive their canonical `e` list; lambdas use vm_invoke_values.
+   The caller keeps ownership of `fn` and `arg`; callee refs as needed. */
+static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env) {
+  if (islambda(fn)) {
+    exp_t *argv[1] = {refexp(arg)};
+    return vm_invoke_values(fn, 1, argv, env);
+  }
+  if (isinternal(fn)) {
+    /* Build (fn arg) list; arg is already evaluated — EVAL on a non-symbol
+       non-pair atom just returns it (refcounted), so this is correct. */
+    exp_t *head = make_node(refexp(fn));
+    head->next = make_node(refexp(arg));
+    int was_tail = in_tail_position;
+    in_tail_position = 0;
+    exp_t *ret = fn->fnc(head, env);
+    in_tail_position = was_tail;
+    return ret;
+  }
+  return error(ERROR_ILLEGAL_VALUE, fn, env, "not a callable");
+}
+
+/* ---- New stdlib additions -------------------------------------------- */
+
+/* (list? x) — t if x is nil or a proper list (all cdrs end with nil). */
+const char doc_listp[] = "(list? x) — t if x is nil or a proper list.";
+exp_t *listpcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    exp_t *cur = a;
+    while (ispair(cur) && cur->content)
+      cur = cur->next;
+    if (!cur || cur == NIL_EXP)
+      ret = TRUE_EXP;
+  }
+  unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (null? x) — t if x is nil (empty list / false). Complements pair?. */
+const char doc_nullp[] = "(null? x) — t if x is nil.";
+exp_t *nullpcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    if (!a || a == NIL_EXP) ret = TRUE_EXP;
+  }
+  unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (gensym) — return a fresh symbol G0, G1, G2, … unique per session. */
+const char doc_gensym[] = "(gensym) — unique symbol each call: G0, G1, …";
+exp_t *gensymcmd(exp_t *e, env_t *env) {
+  static int64_t counter = 0;
+  char buf[32];
+  int n = snprintf(buf, sizeof buf, "G%lld", (long long)counter++);
+  unrefexp(e);
+  (void)env;
+  return make_symbol(buf, n);
+}
+
+/* (take n xs) — first n elements of list xs. */
+const char doc_take[] = "(take n xs) — list of the first n elements of xs.";
+exp_t *takecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(n, xs);
+  if (!n || !isnumber(n))
+    CLEAN_RETURN_2(n, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                "take: first arg must be a number"));
+  int64_t count = FIX_VAL(n);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  exp_t *cur = xs;
+  for (int64_t i = 0; i < count && ispair(cur) && cur->content; i++) {
+    list_append_owned(&ret, &tail, refexp(cur->content));
+    cur = cur->next;
+  }
+  CLEAN_RETURN_2(n, xs, ret);
+}
+
+/* (drop n xs) — xs with the first n elements removed. */
+const char doc_drop[] = "(drop n xs) — xs without its first n elements.";
+exp_t *dropcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(n, xs);
+  if (!n || !isnumber(n))
+    CLEAN_RETURN_2(n, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                "drop: first arg must be a number"));
+  int64_t count = FIX_VAL(n);
+  exp_t *cur = xs;
+  for (int64_t i = 0; i < count && ispair(cur) && cur->content; i++)
+    cur = cur->next;
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  while (ispair(cur) && cur->content) {
+    list_append_owned(&ret, &tail, refexp(cur->content));
+    cur = cur->next;
+  }
+  CLEAN_RETURN_2(n, xs, ret);
+}
+
+/* (range start end) / (range start end step) — list of integers. */
+const char doc_range[] =
+    "(range start end) or (range start end step) — list of integers "
+    "from start (inclusive) to end (exclusive).";
+exp_t *rangecmd(exp_t *e, env_t *env) {
+  exp_t *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
+  if (!e->next) goto bad;
+  arg1 = EVAL(e->next->content, env);
+  if (iserror(arg1)) { unrefexp(e); return arg1; }
+  if (!e->next->next) goto bad;
+  arg2 = EVAL(e->next->next->content, env);
+  if (iserror(arg2)) { unrefexp(arg1); unrefexp(e); return arg2; }
+  if (e->next->next->next) {
+    arg3 = EVAL(e->next->next->next->content, env);
+    if (iserror(arg3)) { unrefexp(arg1); unrefexp(arg2); unrefexp(e); return arg3; }
+  }
+  if (!isnumber(arg1) || !isnumber(arg2) || (arg3 && !isnumber(arg3))) {
+    unrefexp(arg1); unrefexp(arg2); unrefexp(arg3); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "range: args must be integers");
+  }
+  {
+    int64_t start = FIX_VAL(arg1), end = FIX_VAL(arg2);
+    int64_t step = arg3 ? FIX_VAL(arg3) : (start <= end ? 1 : -1);
+    unrefexp(arg1); unrefexp(arg2); unrefexp(arg3); unrefexp(e);
+    if (step == 0)
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "range: step cannot be 0");
+    exp_t *ret = NIL_EXP, *tail = NULL;
+    for (int64_t i = start; step > 0 ? i < end : i > end; i += step)
+      list_append_owned(&ret, &tail, MAKE_FIX(i));
+    return ret;
+  }
+bad:
+  unrefexp(arg1); unrefexp(arg2); unrefexp(e);
+  return error(ERROR_MISSING_PARAMETER, e, env, "(range start end [step])");
+}
+
+/* (zip xs ys) — list of (x y) pairs from two lists. Stops at shorter. */
+const char doc_zip[] =
+    "(zip xs ys) — list of (x y) pairs; stops at the shorter list.";
+exp_t *zipcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(xs, ys);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  exp_t *cx = xs, *cy = ys;
+  while (ispair(cx) && cx->content && ispair(cy) && cy->content) {
+    exp_t *pair = make_node(refexp(cx->content));
+    pair->next = make_node(refexp(cy->content));
+    list_append_owned(&ret, &tail, pair);
+    cx = cx->next; cy = cy->next;
+  }
+  CLEAN_RETURN_2(xs, ys, ret);
+}
+
+/* flatten helper (non-recursive, uses a stack to avoid C stack growth) */
+static void flatten_into(exp_t *x, exp_t **ret, exp_t **tail) {
+  if (!x || x == NIL_EXP) return;
+  if (!ispair(x) || !x->content) {
+    list_append_owned(ret, tail, refexp(x));
+    return;
+  }
+  exp_t *cur = x;
+  while (ispair(cur) && cur->content) {
+    exp_t *v = cur->content;
+    if (ispair(v) && v->content)
+      flatten_into(v, ret, tail);
+    else if (v && v != NIL_EXP)
+      list_append_owned(ret, tail, refexp(v));
+    cur = cur->next;
+  }
+}
+
+/* (flatten xs) — recursively flatten nested lists into a flat list. */
+const char doc_flatten[] =
+    "(flatten xs) — recursively flatten nested lists.";
+exp_t *flattencmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(xs);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  flatten_into(xs, &ret, &tail);
+  CLEAN_RETURN_1(xs, ret);
+}
+
+/* sort helpers */
+typedef struct { exp_t **arr; int n; } sort_ctx;
+
+static int sort_cmp_default(const void *a, const void *b) {
+  exp_t *x = *(exp_t **)a, *y = *(exp_t **)b;
+  if (isnumber(x) && isnumber(y)) {
+    int64_t dx = FIX_VAL(x), dy = FIX_VAL(y);
+    return dx < dy ? -1 : dx > dy ? 1 : 0;
+  }
+  if (isfloat(x) && isfloat(y))
+    return x->f < y->f ? -1 : x->f > y->f ? 1 : 0;
+  if (isnumber(x) && isfloat(y)) {
+    double dx = (double)FIX_VAL(x);
+    return dx < y->f ? -1 : dx > y->f ? 1 : 0;
+  }
+  if (isfloat(x) && isnumber(y)) {
+    double dy = (double)FIX_VAL(y);
+    return x->f < dy ? -1 : x->f > dy ? 1 : 0;
+  }
+  if (isstring(x) && isstring(y))
+    return strcmp((char *)x->ptr, (char *)y->ptr);
+  return 0;
+}
+
+/* (sort xs) — sort list with default < ordering (numbers, strings). */
+const char doc_sort[] =
+    "(sort xs) — sort list using default ordering (numbers by value, "
+    "strings lexicographically).";
+exp_t *sortcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(xs);
+  if (!xs || xs == NIL_EXP) CLEAN_RETURN_1(xs, NIL_EXP);
+  if (!ispair(xs))
+    CLEAN_RETURN_1(xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                             "sort: arg must be a list"));
+  int n = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) n++;
+  exp_t **arr = memalloc(n, sizeof *arr);
+  int i = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next)
+    arr[i++] = c->content;
+  qsort(arr, n, sizeof *arr, sort_cmp_default);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  for (i = 0; i < n; i++)
+    list_append_owned(&ret, &tail, refexp(arr[i]));
+  free(arr);
+  CLEAN_RETURN_1(xs, ret);
+}
+
+/* (sort-by key-fn xs) — sort list by (key-fn element). */
+const char doc_sortby[] =
+    "(sort-by key-fn xs) — sort xs by (key-fn element).";
+
+typedef struct { exp_t *val; exp_t *key; } sortby_pair;
+
+static int sort_cmp_by(const void *a, const void *b) {
+  const sortby_pair *pa = (const sortby_pair *)a;
+  const sortby_pair *pb = (const sortby_pair *)b;
+  return sort_cmp_default(&pa->key, &pb->key);
+}
+
+exp_t *sortbycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !xs)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env,
+                                 "(sort-by key-fn xs)"));
+  if (xs == NIL_EXP) CLEAN_RETURN_2(fn, xs, NIL_EXP);
+  if (!ispair(xs))
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "sort-by: second arg must be a list"));
+  int n = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) n++;
+  sortby_pair *pairs = memalloc(n, sizeof *pairs);
+  int i = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) {
+    pairs[i].val = c->content;
+    pairs[i].key = alc_apply1(fn, c->content, env);
+    if (!pairs[i].key) pairs[i].key = NIL_EXP;
+    if (iserror(pairs[i].key)) {
+      exp_t *err = pairs[i].key;
+      for (int j = 0; j < i; j++) unrefexp(pairs[j].key);
+      free(pairs);
+      CLEAN_RETURN_2(fn, xs, err);
+    }
+    i++;
+  }
+  qsort(pairs, n, sizeof *pairs, sort_cmp_by);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  for (i = 0; i < n; i++) {
+    list_append_owned(&ret, &tail, refexp(pairs[i].val));
+    unrefexp(pairs[i].key);
+  }
+  free(pairs);
+  CLEAN_RETURN_2(fn, xs, ret);
+}
+
+/* (string-contains? s sub) — t if s contains substring sub. */
+const char doc_stringcontainsp[] =
+    "(string-contains? s sub) — t if string s contains substring sub.";
+exp_t *stringcontainspcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, sub);
+  if (!isstring(s) || !isstring(sub))
+    CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "string-contains?: args must be strings"));
+  exp_t *ret = strstr((char *)s->ptr, (char *)sub->ptr) ? TRUE_EXP : NIL_EXP;
+  CLEAN_RETURN_2(s, sub, ret);
+}
+
+/* (string-index s sub) — 0-based index of first occurrence, or nil. */
+const char doc_stringindex[] =
+    "(string-index s sub) — index of first occurrence of sub in s, or nil.";
+exp_t *stringindexcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, sub);
+  if (!isstring(s) || !isstring(sub))
+    CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "string-index: args must be strings"));
+  char *found = strstr((char *)s->ptr, (char *)sub->ptr);
+  exp_t *ret = found ? MAKE_FIX((int64_t)(found - (char *)s->ptr)) : NIL_EXP;
+  CLEAN_RETURN_2(s, sub, ret);
+}
+
+/* (string-replace s old new) — replace all occurrences of old with new. */
+const char doc_stringreplace[] =
+    "(string-replace s old new) — replace all occurrences of old with new.";
+exp_t *stringreplacecmd(exp_t *e, env_t *env) {
+  exp_t *s = NULL, *old = NULL, *nw = NULL;
+  if (!e->next || !e->next->next || !e->next->next->next)
+    goto bad;
+  s = EVAL(e->next->content, env);
+  if (iserror(s)) { unrefexp(e); return s; }
+  old = EVAL(e->next->next->content, env);
+  if (iserror(old)) { unrefexp(s); unrefexp(e); return old; }
+  nw = EVAL(e->next->next->next->content, env);
+  if (iserror(nw)) { unrefexp(s); unrefexp(old); unrefexp(e); return nw; }
+  if (!isstring(s) || !isstring(old) || !isstring(nw)) {
+    unrefexp(s); unrefexp(old); unrefexp(nw); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "string-replace: args must be strings");
+  }
+  {
+    const char *haystack = (char *)s->ptr;
+    const char *needle = (char *)old->ptr;
+    const char *replacement = (char *)nw->ptr;
+    size_t nlen = strlen(needle), rlen = strlen(replacement);
+    size_t cap = 64, len = 0;
+    char *buf = memalloc(cap, 1);
+    const char *p = haystack;
+    if (nlen == 0) {
+      str_buf_put(&buf, &len, &cap, p, strlen(p));
+    } else {
+      const char *found;
+      while ((found = strstr(p, needle)) != NULL) {
+        str_buf_put(&buf, &len, &cap, p, (size_t)(found - p));
+        str_buf_put(&buf, &len, &cap, replacement, rlen);
+        p = found + nlen;
+      }
+      str_buf_put(&buf, &len, &cap, p, strlen(p));
+    }
+    exp_t *ret = make_string(buf, (int)len);
+    free(buf);
+    unrefexp(s); unrefexp(old); unrefexp(nw); unrefexp(e);
+    return ret;
+  }
+bad:
+  unrefexp(s); unrefexp(old); unrefexp(e);
+  return error(ERROR_MISSING_PARAMETER, e, env,
+               "(string-replace s old new)");
+}
+
+/* ---- End new stdlib additions ---------------------------------------- */
 
 const char doc_odd[] = "(odd x) — t if integer x is odd, nil otherwise.";
 exp_t *oddcmd(exp_t *e, env_t *env) {
