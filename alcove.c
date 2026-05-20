@@ -2937,6 +2937,16 @@ const char doc_eq[] =
     "(= place val) — assign val to place. Place can be a symbol, (car/cdr "
     "...), or (str i) for in-place char update.";
 exp_t *equalcmd(exp_t *e, env_t *env) {
+  /* Strict arity: exactly (= place val). Silent truncation was hiding
+     real bugs — (= a 1 2 3 4) used to bind a=1 and discard the rest;
+     (= a) silently bound a to nil. */
+  exp_t *args = cdr(e);
+  if (!args || !cdr(args) || cddr(args)) {
+    exp_t *err = error(ERROR_MISSING_PARAMETER, e, env,
+                       "(= place val): expected exactly 2 arguments");
+    unrefexp(e);
+    return err;
+  }
   exp_t *tmpexp = EVAL(caddr(e), env);
   exp_t *tmpkey = refexp(cadr(e));
   unrefexp(e);
