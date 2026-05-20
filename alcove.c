@@ -5234,9 +5234,9 @@ exp_t *strcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_fmt[] =
-    "(fmt template arg ...) — format string with {} placeholders. Each {} is "
-    "replaced by the printed representation of the next argument. "
-    "Example: (fmt \"{} + {} = {}\" 1 2 3) → \"1 + 2 = 3\".";
+    "(fmt template arg ...) — format string with {} placeholders. Use {} for "
+    "default rendering or {:<spec>} for printf-style: {:.2f} {:%d} {:x} {:s}. "
+    "Example: (fmt \"{} + {} = {:.1f}\" 1 2 3.0) → \"1 + 2 = 3.0\".";
 exp_t *fmtcmd(exp_t *e, env_t *env) {
   exp_t *fmtarg = EVAL(cadr(e), env);
   if (iserror(fmtarg)) { unrefexp(e); return fmtarg; }
@@ -5248,25 +5248,74 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
   const char *tmpl = (const char *)fmtarg->ptr;
   size_t cap = 128, len = 0;
   char *buf = memalloc(cap, 1);
-  exp_t *cur = cddr(e); /* remaining args */
+  exp_t *cur = cddr(e);
   for (size_t i = 0; tmpl[i]; i++) {
-    if (tmpl[i] == '{' && tmpl[i + 1] == '}') {
-      i++; /* skip '}' */
-      if (cur) {
-        exp_t *v = EVAL(car(cur), env);
-        if (iserror(v)) {
-          free(buf); unrefexp(fmtarg); unrefexp(e); return v;
-        }
+    if (tmpl[i] != '{') {
+      str_buf_put(&buf, &len, &cap, tmpl + i, 1);
+      continue;
+    }
+    /* '{' found — check what follows */
+    if (tmpl[i + 1] == '}') {
+      /* bare {} — default rendering */
+      i++;
+      if (!cur) continue;
+      exp_t *v = EVAL(car(cur), env);
+      if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
+      exp_to_string_buf(v, &buf, &len, &cap);
+      unrefexp(v);
+      cur = cur->next;
+    } else if (tmpl[i + 1] == ':') {
+      /* {:<spec>} — find closing } */
+      size_t j = i + 2;
+      while (tmpl[j] && tmpl[j] != '}') j++;
+      size_t spec_len = j - (i + 2);
+      if (!tmpl[j] || spec_len == 0 || spec_len >= 32) {
+        /* malformed — emit '{' literally */
+        str_buf_put(&buf, &len, &cap, "{", 1);
+        continue;
+      }
+      /* build printf format: '%' + spec */
+      char printf_fmt[34];
+      printf_fmt[0] = '%';
+      memcpy(printf_fmt + 1, tmpl + i + 2, spec_len);
+      printf_fmt[spec_len + 1] = '\0';
+      char ftype = printf_fmt[spec_len]; /* last char = conversion letter */
+      i = j; /* advance past closing '}' */
+      if (!cur) continue;
+      exp_t *v = EVAL(car(cur), env);
+      if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
+      char tmp[256];
+      int n = 0;
+      if (ftype == 'd' || ftype == 'i' || ftype == 'o' ||
+          ftype == 'u' || ftype == 'x' || ftype == 'X') {
+        int64_t iv = isnumber(v) ? FIX_VAL(v) :
+                     isfloat(v)  ? (int64_t)v->f : 0LL;
+        /* insert 'll' before type for int64_t */
+        char safe_fmt[36];
+        memcpy(safe_fmt, printf_fmt, spec_len); /* '%' + spec without type */
+        safe_fmt[spec_len]     = 'l';
+        safe_fmt[spec_len + 1] = 'l';
+        safe_fmt[spec_len + 2] = ftype;
+        safe_fmt[spec_len + 3] = '\0';
+        n = snprintf(tmp, sizeof(tmp), safe_fmt, iv);
+      } else if (ftype == 'f' || ftype == 'e' || ftype == 'E' ||
+                 ftype == 'g' || ftype == 'G') {
+        double dv = isfloat(v)  ? v->f :
+                    isnumber(v) ? (double)FIX_VAL(v) : 0.0;
+        n = snprintf(tmp, sizeof(tmp), printf_fmt, dv);
+      } else if (ftype == 's') {
+        const char *sv = isstring(v) ? (char *)v->ptr : "";
+        n = snprintf(tmp, sizeof(tmp), printf_fmt, sv);
+      } else {
         exp_to_string_buf(v, &buf, &len, &cap);
-        unrefexp(v);
-        cur = cur->next;
       }
+      if (n > 0)
+        str_buf_put(&buf, &len, &cap, tmp, (size_t)(n < (int)sizeof(tmp) ? n : (int)sizeof(tmp) - 1));
+      unrefexp(v);
+      cur = cur->next;
     } else {
-      if (len + 1 >= cap) {
-        cap *= 2;
-        buf = realloc(buf, cap);
-      }
-      buf[len++] = tmpl[i];
+      /* '{' not followed by ':' or '}' — emit literally */
+      str_buf_put(&buf, &len, &cap, "{", 1);
     }
   }
   buf[len] = 0;
