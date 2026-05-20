@@ -94,6 +94,7 @@ static ALCOVE_TLS int in_tail_position = 0;
 lispProc lispProcList[] = {
     /* Special forms / control flow */
     LISPCMD("quote", quotecmd, doc_quote),
+    LISPCMD("quasiquote", quasiquotecmd, doc_quasiquote),
     LISPCMD_TAIL("if", ifcmd, doc_if),
     LISPCMD_TAIL("do", docmd, doc_do),
     LISPCMD_TAIL("when", whencmd, doc_when),
@@ -2173,6 +2174,20 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
   } else if (x == '\'') {
     vnode = reader(stream, 0, 0);
     return make_quote(vnode);
+  } else if (x == '`') {
+    vnode = reader(stream, 0, 0);
+    exp_t *qq = make_node(make_symbol("quasiquote", 10));
+    qq->next = make_node(vnode);
+    return qq;
+  } else if (x == ',') {
+    int c = getc(stream);
+    int splice = (c == '@');
+    if (!splice) ungetc(c, stream);
+    vnode = reader(stream, 0, 0);
+    char *tag = splice ? "unquote-splicing" : "unquote";
+    exp_t *uq = make_node(make_symbol(tag, strlen(tag)));
+    uq->next = make_node(vnode);
+    return uq;
   } else if (x == ';') {
     /* Line comment — skip to EOL or EOF. Without this handler `;` was
      * a TERMMACRO that returned EXP_ERROR_PARSING_MACROCHAR; the error
@@ -2845,6 +2860,93 @@ exp_t *quotecmd(exp_t *e, env_t *env) {
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
+
+/* quasiquote expander — walks the template, returns a new AST that when
+   evaluated produces the filled-in structure.
+   Atoms → (quote atom)
+   (unquote x) → x  (evaluated at runtime)
+   list with unquote-splicing elements → (append <spliced> (cons ...))
+   other lists → (cons (qq car) (qq cdr)) */
+static exp_t *qq_expand(exp_t *tmpl, int depth);
+static exp_t *qq_make_list2(char *sym, exp_t *a, exp_t *b) {
+  exp_t *head = make_node(make_symbol(sym, strlen(sym)));
+  head->next = make_node(a);
+  head->next->next = make_node(b);
+  return head;
+}
+static exp_t *qq_expand(exp_t *tmpl, int depth) {
+  if (!tmpl || !ispair(tmpl) || !istrue(tmpl)) {
+    /* atom: (quote tmpl) */
+    exp_t *q = make_node(make_symbol("quote", 5));
+    q->next = make_node(refexp(tmpl));
+    return q;
+  }
+  /* check for (unquote x) */
+  if (issymbol(tmpl->content) &&
+      !strcmp((char *)tmpl->content->ptr, "unquote")) {
+    if (depth == 0)
+      return refexp(cadr(tmpl)); /* splice evaluation site */
+    /* nested quasiquote — decrease depth, still expand */
+    exp_t *inner = qq_expand(cadr(tmpl), depth - 1);
+    exp_t *uq = make_node(make_symbol("unquote", 7));
+    uq->next = make_node(inner);
+    exp_t *q = make_node(make_symbol("quote", 5));
+    q->next = make_node(uq);
+    return q;
+  }
+  /* check for (quasiquote x) — nested, increase depth */
+  if (issymbol(tmpl->content) &&
+      !strcmp((char *)tmpl->content->ptr, "quasiquote")) {
+    exp_t *inner = qq_expand(cadr(tmpl), depth + 1);
+    exp_t *qq_sym = make_node(make_symbol("quasiquote", 10));
+    qq_sym->next = make_node(inner);
+    exp_t *q = make_node(make_symbol("quote", 5));
+    q->next = make_node(qq_sym);
+    return q;
+  }
+  /* list: expand element by element, building (cons car-exp cdr-exp) chain.
+     If an element is (unquote-splicing xs), use (append xs ...) instead. */
+  exp_t *car = tmpl->content;
+  exp_t *cdr = tmpl->next; /* remaining nodes (raw, not wrapped) */
+
+  if (ispair(car) && istrue(car) && issymbol(car->content) &&
+      !strcmp((char *)car->content->ptr, "unquote-splicing")) {
+    /* (append <splice-form> <rest-expansion>) */
+    exp_t *splice = refexp(cadr(car));
+    exp_t *rest_exp;
+    if (!cdr || !istrue(cdr))
+      rest_exp = refexp(NIL_EXP);
+    else
+      rest_exp = qq_expand(cdr, depth);
+    return qq_make_list2("append", splice, rest_exp);
+  } else {
+    exp_t *car_exp = qq_expand(car, depth);
+    exp_t *cdr_exp;
+    if (!cdr || !istrue(cdr))
+      cdr_exp = make_node(make_symbol("quote", 5));
+    else {
+      /* cdr is the raw next node(s) — treat as a list by wrapping it */
+      cdr_exp = qq_expand(cdr, depth);
+      goto done;
+    }
+    /* (quote nil) for empty cdr */
+    cdr_exp->next = make_node(refexp(NIL_EXP));
+    done:
+    return qq_make_list2("cons", car_exp, cdr_exp);
+  }
+}
+
+const char doc_quasiquote[] =
+    "(quasiquote tmpl) — template expansion. `x reader shorthand. "
+    "Evaluates (unquote expr) sub-forms and splices (unquote-splicing list) "
+    "sub-forms into the surrounding list. Shorthands: ,expr and ,@list.";
+exp_t *quasiquotecmd(exp_t *e, env_t *env) {
+  exp_t *tmpl = cadr(e);
+  exp_t *expanded = qq_expand(tmpl, 0);
+  unrefexp(e);
+  /* EVAL takes ownership of expanded — do NOT unrefexp it after. */
+  return EVAL(expanded, env);
+}
 
 const char doc_if[] =
     "(if test then [else]) — branch on test. Falsey is nil/empty; everything "

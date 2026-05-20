@@ -6,7 +6,7 @@
 /* Forward declarations for doc strings defined alongside each cmd
    function. Each is `static const char doc_<symbolname>[]` so a future
    reader can grep `doc_+` to land directly on the help text + the body. */
-extern const char doc_quote[], doc_if[], doc_do[];
+extern const char doc_quote[], doc_quasiquote[], doc_if[], doc_do[];
 extern const char doc_when[], doc_while[], doc_repeat[];
 extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
 extern const char doc_let[], doc_with[];
@@ -94,6 +94,7 @@ extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
    visible at table-init time. The original cmds had a top-level
    #pragma-style sweep (functions all sit in alcove.c above this point);
    newer additions land below and need explicit decls. */
+exp_t *quasiquotecmd(exp_t *e, env_t *env);
 exp_t *doccmd(exp_t *e, env_t *env);
 exp_t *helpcmd(exp_t *e, env_t *env);
 exp_t *bitandcmd(exp_t *e, env_t *env);

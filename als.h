@@ -108,7 +108,7 @@ typedef struct {
 
 static int als_is_delim(char c) {
   return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' ||
-         c == '\'';
+         c == '\'' || c == '`' || c == ',';
 }
 
 static als_node *als_read_one(als_lr *r);
@@ -175,6 +175,27 @@ static als_node *als_read_one(als_lr *r) {
       r->i++;
     als_node *q = als_list();
     als_push(q, als_atom("quote", 5));
+    als_push(q, als_read_one(r));
+    return q;
+  }
+  if (c == '`') {
+    r->i++;
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+      r->i++;
+    als_node *q = als_list();
+    als_push(q, als_atom("quasiquote", 10));
+    als_push(q, als_read_one(r));
+    return q;
+  }
+  if (c == ',') {
+    r->i++; /* consume ',' */
+    int splice = r->i < r->n && r->s[r->i] == '@';
+    if (splice) r->i++; /* consume '@' */
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+      r->i++;
+    als_node *q = als_list();
+    als_push(q, als_atom(splice ? "unquote-splicing" : "unquote",
+                         splice ? 16 : 7));
     als_push(q, als_read_one(r));
     return q;
   }
