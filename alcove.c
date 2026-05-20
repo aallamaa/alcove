@@ -211,6 +211,7 @@ lispProc lispProcList[] = {
     LISPCMD("zip", zipcmd, doc_zip),
     LISPCMD("flatten", flattencmd, doc_flatten),
     LISPCMD("gensym", gensymcmd, doc_gensym),
+    LISPCMD("with-gensyms", withgensymscmd, doc_withgensyms),
     /* Error handling */
     LISPCMD("error?", errorpcmd, doc_errorp),
     LISPCMD("error-message", errormessagecmd, doc_errormessage),
@@ -6803,15 +6804,60 @@ exp_t *nullpcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+static int64_t gensym_counter = 0;
+static exp_t *make_gensym(void) {
+  char buf[32];
+  int n = snprintf(buf, sizeof buf, "G%lld", (long long)gensym_counter++);
+  return make_symbol(buf, n);
+}
+
 /* (gensym) — return a fresh symbol G0, G1, G2, … unique per session. */
 const char doc_gensym[] = "(gensym) — unique symbol each call: G0, G1, …";
 exp_t *gensymcmd(exp_t *e, env_t *env) {
-  static int64_t counter = 0;
-  char buf[32];
-  int n = snprintf(buf, sizeof buf, "G%lld", (long long)counter++);
   unrefexp(e);
   (void)env;
-  return make_symbol(buf, n);
+  return make_gensym();
+}
+
+const char doc_withgensyms[] =
+    "(with-gensyms (s ...) body ...) — bind each name to a fresh unique "
+    "symbol, then evaluate body forms in that scope. Used inside defmacro "
+    "to avoid variable capture: "
+    "(with-gensyms (tmp) `(let ,tmp ,x ,tmp)).";
+exp_t *withgensymscmd(exp_t *e, env_t *env) {
+  exp_t *names_node = e->next;
+  exp_t *body_start = names_node ? names_node->next : NULL;
+  if (!names_node || !body_start ||
+      !(ispair(names_node->content) || istrue(names_node->content) == 0)) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env,
+                 "with-gensyms: expected (name-list body...)");
+  }
+  env_t *newenv = make_env(env);
+  if (!newenv->d) newenv->d = create_dict();
+  exp_t *names = names_node->content;
+  while (names && ispair(names) && istrue(names)) {
+    exp_t *nm = names->content;
+    if (!issymbol(nm)) {
+      destroy_env(newenv);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "with-gensyms: names must be symbols");
+    }
+    exp_t *gs = make_gensym();
+    set_get_keyval_dict(newenv->d, nm->ptr, gs);
+    unrefexp(gs);
+    names = names->next;
+  }
+  exp_t *ret = NIL_EXP;
+  for (exp_t *b = body_start; b; b = b->next) {
+    if (ret != NIL_EXP) unrefexp(ret);
+    ret = EVAL(b->content, newenv);
+    if (iserror(ret)) break;
+  }
+  destroy_env(newenv);
+  unrefexp(e);
+  return ret;
 }
 
 /* (take n xs) — first n elements of list xs. */
@@ -8534,7 +8580,15 @@ exp_t *letcmd(exp_t *e, env_t *env) {
         goto finish;
       }
       if (curval->next) {
-        ret = EVAL(curval->next->content, newenv);
+        /* evaluate all body forms; return last */
+        exp_t *body = curval->next;
+        while (body->next) {
+          ret = EVAL(body->content, newenv);
+          if (iserror(ret)) goto finish;
+          unrefexp(ret); ret = NULL;
+          body = body->next;
+        }
+        ret = EVAL(body->content, newenv);
         goto finish;
       }
     }
@@ -8591,6 +8645,13 @@ exp_t *withcmd(exp_t *e, env_t *env) {
           }
         }
 
+        /* evaluate all body forms; return last */
+        while (curex->next) {
+          ret = EVAL(curex->content, newenv);
+          if (iserror(ret)) goto finish;
+          unrefexp(ret); ret = NULL;
+          curex = curex->next;
+        }
         ret = EVAL(curex->content, newenv);
         goto finish;
       }
