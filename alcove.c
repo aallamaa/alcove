@@ -98,6 +98,7 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("if", ifcmd, doc_if),
     LISPCMD_TAIL("do", docmd, doc_do),
     LISPCMD_TAIL("when", whencmd, doc_when),
+    LISPCMD_TAIL("unless", unlesscmd, doc_unless),
     LISPCMD("while", whilecmd, doc_while),
     LISPCMD("repeat", repeatcmd, doc_repeat),
     LISPCMD_TAIL("and", andcmd, doc_and),
@@ -7290,6 +7291,40 @@ exp_t *whencmd(exp_t *e, env_t *env) {
      NIL_EXP, so (when t 42) gave nil. If the body never ran (falsey
      test, or no body forms), discard ret (which holds the test value
      or last body iteration's truthy ret) and return NIL_EXP. */
+  unrefexp(e);
+  if (!body_ran) {
+    unrefexp(ret);
+    return NIL_EXP;
+  }
+  return ret ? ret : NIL_EXP;
+}
+
+const char doc_unless[] = "(unless test expr ...) — if test is falsey, evaluate "
+                          "the body in order; else nil.";
+exp_t *unlesscmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
+  exp_t *val = cadr(e);
+  exp_t *cur = cddr(e);
+  in_tail_position = 0;
+  exp_t *ret = EVAL(val, env);
+  if iserror (ret) {
+    in_tail_position = outer_tail;
+    unrefexp(e);
+    return ret;
+  }
+  int body_ran = 0;
+  if (!istrue(ret) && cur)
+    do {
+      unrefexp(ret);
+      body_ran = 1;
+      in_tail_position = (cur->next == NULL) ? outer_tail : 0;
+      ret = EVAL(car(cur), env);
+    } while ((cur = cdr(cur)) && !(ret && iserror(ret)));
+  in_tail_position = outer_tail;
+  if (ret && iserror(ret)) {
+    unrefexp(e);
+    return ret;
+  }
   unrefexp(e);
   if (!body_ran) {
     unrefexp(ret);

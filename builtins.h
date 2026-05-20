@@ -7,7 +7,8 @@
    function. Each is `static const char doc_<symbolname>[]` so a future
    reader can grep `doc_+` to land directly on the help text + the body. */
 extern const char doc_quote[], doc_quasiquote[], doc_if[], doc_do[];
-extern const char doc_when[], doc_while[], doc_repeat[];
+extern const char doc_when[], doc_unless[], doc_while[], doc_repeat[];
+exp_t *unlesscmd(exp_t *e, env_t *env);
 extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
 extern const char doc_let[], doc_letstar[], doc_with[];
 exp_t *letstar_cmd(exp_t *e, env_t *env);
