@@ -199,6 +199,10 @@ lispProc lispProcList[] = {
     LISPCMD("zip", zipcmd, doc_zip),
     LISPCMD("flatten", flattencmd, doc_flatten),
     LISPCMD("gensym", gensymcmd, doc_gensym),
+    /* Error handling */
+    LISPCMD("error?", errorpcmd, doc_errorp),
+    LISPCMD("error-message", errormessagecmd, doc_errormessage),
+    LISPCMD("try", trycmd, doc_try),
     /* Predicates */
     LISPCMD("number?", numberpcmd, doc_numberp),
     LISPCMD("string?", stringpcmd, doc_stringp),
@@ -2658,7 +2662,8 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   exp_t *header;
   exp_t *body;
   exp_t *cur = cdr(e);
-  if (cur && ispair(cur->content)) {
+  /* Accept list params OR bare symbol for rest-only: (fn xs body) */
+  if (cur && (ispair(cur->content) || issymbol(cur->content))) {
     header = car(cur);
     cur = cdr(cur);
     if (cur) {
@@ -2666,7 +2671,13 @@ exp_t *fncmd(exp_t *e, env_t *env) {
          as well as a pair — all are legal body expressions. */
       body = cur;
       vali = make_node(refexp(body));
-      val = make_node(refexp(header));
+      if (issymbol(header)) {
+        exp_t *dot = make_node(make_symbol(".", 1));
+        dot->next = make_node(refexp(header));
+        val = make_node(dot);
+      } else {
+        val = make_node(refexp(header));
+      }
       val->next = vali;
       val->type = EXP_LAMBDA;
       /* Closure: stash the env at fn-creation time in the wrapper
@@ -2705,7 +2716,8 @@ exp_t *defcmd(exp_t *e, env_t *env) {
   if (cur && issymbol(cur->content)) {
     name = car(cur);
     cur = cdr(cur);
-    if (cur && ispair(cur->content)) {
+    /* Accept (params...) list OR bare symbol for rest-only: (def f xs body) */
+    if (cur && (ispair(cur->content) || issymbol(cur->content))) {
       header = car(cur);
       cur = cdr(cur);
       if (cur) {
@@ -2713,7 +2725,21 @@ exp_t *defcmd(exp_t *e, env_t *env) {
            as well as a pair — all are legal body expressions. */
         body = cur;
         vali = make_node(refexp(body));
-        val = make_node(refexp(header));
+        /* For bare-symbol params, wrap in a 1-element list so lambda_params
+           always returns a list. We mark this as a rest-param lambda by
+           storing the symbol directly as the sole param wrapped in a pair
+           whose first element is itself a symbol — compile_lambda will see
+           FLAG_REST and skip compilation, falling back to AST eval where
+           var2env handles the rest collection. */
+        if (issymbol(header)) {
+          /* Bare-symbol params: represent as (. sym) so var2env collects
+             all args into a list bound to sym. */
+          exp_t *dot = make_node(make_symbol(".", 1));
+          dot->next = make_node(refexp(header));
+          val = make_node(dot);
+        } else {
+          val = make_node(refexp(header));
+        }
         val->next = vali;
         val->type = EXP_LAMBDA;
         val->meta = (keyval_t *)strdup(name->ptr);
@@ -5358,8 +5384,11 @@ exp_t *loadcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(path, ret);
 }
 
-/* Forward decl needed by applycmd below; defined further down. */
+/* Forward decls needed by HOFs and alc_apply helpers below. */
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env);
+static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env);
 
 /* ---------------- FFI (libffi-backed) ----------------
    Lets alcove call into shared libraries (libc, libm, custom .so's).
@@ -6206,8 +6235,7 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
@@ -6243,8 +6271,7 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
@@ -6314,10 +6341,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
                                      : (a * b);
         acc = MAKE_FIX(r);
       } else {
-        /* Slow path for this element — fall back to vm_invoke_values
-           and resume fast-path on the next element. */
-        exp_t *argv[2] = {acc, refexp(x)};
-        acc = vm_invoke_values(fn, 2, argv, env);
+        acc = alc_apply2(fn, acc, refexp(x), env);
         if (acc && iserror(acc))
           CLEAN_RETURN_2(fn, xs, acc);
         if (!acc)
@@ -6327,8 +6351,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     }
   } else {
     while (ispair(cur) && cur->content) {
-      exp_t *argv[2] = {acc, refexp(cur->content)};
-      acc = vm_invoke_values(fn, 2, argv, env);
+      acc = alc_apply2(fn, acc, refexp(cur->content), env);
       if (acc && iserror(acc))
         CLEAN_RETURN_2(fn, xs, acc);
       if (!acc)
@@ -6357,8 +6380,7 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res))
       CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
@@ -6389,8 +6411,7 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res))
       CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
@@ -6454,26 +6475,33 @@ exp_t *applycmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-/* Call any callable (lambda or builtin) with a single pre-evaluated arg.
+/* Call any callable (lambda or builtin) with pre-evaluated args.
    Builtins receive their canonical `e` list; lambdas use vm_invoke_values.
-   The caller keeps ownership of `fn` and `arg`; callee refs as needed. */
-static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env) {
-  if (islambda(fn)) {
-    exp_t *argv[1] = {refexp(arg)};
-    return vm_invoke_values(fn, 1, argv, env);
-  }
+   The caller keeps ownership of `fn`; argv ownership is transferred. */
+static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
+  if (islambda(fn))
+    return vm_invoke_values(fn, nargs, argv, env);
   if (isinternal(fn)) {
-    /* Build (fn arg) list; arg is already evaluated — EVAL on a non-symbol
-       non-pair atom just returns it (refcounted), so this is correct. */
     exp_t *head = make_node(refexp(fn));
-    head->next = make_node(refexp(arg));
+    exp_t *cur = head;
+    for (int i = 0; i < nargs; i++)
+      cur = cur->next = make_node(argv[i]);
     int was_tail = in_tail_position;
     in_tail_position = 0;
     exp_t *ret = fn->fnc(head, env);
     in_tail_position = was_tail;
     return ret;
   }
+  for (int i = 0; i < nargs; i++) unrefexp(argv[i]);
   return error(ERROR_ILLEGAL_VALUE, fn, env, "not a callable");
+}
+static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env) {
+  exp_t *argv[1] = {refexp(arg)};
+  return alc_apply_n(fn, 1, argv, env);
+}
+static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env) {
+  exp_t *argv[2] = {a, b};
+  return alc_apply_n(fn, 2, argv, env);
 }
 
 /* ---- New stdlib additions -------------------------------------------- */
@@ -6803,6 +6831,66 @@ bad:
   unrefexp(s); unrefexp(old); unrefexp(e);
   return error(ERROR_MISSING_PARAMETER, e, env,
                "(string-replace s old new)");
+}
+
+/* (error? x) — t if x is an error value. */
+const char doc_errorp[] = "(error? x) — t if x is an error value.";
+exp_t *errorpcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    /* Don't propagate: we want to inspect the error, not re-raise it. */
+    if (a && iserror(a)) ret = TRUE_EXP;
+  }
+  if (a && !iserror(a)) unrefexp(a);
+  else if (a) unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (error-message x) — string message from an error value, or nil. */
+const char doc_errormessage[] =
+    "(error-message x) — extract the message string from an error value.";
+exp_t *errormessagecmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (a && iserror(a) && a->ptr)
+      ret = make_string((char *)a->ptr, (int)strlen((char *)a->ptr));
+  }
+  if (a) unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (try body-expr handler) — evaluate body; on error call (handler err).
+   Unlike normal propagation, the error is caught here and not re-raised.
+   handler receives the error exp_t and may call (error-message e) on it. */
+const char doc_try[] =
+    "(try body handler) — evaluate body; if it signals an error, call "
+    "(handler error-value) instead of propagating. Returns body's value or "
+    "handler's return value.";
+exp_t *trycmd(exp_t *e, env_t *env) {
+  if (!e->next || !e->next->next) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env, "(try body handler)");
+  }
+  exp_t *result = EVAL(e->next->content, env);
+  if (!result || !iserror(result)) {
+    unrefexp(e);
+    return result ? result : NIL_EXP;
+  }
+  /* Error caught — evaluate handler and call it. */
+  exp_t *handler = EVAL(e->next->next->content, env);
+  unrefexp(e);
+  if (!handler || iserror(handler)) {
+    unrefexp(result);
+    return handler ? handler : NIL_EXP;
+  }
+  exp_t *ret = alc_apply1(handler, result, env);
+  unrefexp(handler);
+  unrefexp(result);
+  return ret ? ret : NIL_EXP;
 }
 
 /* ---- End new stdlib additions ---------------------------------------- */
@@ -8223,6 +8311,20 @@ finish:
   return ret;
 }
 
+/* Bind a single name (sym->ptr) to val in env; takes ownership of val. */
+static void var2env_bind(char *name, exp_t *val, env_t *env) {
+  if (env->n_inline < ENV_INLINE_SLOTS) {
+    env->inline_keys[env->n_inline] = name;
+    env->inline_vals[env->n_inline] = val;
+    env->n_inline++;
+  } else {
+    if (!env->d)
+      env->d = create_dict();
+    set_get_keyval_dict(env->d, (char *)name, val);
+    unrefexp(val);
+  }
+}
+
 exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
   /* borrow references */
   exp_t *curvar = var;
@@ -8234,6 +8336,28 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
      once and either bind NULL as a key or hit "missing parameter" if
      no args were passed. The content check makes 0-arg defs work. */
   while (curvar && curvar->content) {
+    /* Rest-param marker: (a b . rest) reads as (a b . rest) — detect the
+       dot symbol and collect remaining args into a list for the next param. */
+    if (issymbol(curvar->content) &&
+        strcmp((char *)curvar->content->ptr, ".") == 0) {
+      if (!curvar->next || !curvar->next->content ||
+          !issymbol(curvar->next->content))
+        return error(ERROR_ILLEGAL_VALUE, e, env,
+                     "rest param: symbol expected after '.'");
+      char *rest_name = (char *)curvar->next->content->ptr;
+      exp_t *rest_head = NIL_EXP, *rest_tail = NULL;
+      while (curval) {
+        exp_t *rv = evalexp ? EVAL(curval->content, env->root)
+                            : refexp(curval->content);
+        if (!rv) rv = NIL_EXP;
+        if (evalexp && iserror(rv)) return rv;
+        list_append_owned(&rest_head, &rest_tail, rv);
+        curval = curval->next;
+      }
+      var2env_bind(rest_name, rest_head, env);
+      return NULL;
+    }
+
     if ((curval)) {
       if ((retvar = (evalexp ? EVAL(curval->content, env->root)
                              : refexp(curval->content)))) {
@@ -8243,20 +8367,7 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
       } else
         retvar = NIL_EXP;
       if (issymbol(curvar->content)) {
-        /* Fast path: use inline slots for function-param bindings.
-           Keys BORROW from the symbol's ptr; caller guarantees lifetime
-           by holding a ref to the lambda header. Falls back to the
-           dict once inline slots overflow. */
-        if (env->n_inline < ENV_INLINE_SLOTS) {
-          env->inline_keys[env->n_inline] = curvar->content->ptr;
-          env->inline_vals[env->n_inline] = retvar; /* ownership transferred */
-          env->n_inline++;
-        } else {
-          if (!env->d)
-            env->d = create_dict();
-          set_get_keyval_dict(env->d, curvar->content->ptr, retvar);
-          unrefexp(retvar);
-        }
+        var2env_bind((char *)curvar->content->ptr, retvar, env);
       } else {
         unrefexp(retvar);
         return NULL;
@@ -14890,7 +15001,8 @@ int compile_lambda(exp_t *fn) {
   compiler_t c = {0};
   c.self_name = (const char *)fn->meta; /* may be NULL for anon fn */
 
-  /* Register params into slots 0..N-1 matching env->inline_slots. */
+  /* Register params into slots 0..N-1 matching env->inline_slots.
+     Rest params (dot notation or bare-symbol wrap) fall back to AST. */
   exp_t *p;
   for (p = params; p; p = p->next) {
     if (c.nparams >= ENV_INLINE_SLOTS) {
@@ -14898,6 +15010,11 @@ int compile_lambda(exp_t *fn) {
       break;
     }
     if (!is_ptr(p->content) || !issymbol(p->content)) {
+      c.failed = 1;
+      break;
+    }
+    /* Dot marker means rest params — AST eval handles collection. */
+    if (strcmp((char *)p->content->ptr, ".") == 0) {
       c.failed = 1;
       break;
     }
@@ -15847,7 +15964,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     }
     exp_t *p = lambda_params(fn);
     int i = 0;
-    while (p && i < nargs) {
+    while (p && p->content) {
       if (!is_ptr(p->content) || !issymbol(p->content)) {
         int j;
         for (j = i; j < nargs; j++)
@@ -15855,16 +15972,30 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
         destroy_env(newenv);
         return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
       }
-      if (newenv->n_inline < ENV_INLINE_SLOTS) {
-        newenv->inline_keys[newenv->n_inline] = (char *)p->content->ptr;
-        newenv->inline_vals[newenv->n_inline] = argv[i];
-        newenv->n_inline++;
-      } else {
-        if (!newenv->d)
-          newenv->d = create_dict();
-        set_get_keyval_dict(newenv->d, p->content->ptr, argv[i]);
-        unrefexp(argv[i]);
+      /* Rest param — collect remaining argv into a list and bind. */
+      if (strcmp((char *)p->content->ptr, ".") == 0) {
+        if (!p->next || !p->next->content || !issymbol(p->next->content)) {
+          int j;
+          for (j = i; j < nargs; j++) unrefexp(argv[j]);
+          destroy_env(newenv);
+          return error(ERROR_ILLEGAL_VALUE, fn, env,
+                       "rest param: symbol expected after '.'");
+        }
+        exp_t *rest_head = NIL_EXP, *rest_tail = NULL;
+        for (; i < nargs; i++)
+          list_append_owned(&rest_head, &rest_tail, argv[i]);
+        var2env_bind((char *)p->next->content->ptr, rest_head, newenv);
+        p = NULL; /* done */
+        break;
       }
+      if (i >= nargs) {
+        int j;
+        for (j = i; j < nargs; j++) unrefexp(argv[j]);
+        destroy_env(newenv);
+        return error(ERROR_MISSING_PARAMETER, fn, env,
+                     "wrong number of args");
+      }
+      var2env_bind((char *)p->content->ptr, argv[i], newenv);
       p = p->next;
       i++;
     }
