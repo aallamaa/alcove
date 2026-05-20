@@ -8431,8 +8431,10 @@ exp_t *evalcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_let[] = "(let var val body) — bind var to val in body. The "
-                       "binding is local; body returns its last expression.";
+const char doc_let[] =
+    "(let var val body) — bind var to val in body; (let (a b) val body) — "
+    "destructure val as a list, binding each name to the corresponding "
+    "element (missing elements get nil). Binding is local to body.";
 exp_t *letcmd(exp_t *e, env_t *env) {
   env_t *newenv = make_env(env);
   exp_t *ret;
@@ -8450,6 +8452,32 @@ exp_t *letcmd(exp_t *e, env_t *env) {
         if iserror (ret)
           goto finish;
         set_get_keyval_dict(newenv->d, curvar->content->ptr, ret);
+        unrefexp(ret);
+        ret = NULL;
+      } else if (ispair(curvar->content)) {
+        /* Destructuring: (let (a b ...) val body)
+           Eval val once, then bind each name to the corresponding list
+           element; names without a matching element get nil. */
+        ret = EVAL(curval->content, env);
+        if (ret == NULL) ret = NIL_EXP;
+        if (iserror(ret)) goto finish;
+        exp_t *dnames = curvar->content;
+        exp_t *dvals  = ret;
+        while (dnames && ispair(dnames) && istrue(dnames)) {
+          exp_t *nm = dnames->content;
+          if (!issymbol(nm)) {
+            unrefexp(ret);
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                        "let: destructuring name must be a symbol");
+            goto finish;
+          }
+          exp_t *v = (dvals && ispair(dvals) && istrue(dvals))
+                         ? dvals->content
+                         : NIL_EXP;
+          set_get_keyval_dict(newenv->d, nm->ptr, v);
+          dnames = dnames->next;
+          if (dvals && ispair(dvals) && istrue(dvals)) dvals = dvals->next;
+        }
         unrefexp(ret);
         ret = NULL;
       } else {
