@@ -393,10 +393,13 @@ char *als_to_sexpr(const char *src) {
           als_node *cond = als_line_node(cond_text);
           als_push(target, cond);
         }
-        /* Continue appending body forms to the same if node */
+        /* Insert a fresh (do ...) for the branch body */
+        als_node *do_node = als_list();
+        als_push(do_node, als_atom("do", 2));
+        als_push(target, do_node);
         if (sp < MAXD) {
           ind_stack[sp] = indent;
-          node_stack[sp] = target;
+          node_stack[sp] = do_node;
           sp++;
         }
         if (is_else) if_stack[indent] = NULL; /* else terminates the chain */
@@ -418,11 +421,13 @@ char *als_to_sexpr(const char *src) {
     while (sp > 0 && indent <= ind_stack[sp - 1])
       sp--;
 
-    /* Track if/elif nodes for subsequent else/elif attachment */
+    /* Track if/when/unless nodes for subsequent elif/else attachment. */
     if_stack[indent] = NULL;
     if (block && node->is_list && node->n > 0 && !node->kid[0]->is_list) {
       const char *head = node->kid[0]->atom;
-      if (head && strcmp(head, "if") == 0)
+      if (head && (strcmp(head, "if") == 0 ||
+                   strcmp(head, "when") == 0 ||
+                   strcmp(head, "unless") == 0))
         if_stack[indent] = node;
     }
 
