@@ -123,10 +123,37 @@
 (assert "let basic"                  (let x 3 (+ x 4))            7)
 (assert "let uses caller scope"      ((fn (y) (let x 10 (+ x y))) 5) 15)
 (assert "nested let shadows"         (let x 1 (let x 2 x))        2)
+(assert "let multi-body"             (let x 5 (+ x 1) (+ x 10))   15)
+(assert "let destructuring"          (let (a b) (list 1 2) (+ a b)) 3)
+
+; 8b. let* — sequential bindings (list form + flat legacy form).
+(assert "let* sequential"            (let* (a 1 b (* a 10)) (+ a b)) 11)
+(assert "let* multi-body"            (let* (x 5) (+ x 1) (+ x 10))  15)
+(assert "let* flat legacy"           (let* x 1 y 2 (+ x y))       3)
+
+; 8c. when / unless multi-body and false paths.
+(assert "when multi-body"            (when t 1 2 3)               3)
+(assert "when false -> nil"          (when nil 99)                nil)
+(assert "unless multi-body"          (unless nil 1 2 3)           3)
+(assert "unless true -> nil"         (unless t 99)                nil)
+
+; 8d. TCO through let / let* / with / when / unless (compiled tail calls).
+;     1e6 deep — would overflow the C stack without proper trampolining.
+(def tco-let (n)    (if (is n 0) 'ok (let m (- n 1) (tco-let m))))
+(def tco-lets (n)   (if (is n 0) 'ok (let* (m (- n 1)) (tco-lets m))))
+(def tco-with (n)   (if (is n 0) 'ok (with (m (- n 1)) (tco-with m))))
+(def tco-when (n)   (if (is n 0) 'ok (when t (tco-when (- n 1)))))
+(def tco-unless (n) (unless (is n 0) (tco-unless (- n 1))))
+(assert "tco through let"            (tco-let 1000000)            'ok)
+(assert "tco through let*"           (tco-lets 1000000)           'ok)
+(assert "tco through with"           (tco-with 1000000)           'ok)
+(assert "tco through when"           (tco-when 1000000)           'ok)
+(assert "tco through unless"         (tco-unless 1000000)         nil)
 
 ; 9. Phase-2 compiler — `with` (multi-binding).
 (assert "with 2 bindings"            (with (a 3 b 4) (+ a b))     7)
 (assert "with shadows"               (let a 1 (with (a 9) a))     9)
+(assert "with multi-body"            (with (a 3 b 4) (+ a 1) (+ a b)) 7)
 
 ; 10. let + mutation: assign into let-bound slot, then read.
 (assert "= into let slot"            (let c 10 (= c 20) c)        20)

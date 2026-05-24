@@ -8711,40 +8711,82 @@ finish:
 }
 
 const char doc_letstar[] =
-    "(let* v1 val1 v2 val2 ... body) — sequential bindings: each val is "
-    "evaluated in the scope that includes all preceding bindings. "
-    "Equivalent to nested (let v1 val1 (let v2 val2 ... body)).";
+    "(let* (v1 val1 v2 val2 ...) body ...) — sequential bindings: each val "
+    "is evaluated in the scope that includes all preceding bindings. The "
+    "flat form (let* v1 val1 ... single-body) is also accepted for the "
+    "single-body case.";
 exp_t *letstar_cmd(exp_t *e, env_t *env) {
   int outer_tail = in_tail_position;
-  /* Walk pairs (var val) until only one element remains (the body). */
   exp_t *cur = cdr(e);
-  /* Need at least (v val body) = 3 elements */
-  if (!cur || !cur->next || !cur->next->next) {
+  if (!cur || !cur->next) {
     unrefexp(e);
     return error(ERROR_MISSING_PARAMETER, NULL, env,
-                 "let*: need at least one binding and a body");
+                 "let*: need bindings and a body");
   }
   env_t *newenv = make_env(env);
   exp_t *ret = NULL;
   in_tail_position = 0;
+
+  /* New form: bindings collected into a single list — supports multi-body.
+     (let* (v1 val1 v2 val2 ...) body ...) */
+  if (ispair(cur->content)) {
+    exp_t *bcur = cur->content;
+    exp_t *body_start = cur->next;
+    while (bcur && bcur->content) {
+      exp_t *var = bcur->content;
+      if (!issymbol(var)) {
+        ret = error(ERROR_ILLEGAL_VALUE, NULL, newenv,
+                    "let*: binding name must be a symbol");
+        goto finish;
+      }
+      exp_t *val_node = bcur->next;
+      if (!val_node) {
+        ret = error(ERROR_MISSING_PARAMETER, NULL, newenv,
+                    "let*: binding without value");
+        goto finish;
+      }
+      ret = EVAL(val_node->content, newenv);
+      if (iserror(ret)) goto finish;
+      var2env_bind(var->ptr, ret, newenv);
+      ret = NULL;
+      bcur = val_node->next;
+    }
+    exp_t *body = body_start;
+    while (body && body->next) {
+      in_tail_position = 0;
+      ret = EVAL(body->content, newenv);
+      if (iserror(ret)) goto finish;
+      unrefexp(ret); ret = NULL;
+      body = body->next;
+    }
+    in_tail_position = outer_tail;
+    ret = body ? EVAL(body->content, newenv) : NIL_EXP;
+    goto finish;
+  }
+
+  /* Old form: flat pairs followed by exactly one body expression.
+     (let* v1 val1 v2 val2 ... body) */
+  if (!cur->next->next) {
+    ret = error(ERROR_MISSING_PARAMETER, NULL, env,
+                "let*: need at least one binding and a body");
+    goto finish;
+  }
   while (cur && cur->next && cur->next->next) {
     exp_t *var = cur->content;
     exp_t *val_node = cur->next;
     if (!issymbol(var)) {
-      ret = error(ERROR_ILLEGAL_VALUE, NULL, newenv, "let*: binding name must be a symbol");
+      ret = error(ERROR_ILLEGAL_VALUE, NULL, newenv,
+                  "let*: binding name must be a symbol");
       goto finish;
     }
     ret = EVAL(val_node->content, newenv);
     if (iserror(ret)) goto finish;
     var2env_bind(var->ptr, ret, newenv);
     ret = NULL;
-    cur = val_node->next; /* advance by 2 */
+    cur = val_node->next;
   }
   in_tail_position = outer_tail;
-  if (cur)
-    ret = EVAL(cur->content, newenv);
-  else
-    ret = NIL_EXP;
+  ret = cur ? EVAL(cur->content, newenv) : NIL_EXP;
 finish:
   in_tail_position = outer_tail;
   destroy_env(newenv);
@@ -14690,6 +14732,28 @@ static int op_for_head(const char *s) {
   return -1;
 }
 
+/* Compile a sequence of body forms (e.g. a multi-expression let/with/
+   when body): evaluate each in order, POP all but the last, and let the
+   last keep the caller's tail position. Empty body compiles to nil. */
+static void compile_body_seq(compiler_t *c, exp_t *body, int tail) {
+  if (!body) {
+    int k = add_const(c, nil_singleton);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+    return;
+  }
+  int saw_any = 0;
+  for (; body; body = body->next) {
+    if (saw_any)
+      emit_u8(c, OP_POP);
+    int is_last = (body->next == NULL);
+    compile_expr(c, body->content, is_last && tail);
+    if (c->failed)
+      return;
+    saw_any = 1;
+  }
+}
+
 static void compile_if(compiler_t *c, exp_t *form, int tail) {
   /* (if cond then else)  — only 2-way for phase 1 */
   exp_t *cond = cadr(form);
@@ -14897,12 +14961,14 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
   /* STORE_SLOT re-pushes the stored value so (= x v) returns v. */
 }
 
-/* (let var val body) — single binding, evaluates body in extended scope.
-   Falls back to AST if slot count would exceed ENV_INLINE_SLOTS. */
+/* (let var val body ...) — single binding, evaluates body in extended
+   scope. Destructuring (let (a b) val body) falls back to AST (var is a
+   pair, not a symbol). Falls back if slot count would overflow. */
 static void compile_let(compiler_t *c, exp_t *form, int tail) {
   exp_t *var = cadr(form);
   exp_t *val = caddr(form);
-  exp_t *body = cadddr(form);
+  exp_t *body = form->next ? (form->next->next ? form->next->next->next : NULL)
+                           : NULL;
   if (!issymbol(var) || !body) {
     c->failed = 1;
     return;
@@ -14920,18 +14986,13 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
   c->slot_names[slot] = (char *)var->ptr;
   c->nslots++;
   c->nlet_depth++;
-  compile_expr(c, body, tail);
+  compile_body_seq(c, body, tail);
   if (c->failed)
     return;
   c->nlet_depth--;
   c->nslots--;
-  /* Body's value is on the stack. Peek-unbind: swap top of stack with
-     the slot, but we only have POP/PUSH — cheapest is stash via a temp
-     dedicated op. Simpler: store body result into slot (STORE discards
-     old binding), emit LOAD_SLOT, emit UNBIND_SLOT — round-trip but
-     clean. Actually simpler yet: the binding's owning ref is still in
-     the slot; we can just emit UNBIND_SLOT which unrefs and NULLs it,
-     leaving the body result untouched on the stack. */
+  /* Body's value is on the stack; the binding's owning ref is still in
+     the slot. UNBIND_SLOT unrefs and NULLs it, leaving the result. */
   emit_u8(c, OP_UNBIND_SLOT);
   emit_u8(c, (uint8_t)slot);
 }
@@ -14942,7 +15003,7 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
    matching the tree-walker's withcmd). */
 static void compile_with(compiler_t *c, exp_t *form, int tail) {
   exp_t *pairs = cadr(form);
-  exp_t *body = caddr(form);
+  exp_t *body = form->next ? form->next->next : NULL;
   if (!ispair(pairs) || !body) {
     c->failed = 1;
     return;
@@ -14951,7 +15012,7 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
   int start_slot = c->nslots;
   int nbindings = 0;
   exp_t *p = pairs;
-  while (p) {
+  while (p && p->content) {
     exp_t *var = p->content;
     exp_t *nxt = p->next;
     if (!nxt) {
@@ -14978,7 +15039,7 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
     p = nxt->next;
   }
   c->nlet_depth++;
-  compile_expr(c, body, tail);
+  compile_body_seq(c, body, tail);
   if (c->failed)
     return;
   c->nlet_depth--;
@@ -14989,6 +15050,111 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
     emit_u8(c, (uint8_t)(start_slot + i));
   }
   c->nslots -= nbindings;
+}
+
+/* (let* (v1 e1 v2 e2 ...) body ...) — sequential bindings: each val sees
+   the slots bound by earlier pairs. The flat legacy form
+   (let* v1 e1 ... single-body) is left to the tree-walker. */
+static void compile_letstar(compiler_t *c, exp_t *form, int tail) {
+  exp_t *first = cadr(form);
+  if (!ispair(first)) { /* flat legacy form — defer to AST */
+    c->failed = 1;
+    return;
+  }
+  exp_t *body = form->next ? form->next->next : NULL;
+  if (!body) {
+    c->failed = 1;
+    return;
+  }
+  int start_slot = c->nslots;
+  int nbindings = 0;
+  exp_t *p = first;
+  while (p && p->content) {
+    exp_t *var = p->content;
+    exp_t *nxt = p->next;
+    if (!nxt || !issymbol(var)) {
+      c->failed = 1;
+      return;
+    }
+    if (c->nslots >= ENV_INLINE_SLOTS) {
+      c->failed = 1;
+      return;
+    }
+    /* Compile val BEFORE registering this var's slot name, but AFTER
+       earlier vars are visible — that gives let*'s sequential scope. */
+    compile_expr(c, nxt->content, 0);
+    if (c->failed)
+      return;
+    emit_u8(c, OP_BIND_SLOT);
+    emit_u8(c, (uint8_t)c->nslots);
+    c->slot_names[c->nslots] = (char *)var->ptr;
+    c->nslots++;
+    nbindings++;
+    p = nxt->next;
+  }
+  c->nlet_depth++;
+  compile_body_seq(c, body, tail);
+  if (c->failed)
+    return;
+  c->nlet_depth--;
+  int i;
+  for (i = nbindings - 1; i >= 0; i--) {
+    emit_u8(c, OP_UNBIND_SLOT);
+    emit_u8(c, (uint8_t)(start_slot + i));
+  }
+  c->nslots -= nbindings;
+}
+
+/* (when cond body ...) / (unless cond body ...). For `when`, the body runs
+   when cond is truthy; for `unless`, when cond is falsey. The other case
+   yields nil. `negate` selects unless semantics. */
+static void compile_when_unless(compiler_t *c, exp_t *form, int tail,
+                                int negate) {
+  exp_t *cond = cadr(form);
+  exp_t *body = form->next ? form->next->next : NULL;
+  if (!cond) {
+    c->failed = 1;
+    return;
+  }
+  compile_expr(c, cond, 0);
+  if (c->failed)
+    return;
+  emit_u8(c, OP_BR_IF_FALSE);
+  int patch_false = c->ncode;
+  emit_i16(c, 0);
+  /* Fall-through path = cond truthy. For `when` that runs the body; for
+     `unless` it yields nil. The false-branch target is the opposite. */
+  exp_t *run = negate ? NULL : body;   /* truthy path */
+  exp_t *skip = negate ? body : NULL;  /* falsey path */
+  if (run)
+    compile_body_seq(c, run, tail);
+  else {
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+  }
+  if (c->failed)
+    return;
+  emit_u8(c, OP_JUMP);
+  int patch_end = c->ncode;
+  emit_i16(c, 0);
+  int false_target = c->ncode;
+  if (skip)
+    compile_body_seq(c, skip, tail);
+  else {
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+  }
+  if (c->failed)
+    return;
+  int end_target = c->ncode;
+  int16_t off_false = (int16_t)(false_target - (patch_false + 2));
+  int16_t off_end = (int16_t)(end_target - (patch_end + 2));
+  c->code[patch_false] = off_false & 0xff;
+  c->code[patch_false + 1] = (off_false >> 8) & 0xff;
+  c->code[patch_end] = off_end & 0xff;
+  c->code[patch_end + 1] = (off_end >> 8) & 0xff;
 }
 
 /* (for counter start end body...) — counter iterates start..end inclusive.
@@ -15178,8 +15344,20 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       compile_let(c, e, tail);
       return;
     }
+    if (!strcmp(s, "let*")) {
+      compile_letstar(c, e, tail);
+      return;
+    }
     if (!strcmp(s, "with")) {
       compile_with(c, e, tail);
+      return;
+    }
+    if (!strcmp(s, "when")) {
+      compile_when_unless(c, e, tail, 0);
+      return;
+    }
+    if (!strcmp(s, "unless")) {
+      compile_when_unless(c, e, tail, 1);
       return;
     }
     if (!strcmp(s, "for")) {
