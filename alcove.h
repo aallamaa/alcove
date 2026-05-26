@@ -64,6 +64,9 @@ enum {
 
 #define MAKE_FIX(v) ((exp_t *)((((uintptr_t)(int64_t)(v)) << 3) | TAG_FIX))
 #define FIX_VAL(e) ((int64_t)((intptr_t)(e)) >> 3) /* arithmetic shift */
+/* Coerce a numeric exp_t (fixnum or float) to double without heap allocation.
+   Caller must ensure (e) is either isnumber or isfloat. */
+#define TO_DOUBLE(e) (isnumber(e) ? (double)FIX_VAL(e) : (e)->f)
 #define MAKE_CHAR(c) ((exp_t *)((((uintptr_t)(uint32_t)(c)) << 3) | TAG_CHAR))
 #define CHAR_VAL(e) ((uint32_t)((uintptr_t)(e) >> 3))
 
@@ -345,6 +348,10 @@ typedef struct {
   (((int64_t *)vec_base(e))[(e)->vec_win.start + (i)])
 #define vec_f64_at(e, i) \
   (((double *)vec_base(e))[(e)->vec_win.start + (i)])
+/* Raw double* to the first cell of a VEC_KIND_F64 window. Equivalent to
+   &vec_f64_at(v,0); prefer this for pointer-arithmetic bulk ops where
+   `cells[i]` reads/writes are clearer than repeated vec_f64_at calls. */
+#define VEC_F64_CELLS(v) ((double *)vec_base(v) + (v)->vec_win.start)
 
 /* Inline binding slots per env. The bytecode VM uses slot indices to
    bypass the per-name dict lookup; bytecode_t.param_keys mirrors the

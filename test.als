@@ -448,6 +448,170 @@ def sget (s n):
 
 assert "string read inside def body" (sget "hello" 1) #\e
 
+assert "str concatenates values" (str "a" 12 'b #\c) "a12bc"
+
+assert "string-append" (string-append "ab" "cd" "") "abcd"
+
+assert "substr middle" (substr "abcdef" 1 4) "bcd"
+
+assert "substr clamps bounds" (substr "abc" -4 99) "abc"
+
+assert "string-split literal" (iso (string-split "a,b,c" ",") (list "a" "b" "c")):
+  t
+
+assert "string-split empty sep" (iso (string-split "abc" "") (list "a" "b" "c")):
+  t
+
+assert "string-join" (string-join (list "a" "b" "c") ":") "a:b:c"
+
+assert "string-trim" (string-trim " \t hi \n") "hi"
+
+assert "string-upcase" (string-upcase "aBc9") "ABC9"
+
+assert "string-downcase" (string-downcase "aBc9") "abc9"
+
+assert "write-string returns t" (write-string "/tmp/alcove-test-file.txt" "one\n"):
+  t
+
+assert "append-string returns t" (append-string "/tmp/alcove-test-file.txt" "two\n"):
+  t
+
+assert "file-exists? t" (file-exists? "/tmp/alcove-test-file.txt") t
+
+assert "file-exists? nil" (file-exists? "/tmp/alcove-test-missing-file.txt"):
+  nil
+
+assert "read-string" (read-string "/tmp/alcove-test-file.txt") "one\ntwo\n"
+
+assert "read-lines" (iso (read-lines "/tmp/alcove-test-file.txt") (list "one" "two")):
+  t
+
+assert "write-bytes returns t" (write-bytes "/tmp/alcove-test-file.bin" (string->blob "abc")):
+  t
+
+assert "read-bytes after write-bytes" (blob->string (read-bytes "/tmp/alcove-test-file.bin")):
+  "abc"
+
+write-string "/tmp/alcove-test-load.alc" "(= loaded-var 77)\n(def loaded-add (x) (+ x loaded-var))\n"
+
+assert "load returns t" (load "/tmp/alcove-test-load.alc") t
+
+assert "load defines var" loaded-var 77
+
+assert "load defines fn" (loaded-add 3) 80
+
+= s1 (set 1 2 2 "a" :kw)
+
+assert "set? populated" (set? s1) t
+
+assert "set? non-set" (set? (hash-map "a" 1)) nil
+
+assert "set count unique" (count s1) 4
+
+assert "set-has? number" (set-has? s1 2) t
+
+assert "set-has? missing" (set-has? s1 3) nil
+
+set-add! s1 3
+
+assert "set-add! mutates" (set-has? s1 3) t
+
+set-del! s1 2
+
+assert "set-del! mutates" (set-has? s1 2) nil
+
+= s2 (set 3 4 :kw)
+
+= sunion (set-union s1 s2)
+
+assert "set-union count" (count sunion) 5
+
+assert "set-union contains" (and (set-has? sunion 1) (set-has? sunion 4)) t
+
+= sint (set-intersection s1 s2)
+
+assert "set-intersection count" (count sint) 2
+
+assert "set-intersection elem" (and (set-has? sint 3) (set-has? sint :kw)) t
+
+= sdiff (set-difference s1 s2)
+
+assert "set-difference count" (count sdiff) 2
+
+assert "set-difference elem" (and (set-has? sdiff 1) (set-has? sdiff "a")) t
+
+assert "set->list count" (length (set->list s1)) (count s1)
+
+= styped (set 1 "1" 'foo "foo" 10 "10")
+
+assert "set typed identity count" (count styped) 6
+
+assert "set typed identity members" (and (set-has? styped 1) (set-has? styped "1") (set-has? styped 'foo) (set-has? styped "foo")):
+  t
+
+assert "set->list preserves string" (string? (car (set->list (set "123")))) t
+
+= smore (set 3.14 #\a nil t (string->blob "abc"))
+
+assert "set supports scalar types" (and (set-has? smore 3.14) (set-has? smore #\a) (set-has? smore nil) (set-has? smore t) (set-has? smore (string->blob "abc"))):
+  t
+
+= sbig (set)
+
+for i 0 255:
+  set-add! sbig i
+
+assert "set rehash count" (count sbig) 256
+
+assert "set rehash membership" (and (set-has? sbig 0) (set-has? sbig 255)) t
+
+assert "set rehash list count" (length (set->list sbig)) 256
+
+= sbig2 (set)
+
+for i 128 383:
+  set-add! sbig2 i
+
+assert "set rehash union count" (count (set-union sbig sbig2)) 384
+
+assert "set rehash intersection" (count (set-intersection sbig sbig2)) 128
+
+assert "set rehash difference" (count (set-difference sbig sbig2)) 128
+
+= persisted-set (set 9 "x" :z "123" 123 3.14 #\a nil (string->blob "bb"))
+
+persist 'persisted-set
+
+savedb "/tmp/alcove-test-set.db"
+
+forget 'persisted-set
+
+loaddb "/tmp/alcove-test-set.db"
+
+assert "set persistence type" (set? persisted-set) t
+
+assert "set persistence member" (and (set-has? persisted-set 9) (set-has? persisted-set "x") (set-has? persisted-set :z) (set-has? persisted-set "123") (set-has? persisted-set 123) (set-has? persisted-set 3.14) (set-has? persisted-set #\a) (set-has? persisted-set nil) (set-has? persisted-set (string->blob "bb"))):
+  t
+
+forget 'persisted-set
+
+savedb 42
+
+assert "after bad savedb arg: recovery" 1 1
+
+loaddb 42
+
+assert "after bad loaddb arg: recovery" 1 1
+
+def _test_fn_for_inspect (x):
+  * x x
+
+assert "inspect nil-return" (no (inspect 42)) t
+
+assert "disasm nil-return" (no (disasm _test_fn_for_inspect)) t
+
+assert "source nil-return" (no (source _test_fn_for_inspect)) t
+
 assert "(+) is 0" (+) 0
 
 assert "(*) is 1" (*) 1
@@ -491,6 +655,22 @@ assert "expt int overflow → float" (iso (expt 2 80) (** 2 80)) t
 assert "sqrt-int" (sqrt-int 100) 10
 
 assert "sqrt-int floor" (sqrt-int 99) 9
+
+assert "sqrt-int 0" (sqrt-int 0) 0
+
+assert "sqrt-int negative → 0" (sqrt-int -1) 0
+
+assert "sqrt-int large" (sqrt-int 1000000) 1000
+
+assert "mod float operands" (mod 7.0 2.5) 2.0
+
+assert "mod int/float mixed" (mod 7 2.5) 2.0
+
+assert "< mixed int/float" (< 1 1.5) t
+
+assert "> mixed int/float" (> 2.5 2) t
+
+assert "comparisons: float=float" (<= 1.0 1.0) t
 
 assert "odd t" (odd 3) t
 
@@ -932,6 +1112,57 @@ assert "apply +" (apply + (list 1 2 3 4)) 10
 
 assert "apply list" (iso (apply list (list 1 2 3)) (list 1 2 3)) t
 
+def noleak-local (x):
+  = noleak-y x
+
+assert "function-local assignment returns value" (noleak-local 10) 10
+
+setq setq-top 1
+
+assert "setq top-level creates binding" setq-top 1
+
+def setq-create (x):
+  setq setq-created x
+
+assert "setq in fn returns value" (setq-create 10) 10
+
+assert "setq in fn creates top-level" setq-created 10
+
+def setq-update (x):
+  setq setq-top x
+
+setq-update 20
+
+assert "setq updates existing top-level" setq-top 20
+
+= setq-shadow 1
+
+assert "setq updates local shadow" (let setq-shadow 2 (do (setq setq-shadow 3) setq-shadow)):
+  3
+
+assert "setq local shadow preserves top-level" setq-shadow 1
+
+def setq-param (x):
+  do:
+    setq x 11
+    x
+
+assert "setq updates function param" (setq-param 5) 11
+
+setq setq-a 1 setq-b 2
+
+assert "setq multiple pairs" (+ setq-a setq-b) 3
+
+forget 'setq-top
+
+forget 'setq-created
+
+forget 'setq-shadow
+
+forget 'setq-a
+
+forget 'setq-b
+
 def counter-mk ():
   = cnt 0
   def counter-inc ():
@@ -946,7 +1177,7 @@ counter-inc()
 
 counter-inc()
 
-assert "global counter via def" cnt 3
+assert "top-level counter via def" cnt 3
 
 assert "doc returns nil" (doc cons) nil
 
@@ -971,6 +1202,32 @@ loaddb "/tmp/alcove-test-roundtrip.db"
 assert "loaddb restores rt" rt 1234
 
 forget 'rt
+
+= persist_scope 42
+
+let persist_scope 99:
+  persist 'persist_scope
+
+assert "persist in local scope marks top-level" (ispersistent 'persist_scope):
+  t
+
+savedb "/tmp/alcove-test-persist-scope.db"
+
+forget 'persist_scope
+
+assert "after forget persist_scope is gone" (caught persist_scope) t
+
+loaddb "/tmp/alcove-test-persist-scope.db"
+
+assert "local shadow was not saved" persist_scope 42
+
+let persist_scope 99:
+  unpersist 'persist_scope
+
+assert "unpersist in local scope clears top-level" (ispersistent 'persist_scope):
+  nil
+
+forget 'persist_scope
 
 def countdownr (n):
   if (< n 1):
@@ -1896,3 +2153,578 @@ def bm-tak (x y z):
     bm-tak (bm-tak (- x 1) y z) (bm-tak (- y 1) z x) (bm-tak (- z 1) x y)
 
 assert "bench tak 24 16 8" (bm-tak 24 16 8) 9
+
+= wh-n 0
+
+while (< wh-n 5):
+  = wh-n (+ wh-n 1)
+
+assert "while counts to 5" wh-n 5
+
+= wh-x 10
+
+while nil:
+  = wh-x 0
+
+assert "while nil-cond never runs" wh-x 10
+
+= wh-last 0
+
+while (< wh-last 3):
+  = wh-last (+ wh-last 1)
+
+assert "while final value" wh-last 3
+
+= rep-n 0
+
+repeat 4 (= rep-n (+ rep-n 1))
+
+assert "repeat 4 increments" rep-n 4
+
+repeat 0 (= rep-n 99)
+
+assert "repeat 0 is no-op" rep-n 4
+
+= each-sum 0
+
+each x:
+  list 10 20 30
+  = each-sum (+ each-sum x)
+
+assert "each list sum" each-sum 60
+
+= each-acc (list)
+
+each x:
+  list 1 2 3
+  = each-acc (cons x each-acc)
+
+assert "each list collect" (length each-acc) 3
+
+= each-empty 0
+
+each x:
+  nil
+  = each-empty 99
+
+assert "each nil runs once" each-empty 99
+
+assert "case match first" (case 1 1 "one" 2 "two") "one"
+
+assert "case match second" (case 2 1 "one" 2 "two") "two"
+
+assert "case default" (case 9 1 "one" "other") "other"
+
+assert "case no match no default" (case 9 1 "one" 2 "two") nil
+
+assert "case string key" (case "b" "a" 1 "b" 2 "c" 3) 2
+
+def classify (n):
+  case (mod n 3):
+    0
+    "div3"
+    1
+    "rem1"
+    "rem2"
+
+assert "case in fn: div3" (classify 9) "div3"
+
+assert "case in fn: rem1" (classify 7) "rem1"
+
+assert "case in fn: rem2" (classify 8) "rem2"
+
+assert "bit-not 0 = -1" (bit-not 0) -1
+
+assert "bit-not -1 = 0" (bit-not -1) 0
+
+assert "bit-not 1 = -2" (bit-not 1) -2
+
+assert "~ alias same as bit-not" (~ 42) (bit-not 42)
+
+assert "bit-not inverts all bits" (bit-not (bit-not 1234)) 1234
+
+assert "double-not identity" (~ (~ -5)) -5
+
+= rnd (random 100)
+
+assert "random in [0,100)" (and (>= rnd 0) (< rnd 100)) t
+
+assert "random 0 → 0" (random 0) 0
+
+assert "random returns fixnum" (number? (random 1000)) t
+
+assert "random no-arg is fixnum" (number? (random)) t
+
+defmacro mx-double (x):
+  list '* 2 x
+
+defmacro mx-swap (a b):
+  list 'list b a
+
+= mx-res (macroexpand-1 '(mx-double 7))
+
+assert "macroexpand-1 head" (car mx-res) '*
+
+assert "macroexpand-1 arg1" (car (cdr mx-res)) 2
+
+assert "macroexpand-1 arg2" (car (cdr (cdr mx-res))) 7
+
+assert "macroexpand-1 non-macro" (iso (macroexpand-1 '(+ 1 2)) '(+ 1 2)) t
+
+assert "macroexpand-1 gives form" (pair? (macroexpand-1 '(mx-swap a b))) t
+
+assert "println returns nil" (no (println)) t
+
+= hm (hash-map "x" 10 "y" 20 "z" 30)
+
+assert "hash-map get x" (get hm "x") 10
+
+assert "hash-map get y" (get hm "y") 20
+
+assert "hash-map get missing nil" (get hm "w") nil
+
+assert "hash-map get with default" (get hm "w" 99) 99
+
+assert "hash-map contains? true" (contains? hm "x") t
+
+assert "hash-map contains? false" (contains? hm "w") nil
+
+assert "hash-map keys count" (length (keys hm)) 3
+
+assert "hash-map vals count" (length (vals hm)) 3
+
+assert "hash-map empty" (length (keys (hash-map))) 0
+
+assoc! hm "w" 40
+
+assert "assoc! adds key" (get hm "w") 40
+
+assert "assoc! grows map" (length (keys hm)) 4
+
+assoc! hm "x" 100
+
+assert "assoc! updates existing" (get hm "x") 100
+
+assert "assoc! size unchanged" (length (keys hm)) 4
+
+dissoc! hm "y"
+
+assert "dissoc! removes key" (get hm "y" "gone") "gone"
+
+assert "dissoc! shrinks map" (length (keys hm)) 3
+
+= hm2 (hash-map "k" 7)
+
+= ks2 (keys hm2)
+
+= vs2 (vals hm2)
+
+assert "keys/vals aligned" (is (get hm2 (car ks2)) (car vs2)) t
+
+= hs (hash-set 1 2 3 2 1)
+
+assert "hash-set alias for set" (set? hs) t
+
+assert "hash-set deduplicates" (count hs) 3
+
+assert "hash-set has member" (set-has? hs 2) t
+
+= bl (string->blob "Hello")
+
+assert "blob-len of Hello" (blob-len bl) 5
+
+assert "blob-ref 0 is H" (blob-ref bl 0) 72
+
+assert "blob-ref 4 is o" (blob-ref bl 4) 111
+
+assert "blob-len empty blob" (blob-len (make-blob 0)) 0
+
+assert "blob-len make-blob 3" (blob-len (make-blob 3)) 3
+
+= bl2 (string->blob "world")
+
+assert "blob->string roundtrip" (blob->string bl2) "world"
+
+= dq (deque)
+
+push-right! dq 10
+
+push-right! dq 20
+
+push-right! dq 30
+
+assert "deque count after 3 push" (count dq) 3
+
+assert "peek-right last pushed" (peek-right dq) 30
+
+assert "peek-left first pushed" (peek-left dq) 10
+
+= prv (pop-right! dq)
+
+assert "pop-right returns last" prv 30
+
+assert "deque count after pop-r" (count dq) 2
+
+push-left! dq 5
+
+assert "deque count after push-l" (count dq) 3
+
+assert "peek-left after push-left" (peek-left dq) 5
+
+= plv (pop-left! dq)
+
+assert "pop-left returns first" plv 5
+
+assert "deque count after pop-l" (count dq) 2
+
+= dq2 (deque 1 2 3)
+
+assert "deque constructor count" (count dq2) 3
+
+assert "deque peek-left = 1" (peek-left dq2) 1
+
+assert "deque peek-right = 3" (peek-right dq2) 3
+
+assert "deque? deque is t" (deque? (deque)) t
+
+assert "deque? list is nil" (deque? (list 1 2)) nil
+
+assert "deque? nil is nil" (deque? nil) nil
+
+assert "apply + empty" (apply + (list)) 0
+
+assert "apply + list" (apply + (list 1 2 3 4)) 10
+
+assert "apply * list" (apply * (list 2 3 4)) 24
+
+assert "apply max" (apply max (list 3 1 4 1 5)) 5
+
+assert "apply min" (apply min (list 3 1 4 1 5)) 1
+
+assert "apply str" (apply str (list "a" "b" "c")) "abc"
+
+assert "apply list" (iso (apply list (list 1 2 3)) (list 1 2 3)) t
+
+assert "map empty list" (iso (map (fn (x) x) nil) nil) t
+
+assert "map identity" (iso (map (fn (x) x) (list 1 2 3)) (list 1 2 3)) t
+
+assert "map square" (iso (map (fn (x) (* x x)) (list 2 3)) (list 4 9)) t
+
+assert "filter all-pass" (length (filter odd (list 1 3 5))) 3
+
+assert "filter all-fail" (iso (filter even (list 1 3 5)) nil) t
+
+assert "filter empty" (iso (filter odd nil) nil) t
+
+assert "filter one-pass" (iso (filter (fn (x) (> x 3)) (list 1 2 3 4 5)) (list 4 5)):
+  t
+
+assert "reduce sum" (reduce + 0 (list 1 2 3 4 5)) 15
+
+assert "reduce with string" (reduce string-append "" (list "a" "b" "c")) "abc"
+
+assert "reduce empty list" (reduce + 0 nil) 0
+
+assert "reduce single element" (reduce + 0 (list 7)) 7
+
+setq sq-a 1 sq-b 2 sq-c 3
+
+assert "setq multi a" sq-a 1
+
+assert "setq multi b" sq-b 2
+
+assert "setq multi c" sq-c 3
+
+= do-side 0
+
+= do-ret (do (= do-side 1) (= do-side 2) 42)
+
+assert "do side effects ran" do-side 2
+
+assert "do returns last" do-ret 42
+
+assert "let inner shadows outer" (let x 99 (let x 1 x)) 1
+
+assert "let outer visible after inner" (let x 5 (let y 10 (+ x y))) 15
+
+assert "with multiple bindings" (with (a 3 b 4) (+ (* a a) (* b b))) 25
+
+assert "string-append empty" (string-append) ""
+
+assert "string-append single" (string-append "hi") "hi"
+
+assert "string-append multiple" (string-append "a" "b" "c") "abc"
+
+assert "substr full" (substr "hello" 0 5) "hello"
+
+assert "substr from middle" (substr "hello" 1 4) "ell"
+
+assert "substr empty range" (substr "hello" 2 2) ""
+
+assert "string-join empty list" (string-join (list) ",") ""
+
+assert "string-join one element" (string-join (list "a") ",") "a"
+
+assert "string-split returns list" (pair? (string-split "a,b" ",")) t
+
+assert "string-split count" (length (string-split "a,b,c" ",")) 3
+
+assert "str of number" (str 42) "42"
+
+assert "str of float" (str 1.5) "1.5"
+
+assert "str of nil" (str nil) "nil"
+
+assert "integer division truncates" (/ 7 2) 3
+
+assert "float division" (/ 7.0 2) 3.5
+
+assert "mod positive" (mod 10 3) 1
+
+assert "mod negative dividend" (mod -7 3) -1
+
+assert "abs of zero" (abs 0) 0
+
+assert "expt 0 0 = 1" (expt 0 0) 1
+
+assert "expt 2 10 = 1024" (expt 2 10) 1024
+
+assert "sqrt of 0" (sqrt 0) 0.0
+
+assert "max two args" (max 3 5) 5
+
+assert "max three args" (max 1 5 3) 5
+
+assert "min two args" (min 3 5) 3
+
+assert "min three args" (min 4 1 3) 1
+
+assert "and short-circuits" (and t t t) t
+
+assert "and returns first false" (and t nil t) nil
+
+assert "and empty" (and) t
+
+assert "or returns first true" (or nil nil 42) 42
+
+assert "or all false" (or nil nil nil) nil
+
+assert "or empty" (or) nil
+
+assert "not of t" (not t) nil
+
+assert "not of nil" (not nil) t
+
+assert "not of 0 is t" (not 0) t
+
+assert "cons builds pair" (pair? (cons 1 2)) t
+
+assert "list builds cons chain" (pair? (list 1 2 3)) t
+
+assert "length of nil" (length nil) 0
+
+assert "length of pair list" (length (list 1 2 3 4)) 4
+
+assert "nth 0 list" (nth 0 (list 10 20 30)) 10
+
+assert "nth 2 list" (nth 2 (list 10 20 30)) 30
+
+assert "nth out-of-range nil" (nth 5 (list 1 2 3)) nil
+
+assert "reverse nil" (iso (reverse nil) nil) t
+
+assert "reverse one" (iso (reverse (list 1)) (list 1)) t
+
+assert "append nil nil" (iso (append nil nil) nil) t
+
+assert "char? char" (char? #\a) t
+
+assert "char? int" (char? 65) nil
+
+assert "char=char" (is #\a #\a) t
+
+assert "char<>char" (is #\a #\b) nil
+
+assert "is same fixnum" (is 42 42) t
+
+assert "is same string ptr" (is "hi" "hi") t
+
+assert "iso equal strings" (iso "hi" "hi") t
+
+assert "iso equal lists" (iso (list 1 2) (list 1 2)) t
+
+assert "iso nil nil" (iso nil nil) t
+
+assert "isnt" (isnt 1 2) t
+
+assert "isnt same" (isnt 1 1) nil
+
+assert "number? fixnum t" (number? 42) t
+
+assert "number? float t" (number? 3.14) t
+
+assert "number? string nil" (number? "42") nil
+
+assert "number? nil nil" (number? nil) nil
+
+assert "string? string t" (string? "hi") t
+
+assert "string? fixnum nil" (string? 42) nil
+
+assert "pair? pair t" (pair? (cons 1 2)) t
+
+assert "pair? nil nil" (pair? nil) nil
+
+assert "fn? lambda t" (fn? (fn (x) x)) t
+
+assert "fn? builtin t" (fn? car) t
+
+assert "fn? nil nil" (fn? nil) nil
+
+assert "nil? nil t" (nil? nil) t
+
+assert "nil? 0 nil" (nil? 0) nil
+
+assert "zero? 0 t" (zero? 0) t
+
+assert "zero? 1 nil" (zero? 1) nil
+
+assert "yes nil t" (yes nil) nil
+
+assert "yes 0 t" (yes 0) t
+
+assert "no nil t" (no nil) t
+
+assert "no 0 is t" (no 0) t
+
+assert "in member" (in 2 1 2 3) t
+
+assert "in not-member" (in 5 1 2 3) nil
+
+assert "bit-and 12 10" (bit-and 12 10) 8
+
+assert "bit-or  12 10" (bit-or 12 10) 14
+
+assert "bit-xor 12 10" (bit-xor 12 10) 6
+
+assert "bit-not 5" (bit-not 5) -6
+
+assert "bit-not -1" (bit-not -1) 0
+
+assert "<< 1 4 = 16" (<< 1 4) 16
+
+assert ">> 16 2 = 4" (>> 16 2) 4
+
+assert ">> neg / sign-ext" (>> -8 1) -4
+
+= tv (vec 5 0)
+
+for i 0 4:
+  vec-set! tv i (* i i)
+
+assert "vec-set!/ref loop" (vec-ref tv 4) 16
+
+assert "vec-ref tv 0" (vec-ref tv 0) 0
+
+assert "vec-ref tv 2" (vec-ref tv 2) 4
+
+assert "vec-len 5" (vec-len tv) 5
+
+= tv2 (vec 3 0)
+
+vec-set! tv2 0 10
+
+vec-set! tv2 1 20
+
+vec-set! tv2 2 30
+
+vec-push! tv2 40
+
+assert "vec-push grows" (vec-len tv2) 4
+
+assert "vec-push end value" (vec-ref tv2 3) 40
+
+= pv (vec-pop! tv2)
+
+assert "vec-pop returns last" pv 40
+
+assert "vec-pop shrinks" (vec-len tv2) 3
+
+/ 1 0
+
+assert "recovery after div-by-zero" 1 1
+
+nth 0 42
+
+assert "recovery after nth-non-list" 1 1
+
+vec-ref (vec 3 0) 99
+
+assert "recovery after vec-ref OOB" 1 1
+
+car 42
+
+assert "recovery after car-non-pair" 1 1
+
+assert "hex escape \\x09 = tab" (is "\x09" "\x09") t
+
+assert "hex escape \\x0f = \\x0F" (iso "\x0f" "\x0F") t
+
+assert "hex escape \\x39 = 9" (blob-ref (string->blob "\x39") 0) 57
+
+assert "hex escape \\x19" (blob-len (string->blob "\x19")) 1
+
+assert "hex escape \\xff" (blob-len (string->blob "\xff")) 1
+
+def _anon_persist (fn (x) (* x x))
+
+savedb "/tmp/alcove-bugfix-dump.db"
+
+loaddb "/tmp/alcove-bugfix-dump.db"
+
+assert "savedb/loaddb after fix" 1 1
+
+assert "(-) is error" (no (-)) nil
+
+-()
+
+assert "(-) recovery" 1 1
+
+/()
+
+assert "(/) recovery" 1 1
+
+= fixmin -1152921504606846976
+
+assert "abs FIXMIN promoted float" (> (abs fixmin) 0) t
+
+assert "negate FIXMIN promoted float" (> (- fixmin) 0) t
+
+assert "abs positive preserved" (abs 42) 42
+
+assert "abs float unchanged" (abs -2.5) 2.5
+
+assert "(- 5) still works" (- 5) -5
+
+assert "(- -5) still works" (- -5) 5
+
+assert "deeply nested parse ok" (+ (+ (+ 1 2) (+ 3 4)) (+ (+ 5 6) (+ 7 8))) 36
+
+= _ushift_v (vec 3 0)
+
+vec-set! _ushift_v 0 10
+
+vec-set! _ushift_v 1 20
+
+vec-set! _ushift_v 2 30
+
+vec-unshift! _ushift_v 5
+
+assert "vec-unshift! still works" (vec-ref _ushift_v 0) 5
+
+assert "vec-unshift! length" (vec-len _ushift_v) 4
+
+assert "load_pair happy path" (car '(1 2 3)) 1
+
+assert "nested pairs parse ok" (car (cdr '(a b c))) 'b
