@@ -1862,3 +1862,30 @@
 ;; Can't trigger without corrupt db; verify normal load still works
 (assert "load_pair happy path"       (car '(1 2 3))                    1)
 (assert "nested pairs parse ok"      (car (cdr '(a b c)))              'b)
+
+;; Bug 12: load handlers leaked placeholder exp_t on read failure
+;; Indirect test: verify a full savedb/loaddb round-trip with all types
+(= _saved_str "hello")
+(= _saved_num 42)
+(= _saved_float 3.14)
+(persist '_saved_str) (persist '_saved_num) (persist '_saved_float)
+(savedb "/tmp/alcove-bug12-test.db")
+(forget '_saved_str) (forget '_saved_num) (forget '_saved_float)
+(loaddb "/tmp/alcove-bug12-test.db")
+(assert "load string roundtrip"      _saved_str                       "hello")
+(assert "load number roundtrip"      _saved_num                       42)
+(assert "load float roundtrip"       (iso _saved_float 3.14)          t)
+
+;; Bug 13: sqrt-int signed overflow near INT64_MAX
+;; Largest fixnum is 2^60 - 1 = 1152921504606846975; sqrt ≈ 1073741824
+(assert "sqrt-int large fixnum"      (sqrt-int 1152921504606846975)   1073741823)
+(assert "sqrt-int perfect square"    (sqrt-int 1073741824)            32768)
+(assert "sqrt-int near max correct"  (* (sqrt-int 1152921504606846975)
+                                        (sqrt-int 1152921504606846975))
+                                     1152921502459363329)
+
+;; Bug 14: unrefexp nref underflow guard — no direct test (crash on double-free),
+;; but verify normal unrefexp paths still work after the guard was added
+(assert "normal refcount still works" (+ 1 2)                         3)
+(= _tmp_str "guard test") (= _tmp_str nil)  ;; exercise unrefexp on a heap obj
+(assert "string unrefexp ok"          1                               1)

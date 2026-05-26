@@ -493,6 +493,17 @@ inline int unrefexp(exp_t *e) {
       return is_ptr(e) ? 1 : 0;
     if ((ret = REFCOUNT_DEC(&e->nref)) > 0)
       return ret;
+    /* Detect double-free: a refcount that goes negative means this exp_t
+       was already freed and the caller holds a dangling pointer. Abort in
+       debug builds; in production at least avoid spiralling into UB. */
+    if (ret < 0) {
+      REFCOUNT_INC(&e->nref); /* undo the over-decrement */
+#ifdef NDEBUG
+      return 0;
+#else
+      abort(); /* double-free — crash loudly so the caller can be found */
+#endif
+    }
     /* meta holds a strdup'd name for LAMBDA/MACRO, or a borrowed
        resolved-exp_t* pointer for cached SYMBOL lookups. Only free()
        in the former case — the cached pointer is borrowed. */
@@ -1512,8 +1523,8 @@ char *load_str(char **pptr, FILE *stream) {
 exp_t *load_string(exp_t *e, FILE *stream) {
   if (load_str((char **)&(e->ptr), stream))
     return e;
-  else
-    return NULL;
+  unrefexp(e);  /* release placeholder on read failure */
+  return NULL;
 }
 
 char *dump_str(char *ptr, FILE *stream) {
@@ -1673,8 +1684,10 @@ exp_t *dump_float(exp_t *e, FILE *stream) {
   return e;
 }
 exp_t *load_float(exp_t *e, FILE *stream) {
-  if (fread(&e->f, sizeof(e->f), 1, stream) != 1)
+  if (fread(&e->f, sizeof(e->f), 1, stream) != 1) {
+    unrefexp(e);  /* release placeholder on read failure */
     return NULL;
+  }
   return e;
 }
 
@@ -1691,6 +1704,7 @@ exp_t *dump_symbol(exp_t *e, FILE *stream) {
 exp_t *load_symbol(exp_t *e, FILE *stream) {
   if (load_str((char **)&(e->ptr), stream))
     return e;
+  unrefexp(e);  /* release placeholder on read failure */
   return NULL;
 }
 
@@ -1763,11 +1777,14 @@ exp_t *dump_lambda(exp_t *e, FILE *stream) {
 }
 exp_t *load_lambda(exp_t *e, FILE *stream) {
   char *name = NULL;
-  if (!load_str(&name, stream))
+  if (!load_str(&name, stream)) {
+    unrefexp(e);  /* release placeholder on read failure */
     return NULL;
+  }
   uint8_t flags;
   if (fread(&flags, 1, 1, stream) != 1) {
     free(name);
+    unrefexp(e);
     return NULL;
   }
   exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
@@ -1817,11 +1834,14 @@ exp_t *dump_macro(exp_t *e, FILE *stream) {
 }
 exp_t *load_macro(exp_t *e, FILE *stream) {
   char *name = NULL;
-  if (!load_str(&name, stream))
+  if (!load_str(&name, stream)) {
+    unrefexp(e);  /* release placeholder on read failure */
     return NULL;
+  }
   uint8_t flags;
   if (fread(&flags, 1, 1, stream) != 1) {
     free(name);
+    unrefexp(e);
     return NULL;
   }
   exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
@@ -4751,10 +4771,11 @@ exp_t *sqrtintcmd(exp_t *e, env_t *env) {
   if (n < 0)
     CLEAN_RETURN_1(v, MAKE_FIX(0));
   int64_t r = (int64_t)sqrt((double)n);
-  /* Correct for double imprecision: tighten boundary. */
-  while ((r + 1) * (r + 1) <= n)
+  /* Use uint64_t for the multiply to avoid signed overflow UB when r is
+     near the fixnum maximum (n close to 2^60). */
+  while ((uint64_t)(r + 1) * (uint64_t)(r + 1) <= (uint64_t)n)
     r++;
-  while (r * r > n)
+  while ((uint64_t)r * (uint64_t)r > (uint64_t)n)
     r--;
   CLEAN_RETURN_1(v, MAKE_FIX(r));
 }
@@ -15246,9 +15267,11 @@ l_sqrt_int: {
   }
   int64_t n = FIX_VAL(nexp);
   int64_t r = (n < 0) ? 0 : (int64_t)sqrt((double)n);
-  while ((r + 1) * (r + 1) <= n)
+  /* Cast to uint64_t before multiplying to avoid signed overflow UB when
+     r is near INT64_MAX (same guard used in sqrtintcmd tree-walker path). */
+  while ((uint64_t)(r + 1) * (uint64_t)(r + 1) <= (uint64_t)n)
     r++;
-  while (r * r > n)
+  while ((uint64_t)r * (uint64_t)r > (uint64_t)n)
     r--;
   unrefexp(nexp);
   PUSH(MAKE_FIX(r));
