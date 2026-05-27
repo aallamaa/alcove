@@ -5225,6 +5225,25 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       memcpy(printf_fmt + 1, tmpl + i + 2, spec_len);
       printf_fmt[spec_len + 1] = '\0';
       char ftype = printf_fmt[spec_len];
+      /* Reject anything other than printf flags/width/precision in the
+         spec body (every char before the final type char). This blocks
+         format-string injection: an embedded '%' or conversion letter
+         would feed snprintf a second specifier, and a '*' would consume
+         the arg as a width then read a nonexistent second arg — both
+         undefined behavior. Invalid specs degrade to literal text. */
+      int spec_ok = 1;
+      for (size_t k = 0; k + 1 < spec_len; k++) {
+        char sc = printf_fmt[1 + k];
+        if (!(sc == '-' || sc == '+' || sc == ' ' || sc == '#' ||
+              sc == '.' || (sc >= '0' && sc <= '9'))) {
+          spec_ok = 0;
+          break;
+        }
+      }
+      if (!spec_ok) {
+        str_buf_put(&buf, &len, &cap, "{", 1);
+        continue;
+      }
       i = j;
       if (!cur) continue;
       exp_t *v = EVAL(car(cur), env);
