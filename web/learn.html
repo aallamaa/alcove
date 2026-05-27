@@ -371,14 +371,13 @@ set counter (make-counter)
 list (counter) (counter) (counter)`,
     },
     {
-      title: "Macros",
-      note: "Macros build Alcove forms before evaluation.",
-      lisp: `(defmacro unless (test body)
-  (list 'if test nil body))
-(unless nil (println "macro branch"))`,
-      als: `macro unless (test body):
-  list 'if test nil body
-unless nil (println "macro branch")`,
+      title: "Macros And Quasiquote",
+      note: "Macros build forms before evaluation; the backtick reader templates them (, unquotes, ,@ splices).",
+      lisp: `(defmacro my-when (c body) \`(if ,c ,body nil))
+(my-when (> 5 3) "macro branch")`,
+      als: `macro my-when (c body):
+  \`(if ,c ,body nil)
+my-when (> 5 3) "macro branch"`,
     },
     {
       title: "Deques",
@@ -399,6 +398,49 @@ list (peek-left q) (peek-right q) (count q)`,
 (list (blob-len blob) (blob-ref blob 1) (blob->string blob))`,
       als: `set blob (string->blob "abc")
 list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
+    },
+    {
+      title: "Sequential Bindings",
+      note: "let* binds in sequence (each value sees earlier ones); let can destructure a list.",
+      lisp: `(list
+  (let* (a 1 b (* a 10)) (+ a b))
+  (let (lo hi) (list 3 9) (- hi lo)))`,
+      als: `list:
+  (let* (a 1 b (* a 10)) (+ a b))
+  (let (lo hi) (list 3 9) (- hi lo))`,
+    },
+    {
+      title: "Numbers And Math",
+      note: "Rounding family (all return floats) plus integer/float coercion.",
+      lisp: `(list (round 2.6) (floor 2.4) (ceil 2.1) (int 3.9) (float 5))`,
+      als: `list (round 2.6) (floor 2.4) (ceil 2.1) (int 3.9) (float 5)`,
+    },
+    {
+      title: "Sequence Utilities",
+      note: "range, take/drop, zip, flatten, and sort over lists.",
+      lisp: `(list
+  (range 0 5)
+  (take 2 (list 9 8 7))
+  (sort (list 3 1 2)))`,
+      als: `list:
+  (range 0 5)
+  (take 2 (list 9 8 7))
+  (sort (list 3 1 2))`,
+    },
+    {
+      title: "Formatting",
+      note: "fmt: {} interpolates, {:spec} applies a printf-style spec.",
+      lisp: `(fmt "{} items, {:.1f}% done" 7 42.5)`,
+      als: `fmt "{} items, {:.1f}% done" 7 42.5`,
+    },
+    {
+      title: "Error Handling",
+      note: "Errors are values; try catches one and passes it to a handler.",
+      lisp: `(try (/ 1 0)
+  (fn (e) (error-message e)))`,
+      als: `try (/ 1 0):
+  fn (e):
+    error-message e`,
     },
   ];
 

@@ -71,18 +71,31 @@ keeps going. There is no `try` / `catch`.
 | true         | `t`                            | symbol `t`      |
 | vector       | `#[1 2 3]`                     | fixed-size      |
 
-Strings are **mutable** — `(= (s i) ch)` writes a byte. There is **no
-string concatenation builtin** (no `concat`, `str`, `format`). Build
-strings either by mutating a pre-sized buffer or by streaming output
-with multiple `(pr …)` calls.
+Strings are **mutable** — `(= (s i) ch)` writes a byte. Build strings
+with `str` (concatenate any values), `string-append` (concatenate
+strings), or `fmt` (printf-style templating); see [Strings &
+chars](#strings--chars). You can also mutate a pre-sized buffer in
+place or stream output with multiple `(pr …)` calls.
 
 ### Reader
 
 - `;` starts a line comment.
 - `'expr` reads as `(quote expr)`.
-- `` `expr `` is the quasiquote macro form (used in `defmacro`).
-- `,expr` is unquote inside a quasiquote (test.alc:595 has the canonical
-  example: `(defmacro my-when (cond body) `(if ,cond ,body nil))`).
+- `` `expr `` reads as `(quasiquote expr)` — a template that evaluates
+  the unquoted holes and quotes everything else.
+- `,expr` is `(unquote expr)` — evaluate `expr` and drop its value into
+  the template.
+- `,@expr` is `(unquote-splicing expr)` — splice the elements of the
+  list `expr` into the surrounding list.
+
+```
+(= xs (list 2 3))
+`(1 ,(+ 1 1) 3)        ; (1 2 3)
+`(1 ,@xs 4)            ; (1 2 3 4)
+```
+
+These power `defmacro`; the canonical example is
+`(defmacro my-when (cond body) `(if ,cond ,body nil))`.
 
 ### Truthiness — heads-up
 
@@ -107,11 +120,13 @@ Container types follow the same emptiness rule: an empty `vec`,
 (def name (params...) body...)         ; named function, top-level binding
 (defmacro name (params...) body)       ; macro; body returns the expansion
 (fn (params...) body...)               ; anonymous lambda; closes over env
-(let var val body...)                  ; one binding
-(with (v1 e1 v2 e2 ...) body...)       ; multiple bindings
+(let var val body...)                  ; one binding; (let (a b) xs ...) destructures
+(let* (v1 e1 v2 e2 ...) body...)       ; sequential bindings; each ei sees earlier vars
+(with (v1 e1 v2 e2 ...) body...)       ; multiple bindings, evaluated in parallel
 (if c1 t1 c2 t2 ... else)              ; cond-style ladder; no `cond` keyword
 (case key v1 r1 v2 r2 ... default)     ; flat pairs, Arc-style
 (when c body...)                       ; (if c (do body...) nil)
+(unless c body...)                     ; runs body when c is falsey; else nil
 (and ...) (or ...)                     ; short-circuit; both tail-aware
 (do body...)                           ; sequence; value of last form
 (for v start end body...)              ; inclusive range, integer counter
@@ -198,6 +213,56 @@ just use `fn`. `(fn? x)` tests for a function (including builtins).
 The `NO CLOSURES` invariant in older internal notes refers to the env
 arena's storage layout, not the user-visible language.
 
+### `let`, `let*`, and destructuring
+
+`let` takes one binding and a body that may hold several expressions
+(the last is the value):
+
+```
+(let x 5 (+ x 1) (+ x 10))      ; 15 — multi-expression body
+(let (a b) (list 1 2) (+ a b))  ; 3  — destructure a list; missing slots are nil
+```
+
+`let*` binds a flat list of pairs **sequentially**, so each value sees
+the bindings before it. The legacy flat form `(let* v1 e1 ... body)` is
+also accepted for a single body expression:
+
+```
+(let* (a 1 b (* a 10)) (+ a b)) ; 11 — b sees a
+```
+
+`let`, `let*`, `with`, `when`, and `unless` are all tail-call aware:
+the final body expression keeps the caller's tail position, so a
+self-call there recurses without growing the C stack.
+
+### Rest parameters
+
+A bare symbol in place of the parameter list collects **all** arguments
+into a list; a dotted tail collects the **remaining** ones:
+
+```
+(def all-args xs xs)            ; (all-args 1 2 3) → (1 2 3)
+(def head-rest (a . rest) rest) ; (head-rest 1 2 3) → (2 3)
+((fn xs xs) 7 8)                ; (7 8) — works for anonymous fns too
+```
+
+### Error handling
+
+Errors are first-class values that propagate up the call chain. Instead
+of crashing, builtins return an error `exp_t`. You can inspect or catch
+them:
+
+```
+(error? (/ 1 0))                ; t
+(error-message (/ 1 0))         ; "Illegal Division by 0"
+(try (/ 1 0) (fn (e) 'caught))  ; 'caught — handler runs on error
+(try (+ 1 2) (fn (e) 'caught))  ; 3 — body succeeded, handler ignored
+```
+
+`(try body handler)` evaluates `body`; if it signals an error, it calls
+`(handler error-value)` instead of propagating, returning the handler's
+result. Otherwise it returns `body`'s value.
+
 ---
 
 ## 4. Builtin functions
@@ -212,6 +277,21 @@ promotes the result to float.
 `expt`. Integers exceeding 2^60 silently widen to floats — there is no
 bignum.
 
+Floating-point helpers (all return a float): `round` (nearest integer),
+`floor` (largest integer ≤ x), `ceil` (smallest integer ≥ x),
+`truncate` (toward zero), `log` (natural log), and `sin` `cos` `tan`
+(radians). Coercion: `(float x)` widens an integer; `(int x)` truncates
+a float to an integer.
+
+```
+(round 2.6)     ; 3.0
+(floor 2.9)     ; 2.0
+(ceil 2.1)      ; 3.0
+(truncate -2.7) ; -2.0
+(int 3.9)       ; 3
+(float 5)       ; 5.0
+```
+
 Comparisons `< > <= >=` are **variadic and chained** in the SQL/Python
 sense: `(< 1 2 3 4)` is `t` iff each adjacent pair is ordered. With
 zero or one argument they are vacuously `t`.
@@ -222,10 +302,11 @@ Equality:
 - `in` — `(in x a b c)` is `(or (iso x a) (iso x b) (iso x c))`.
 
 Type predicates (all return `t` / `nil`): `number?`, `string?`,
-`symbol?`, `pair?`, `fn?`, `vec?`, `blob?`, `dict?`, `deque?`. All
-accept zero or one argument; the no-arg form returns `nil`. `pair?`
-is true only for *non-empty* pairs — the empty list (nil) is excluded
-to match the `list?`-equivalent intent.
+`symbol?`, `pair?`, `list?`, `null?`, `fn?`, `vec?`, `blob?`, `dict?`,
+`deque?`. All accept zero or one argument; the no-arg form returns
+`nil`. `pair?` is true only for *non-empty* pairs — the empty list
+(nil) is excluded. `list?` is true for nil **or** any proper list;
+`null?` is true only for nil.
 
 ### Bitwise
 
@@ -239,10 +320,36 @@ arguments and return errors (not segfaults) on type mismatch — the
 returned error is an `exp_t*` of error type that prints visibly but is
 truthy under `(no (no e))`, which is how the regression suite traps it.
 
+Sequence utilities:
+
+```
+(take 2 (list 1 2 3 4))   ; (1 2)
+(drop 2 (list 1 2 3 4))   ; (3 4)
+(range 0 4)               ; (0 1 2 3) — end-exclusive
+(range 0 6 2)             ; (0 2 4)   — optional step
+(zip (list 1 2) (list 3 4)) ; ((1 3) (2 4)) — stops at the shorter
+(flatten (list 1 (list 2 (list 3)))) ; (1 2 3)
+(sort (list 3 1 2))       ; (1 2 3) — numbers by value, strings lexicographically
+(sort-by (fn (x) (- 0 x)) (list 1 2 3)) ; (3 2 1) — sort by (key-fn element)
+```
+
 ### Higher-order
 
 `map filter reduce apply any? all?`. `reduce` is left-fold:
 `(reduce + 0 xs)`. `apply` flattens its last list arg into a call.
+
+### Symbols & macro hygiene
+
+`(gensym)` returns a fresh, session-unique symbol (`G0`, `G1`, …).
+`(with-gensyms (a b) body...)` binds each name to a fresh gensym for the
+duration of `body` — the standard way to avoid variable capture inside
+`defmacro`:
+
+```
+(defmacro swap (x y)
+  (with-gensyms (tmp)
+    `(let ,tmp ,x (= ,x ,y) (= ,y ,tmp))))
+```
 
 ### Strings & chars
 
@@ -259,9 +366,23 @@ Common whole-string helpers:
 (string-trim "  hi  ")
 (string-upcase "fast")
 (string-downcase "LOUD")
+(string-contains? "hello world" "world")  ; t
+(string-index "hello" "ll")     ; 2 — 0-based, or nil if absent
+(string-replace "a-b-c" "-" "+") ; "a+b+c" — replaces all occurrences
 ```
 
-There is no full formatting function yet.
+`fmt` is the formatting function: `{}` interpolates the next argument
+with default rendering, and `{:<spec>}` applies a printf-style spec
+(`{:.2f}`, `{:x}`, `{:05d}`, `{:s}`). The spec accepts only printf
+flags/width/precision plus a type char; anything else (e.g. an embedded
+`%` or `*`) is left as literal text rather than risking malformed
+output.
+
+```
+(fmt "{} + {} = {:.1f}" 1 2 3.0) ; "1 + 2 = 3.0"
+(fmt "{:x}" 255)                 ; "ff"
+(fmt "{:05d}" 42)                ; "00042"
+```
 
 ### Vectors
 
@@ -577,13 +698,11 @@ There is no built-in. Either:
 
 So you do not waste time looking:
 
-- No `cond`, `progn` (use `do`), `let*` (use `with`), `setf`,
-  `destructuring-bind`.
-- No multiple return values, no continuations, no exceptions.
-- No full `format` or `printf`-style formatting. Use `str` or
-  `string-append` for simple string construction.
-- No floating-point formatting controls — `(prn 1.0)` prints
-  `1.000000`.
+- No `cond`, `progn` (use `do`), `setf`. (`let*` and list
+  destructuring in `let` now exist — see [§3](#3-special-forms).)
+- No multiple return values, no continuations. Errors are reified as
+  values and can be caught with `(try body handler)` rather than via
+  unwinding exceptions.
 - No bignums; integers wider than 60 bits silently become floats.
 - No threads visible from user Lisp. The RESP server runs sharded
   reactors internally but those shards do not expose user-facing

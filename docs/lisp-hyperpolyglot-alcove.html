@@ -331,8 +331,8 @@ literals</td>
 <td>backquote and comma</td>
 <td>syntax quote/unquote</td>
 <td>backquote and comma</td>
-<td>backquote and comma</td>
-<td>backquote and comma reader forms</td>
+<td><code>`(a ,b ,@xs)</code> — <code>quasiquote</code>/<code>unquote</code>/<code>unquote-splicing</code> via <code>`</code> <code>,</code> <code>,@</code></td>
+<td><code>`(a ,b ,@xs)</code> — same reader forms</td>
 </tr>
 <tr class="even">
 <td>Booleans</td>
@@ -474,11 +474,16 @@ Local binding
 <code>let</code>, <code>let*</code>, <code>lexical-let</code>
 </td>
 <td>
-<code>(let x v body…)</code>, <code>(with (x v y w) body…)</code>
+<code>(let x v body…)</code> (also destructures: <code>(let (a b) xs …)</code>),
+<code>(let* (x v y w) body…)</code> sequential,
+<code>(with (x v y w) body…)</code> parallel
 </td>
 <td>
 <pre><code>let x 10:
   + x 5
+
+let* (x 3 y (* x 2)):   # y sees x
+  + x y
 
 with (x 3 y 4):
   sqrt (+ (* x x) (* y y))</code></pre>
@@ -964,8 +969,8 @@ Time</h2>
 <td><code>format</code></td>
 <td><code>format</code>, <code>String/format</code></td>
 <td><code>format</code></td>
-<td>not built in; use <code>str</code> for simple conversion</td>
-<td>not built in; use <code>str</code></td>
+<td><code>(fmt "{} = {:.2f}" k v)</code> — <code>{}</code> default, <code>{:spec}</code> printf-style; or <code>str</code> for plain concatenation</td>
+<td><code>fmt "{} = {:.2f}" k v</code></td>
 </tr>
 <tr class="odd">
 <td>Split/join</td>
@@ -1225,10 +1230,15 @@ Exceptions
 <code>condition-case</code>
 </td>
 <td>
-no user-level exceptions
+Errors are reified as values, not unwinding exceptions:
+<code>(try body (fn (e) …))</code> catches and passes the error to a
+handler; <code>(error? x)</code> and <code>(error-message x)</code>
+inspect one.
 </td>
 <td>
-no user-level exceptions
+<pre><code>try (/ 1 0):
+  fn (e):
+    error-message e</code></pre>
 </td>
 </tr>
 <tr>
@@ -1416,13 +1426,16 @@ are still documented.</p>
 <tbody>
 <tr class="odd">
 <td>Special forms/control</td>
-<td><code>quote</code>, <code>if</code>, <code>do</code>,
-<code>when</code>, <code>while</code>, <code>repeat</code>,
-<code>and</code>, <code>or</code>, <code>case</code>, <code>for</code>,
-<code>each</code>, <code>let</code>, <code>with</code></td>
+<td><code>quote</code>, <code>quasiquote</code>, <code>if</code>,
+<code>do</code>, <code>when</code>, <code>unless</code>,
+<code>while</code>, <code>repeat</code>, <code>and</code>,
+<code>or</code>, <code>case</code>, <code>for</code>, <code>each</code>,
+<code>let</code>, <code>let*</code>, <code>with</code></td>
 <td>CL/Racket/Clojure/Emacs all have conditionals and local binding;
-<code>repeat</code>, integer <code>for</code>, and <code>each</code> map
-to loop libraries or sequence functions</td>
+<code>quasiquote</code>/<code>unquote</code>/<code>unquote-splicing</code>
+match the backtick reader (<code>`</code>, <code>,</code>,
+<code>,@</code>); <code>repeat</code>, integer <code>for</code>, and
+<code>each</code> map to loop libraries or sequence functions</td>
 </tr>
 <tr class="even">
 <td>Comparison/equality</td>
@@ -1438,9 +1451,13 @@ to loop libraries or sequence functions</td>
 <code>mod</code>, <code>abs</code>, <code>max</code>, <code>min</code>,
 <code>odd</code>, <code>sqrt</code>, <code>sqrt-int</code>,
 <code>exp</code>, <code>expt</code>, <code>**</code>,
-<code>random</code></td>
+<code>random</code>, <code>round</code>, <code>floor</code>,
+<code>ceil</code>, <code>truncate</code>, <code>log</code>,
+<code>sin</code>, <code>cos</code>, <code>tan</code>, <code>float</code>,
+<code>int</code></td>
 <td>Standard numeric functions; <code>sqrt-int</code> often requires a
-helper/library</td>
+helper/library; <code>float</code>/<code>int</code> are coercions
+(widen / truncate)</td>
 </tr>
 <tr class="even">
 <td>Bitwise</td>
@@ -1455,8 +1472,14 @@ Clojure bit functions; Emacs <code>logand</code>/<code>lsh</code></td>
 <td>Pairs/lists</td>
 <td><code>cons</code>, <code>car</code>, <code>cdr</code>,
 <code>list</code>, <code>length</code>, <code>nth</code>,
-<code>reverse</code>, <code>append</code></td>
-<td>Standard list APIs</td>
+<code>reverse</code>, <code>append</code>, <code>take</code>,
+<code>drop</code>, <code>range</code>, <code>zip</code>,
+<code>flatten</code>, <code>sort</code>, <code>sort-by</code></td>
+<td>Standard list APIs; <code>take</code>/<code>drop</code>/
+<code>range</code>/<code>zip</code>/<code>flatten</code> map to Racket/
+Clojure sequence functions or CL <code>subseq</code>/<code>loop</code>;
+<code>sort-by</code> is Clojure's, CL's <code>sort</code> with a
+<code>:key</code></td>
 </tr>
 <tr class="even">
 <td>Vectors</td>
@@ -1496,9 +1519,11 @@ differences</td>
 <tr class="odd">
 <td>Predicates</td>
 <td><code>number?</code>, <code>string?</code>, <code>symbol?</code>,
-<code>pair?</code>, <code>fn?</code>, <code>vec?</code>,
-<code>blob?</code>, <code>dict?</code>, <code>deque?</code></td>
-<td>Standard type predicates; <code>blob?</code>, <code>dict?</code>,
+<code>pair?</code>, <code>list?</code>, <code>null?</code>,
+<code>fn?</code>, <code>vec?</code>, <code>blob?</code>,
+<code>dict?</code>, <code>deque?</code></td>
+<td>Standard type predicates; <code>list?</code> accepts nil or a proper
+list, <code>null?</code> tests nil; <code>blob?</code>, <code>dict?</code>,
 <code>deque?</code> are Alcove-specific data types</td>
 </tr>
 <tr class="even">
@@ -1564,6 +1589,32 @@ modules</td>
 <code>redis-defcmd</code>, <code>redis-undefcmd</code>,
 <code>redis-cmds</code></td>
 <td>Redis client/server libraries; not a standard Lisp feature</td>
+</tr>
+<tr class="even">
+<td>Strings</td>
+<td><code>str</code>, <code>fmt</code>, <code>substr</code>,
+<code>string-append</code>, <code>string-split</code>,
+<code>string-join</code>, <code>string-trim</code>,
+<code>string-upcase</code>, <code>string-downcase</code>,
+<code>string-contains?</code>, <code>string-index</code>,
+<code>string-replace</code></td>
+<td>CL <code>concatenate</code>/<code>format</code>/<code>search</code>;
+Racket/Clojure string libraries; <code>fmt</code> is a small
+<code>{}</code>/<code>{:spec}</code> templating function (printf-style
+specs)</td>
+</tr>
+<tr class="odd">
+<td>Symbols/macro hygiene</td>
+<td><code>gensym</code>, <code>with-gensyms</code></td>
+<td>CL/Elisp <code>gensym</code>; <code>with-gensyms</code> is the
+common CL macro idiom (built-in here)</td>
+</tr>
+<tr class="even">
+<td>Error handling</td>
+<td><code>error?</code>, <code>error-message</code>, <code>try</code></td>
+<td>Errors are reified as values; <code>try</code> is a lightweight
+<code>handler-case</code>/<code>with-handlers</code>/<code>try</code>
+catching a returned error rather than unwinding</td>
 </tr>
 </tbody>
 </table>
