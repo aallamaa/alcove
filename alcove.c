@@ -526,6 +526,17 @@ inline int unrefexp(exp_t *e) {
       return is_ptr(e) ? 1 : 0;
     if ((ret = REFCOUNT_DEC(&e->nref)) > 0)
       return ret;
+    /* Detect double-free: a refcount that goes negative means this exp_t
+       was already freed and the caller holds a dangling pointer. Abort in
+       debug builds; in production at least avoid spiralling into UB. */
+    if (ret < 0) {
+      REFCOUNT_INC(&e->nref); /* undo the over-decrement */
+#ifdef NDEBUG
+      return 0;
+#else
+      abort(); /* double-free — crash loudly so the caller can be found */
+#endif
+    }
     /* meta holds a strdup'd name for LAMBDA/MACRO, or a borrowed
        resolved-exp_t* pointer for cached SYMBOL lookups. Only free()
        in the former case — the cached pointer is borrowed. */
@@ -1136,7 +1147,7 @@ void pair_add_node(exp_t *pair, exp_t *node) {
       cur = cur->next;
       if (cur->type == EXP_PAIR)
         pair_add_node(cur, node);
-      else if (cur->type == EXP_PAIR)
+      else if (cur->type == EXP_TREE)  /* was duplicate EXP_PAIR — copy-paste bug */
         tree_add_node(cur, node);
       else
         printf("ERROR UNABLE TO ADD NODE TO EXP");
@@ -1545,15 +1556,17 @@ char *load_str(char **pptr, FILE *stream) {
 exp_t *load_string(exp_t *e, FILE *stream) {
   if (load_str((char **)&(e->ptr), stream))
     return e;
-  else
-    return NULL;
+  unrefexp(e);  /* release placeholder on read failure */
+  return NULL;
 }
 
 char *dump_str(char *ptr, FILE *stream) {
   size_t length = strlen(ptr);
   if (dumpsize_t(stream, &length) <= 0)
     return NULL;
-  if (fwrite(ptr, 1, length, stream) <= 0)
+  /* fwrite returns 0 on success for empty strings — guard with length > 0
+     to avoid treating a successful empty write as a failure. */
+  if (length > 0 && fwrite(ptr, 1, length, stream) != length)
     return NULL;
   return ptr;
 }
@@ -1704,8 +1717,10 @@ exp_t *dump_float(exp_t *e, FILE *stream) {
   return e;
 }
 exp_t *load_float(exp_t *e, FILE *stream) {
-  if (fread(&e->f, sizeof(e->f), 1, stream) != 1)
+  if (fread(&e->f, sizeof(e->f), 1, stream) != 1) {
+    unrefexp(e);  /* release placeholder on read failure */
     return NULL;
+  }
   return e;
 }
 
@@ -1722,6 +1737,7 @@ exp_t *dump_symbol(exp_t *e, FILE *stream) {
 exp_t *load_symbol(exp_t *e, FILE *stream) {
   if (load_str((char **)&(e->ptr), stream))
     return e;
+  unrefexp(e);  /* release placeholder on read failure */
   return NULL;
 }
 
@@ -1748,8 +1764,14 @@ exp_t *load_pair(exp_t *e, FILE *stream) {
   uint8_t flags;
   if (fread(&flags, 1, 1, stream) != 1)
     return NULL;
-  e->content = (flags & 1) ? load_exp_t(stream) : NULL;
-  e->next = (flags & 2) ? load_exp_t(stream) : NULL;
+  if (flags & 1) {
+    e->content = load_exp_t(stream);
+    if (!e->content) return NULL; /* propagate sub-read failure */
+  }
+  if (flags & 2) {
+    e->next = load_exp_t(stream);
+    if (!e->next) return NULL;  /* propagate sub-read failure */
+  }
   return e;
 }
 
@@ -1788,11 +1810,14 @@ exp_t *dump_lambda(exp_t *e, FILE *stream) {
 }
 exp_t *load_lambda(exp_t *e, FILE *stream) {
   char *name = NULL;
-  if (!load_str(&name, stream))
+  if (!load_str(&name, stream)) {
+    unrefexp(e);  /* release placeholder on read failure */
     return NULL;
+  }
   uint8_t flags;
   if (fread(&flags, 1, 1, stream) != 1) {
     free(name);
+    unrefexp(e);
     return NULL;
   }
   exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
@@ -1842,11 +1867,14 @@ exp_t *dump_macro(exp_t *e, FILE *stream) {
 }
 exp_t *load_macro(exp_t *e, FILE *stream) {
   char *name = NULL;
-  if (!load_str(&name, stream))
+  if (!load_str(&name, stream)) {
+    unrefexp(e);  /* release placeholder on read failure */
     return NULL;
+  }
   uint8_t flags;
   if (fread(&flags, 1, 1, stream) != 1) {
     free(name);
+    unrefexp(e);
     return NULL;
   }
   exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
@@ -1908,7 +1936,7 @@ exp_t *dump_vec(exp_t *e, FILE *stream) {
       return NULL;
   } else { /* VEC_KIND_F64 */
     double *cells =
-        (double *)((char *)e->ptr + sizeof(alc_vec_t)) + e->vec_win.start;
+        VEC_F64_CELLS(e);
     if (n > 0 && fwrite(cells, sizeof(double), n, stream) != n)
       return NULL;
   }
@@ -2337,8 +2365,10 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         continue;
     } else if (ISSINGLEESCAPE & chrmap[x]) { // step 5
       if ((y = getc(stream)) != EOF) {
-        if ((ret = escapereader(stream, &token, y)))
+        if ((ret = escapereader(stream, &token, y))) {
+          if (token) freetoken(token);
           return ret;
+        }
       } else
         return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
                      "End of file reached while parsing");
@@ -3495,27 +3525,26 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   /* Resolve the target path: optional first arg, else session default.
      The arg is evaluated so callers can build the path: (savedb (str ...)). */
   const char *path = alcove_db_path;
-  exp_t *path_arg = NULL;
-  if (e->next) {
-    path_arg = EVAL(e->next->content, env);
-    if (iserror(path_arg)) {
-      unrefexp(e);
-      return path_arg;
-    }
-    if (!isstring(path_arg)) {
-      unrefexp(path_arg);
-      unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                   "savedb: optional argument must be a filename string");
-    }
+  EVAL_ARG_1(path_arg);
+  if (path_arg) {
+    if (!isstring(path_arg))
+      CLEAN_RETURN_1(path_arg,
+                     error(ERROR_ILLEGAL_VALUE, NULL, env,
+                           "savedb: optional argument must be a filename string"));
     path = (const char *)path_arg->ptr;
   }
+  /* Snapshot path before releasing path_arg — error() would receive a
+     dangling pointer if we unrefexp(path_arg) first and its ptr was freed. */
+  char *path_snap = (path == alcove_db_path) ? NULL : strdup(path);
   FILE *stream = fopen(path, "w");
   if (!stream) {
-    if (path_arg)
-      unrefexp(path_arg);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "Unable to open '%s' for writing",
-                 path);
+    if (path_arg) unrefexp(path_arg);
+    unrefexp(e);
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
+                       "Unable to open '%s' for writing",
+                       path_snap ? path_snap : path);
+    free(path_snap);
+    return err;
   }
   /* Unified writer: section L (this env) + section R (resp_kv if a
      reactor is alive). Old-format db.dump files are still readable
@@ -3523,11 +3552,15 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   int ok = alcove_dump_unified(env, resp_kv_get(), stream);
   fclose(stream);
   if (!ok) {
-    if (path_arg)
-      unrefexp(path_arg);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "savedb: I/O error writing '%s'",
-                 path);
+    if (path_arg) unrefexp(path_arg);
+    unrefexp(e);
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
+                       "savedb: I/O error writing '%s'",
+                       path_snap ? path_snap : path);
+    free(path_snap);
+    return err;
   }
+  free(path_snap);
   /* Successful explicit save → adopt this path as the session default,
      so a follow-up (loaddb) or (savedb) targets the same file. The
      strdup leaks across the run but session-default is set rarely. */
@@ -3607,19 +3640,12 @@ const char doc_loaddb[] =
     "--noload.";
 exp_t *loaddbcmd(exp_t *e, env_t *env) {
   const char *path = alcove_db_path;
-  exp_t *path_arg = NULL;
-  if (e->next) {
-    path_arg = EVAL(e->next->content, env);
-    if (iserror(path_arg)) {
-      unrefexp(e);
-      return path_arg;
-    }
-    if (!isstring(path_arg)) {
-      unrefexp(path_arg);
-      unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                   "loaddb: optional argument must be a filename string");
-    }
+  EVAL_ARG_1(path_arg);
+  if (path_arg) {
+    if (!isstring(path_arg))
+      CLEAN_RETURN_1(path_arg,
+                     error(ERROR_ILLEGAL_VALUE, NULL, env,
+                           "loaddb: optional argument must be a filename string"));
     path = (const char *)path_arg->ptr;
   }
   int n = loaddb_from_file_path(env, path);
@@ -3652,8 +3678,8 @@ const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
    of (a - b); returns 0 on type mismatch (caller raises error). */
 static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
   if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
-    *d = (isnumber(a) ? (double)FIX_VAL(a) : a->f) -
-         (isnumber(b) ? (double)FIX_VAL(b) : b->f);
+    *d = (TO_DOUBLE(a)) -
+         (TO_DOUBLE(b));
     return 1;
   }
   if (isstring(a) && isstring(b)) {
@@ -3794,12 +3820,29 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
         unrefexp(v);                                                           \
       }                                                                        \
     } while (c && (c = c->next));                                              \
+    /* (-)  and (/) with no args are errors — they have no identity value. */  \
+    if (i == 0 && ((IS_SUB) || (IS_DIV))) {                                   \
+      ret = error(ERROR_MISSING_PARAMETER, e, env,                             \
+                  (IS_SUB) ? "(- a ...): needs at least one argument"          \
+                           : "(/ a ...): needs at least one argument");        \
+      goto finish;                                                             \
+    }                                                                          \
     if (i == 1) {                                                              \
       if (IS_SUB) {                                                            \
-        if (saw_float)                                                         \
+        if (saw_float) {                                                       \
           sum_f = -sum_f;                                                      \
-        else                                                                   \
-          sum_i = -sum_i;                                                      \
+        } else {                                                               \
+          int64_t _neg = -sum_i;                                               \
+          /* Detect fixnum range overflow: if the negation doesn't             \
+             round-trip through the 61-bit tag (arithmetic shift),             \
+             promote to float. Uses signed cast before >>3 to match FIX_VAL. */\
+          if (((int64_t)((uintptr_t)(int64_t)_neg << 3)) >> 3 != _neg) {      \
+            sum_f = -(expfloat)sum_i;                                          \
+            saw_float = 1;                                                     \
+          } else {                                                             \
+            sum_i = _neg;                                                      \
+          }                                                                    \
+        }                                                                      \
       } else if (IS_DIV) {                                                     \
         if (saw_float) {                                                       \
           if (sum_f == 0) {                                                    \
@@ -4169,28 +4212,16 @@ static int vec_tighten(exp_t *vexp) {
 const char doc_vec[] = "(vec n init) — fixed-size vector of n cells "
                        "initialised to init. (vec n) defaults init to nil.";
 exp_t *veccmd(exp_t *e, env_t *env) {
-  exp_t *nexp = NULL, *fill = NIL_EXP;
-  if (e->next)
-    nexp = EVAL(e->next->content, env);
-  if (iserror(nexp)) {
-    unrefexp(e);
-    return nexp;
-  }
+  exp_t *fill = NIL_EXP;
+  EVAL_ARG_1(nexp);
   if (e->next && e->next->next)
     fill = EVAL(e->next->next->content, env);
-  if (iserror(fill)) {
-    unrefexp(nexp);
-    unrefexp(e);
-    return fill;
-  }
-  if (!isnumber(nexp)) {
-    if (nexp)
-      unrefexp(nexp);
-    unrefexp(fill);
-    unrefexp(e);
-    return error(ERROR_NUMBER_EXPECTED, e, env,
-                 "(vec n init): n must be a number");
-  }
+  if (iserror(fill))
+    CLEAN_RETURN_1(nexp, fill);
+  if (!isnumber(nexp))
+    CLEAN_RETURN_2(nexp, fill,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "(vec n init): n must be a number"));
   int64_t n = FIX_VAL(nexp);
   if (n < 0)
     n = 0;
@@ -4256,24 +4287,12 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
 
 const char doc_veclen[] = "(vec-len v) — number of cells in vector v.";
 exp_t *veclencmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
-  if (!isvector(vexp)) {
-    if (vexp)
-      unrefexp(vexp);
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(vec-len v): not a vector");
-    unrefexp(e);
-    return err;
-  }
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "(vec-len v): not a vector"));
   int64_t n = vec_len(vexp);
-  unrefexp(vexp);
-  unrefexp(e);
-  return MAKE_FIX(n);
+  CLEAN_RETURN_1(vexp, MAKE_FIX(n));
 }
 
 /* ---------- tensor bulk ops ----------
@@ -4357,9 +4376,9 @@ exp_t *vecdotcmd(exp_t *e, env_t *env) {
      element kind switch — same correctness, slower. */
   if (ka == VEC_KIND_F64 && kb == VEC_KIND_F64) {
     double *acells =
-        (double *)((char *)aexp->ptr + sizeof(alc_vec_t)) + aexp->vec_win.start;
+        VEC_F64_CELLS(aexp);
     double *bcells =
-        (double *)((char *)bexp->ptr + sizeof(alc_vec_t)) + bexp->vec_win.start;
+        VEC_F64_CELLS(bexp);
     for (int64_t i = 0; i < na; i++)
       s += acells[i] * bcells[i];
   } else if (ka == VEC_KIND_GEN && kb == VEC_KIND_GEN) {
@@ -4372,12 +4391,12 @@ exp_t *vecdotcmd(exp_t *e, env_t *env) {
     int64_t *acells = (int64_t *)((char *)aexp->ptr + sizeof(alc_vec_t)) +
                       aexp->vec_win.start;
     double *bcells =
-        (double *)((char *)bexp->ptr + sizeof(alc_vec_t)) + bexp->vec_win.start;
+        VEC_F64_CELLS(bexp);
     for (int64_t i = 0; i < na; i++)
       s += (double)acells[i] * bcells[i];
   } else if (ka == VEC_KIND_F64 && kb == VEC_KIND_I64) {
     double *acells =
-        (double *)((char *)aexp->ptr + sizeof(alc_vec_t)) + aexp->vec_win.start;
+        VEC_F64_CELLS(aexp);
     int64_t *bcells = (int64_t *)((char *)bexp->ptr + sizeof(alc_vec_t)) +
                       bexp->vec_win.start;
     for (int64_t i = 0; i < na; i++)
@@ -4421,9 +4440,9 @@ exp_t *vecaxpycmd(exp_t *e, env_t *env) {
   int err = 0;
   if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
     double *ycells =
-        (double *)((char *)yexp->ptr + sizeof(alc_vec_t)) + yexp->vec_win.start;
+        VEC_F64_CELLS(yexp);
     double *xcells =
-        (double *)((char *)xexp->ptr + sizeof(alc_vec_t)) + xexp->vec_win.start;
+        VEC_F64_CELLS(xexp);
     for (int64_t i = 0; i < ny; i++)
       ycells[i] += a * xcells[i];
   } else {
@@ -4460,7 +4479,7 @@ exp_t *vecscalecmd(exp_t *e, env_t *env) {
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells =
-        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+        VEC_F64_CELLS(vexp);
     for (int64_t i = 0; i < n; i++)
       cells[i] *= a;
   } else {
@@ -4540,9 +4559,9 @@ exp_t *vecaddcmd(exp_t *e, env_t *env) {
   int err = 0;
   if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
     double *ycells =
-        (double *)((char *)yexp->ptr + sizeof(alc_vec_t)) + yexp->vec_win.start;
+        VEC_F64_CELLS(yexp);
     double *xcells =
-        (double *)((char *)xexp->ptr + sizeof(alc_vec_t)) + xexp->vec_win.start;
+        VEC_F64_CELLS(xexp);
     for (int64_t i = 0; i < ny; i++)
       ycells[i] += xcells[i];
   } else {
@@ -4577,7 +4596,7 @@ exp_t *vecfillcmd(exp_t *e, env_t *env) {
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells =
-        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+        VEC_F64_CELLS(vexp);
     for (int64_t i = 0; i < n; i++)
       cells[i] = a;
   } else {
@@ -4591,32 +4610,18 @@ exp_t *vecfillcmd(exp_t *e, env_t *env) {
 const char doc_vecrelu[] =
     "(vec-relu! v) — in place v[i] = max(0, v[i]). Returns v.";
 exp_t *vecrelucmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
-  if (!isvector(vexp)) {
-    if (vexp)
-      unrefexp(vexp);
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(vec-relu! v): not a vector");
-    unrefexp(e);
-    return err;
-  }
-  if (vec_kind(vexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(vexp)) {
-    unrefexp(vexp);
-    exp_t *promote_err = error(ERROR_ILLEGAL_VALUE, e, env,
-                               "vec-relu!: cannot promote shared I64 vec");
-    unrefexp(e);
-    return promote_err;
-  }
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "(vec-relu! v): not a vector"));
+  if (vec_kind(vexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(vexp))
+    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
+                               "vec-relu!: cannot promote shared I64 vec"));
   int err = 0;
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells =
-        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+        VEC_F64_CELLS(vexp);
     for (int64_t i = 0; i < n; i++)
       if (cells[i] < 0.0)
         cells[i] = 0.0;
@@ -4629,43 +4634,27 @@ exp_t *vecrelucmd(exp_t *e, env_t *env) {
         vec_write_double(vexp, i, 0.0);
     }
   }
-  if (err) {
-    exp_t *err_exp = error(ERROR_NUMBER_EXPECTED, e, env,
-                           "vec-relu!: non-numeric element");
-    unrefexp(vexp);
-    unrefexp(e);
-    return err_exp;
-  }
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-relu!: non-numeric element"));
   exp_t *ret = refexp(vexp);
-  unrefexp(vexp);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_1(vexp, ret);
 }
 
 const char doc_vecargmax[] =
     "(vec-argmax v) — index of the largest element. Empty vec -> -1.";
 exp_t *vecargmaxcmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
-  if (!isvector(vexp)) {
-    if (vexp)
-      unrefexp(vexp);
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(vec-argmax v): not a vector");
-    unrefexp(e);
-    return err;
-  }
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "(vec-argmax v): not a vector"));
   int64_t best = -1;
   double bestv = 0.0;
   int err = 0;
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells =
-        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+        VEC_F64_CELLS(vexp);
     for (int64_t i = 0; i < n; i++)
       if (best < 0 || cells[i] > bestv) {
         best = i;
@@ -4682,47 +4671,27 @@ exp_t *vecargmaxcmd(exp_t *e, env_t *env) {
       }
     }
   }
-  if (err) {
-    exp_t *err_exp = error(ERROR_NUMBER_EXPECTED, e, env,
-                           "vec-argmax: non-numeric element");
-    unrefexp(vexp);
-    unrefexp(e);
-    return err_exp;
-  }
-  unrefexp(vexp);
-  unrefexp(e);
-  return MAKE_FIX(best);
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-argmax: non-numeric element"));
+  CLEAN_RETURN_1(vexp, MAKE_FIX(best));
 }
 
 const char doc_vecmax[] =
     "(vec-max v) — largest element as a float. Empty vec is an error.";
 exp_t *vecmaxcmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
-  if (!isvector(vexp)) {
-    if (vexp)
-      unrefexp(vexp);
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(vec-max v): not a vector");
-    unrefexp(e);
-    return err;
-  }
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "(vec-max v): not a vector"));
   int64_t n = vec_len(vexp);
-  if (n == 0) {
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "vec-max: empty vector");
-    unrefexp(vexp);
-    unrefexp(e);
-    return err;
-  }
+  if (n == 0)
+    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env, "vec-max: empty vector"));
   int err = 0;
   double m;
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells =
-        (double *)((char *)vexp->ptr + sizeof(alc_vec_t)) + vexp->vec_win.start;
+        VEC_F64_CELLS(vexp);
     m = cells[0];
     for (int64_t i = 1; i < n; i++)
       if (cells[i] > m)
@@ -4737,16 +4706,10 @@ exp_t *vecmaxcmd(exp_t *e, env_t *env) {
         m = x;
     }
   }
-  if (err) {
-    exp_t *err_exp = error(ERROR_NUMBER_EXPECTED, e, env,
-                           "vec-max: non-numeric element");
-    unrefexp(vexp);
-    unrefexp(e);
-    return err_exp;
-  }
-  unrefexp(vexp);
-  unrefexp(e);
-  return make_floatf((expfloat)m);
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-max: non-numeric element"));
+  CLEAN_RETURN_1(vexp, make_floatf((expfloat)m));
 }
 
 /* ---------- deque ops ----------
@@ -4869,13 +4832,7 @@ exp_t *vecpushcmd(exp_t *e, env_t *env) {
 const char doc_vecpop[] = "(vec-pop! v) — remove and return the last "
                           "element of v (O(1)). Errors on empty.";
 exp_t *vecpopcmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
+  EVAL_ARG_1(vexp);
   if (!isvector(vexp))
     CLEAN_RETURN_1(
         vexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-pop! v): not a vec"));
@@ -4924,11 +4881,19 @@ exp_t *vecunshiftcmd(exp_t *e, env_t *env) {
   }
   exp_t *ret = refexp(valexp);
   if (!vec_set_boxed(vexp, 0, valexp)) {
-    vexp->vec_win.start++; /* roll back */
+    vexp->vec_win.start++; /* roll back window */
+    /* Release the NIL sentinel placed above for GEN kind */
+    if (vec_kind(vexp) == VEC_KIND_GEN) {
+      exp_t **cells = (exp_t **)((char *)vexp->ptr + sizeof(alc_vec_t));
+      unrefexp(cells[vexp->vec_win.start]);
+      cells[vexp->vec_win.start] = NULL;
+    }
     unrefexp(ret);
-    unrefexp(vexp);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "vec-unshift!: write failed");
+    /* CLEAN_RETURN_2 evaluates error() before touching vexp/valexp/e, so
+       no use-after-free; the old hand-rolled path had that ordering bug. */
+    CLEAN_RETURN_2(vexp, valexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "vec-unshift!: write failed"));
   }
   unrefexp(vexp);
   unrefexp(e);
@@ -4938,13 +4903,7 @@ exp_t *vecunshiftcmd(exp_t *e, env_t *env) {
 const char doc_vecshift[] = "(vec-shift! v) — remove and return the first "
                             "element of v (O(1)). Errors on empty.";
 exp_t *vecshiftcmd(exp_t *e, env_t *env) {
-  exp_t *vexp = NULL;
-  if (e->next)
-    vexp = EVAL(e->next->content, env);
-  if (iserror(vexp)) {
-    unrefexp(e);
-    return vexp;
-  }
+  EVAL_ARG_1(vexp);
   if (!isvector(vexp))
     CLEAN_RETURN_1(
         vexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-shift! v): not a vec"));
@@ -4970,33 +4929,21 @@ exp_t *vecshiftcmd(exp_t *e, env_t *env) {
 const char doc_sqrtint[] = "(sqrt-int n) — integer square root (floor). Faster "
                            "than (int (sqrt n)) and exact.";
 exp_t *sqrtintcmd(exp_t *e, env_t *env) {
-  exp_t *v = NULL;
-  if (e->next)
-    v = EVAL(e->next->content, env);
-  if (iserror(v)) {
-    unrefexp(e);
-    return v;
-  }
-  if (!isnumber(v)) {
-    if (v)
-      unrefexp(v);
-    exp_t *err = error(ERROR_NUMBER_EXPECTED, e, env,
-                       "(sqrt-int n): n must be a fixnum");
-    unrefexp(e);
-    return err;
-  }
+  EVAL_ARG_1(v);
+  if (!isnumber(v))
+    CLEAN_RETURN_1(v, error(ERROR_NUMBER_EXPECTED, e, env,
+                            "(sqrt-int n): n must be a fixnum"));
   int64_t n = FIX_VAL(v);
-  unrefexp(v);
-  unrefexp(e);
   if (n < 0)
-    return MAKE_FIX(0);
+    CLEAN_RETURN_1(v, MAKE_FIX(0));
   int64_t r = (int64_t)sqrt((double)n);
-  /* Correct for double imprecision: tighten boundary. */
-  while ((r + 1) * (r + 1) <= n)
+  /* Use uint64_t for the multiply to avoid signed overflow UB when r is
+     near the fixnum maximum (n close to 2^60). */
+  while ((uint64_t)(r + 1) * (uint64_t)(r + 1) <= (uint64_t)n)
     r++;
-  while (r * r > n)
+  while ((uint64_t)r * (uint64_t)r > (uint64_t)n)
     r--;
-  return MAKE_FIX(r);
+  CLEAN_RETURN_1(v, MAKE_FIX(r));
 }
 
 const char doc_exp[] = "(exp x) — natural exponential e^x.";
@@ -6097,8 +6044,8 @@ exp_t *modcmd(exp_t *e, env_t *env) {
       int64_t va = FIX_VAL(a), vb = FIX_VAL(b);
       ret = MAKE_FIX(va - (va / vb) * vb); /* C99 truncated div */
     } else if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
-      double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;
-      double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;
+      double da = TO_DOUBLE(a);
+      double db = TO_DOUBLE(b);
       if (db == 0.0)
         ret = error(ERROR_DIV_BY0, e, env, "mod by 0");
       else
@@ -6199,7 +6146,14 @@ exp_t *abscmd(exp_t *e, env_t *env) {
     }
     if (isnumber(a)) {
       int64_t v = FIX_VAL(a);
-      ret = MAKE_FIX(v < 0 ? -v : v);
+      int64_t av = v < 0 ? -v : v;
+      /* If negation overflows fixnum range (abs of most-negative fixnum),
+         promote to float rather than silently wrapping to negative.
+         Uses signed >>3 to match FIX_VAL's arithmetic-shift semantics. */
+      if (v < 0 && ((int64_t)((uintptr_t)(int64_t)av << 3)) >> 3 != av)
+        ret = make_floatf(-(expfloat)v);
+      else
+        ret = MAKE_FIX(av);
     } else if (isfloat(a)) {
       ret = make_floatf(a->f < 0 ? -a->f : a->f);
     } else
@@ -6219,8 +6173,8 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
   if (isnumber(a) && isnumber(b))
     return FIX_VAL(a) < FIX_VAL(b);
   if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
-    double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;
-    double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;
+    double da = TO_DOUBLE(a);
+    double db = TO_DOUBLE(b);
     return da < db;
   }
   *err = 1;
@@ -7881,15 +7835,9 @@ static void inspect_value(exp_t *v) {
 const char doc_inspect[] = "(inspect x) — print internal representation: type, "
                            "refcount, and (for lambdas) compile/JIT status.";
 exp_t *inspectcmd(exp_t *e, env_t *env) {
-  exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
-  if (arg && iserror(arg)) {
-    unrefexp(e);
-    return arg;
-  }
+  EVAL_ARG_1(arg);
   inspect_value(arg);
-  unrefexp(arg);
-  unrefexp(e);
-  return NULL;
+  CLEAN_RETURN_1(arg, NULL);
 }
 
 /* (dir)              — list user/local bindings, alphabetically.
@@ -7954,28 +7902,12 @@ const char doc_dir[] =
 exp_t *dircmd(exp_t *e, env_t *env) {
   const char *needle = NULL;
   int show_builtins = 0;
-  exp_t *needle_arg = NULL, *flag_arg = NULL;
-
-  if (e->next) {
-    needle_arg = EVAL(e->next->content, env);
-    if (needle_arg && iserror(needle_arg)) {
-      unrefexp(e);
-      return needle_arg;
-    }
-    if (e->next->next) {
-      flag_arg = EVAL(e->next->next->content, env);
-      if (flag_arg && iserror(flag_arg)) {
-        unrefexp(needle_arg);
-        unrefexp(e);
-        return flag_arg;
-      }
-      if (istrue(flag_arg))
-        show_builtins = 1;
-    }
-    /* needle: accept symbol or string; nil / other → no filter */
-    if (is_ptr(needle_arg) && (issymbol(needle_arg) || isstring(needle_arg)))
-      needle = (const char *)needle_arg->ptr;
-  }
+  EVAL_ARG_2(needle_arg, flag_arg);
+  if (istrue(flag_arg))
+    show_builtins = 1;
+  /* needle: accept symbol or string; nil / other → no filter */
+  if (is_ptr(needle_arg) && (issymbol(needle_arg) || isstring(needle_arg)))
+    needle = (const char *)needle_arg->ptr;
 
   dir_entry_t *arr = NULL;
   int n = 0, cap = 0;
@@ -8097,11 +8029,7 @@ exp_t *sleepmscmd(exp_t *e, env_t *env) {
 const char doc_disasm[] = "(disasm fn) — print the bytecode of a compiled "
                           "function (or note that it's not compiled).";
 exp_t *disasmcmd(exp_t *e, env_t *env) {
-  exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
-  if (arg && iserror(arg)) {
-    unrefexp(e);
-    return arg;
-  }
+  EVAL_ARG_1(arg);
   if (!arg || !islambda(arg)) {
     printf("\x1B[96m(disasm): not a lambda\x1B[39m\n");
   } else if (!(arg->flags & FLAG_COMPILED) || !arg->bc) {
@@ -8109,9 +8037,7 @@ exp_t *disasmcmd(exp_t *e, env_t *env) {
   } else {
     disasm_bytecode(arg->bc);
   }
-  unrefexp(arg);
-  unrefexp(e);
-  return NULL;
+  CLEAN_RETURN_1(arg, NULL);
 }
 
 /* ---------------- Source pretty-printer ----------------
@@ -8430,16 +8356,10 @@ static void als_stmt(exp_t *x, int ind) { /* statement position */
 const char doc_source[] = "(source fn) — print the original (params) + body "
                           "for a user-defined function.";
 exp_t *sourcecmd(exp_t *e, env_t *env) {
-  exp_t *arg = e->next ? EVAL(e->next->content, env) : NULL;
-  if (arg && iserror(arg)) {
-    unrefexp(e);
-    return arg;
-  }
+  EVAL_ARG_1(arg);
   if (!arg || !is_ptr(arg) || (!islambda(arg) && !ismacro(arg))) {
     printf("\x1B[96m(source): not a lambda or macro\x1B[39m\n");
-    unrefexp(arg);
-    unrefexp(e);
-    return NULL;
+    CLEAN_RETURN_1(arg, NULL);
   }
   int is_macro = ismacro(arg);
   /* Only flag as a "closure" if the captured env is non-global. Top-
@@ -9491,6 +9411,15 @@ static void jit_write_end(void *p, size_t sz) {
   __builtin___clear_cache((char *)p, (char *)p + sz);
 }
 
+/* Shared JIT helper used by both arm64 and x64 shape emitters.
+   Bail to the interpreter (return 0) when the emitted instruction count
+   `n` would overrun the caller's fixed stack buffer. */
+#define JIT_GUARD(cap)                                                         \
+  do {                                                                         \
+    if (n > (cap))                                                             \
+      return 0; /* JIT buffer guard (was assert) */                           \
+  } while (0)
+
 #if defined(__aarch64__)
 /* ===================== arm64 backend ===================== */
 
@@ -9732,6 +9661,40 @@ static uint32_t arm64_cbz_w(int rt, int off_insns) {
          (uint32_t)(rt & 0x1f);
 }
 
+/* arm64 shape-emitter helpers. PATCH_DEOPT_* and the EMIT macros below
+   require `out`, `n`, and `deopt_pc` to be in scope. Note: the inline
+   blocks in jit_compile use `insns[]` instead of `out` and cannot use
+   these macros — see the comments at those sites.
+
+   PATCH_DEOPT_*(slot, ...): back-patch a previously-reserved branch
+   word at index `slot` in `out` so it targets the shared `deopt_pc`
+   label. The relative offset is ALWAYS measured from `slot` itself —
+   this removes the copy-paste hazard of writing
+   `out[patch_a] = arm64_tbz(.., deopt_pc - patch_b)` with a mismatched
+   slot, which would silently emit a wrong branch target. */
+#define PATCH_DEOPT_TBZ(slot, rt, bit)                                         \
+  (out[(slot)] = arm64_tbz((rt), (bit), deopt_pc - (slot)))
+#define PATCH_DEOPT_TBNZ(slot, rt, bit)                                        \
+  (out[(slot)] = arm64_tbnz((rt), (bit), deopt_pc - (slot)))
+#define PATCH_DEOPT_CBZ(slot, rt)                                              \
+  (out[(slot)] = arm64_cbz((rt), deopt_pc - (slot)))
+#define PATCH_DEOPT_CBZ_W(slot, rt)                                            \
+  (out[(slot)] = arm64_cbz_w((rt), deopt_pc - (slot)))
+
+/* Emit the arm64 deopt stub. Must be placed after all PATCH_DEOPT_* calls
+   that reference deopt_pc so the back-patches can target the correct pc. */
+#define ARM64_EMIT_DEOPT() do {                                                \
+  out[n++] = arm64_movz(0, 0, 0); /* x0 = 0 (NULL) */                        \
+  out[n++] = arm64_ret();                                                      \
+} while (0)
+
+/* Pack an untagged int64 in src_reg as a fixnum in x0 and return. */
+#define ARM64_EMIT_RETAG_RET(src_reg) do {                                     \
+  out[n++] = arm64_lsl_imm(0, (src_reg), 3); /* x0 = src << 3  */            \
+  out[n++] = arm64_orr_imm_bit0(0, 0);       /* x0 |= 1 (fixnum tag) */      \
+  out[n++] = arm64_ret();                                                      \
+} while (0)
+
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs.
  */
 static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
@@ -9873,15 +9836,13 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ret();
   /* deopt: */
   int deopt_pc = n;
-  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
-  out[n++] = arm64_movz(0, 0, 0); /* mov x0, #0 (NULL) */
-  out[n++] = arm64_ret();
+  PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  ARM64_EMIT_DEOPT();
 
   /* Worst case: 12 instructions (load, tbz, cmp, b.cond, sub/add, str,
      b loop, mov, ret, movz, ret + slack). Caller's buffer is uint32_t
      insns[32] — comfortable margin. Trip if a future tweak overruns. */
-  if (n > 16)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(16);
   *outn = n;
   return 1;
 }
@@ -10039,20 +10000,15 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* done: x0 = (b << 3) | 1 (re-tag), ret. */
   int done_pc = n;
-  out[n++] = arm64_lsl_imm(0, 3, 3);
-  out[n++] = arm64_orr_imm_bit0(0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_RETAG_RET(3);
 
   /* base: re-tag x1 (untagged n) into x0, ret. */
   int base_pc = n;
-  out[n++] = arm64_lsl_imm(0, 1, 3);
-  out[n++] = arm64_orr_imm_bit0(0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_RETAG_RET(1);
 
   /* deopt: return NULL. */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   /* Patch forward branches now that targets are known.
      b.gt = cond 12 (GT). Always emit GT regardless of cmp_op — the loop
@@ -10060,10 +10016,9 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
      base predicate. */
   out[patch_done] = arm64_b_cond(12, done_pc - patch_done);
   out[patch_base] = arm64_b_cond(exit_cc, base_pc - patch_base);
-  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
 
-  if (n > 32)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(32);
   *outn = n;
   return 1;
 }
@@ -10174,19 +10129,15 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   }
 
   int done_pc = n;
-  out[n++] = arm64_lsl_imm(0, 2, 3);
-  out[n++] = arm64_orr_imm_bit0(0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_RETAG_RET(2);
 
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_done] = arm64_b_cond(exit_cc, done_pc - patch_done);
-  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
 
-  if (n > 32)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(32);
   *outn = n;
   return 1;
 }
@@ -10325,19 +10276,17 @@ static int try_jit_count_primes(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
-  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
-  out[patch_kind_cp_a] = arm64_tbnz(7, 4, deopt_pc - patch_kind_cp_a);
-  out[patch_kind_cp_b] = arm64_tbnz(7, 5, deopt_pc - patch_kind_cp_b);
+  PATCH_DEOPT_TBZ(patch_da, 1, 0);
+  PATCH_DEOPT_TBZ(patch_db, 2, 0);
+  PATCH_DEOPT_TBNZ(patch_kind_cp_a, 7, 4);
+  PATCH_DEOPT_TBNZ(patch_kind_cp_b, 7, 5);
   out[patch_skip_a] = arm64_cbz(5, skip_pc - patch_skip_a);
   out[patch_skip_b] = arm64_b_cond(0, skip_pc - patch_skip_b);
 
-  if (n > 64)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(64);
   *outn = n;
   return 1;
 }
@@ -10511,14 +10460,13 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ret();
 
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_t1] = arm64_cbz(1, ret_t_pc - patch_t1);
   out[patch_t2] = arm64_b_cond(0, ret_t_pc - patch_t2);
-  out[patch_da] = arm64_tbz(2, 0, deopt_pc - patch_da);
-  out[patch_db] = arm64_tbz(3, 0, deopt_pc - patch_db);
-  out[patch_dc] = arm64_cbz(2, deopt_pc - patch_dc);
+  PATCH_DEOPT_TBZ(patch_da, 2, 0);
+  PATCH_DEOPT_TBZ(patch_db, 3, 0);
+  PATCH_DEOPT_CBZ(patch_dc, 2);
   out[patch_n1] = arm64_cbz(5, ret_nil_pc - patch_n1);
 
   out[patch_skip_ref_a] = arm64_cbz(4, skip_ref_pc - patch_skip_ref_a);
@@ -10528,14 +10476,13 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_a] = arm64_cbz(1, skip_unref_pc - patch_skip_unref_a);
   out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
-  out[patch_to_deopt] = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+  PATCH_DEOPT_CBZ_W(patch_to_deopt, 6);
 #if !ALCOVE_SINGLE_THREADED
-  out[patch_shared_ref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
-  out[patch_shared_unref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_unref);
+  PATCH_DEOPT_TBNZ(patch_shared_ref, 7, 3);
+  PATCH_DEOPT_TBNZ(patch_shared_unref, 7, 3);
 #endif
 
-  if (n > 96)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(96);
   *outn = n;
   return 1;
 }
@@ -10784,14 +10731,13 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* deopt: x0 = NULL */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   /* Patch all forward branches. */
   out[patch_t1] = arm64_cbz(1, ret_t_pc - patch_t1);
   out[patch_t2] = arm64_b_cond(0 /* EQ */, ret_t_pc - patch_t2);
-  out[patch_da] = arm64_tbz(2, 0, deopt_pc - patch_da);
-  out[patch_db] = arm64_tbz(4, 0, deopt_pc - patch_db);
+  PATCH_DEOPT_TBZ(patch_da, 2, 0);
+  PATCH_DEOPT_TBZ(patch_db, 4, 0);
   out[patch_n1] = arm64_b_cond(0, ret_nil_pc - patch_n1);
   out[patch_n2] = arm64_b_cond(0, ret_nil_pc - patch_n2);
   out[patch_n3] = arm64_b_cond(0, ret_nil_pc - patch_n3);
@@ -10803,18 +10749,17 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_skip_unref_a] = arm64_cbz(1, skip_unref_pc - patch_skip_unref_a);
   out[patch_skip_unref_b] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_b);
   out[patch_skip_unref_c] = arm64_b_cond(0, skip_unref_pc - patch_skip_unref_c);
-  out[patch_to_deopt] = arm64_cbz_w(6, deopt_pc - patch_to_deopt);
+  PATCH_DEOPT_CBZ_W(patch_to_deopt, 6);
 #if !ALCOVE_SINGLE_THREADED
-  out[patch_shared_ref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_ref);
-  out[patch_shared_unref] = arm64_tbnz(7, 3, deopt_pc - patch_shared_unref);
+  PATCH_DEOPT_TBNZ(patch_shared_ref, 7, 3);
+  PATCH_DEOPT_TBNZ(patch_shared_unref, 7, 3);
 #endif
 
   /* Suppress unused-on-some-paths warnings. */
   (void)arm64_cbnz;
   (void)arm64_cmp_reg_w;
 
-  if (n > 96)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(96);
   *outn = n;
   return 1;
 }
@@ -10955,17 +10900,15 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
-  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
-  out[patch_kind_m_a] = arm64_tbnz(7, 4, deopt_pc - patch_kind_m_a);
-  out[patch_kind_m_b] = arm64_tbnz(7, 5, deopt_pc - patch_kind_m_b);
+  PATCH_DEOPT_TBZ(patch_da, 1, 0);
+  PATCH_DEOPT_TBZ(patch_db, 2, 0);
+  PATCH_DEOPT_TBNZ(patch_kind_m_a, 7, 4);
+  PATCH_DEOPT_TBNZ(patch_kind_m_b, 7, 5);
 
-  if (n > 64)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(64);
   *outn = n;
   return 1;
 }
@@ -11101,17 +11044,15 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
   out[n++] = arm64_ret();
 
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   /* Use the proper helper so the offset gets range-checked instead of
      silently truncated by the inline mask. */
   out[patch_err] = arm64_cbnz(0, err_pc - patch_err);
   out[patch_end] = arm64_b_cond(inv_cc, end_pc - patch_end);
-  out[patch_deopt] = arm64_tbz(1, 0, deopt_pc - patch_deopt);
+  PATCH_DEOPT_TBZ(patch_deopt, 1, 0);
 
-  if (n > 64)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(64);
   *outn = n;
   return 1;
 }
@@ -11302,18 +11243,16 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ret();
 
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_recurse] = arm64_b_cond(11 /* LT */, recurse_pc - patch_recurse);
   out[patch_b1] = arm64_tbz(0, 0, bail_pc - patch_b1);
   out[patch_b2] = arm64_tbz(0, 0, bail_pc - patch_b2);
   out[patch_b3] = arm64_tbz(0, 0, bail_pc - patch_b3);
-  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
+  PATCH_DEOPT_TBZ(patch_da, 1, 0);
+  PATCH_DEOPT_TBZ(patch_db, 2, 0);
 
-  if (n > 96)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(96);
   *outn = n;
   return 1;
 }
@@ -11486,22 +11425,20 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* deopt (no frame yet). */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   /* Patch forward branches. */
   out[patch_not_m0] = arm64_b_cond(1 /* NE */, not_m0_pc - patch_not_m0);
   out[patch_not_n0] = arm64_b_cond(1 /* NE */, not_n0_pc - patch_not_n0);
   out[patch_bail] = arm64_tbz(0, 0, bail_pc - patch_bail);
-  out[patch_da] = arm64_tbz(1, 0, deopt_pc - patch_da);
-  out[patch_db] = arm64_tbz(2, 0, deopt_pc - patch_db);
+  PATCH_DEOPT_TBZ(patch_da, 1, 0);
+  PATCH_DEOPT_TBZ(patch_db, 2, 0);
 
   /* Suppress unused-warning for the helper we resolved inline. */
   (void)arm64_stp_pre_sp;
   (void)arm64_ldp_post_sp;
 
-  if (n > 64)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(64);
   *outn = n;
   return 1;
 }
@@ -11570,15 +11507,13 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* deopt → return NULL */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_t1] = arm64_tbz(1, 0, deopt_pc - patch_t1);
   out[patch_t2] = arm64_tbz(2, 0, deopt_pc - patch_t2);
-  out[patch_dz] = arm64_cbz(2, deopt_pc - patch_dz);
+  PATCH_DEOPT_CBZ(patch_dz, 2);
 
-  if (n > 32)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(32);
   *outn = n;
   return 1;
 }
@@ -11701,20 +11636,16 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* done: x0 = (s << 3) | 1, ret. */
   int done_pc = n;
-  out[n++] = arm64_lsl_imm(0, 3, 3);
-  out[n++] = arm64_orr_imm_bit0(0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_RETAG_RET(3);
 
   /* deopt: x0 = NULL, ret. */
   int deopt_pc = n;
-  out[n++] = arm64_movz(0, 0, 0);
-  out[n++] = arm64_ret();
+  ARM64_EMIT_DEOPT();
 
   out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
-  out[patch_tbz] = arm64_tbz(1, 0, deopt_pc - patch_tbz);
+  PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
 
-  if (n > 32)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(32);
   *outn = n;
   return 1;
 }
@@ -11789,7 +11720,9 @@ int jit_compile(bytecode_t *bc) {
       insns[n++] = arm64_ret();
       int deopt_pc = n;
       insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
-      insns[n++] = arm64_movz(0, 0, 0);
+      /* ARM64_EMIT_DEOPT() cannot be used here: this dispatcher uses
+         insns[], while the macro references `out` (the shape emitter param). */
+      insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
       insns[n++] = arm64_ret();
     } else {
       int delta = ((int)k) << 3;
@@ -11803,7 +11736,8 @@ int jit_compile(bytecode_t *bc) {
       insns[n++] = arm64_ret();
       int deopt_pc = n;
       insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
-      insns[n++] = arm64_movz(0, 0, 0); /* mov x0, #0 (NULL) */
+      /* See comment above — ARM64_EMIT_DEOPT() uses `out`, not `insns`. */
+      insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
       insns[n++] = arm64_ret();
     }
   } else if (bc->ncode == 5 &&
@@ -11822,7 +11756,8 @@ int jit_compile(bytecode_t *bc) {
     insns[n++] = arm64_ret();
     int deopt_pc = n;
     insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
-    insns[n++] = arm64_movz(0, 0, 0);
+    /* See comment above — ARM64_EMIT_DEOPT() uses `out`, not `insns`. */
+    insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
     insns[n++] = arm64_ret();
   } else {
     return 0; /* shape not recognized */
@@ -11830,8 +11765,7 @@ int jit_compile(bytecode_t *bc) {
 
   /* Hard cap is the insns[128] declaration above; trip if anything
      exceeds the buffer. The widest shape today is ackermann (~50). */
-  if (n > 128)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(128);
   size_t sz = (size_t)n * 4;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
@@ -12089,6 +12023,14 @@ static void x64_patch_rel32(uint8_t *buf, int branch_start, int branch_size,
   memcpy(buf + branch_start + branch_size - 4, &rel, 4);
 }
 
+/* x64 JIT shape-emitter helper. Mirrors ARM64_EMIT_DEOPT for the x64
+   backend. All x64 shape emitters end their deopt stub identically:
+   zero rax (returns NULL = 0) then ret. Requires `buf` and `n` in scope. */
+#define X64_EMIT_DEOPT() do {                                 \
+  n += x64_zero_reg(buf + n, X64_RAX); /* rax = 0 (NULL) */ \
+  n += x64_ret(buf + n);                                     \
+} while (0)
+
 /* Same shape detector as the arm64 path: a self-tail counter loop with
    compare + arith on a single param slot. See the arm64 version's
    comment block above for the bytecode layout (19 bytes total). */
@@ -12185,16 +12127,14 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_ret(buf + n);
 
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX); /* xor eax, eax */
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
   x64_patch_rel32(buf, jz_start, 6, deopt_pc);
 
   /* Worst case ~55 bytes (load, test, jcc, cmp, jcc, sub/add, mov,
      jmp, mov, ret, xor, ret + slack). Caller's buffer is uint8_t buf[256]. */
-  if (n > 80)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(80);
   *outn = n;
   return 1;
 }
@@ -12349,8 +12289,7 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
 
   /* deopt (no frame to tear down — we hadn't pushed yet). */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jcc_end, 6, end_pc);
   x64_patch_rel32(buf, jnz_err, 6, err_pc);
@@ -12358,8 +12297,7 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
 
   /* Worst case ~134 bytes (entry tag-check + frame setup + ~45-byte
      call sequence + arith + jmp + exits). buf is 256 bytes. */
-  if (n > 160)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(160);
   *outn = n;
   return 1;
 }
@@ -12586,8 +12524,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
 
     /* deopt → return NULL */
     int deopt_pc_it = n;
-    n += x64_zero_reg(buf + n, X64_RAX);
-    n += x64_ret(buf + n);
+    X64_EMIT_DEOPT();
 
     x64_patch_rel32(buf, jcc_done, 6, done_pc);
     x64_patch_rel32(buf, jcc_base, 6, base_pc);
@@ -12600,8 +12537,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     (void)inv_cc;
     (void)slot;
 
-    if (n > 200)
-      return 0; /* JIT buffer guard (was assert) */
+    JIT_GUARD(200);
     *outn = n;
     return 1;
   }
@@ -12685,8 +12621,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt (no frame): */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jcc_recurse, 6, recurse_pc);
   x64_patch_rel32(buf, jz_bail1, 6, bail_pc);
@@ -12696,8 +12631,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Worst case ~190 bytes (entry tag-check + 2 ~45-byte call sequences
      + tag-checks + tagged add + frame teardown + bail + deopt). buf
      is 256 bytes. The matcher with the largest emission. */
-  if (n > 224)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(224);
   *outn = n;
   return 1;
 }
@@ -12991,8 +12925,7 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jz_ret_t, 6, ret_t_pc);
   x64_patch_rel32(buf, je_ret_t, 6, ret_t_pc);
@@ -13013,8 +12946,7 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jnz_shared_unref, 6, deopt_pc);
 #endif
 
-  if (n > 480)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(480);
   *outn = n;
   return 1;
 }
@@ -13238,8 +13170,7 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jz_ret_t, 6, ret_t_pc);
   x64_patch_rel32(buf, je_ret_t, 6, ret_t_pc);
@@ -13259,8 +13190,7 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jnz_shared_unref, 6, deopt_pc);
 #endif
 
-  if (n > 480)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(480);
   *outn = n;
   return 1;
 }
@@ -13419,8 +13349,7 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jg_done, 6, done_pc);
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
@@ -13429,8 +13358,7 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_skip_inc, 6, skip_inc_pc);
   x64_patch_rel32(buf, je_skip_inc, 6, skip_inc_pc);
 
-  if (n > 200)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(200);
   *outn = n;
   return 1;
 }
@@ -13610,16 +13538,14 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jg_done, 6, done_pc);
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
   x64_patch_rel32(buf, jnz_kind_m, 6, deopt_pc);
 
-  if (n > 200)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(200);
   *outn = n;
   return 1;
 }
@@ -13846,8 +13772,7 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jl_recurse, 6, recurse_pc);
   x64_patch_rel32(buf, jz_b1, 6, bail_pc);
@@ -13856,8 +13781,7 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_dop_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_dop_b, 6, deopt_pc);
 
-  if (n > 480)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(480);
   *outn = n;
   return 1;
 }
@@ -14052,8 +13976,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jne_not_m0, 6, not_m0_pc);
   x64_patch_rel32(buf, jne_not_n0, 6, not_n0_pc);
@@ -14061,8 +13984,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_deopt_a, 6, deopt_pc);
   x64_patch_rel32(buf, jz_deopt_b, 6, deopt_pc);
 
-  if (n > 320)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(320);
   *outn = n;
   return 1;
 }
@@ -14216,14 +14138,12 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt → return NULL */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
 
-  if (n > 128)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(128);
   *outn = n;
   return 1;
 }
@@ -14406,8 +14326,7 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* deopt → return NULL */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   /* Suppress unused-var warnings for variables that became dead when we
      switched from recursive emission to iterative. */
@@ -14418,8 +14337,7 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
 
-  if (n > 128)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(128);
   *outn = n;
   return 1;
 }
@@ -14493,15 +14411,13 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* Single deopt point — return NULL → caller's vm_run kicks in. */
   int deopt_pc = n;
-  n += x64_zero_reg(buf + n, X64_RAX);
-  n += x64_ret(buf + n);
+  X64_EMIT_DEOPT();
 
   x64_patch_rel32(buf, jz1, 6, deopt_pc);
   x64_patch_rel32(buf, jz2, 6, deopt_pc);
   x64_patch_rel32(buf, jz_bz, 6, deopt_pc);
 
-  if (n > 96)
-    return 0; /* JIT buffer guard (was assert) */
+  JIT_GUARD(96);
   *outn = n;
   return 1;
 }
@@ -14598,8 +14514,7 @@ int jit_compile(bytecode_t *bc) {
     }
     n += x64_ret(buf + n);
     int deopt_pc = n;
-    n += x64_zero_reg(buf + n, X64_RAX);
-    n += x64_ret(buf + n);
+    X64_EMIT_DEOPT();
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
   }
   /* slot-fix superinstruction form: SLOT_ADD_FIX/SLOT_SUB_FIX slot K, RET */
@@ -14621,8 +14536,7 @@ int jit_compile(bytecode_t *bc) {
       n += x64_sub_imm32(buf + n, X64_RAX, delta);
     n += x64_ret(buf + n);
     int deopt_pc = n;
-    n += x64_zero_reg(buf + n, X64_RAX);
-    n += x64_ret(buf + n);
+    X64_EMIT_DEOPT();
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
   } else {
     JT("miss");
@@ -15995,8 +15909,8 @@ l_mod: {
       if (isnumber(a) && isnumber(b))                                          \
         r = FIX_VAL(a) intcmp FIX_VAL(b);                                      \
       else {                                                                   \
-        double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;                   \
-        double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;                   \
+        double da = TO_DOUBLE(a);                   \
+        double db = TO_DOUBLE(b);                   \
         r = da flcmp db;                                                       \
       }                                                                        \
     } else {                                                                   \
@@ -16170,6 +16084,10 @@ l_tail_call: {
     return ret;
   }
   if (!islambda(new_fn)) {
+    /* Release the n argument values above base before shrinking sp,
+       otherwise RUNTIME_ERR's cleanup loop misses stack[base..base+n-1]. */
+    for (int _i = 0; _i < n; _i++)
+      unrefexp(stack[base + _i]);
     sp = base - 1;
     unrefexp(new_fn);
     RUNTIME_ERR("OP_TAIL_CALL: not a lambda");
@@ -16231,9 +16149,13 @@ l_tail_call: {
       for (j = i; j < n; j++)
         unrefexp(args_buf[j]);
       unrefexp(new_fn);
+      /* Build error BEFORE potentially freeing fn — error() takes a refexp
+         on the id argument, so fn must still be live when it is passed. */
+      exp_t *_tc_err = error(ERROR_ILLEGAL_VALUE, fn, env,
+                             "OP_TAIL_CALL: bad param");
       if (fn_owned)
         unrefexp(fn);
-      return error(ERROR_ILLEGAL_VALUE, fn, env, "OP_TAIL_CALL: bad param");
+      return _tc_err;
     }
     if (env->n_inline < ENV_INLINE_SLOTS) {
       env->inline_keys[env->n_inline] = (char *)p->content->ptr;
@@ -16362,8 +16284,8 @@ l_slot_le_slot: {
   if (isnumber(a) && isnumber(b)) {
     PUSH(FIX_VAL(a) <= FIX_VAL(b) ? TRUE_EXP : NIL_EXP);
   } else if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
-    double da = isnumber(a) ? (double)FIX_VAL(a) : a->f;
-    double db = isnumber(b) ? (double)FIX_VAL(b) : b->f;
+    double da = TO_DOUBLE(a);
+    double db = TO_DOUBLE(b);
     PUSH(da <= db ? TRUE_EXP : NIL_EXP);
   } else {
     RUNTIME_ERR("Illegal value in <=");
@@ -16458,9 +16380,11 @@ l_sqrt_int: {
   }
   int64_t n = FIX_VAL(nexp);
   int64_t r = (n < 0) ? 0 : (int64_t)sqrt((double)n);
-  while ((r + 1) * (r + 1) <= n)
+  /* Cast to uint64_t before multiplying to avoid signed overflow UB when
+     r is near INT64_MAX (same guard used in sqrtintcmd tree-walker path). */
+  while ((uint64_t)(r + 1) * (uint64_t)(r + 1) <= (uint64_t)n)
     r++;
-  while (r * r > n)
+  while ((uint64_t)r * (uint64_t)r > (uint64_t)n)
     r--;
   unrefexp(nexp);
   PUSH(MAKE_FIX(r));

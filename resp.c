@@ -617,6 +617,28 @@ static int resp_arg_to_ll(const char *p, long len, long long *out) {
   return 1;
 }
 
+/* Parse a stored blob value's bytes as a signed integer (Redis INCR
+   semantics). Returns 1 on success, 0 if the bytes aren't a valid
+   integer. Refcount-neutral; caller must have already verified isblob()
+   (wrongtype is a distinct error). */
+static int resp_blob_to_ll(exp_t *v, long long *out) {
+  alc_blob_t *b = (alc_blob_t *)v->ptr;
+  return resp_arg_to_ll((const char *)b->bytes, (long)b->len, out);
+}
+
+/* Extract a key's raw bytes + length from a string or blob exp_t.
+   Caller must have verified isstring(kx) || isblob(kx). */
+static void resp_key_bytes(exp_t *kx, const char **ks, size_t *klen) {
+  if (isstring(kx)) {
+    *ks = (const char *)kx->ptr;
+    *klen = strlen(*ks);
+  } else {
+    alc_blob_t *bl = (alc_blob_t *)kx->ptr;
+    *ks = bl->bytes;
+    *klen = bl->len;
+  }
+}
+
 /* ---------- dispatch helpers ---------- */
 
 #define ARGN(needed)                                                          \
@@ -630,6 +652,18 @@ static int resp_arg_to_ll(const char *p, long len, long long *out) {
   do {                                                                        \
     if (argc < (min)) {                                                       \
       resp_write_err(c, "ERR wrong number of arguments");                     \
+      return;                                                                 \
+    }                                                                         \
+  } while (0)
+/* Type-guard for looked-up (refcount-bumped) values. If type_ok_expr is
+   false: unref v, send WRONGTYPE error, and return from the command handler.
+   For peek'd (borrowed-ref) values omit the unrefexp — use a plain if block.
+   Requires c and v in scope. */
+#define RESP_WRONGTYPE_IF_NOT(v, type_ok_expr)                                \
+  do {                                                                        \
+    if (!(type_ok_expr)) {                                                    \
+      unrefexp(v);                                                            \
+      resp_write_wrongtype(c);                                                \
       return;                                                                 \
     }                                                                         \
   } while (0)
@@ -1069,19 +1103,7 @@ static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
         resp_write_wrongtype(c);
         return;
       }
-      alc_blob_t *b = (alc_blob_t *)cur_v->ptr;
-      if (b->len == 0 || b->len > 30) {
-        unrefexp(cur_v);
-        resp_write_err(c, "ERR value is not an integer or out of range");
-        return;
-      }
-      char buf[32];
-      memcpy(buf, b->bytes, b->len);
-      buf[b->len] = '\0';
-      char *end;
-      errno = 0;
-      cur = strtoll(buf, &end, 10);
-      if (*end != '\0' || errno) {
+      if (!resp_blob_to_ll(cur_v, &cur)) {
         unrefexp(cur_v);
         resp_write_err(c, "ERR value is not an integer or out of range");
         return;
@@ -1125,17 +1147,8 @@ static void cmd_incr_decr(resp_client_t *c, char **argv, long *argl, int argc,
 static void cmd_incrby_decrby(resp_client_t *c, char **argv, long *argl,
                               int argc, int sign) {
   ARGN(3);
-  if (argl[2] == 0 || argl[2] > 20) {
-    resp_write_err(c, "ERR value is not an integer or out of range");
-    return;
-  }
-  char dbuf[32];
-  memcpy(dbuf, argv[2], argl[2]);
-  dbuf[argl[2]] = '\0';
-  char *end;
-  errno = 0;
-  long long delta = strtoll(dbuf, &end, 10);
-  if (*end != '\0' || errno) {
+  long long delta;
+  if (!resp_arg_to_ll(argv[2], argl[2], &delta)) {
     resp_write_err(c, "ERR value is not an integer or out of range");
     return;
   }
@@ -1241,7 +1254,7 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
   for (;;) {
     exp_t *cur = resp_kv_lookup(k, klen);
     if (!cur) { resp_write_nil(c); return; }
-    if (!islist(cur)) { unrefexp(cur); resp_write_wrongtype(c); return; }
+    RESP_WRONGTYPE_IF_NOT(cur, islist(cur));
     alc_list_t *src = (alc_list_t *)cur->ptr;
     if (src->len == 0) { unrefexp(cur); resp_write_nil(c); return; }
     /* Capture the popped value's bytes BEFORE the swap so an evicted
@@ -1280,7 +1293,7 @@ static void cmd_llen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_int(c, 0); return; }
-  if (!islist(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, islist(v));
   resp_write_int(c, (long long)((alc_list_t *)v->ptr)->len);
   unrefexp(v);
 }
@@ -1294,7 +1307,7 @@ static void cmd_lindex(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_nil(c); return; }
-  if (!islist(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, islist(v));
   alc_list_t *l = (alc_list_t *)v->ptr;
   long ni = resp_norm_index((long)idx, l->len);
   if (ni < 0) { unrefexp(v); resp_write_nil(c); return; }
@@ -1321,7 +1334,7 @@ static void cmd_lrange(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_array_hdr(c, 0); return; }
-  if (!islist(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, islist(v));
   alc_list_t *l = (alc_list_t *)v->ptr;
   long len = l->len;
   if (start < 0) start += len;
@@ -1406,7 +1419,7 @@ static void cmd_hget(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_nil(c); return; }
-  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   char *fk = resp_dup_key(argv[2], argl[2]);
   if (!fk) { unrefexp(v); resp_write_nil(c); return; }
   exp_t *fv = resp_dict_field_get((dict_t *)v->ptr, fk);
@@ -1424,7 +1437,7 @@ static void cmd_hdel(resp_client_t *c, char **argv, long *argl, int argc) {
   for (;;) {
     exp_t *cur = resp_kv_lookup(k, klen);
     if (!cur) { resp_write_int(c, 0); return; }
-    if (!isdict(cur)) { unrefexp(cur); resp_write_wrongtype(c); return; }
+    RESP_WRONGTYPE_IF_NOT(cur, isdict(cur));
     exp_t *fresh = resp_dict_clone((dict_t *)cur->ptr);
     dict_t *h = (dict_t *)fresh->ptr;
     long long deleted = 0;
@@ -1454,7 +1467,7 @@ static void cmd_hexists(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_int(c, 0); return; }
-  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   char *fk = resp_dup_key(argv[2], argl[2]);
   if (!fk) { unrefexp(v); resp_write_int(c, 0); return; }
   exp_t *fv = resp_dict_field_get((dict_t *)v->ptr, fk);
@@ -1467,7 +1480,7 @@ static void cmd_hlen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_int(c, 0); return; }
-  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   resp_write_int(c, (long long)dict_count((dict_t *)v->ptr));
   unrefexp(v);
 }
@@ -1498,7 +1511,7 @@ static void cmd_hkeys_hvals_hgetall(resp_client_t *c, char **argv, long *argl,
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
   if (!v) { resp_write_array_hdr(c, 0); return; }
-  if (!isdict(v)) { unrefexp(v); resp_write_wrongtype(c); return; }
+  RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   hash_emit(c, (dict_t *)v->ptr, keys, vals);
   unrefexp(v);
 }
@@ -2507,8 +2520,7 @@ exp_t *redistypecmd(exp_t *e, env_t *env) {
                  "redis-type: key must be a string or blob");
   }
   const char *ks; size_t klen;
-  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
-  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
   const char *tn = v ? resp_type_name(v) : "none";
   exp_t *ret = make_string((char *)tn, (int)strlen(tn));
@@ -2527,8 +2539,7 @@ exp_t *redisgetcmd(exp_t *e, env_t *env) {
                  "redis-get: key must be a string or blob");
   }
   const char *ks; size_t klen;
-  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
-  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
   exp_t *ret = NIL_EXP;
   if (v && isblob(v)) {
@@ -2640,8 +2651,7 @@ exp_t *redisvalcmd(exp_t *e, env_t *env) {
                  "redis-val: key must be a string or blob");
   }
   const char *ks; size_t klen;
-  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
-  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
   exp_t *ret = v ? resp_exp_clone_for_lisp(v, 0) : NIL_EXP;
   if (v) unrefexp(v);
@@ -2741,8 +2751,7 @@ exp_t *redissetcmd(exp_t *e, env_t *env) {
                  "or a deque/hash-map containing those scalar values");
   }
   const char *ks; size_t klen;
-  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
-  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  resp_key_bytes(kx, &ks, &klen);
   resp_kv_ensure();
   resp_kv_set(ks, klen, stored); /* consumes stored */
   unrefexp(vx); unrefexp(kx); unrefexp(e);
@@ -2760,8 +2769,7 @@ exp_t *redisdelcmd(exp_t *e, env_t *env) {
                  "redis-del: key must be a string or blob");
   }
   const char *ks; size_t klen;
-  if (isstring(kx)) { ks = (char *)kx->ptr; klen = strlen(ks); }
-  else { alc_blob_t *bl = (alc_blob_t *)kx->ptr; ks = bl->bytes; klen = bl->len; }
+  resp_key_bytes(kx, &ks, &klen);
   int removed = resp_kv_del(ks, klen);
   unrefexp(kx); unrefexp(e);
   return MAKE_FIX(removed ? 1 : 0);
