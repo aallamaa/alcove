@@ -136,16 +136,9 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
         als_push(call, f);
         als_free(args);
         als_push(out, call);
-      } else {                       /* name(a b) -> (name a b) */
-        als_node *call = als_list();
-        als_push(call, f);
-        for (int i = 0; i < args->n; i++) {
-          als_node *kid = args->kid[i];
-          args->kid[i] = NULL;
-          als_push(call, kid);
-        }
-        als_free(args);
-        als_push(out, call);
+      } else {                       /* name(a b) -> name (a b) */
+        als_push(out, f);
+        als_push(out, args);
       }
       continue;
     }

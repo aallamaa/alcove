@@ -1898,6 +1898,9 @@ typedef struct {
 static char resp_listener_marker;
 static char resp_wake_marker;
 
+/* resp_backend_init/close and resp_ready_add are only called from resp_serve's
+   multi-threaded branch — compile them out in single-threaded builds. */
+#if !ALCOVE_SINGLE_THREADED
 static void resp_ready_add(resp_backend_t *b, void *ptr, int mask, int *n) {
   if (!ptr || !mask) return;
   for (int i = 0; i < *n; i++) {
@@ -1983,6 +1986,7 @@ static void resp_backend_close(resp_backend_t *b) {
   b->fd = -1;
   b->kind = RESP_BACKEND_SELECT;
 }
+#endif /* !ALCOVE_SINGLE_THREADED (resp_ready_add, resp_backend_init, resp_backend_close) */
 
 static int resp_backend_active(resp_backend_t *b) {
   return b && b->kind != RESP_BACKEND_SELECT && b->fd >= 0;
@@ -2019,6 +2023,9 @@ static int resp_backend_add_client(resp_backend_t *b, resp_client_t *c) {
   return 0;
 }
 
+/* resp_backend_del_client, resp_backend_update_client, resp_backend_wait are
+   only called from resp_serve's multi-threaded branch. */
+#if !ALCOVE_SINGLE_THREADED
 static void resp_backend_del_client(resp_backend_t *b, resp_client_t *c) {
   if (!resp_backend_active(b)) return;
 #if RESP_HAVE_EPOLL
@@ -2117,6 +2124,7 @@ static int resp_backend_wait(resp_backend_t *b, int timeout_ms) {
 #endif
   return 0;
 }
+#endif /* !ALCOVE_SINGLE_THREADED (resp_backend_del/update_client, resp_backend_wait) */
 
 /* Drain pending accepts on a non-blocking listen socket, capped at
    RESP_ACCEPT_BURST. EAGAIN/EWOULDBLOCK is the normal exit (queue empty,

@@ -520,7 +520,7 @@ static ALCOVE_TLS exp_t *exp_bump_next = NULL;
 static ALCOVE_TLS int exp_bump_left = 0;
 
 /* Iterative over e->next; recurses for e->content and vector/list elements. */
-inline int unrefexp(exp_t *e) {
+static inline int unrefexp(exp_t *e) {
   int ret;
   while (1) {
     if (is_immortal(e))
@@ -1013,7 +1013,7 @@ int del_keyval_dict(dict_t *d, char *key) {
 
 // see page 25 concept of "liaison immuable" et liaison "muable"
 
-inline exp_t *make_nil() {
+static inline exp_t *make_nil() {
   exp_t *nil_exp;
   if (exp_freelist) {
     nil_exp = exp_freelist;
@@ -4334,23 +4334,6 @@ static inline double gen_cell_as_double(exp_t **cells, int64_t i, int *err) {
     return e->f;
   *err = 1;
   return 0.0;
-}
-
-/* Write a double into cells[i]. Fast path: when the existing slot holds
-   a uniquely-owned EXP_FLOAT, just overwrite its `f` field — no alloc,
-   no refcount round-trip. Safe because:
-     1. nref == 1 means nothing else observes the exp_t,
-     2. EXP_FLOAT's value lives inline in the union (no ptr to release),
-     3. type/flags don't move since we're rewriting float as float. */
-static inline void gen_cell_set_double(exp_t **cells, int64_t i, double x) {
-  exp_t *cur = cells[i];
-  if (is_ptr(cur) && cur->type == EXP_FLOAT && cur->nref == 1 &&
-      !(cur->flags & FLAG_SHARED)) {
-    cur->f = (expfloat)x;
-    return;
-  }
-  unrefexp(cur);
-  cells[i] = make_floatf((expfloat)x);
 }
 
 const char doc_vecdot[] =
@@ -17012,6 +16995,7 @@ finisht:
 }
 
 #ifdef ALCOVE_READLINE
+#undef ISDIGIT /* char.h defines ISDIGIT as a bitmask; readline redefines it */
 #include <readline/history.h>
 #include <readline/readline.h>
 #include <sys/stat.h> /* chmod(0600) on the persisted history file */
@@ -18475,11 +18459,13 @@ typedef struct shard_thread_arg {
   int rc;
 } shard_thread_arg_t;
 
+#if !ALCOVE_SINGLE_THREADED
 static void *shard_thread_entry(void *p) {
   shard_thread_arg_t *a = p;
   a->rc = shard_main(a->sh, a->port);
   return NULL;
 }
+#endif
 
 int respN_serve(int port, int nthreads) {
   if (nthreads <= 1)

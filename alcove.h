@@ -571,7 +571,7 @@ int64_t gettimeusec();
 /* memory management */
 exp_t *refexp(exp_t *e);
 void *memalloc(size_t count, size_t size);
-int unrefexp(exp_t *e);
+static int unrefexp(exp_t *e);
 
 /* env management and exception handling inside env*/
 env_t *ref_env(env_t *env);
@@ -592,7 +592,7 @@ int del_keyval_dict(dict_t *d, char *key);
 
 /* lisp */
 exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...);
-exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
+static exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
 #define MAKE_TYPED(name, t, p) \
   exp_t *(name) = make_nil(); \
   (name)->type = (t); \
