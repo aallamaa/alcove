@@ -160,7 +160,7 @@ enum {
                                 (e)->type <= EXP_SET))))
 
 /* Helper for fast-path refcounting */
-#define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton)
+#define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton || (e) == gen_done_singleton)
 
 #define car(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->content : NULL)
 #define cdr(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->next : NULL)
@@ -626,8 +626,11 @@ exp_t *make_symbol(char *str, int length);
    unrefexp short-circuit on them so they never reach 0. */
 extern exp_t *nil_singleton;
 extern exp_t *true_singleton;
-#define NIL_EXP (nil_singleton)
+extern exp_t *gen_done_singleton; /* generator exhaustion sentinel */
+#define NIL_EXP  (nil_singleton)
 #define TRUE_EXP (true_singleton)
+#define GEN_DONE (gen_done_singleton)
+#define isgen_done(e) ((e) == gen_done_singleton)
 exp_t *make_quote(exp_t *node);
 exp_t *make_integer(char *str);
 exp_t *make_integeri(int64_t i);

@@ -65,6 +65,7 @@ exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
 /* Canonical singletons — pointer set at main() startup. */
 exp_t *nil_singleton = NULL;
 exp_t *true_singleton = NULL;
+exp_t *gen_done_singleton = NULL;
 static exp_t *alc_cstr_to_key(const char *k);
 static int set_insert_value(dict_t *d, exp_t *v);
 
@@ -104,11 +105,23 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("and", andcmd, doc_and),
     LISPCMD_TAIL("or", orcmd, doc_or),
     LISPCMD_TAIL("case", casecmd, doc_case),
+    LISPCMD_TAIL("cond", condcmd, doc_cond),
+    LISPCMD_TAIL("match", matchcmd, doc_match),
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
+    LISPCMD_TAIL("for-gen", forgencmd, doc_forgen),
     LISPCMD_TAIL("let", letcmd, doc_let),
     LISPCMD_TAIL("let*", letstar_cmd, doc_letstar),
     LISPCMD_TAIL("with", withcmd, doc_with),
+    /* Generators */
+    LISPCMD("*gen-done*", gendone_cmd, doc_gendone),
+    LISPCMD("gen-done?", gendonep_cmd, doc_gendonep),
+    LISPCMD("gen-list", genlist_cmd, doc_genlist),
+    LISPCMD("gen-range", genrange_cmd, doc_genrange),
+    LISPCMD("gen-next!", gennext_cmd, doc_gennext),
+    LISPCMD("gen-collect", gencollect_cmd, doc_gencollect),
+    LISPCMD("gen-map", genmap_cmd, doc_genmap),
+    LISPCMD("gen-filter", genfilter_cmd, doc_genfilter),
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
     LISPCMD("setf", equalcmd, doc_setf), /* exact synonym of = (readable head) */
@@ -7147,29 +7160,48 @@ exp_t *errormessagecmd(exp_t *e, env_t *env) {
    Unlike normal propagation, the error is caught here and not re-raised.
    handler receives the error exp_t and may call (error-message e) on it. */
 const char doc_try[] =
-    "(try body handler) — evaluate body; if it signals an error, call "
-    "(handler error-value) instead of propagating. Returns body's value or "
-    "handler's return value.";
+    "(try body handler) — evaluate body; if it signals an error call "
+    "(handler err). Returns body's value on success or handler's value. "
+    "(try body handler finally-expr) — like above but always evaluates "
+    "finally-expr last; its value is discarded. "
+    "(try body nil finally-expr) — no catch; run body, always run finally "
+    "(errors from body propagate after finally runs).";
 exp_t *trycmd(exp_t *e, env_t *env) {
   if (!e->next || !e->next->next) {
     unrefexp(e);
     return error(ERROR_MISSING_PARAMETER, NULL, env, "(try body handler)");
   }
+  exp_t *finally_form = e->next->next->next
+                        ? e->next->next->next->content : NULL;
   exp_t *result = EVAL(e->next->content, env);
+  exp_t *ret;
   if (!result || !iserror(result)) {
-    unrefexp(e);
-    return result ? result : NIL_EXP;
+    ret = result ? result : NIL_EXP;
+  } else {
+    /* Error path: evaluate handler then call it. nil handler = no catch. */
+    exp_t *handler = EVAL(e->next->next->content, env);
+    if (!handler || !istrue(handler)) {
+      unrefexp(handler);
+      ret = result; /* propagate */
+    } else if (iserror(handler)) {
+      unrefexp(result);
+      ret = handler;
+    } else {
+      ret = alc_apply1(handler, result, env);
+      unrefexp(handler);
+      unrefexp(result);
+      if (!ret) ret = NIL_EXP;
+    }
   }
-  /* Error caught — evaluate handler and call it. */
-  exp_t *handler = EVAL(e->next->next->content, env);
+  if (finally_form) {
+    exp_t *fret = EVAL(finally_form, env);
+    if (fret && iserror(fret) && !iserror(ret)) {
+      unrefexp(ret);
+      ret = fret;
+    } else
+      unrefexp(fret);
+  }
   unrefexp(e);
-  if (!handler || iserror(handler)) {
-    unrefexp(result);
-    return handler ? handler : NIL_EXP;
-  }
-  exp_t *ret = alc_apply1(handler, result, env);
-  unrefexp(handler);
-  unrefexp(result);
   return ret ? ret : NIL_EXP;
 }
 
@@ -8720,6 +8752,554 @@ finish:
   return ret;
 }
 
+/* ---- cond ---------------------------------------------------------------- */
+
+const char doc_cond[] =
+    "(cond test1 expr1 test2 expr2 ... default) — Arc-style flat cond. "
+    "Evaluates tests left-to-right; returns the expr paired with the first "
+    "truthy test. A lone trailing element is the unconditional default. "
+    "(cond) returns nil.";
+exp_t *condcmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
+  exp_t *cur = cdr(e);
+  while (cur) {
+    if (!cur->next) {
+      /* Lone trailing element: default */
+      in_tail_position = outer_tail;
+      exp_t *ret = EVAL(car(cur), env);
+      unrefexp(e);
+      return ret ? ret : NIL_EXP;
+    }
+    in_tail_position = 0;
+    exp_t *test = EVAL(car(cur), env);
+    if (iserror(test)) {
+      in_tail_position = outer_tail;
+      unrefexp(e);
+      return test;
+    }
+    int truthy = istrue(test);
+    unrefexp(test);
+    if (truthy) {
+      in_tail_position = outer_tail;
+      exp_t *ret = EVAL(car(cur->next), env);
+      unrefexp(e);
+      return ret ? ret : NIL_EXP;
+    }
+    cur = cur->next ? cur->next->next : NULL;
+  }
+  in_tail_position = outer_tail;
+  unrefexp(e);
+  return NIL_EXP;
+}
+
+/* ---- match --------------------------------------------------------------- */
+
+/* Forward declaration for mutual recursion in list pattern matching. */
+static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
+                         exp_t *e_err, env_t *eval_env, exp_t **err);
+
+static int alc_match_list_pats(exp_t *pats, exp_t *vals, env_t *newenv,
+                               exp_t *e_err, env_t *eval_env, exp_t **err) {
+  exp_t *p = pats, *v = vals;
+  while (p && p->content) {
+    if (!ispair(v) || !istrue(v)) return 0; /* fewer values than patterns */
+    if (!alc_match_pat(p->content, v->content, newenv, e_err, eval_env, err))
+      return *err ? -1 : 0;
+    if (*err) return -1;
+    p = p->next;
+    v = v ? v->next : NULL;
+  }
+  /* Exact length: value list must also be exhausted. */
+  return (!v || v == NIL_EXP || !istrue(v)) ? 1 : 0;
+}
+
+/* Returns 1 on match (variables bound into newenv), 0 on no-match,
+   -1 on structural error (sets *err). All refs borrowed. */
+static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
+                         exp_t *e_err, env_t *eval_env, exp_t **err) {
+  *err = NULL;
+
+  /* Wildcard `_` */
+  if (issymbol(pat) && strcmp((char *)pat->ptr, "_") == 0)
+    return 1;
+
+  /* Literal nil — matches nil/empty-list */
+  if (!pat || pat == NIL_EXP || !istrue(pat))
+    return (!val || val == NIL_EXP || !istrue(val)) ? 1 : 0;
+
+  /* Literal t — matches t */
+  if (pat == TRUE_EXP)
+    return (val == TRUE_EXP) ? 1 : 0;
+
+  /* gen-done sentinel */
+  if (isgen_done(pat))
+    return isgen_done(val) ? 1 : 0;
+
+  /* Fixnum literal */
+  if (isnumber(pat))
+    return (isnumber(val) && FIX_VAL(pat) == FIX_VAL(val)) ? 1 : 0;
+
+  /* Float literal */
+  if (isfloat(pat))
+    return (isfloat(val) && pat->f == val->f) ? 1 : 0;
+
+  /* String literal */
+  if (isstring(pat))
+    return (isstring(val) && strcmp((char *)pat->ptr, (char *)val->ptr) == 0)
+           ? 1 : 0;
+
+  /* Plain symbol: capture binding */
+  if (issymbol(pat)) {
+    /* pre-allocate a binding node in newenv: this borrows the name ptr (safe,
+       the pattern lives for the duration of the match call). */
+    extern void var2env_bind(char *name, exp_t *val, env_t *env);
+    var2env_bind((char *)pat->ptr, refexp(val ? val : NIL_EXP), newenv);
+    return 1;
+  }
+
+  /* Compound pattern: must be a pair */
+  if (!ispair(pat) || !istrue(pat))
+    return 0;
+
+  exp_t *head = pat->content;
+  exp_t *rest = pat->next;
+
+  if (issymbol(head)) {
+    const char *hn = (const char *)head->ptr;
+
+    /* (quote sym) — match a specific symbol */
+    if (strcmp(hn, "quote") == 0) {
+      if (!rest || !rest->content) {
+        *err = error(ERROR_ILLEGAL_VALUE, e_err, eval_env,
+                     "match: (quote sym) needs an argument");
+        return -1;
+      }
+      exp_t *q = rest->content;
+      return (issymbol(q) && issymbol(val) &&
+              strcmp((char *)q->ptr, (char *)val->ptr) == 0) ? 1 : 0;
+    }
+
+    /* (? pred) — guard: call pred on val */
+    if (strcmp(hn, "?") == 0) {
+      if (!rest || !rest->content) {
+        *err = error(ERROR_ILLEGAL_VALUE, e_err, eval_env,
+                     "match: (? pred) needs a predicate");
+        return -1;
+      }
+      exp_t *pred = EVAL(rest->content, eval_env);
+      if (!pred || iserror(pred)) { *err = pred ? pred : NIL_EXP; return -1; }
+      exp_t *r = alc_apply1(pred, val ? val : NIL_EXP, eval_env);
+      unrefexp(pred);
+      if (!r || iserror(r)) { *err = r ? r : NIL_EXP; return -1; }
+      int ok = istrue(r);
+      unrefexp(r);
+      return ok ? 1 : 0;
+    }
+
+    /* (cons ph pt) — pair pattern */
+    if (strcmp(hn, "cons") == 0) {
+      if (!rest || !rest->next) {
+        *err = error(ERROR_ILLEGAL_VALUE, e_err, eval_env,
+                     "match: (cons head tail) needs two sub-patterns");
+        return -1;
+      }
+      if (!ispair(val) || !istrue(val)) return 0;
+      int r = alc_match_pat(rest->content, val->content,
+                            newenv, e_err, eval_env, err);
+      if (r <= 0) return r;
+      return alc_match_pat(rest->next->content,
+                           val->next ? val->next : NIL_EXP,
+                           newenv, e_err, eval_env, err);
+    }
+
+    /* (list p1 p2 ...) — exact-length list pattern */
+    if (strcmp(hn, "list") == 0)
+      return alc_match_list_pats(rest, val, newenv, e_err, eval_env, err);
+
+    /* (vec p1 p2 ...) — exact-length vector pattern */
+    if (strcmp(hn, "vec") == 0) {
+      if (!isvector(val)) return 0;
+      int64_t vlen = vec_len(val);
+      exp_t *p = rest;
+      int64_t pi = 0;
+      while (p && p->content) {
+        if (pi >= vlen) return 0;
+        exp_t *cell;
+        int cell_owned = 0;
+        if (vec_kind(val) == VEC_KIND_GEN) {
+          cell = vec_gen_at(val, pi);
+        } else if (vec_kind(val) == VEC_KIND_I64) {
+          cell = make_integeri(vec_i64_at(val, pi)); cell_owned = 1;
+        } else {
+          cell = make_floatf((expfloat)vec_f64_at(val, pi)); cell_owned = 1;
+        }
+        int r = alc_match_pat(p->content, cell, newenv, e_err, eval_env, err);
+        if (cell_owned) unrefexp(cell);
+        if (r <= 0) return r;
+        p = p->next; pi++;
+      }
+      return (pi == vlen) ? 1 : 0;
+    }
+  }
+  return 0; /* unrecognised compound pattern = no-match */
+}
+
+const char doc_match[] =
+    "(match expr pat1 result1 pat2 result2 ... default) — structural pattern "
+    "matching. Evaluates expr once, then tries each pat left-to-right. The "
+    "first matching pat evaluates its result with pattern variables in scope. "
+    "A lone trailing element is the unconditional default; (match x) is nil. "
+    "Patterns: _ wildcard; symbol x binds; nil/t/number/string literal; "
+    "(list p...) exact list; (cons h t) pair; (vec p...) vector; "
+    "(quote sym) symbol literal; (? pred) guard predicate.";
+exp_t *matchcmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
+  if (!e->next) { unrefexp(e); return NIL_EXP; }
+  in_tail_position = 0;
+  exp_t *val = EVAL(e->next->content, env);
+  if (!val || iserror(val)) {
+    in_tail_position = outer_tail;
+    unrefexp(e);
+    return val ? val : NIL_EXP;
+  }
+  exp_t *cur = e->next->next;
+  exp_t *ret = NIL_EXP;
+  while (cur) {
+    if (!cur->next) {
+      /* Default: lone trailing element */
+      in_tail_position = outer_tail;
+      ret = EVAL(car(cur), env);
+      break;
+    }
+    exp_t *pat   = car(cur);
+    exp_t *rform = car(cur->next);
+    env_t *newenv = make_env(env);
+    exp_t *merr = NULL;
+    int m = alc_match_pat(pat, val, newenv, e, env, &merr);
+    if (merr) {
+      destroy_env(newenv);
+      unrefexp(val);
+      unrefexp(e);
+      in_tail_position = outer_tail;
+      return merr;
+    }
+    if (m > 0) {
+      in_tail_position = outer_tail;
+      ret = EVAL(rform, newenv);
+      destroy_env(newenv);
+      break;
+    }
+    destroy_env(newenv);
+    cur = cur->next ? cur->next->next : NULL;
+  }
+  unrefexp(val);
+  unrefexp(e);
+  in_tail_position = outer_tail;
+  return ret ? ret : NIL_EXP;
+}
+
+/* ---- generators ---------------------------------------------------------- */
+
+/* Internal dict keys for generator state (chosen to avoid user collisions). */
+#define GK_KIND "\x01gk" /* fixnum kind: 0=list 1=range 2=map 3=filter */
+#define GK_CUR  "\x01gc" /* cursor: list node (list), current int (range) */
+#define GK_END  "\x01ge" /* end value (range) */
+#define GK_STP  "\x01gs" /* step (range) */
+#define GK_FN   "\x01gf" /* function (map/filter) */
+#define GK_IN   "\x01gi" /* inner generator (map/filter) */
+#define GK_LIST  0
+#define GK_RANGE 1
+#define GK_MAP   2
+#define GK_FILTER 3
+
+static exp_t *gen_dict_get(exp_t *d, const char *k) {
+  keyval_t *kv = set_get_keyval_dict((dict_t *)d->ptr, (char *)k, NULL);
+  return kv ? kv->val : NULL;
+}
+static void gen_dict_set(exp_t *d, const char *k, exp_t *v) {
+  set_get_keyval_dict((dict_t *)d->ptr, (char *)k, v);
+}
+static int gen_kind(exp_t *g) {
+  exp_t *k = gen_dict_get(g, GK_KIND);
+  return (k && isnumber(k)) ? (int)FIX_VAL(k) : -1;
+}
+static int isgen(exp_t *g) {
+  return isdict(g) && gen_kind(g) >= 0;
+}
+
+/* Advance generator g by one step. Returns next value (owned ref) or GEN_DONE.
+   Mutates g's internal state in-place. */
+static exp_t *alc_gen_step(exp_t *g, env_t *env) {
+  if (!isgen(g)) return GEN_DONE;
+  switch (gen_kind(g)) {
+
+  case GK_LIST: {
+    exp_t *cur = gen_dict_get(g, GK_CUR);
+    if (!cur || !ispair(cur) || !istrue(cur)) return GEN_DONE;
+    exp_t *val  = refexp(cur->content ? cur->content : NIL_EXP);
+    /* refexp next BEFORE dict-set: the dict will unref the old cursor
+       (cascade-freeing cur), which would also decrement cur->next.
+       Our explicit ref keeps next alive until dict_set stores its own. */
+    exp_t *rest = refexp(cur->next ? cur->next : NIL_EXP);
+    gen_dict_set(g, GK_CUR, rest);
+    unrefexp(rest); /* release our protection ref; dict holds its own */
+    return val;
+  }
+
+  case GK_RANGE: {
+    exp_t *ecur = gen_dict_get(g, GK_CUR);
+    exp_t *eend = gen_dict_get(g, GK_END);
+    exp_t *estp = gen_dict_get(g, GK_STP);
+    if (!ecur || !eend || !estp || !isnumber(ecur)) return GEN_DONE;
+    int64_t cur = FIX_VAL(ecur), end = FIX_VAL(eend), stp = FIX_VAL(estp);
+    int done = (stp > 0) ? (cur >= end) : (cur <= end);
+    if (done) return GEN_DONE;
+    gen_dict_set(g, GK_CUR, MAKE_FIX(cur + stp));
+    return MAKE_FIX(cur);
+  }
+
+  case GK_MAP: {
+    exp_t *inner = gen_dict_get(g, GK_IN);
+    exp_t *fn    = gen_dict_get(g, GK_FN);
+    if (!inner || !fn) return GEN_DONE;
+    exp_t *v = alc_gen_step(inner, env);
+    if (!v || isgen_done(v)) return GEN_DONE;
+    exp_t *r = alc_apply1(fn, v, env);
+    unrefexp(v);
+    return r ? r : NIL_EXP;
+  }
+
+  case GK_FILTER: {
+    exp_t *inner = gen_dict_get(g, GK_IN);
+    exp_t *pred  = gen_dict_get(g, GK_FN);
+    if (!inner || !pred) return GEN_DONE;
+    for (;;) {
+      exp_t *v = alc_gen_step(inner, env);
+      if (!v || isgen_done(v)) return GEN_DONE;
+      exp_t *ok = alc_apply1(pred, v, env);
+      if (iserror(ok)) { unrefexp(v); return ok; }
+      int pass = istrue(ok);
+      unrefexp(ok);
+      if (pass) return v;
+      unrefexp(v);
+    }
+  }
+  }
+  return GEN_DONE;
+}
+
+static exp_t *make_gen_dict(int kind) {
+  exp_t *d = make_nil();
+  d->type = EXP_DICT;
+  d->ptr  = create_dict();
+  gen_dict_set(d, GK_KIND, MAKE_FIX(kind));
+  return d;
+}
+
+const char doc_gendone[] = "(*gen-done*) — returns the generator exhaustion "
+                           "sentinel. Generators return this when exhausted.";
+exp_t *gendone_cmd(exp_t *e, env_t *env) {
+  unrefexp(e); (void)env;
+  return GEN_DONE;
+}
+
+const char doc_gendonep[] = "(gen-done? x) — t if x is the generator exhaustion "
+                            "sentinel (*gen-done*), nil otherwise.";
+exp_t *gendonep_cmd(exp_t *e, env_t *env) {
+  if (!e->next) { unrefexp(e); return NIL_EXP; }
+  exp_t *v = EVAL(e->next->content, env);
+  exp_t *ret = (v && isgen_done(v)) ? TRUE_EXP : NIL_EXP;
+  unrefexp(v);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_genlist[] = "(gen-list lst) — returns a generator that yields "
+                           "each element of lst in order. Exhaustion returns *gen-done*.";
+exp_t *genlist_cmd(exp_t *e, env_t *env) {
+  if (!e->next) { unrefexp(e); return NIL_EXP; }
+  exp_t *lst = EVAL(e->next->content, env);
+  if (iserror(lst)) { unrefexp(e); return lst; }
+  exp_t *g = make_gen_dict(GK_LIST);
+  gen_dict_set(g, GK_CUR, lst ? lst : NIL_EXP);
+  unrefexp(lst);
+  unrefexp(e);
+  return g;
+}
+
+const char doc_genrange[] =
+    "(gen-range end) / (gen-range start end) / (gen-range start end step) — "
+    "yields integers from start (default 0) up to but not including end, "
+    "incrementing by step (default 1; negative step counts down).";
+exp_t *genrange_cmd(exp_t *e, env_t *env) {
+  exp_t *cur = cdr(e);
+  if (!cur) { unrefexp(e); return NIL_EXP; }
+  EVAL_ARG_1(a);
+  int64_t start = 0, end = 0, step = 1;
+  exp_t *b = NULL, *c = NULL;
+  if (cdr(cur)) {
+    b = EVAL(car(cdr(cur)), env);
+    if (!b || iserror(b)) {
+      unrefexp(a); unrefexp(e);
+      return b ? b : NIL_EXP;
+    }
+    if (cdr(cdr(cur))) {
+      c = EVAL(car(cdr(cdr(cur))), env);
+      if (!c || iserror(c)) {
+        unrefexp(a); unrefexp(b); unrefexp(e);
+        return c ? c : NIL_EXP;
+      }
+    }
+  }
+  if (!b) {
+    /* (gen-range end) */
+    if (!isnumber(a)) {
+      unrefexp(a); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "gen-range: integer expected");
+    }
+    end = FIX_VAL(a);
+  } else if (!c) {
+    /* (gen-range start end) */
+    if (!isnumber(a) || !isnumber(b)) {
+      unrefexp(a); unrefexp(b); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "gen-range: integers expected");
+    }
+    start = FIX_VAL(a); end = FIX_VAL(b);
+  } else {
+    /* (gen-range start end step) */
+    if (!isnumber(a) || !isnumber(b) || !isnumber(c)) {
+      unrefexp(a); unrefexp(b); unrefexp(c); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "gen-range: integers expected");
+    }
+    start = FIX_VAL(a); end = FIX_VAL(b); step = FIX_VAL(c);
+    unrefexp(c);
+  }
+  unrefexp(a); unrefexp(b);
+  if (step == 0) { unrefexp(e); return error(ERROR_ILLEGAL_VALUE, NULL, env, "gen-range: step cannot be 0"); }
+  exp_t *g = make_gen_dict(GK_RANGE);
+  gen_dict_set(g, GK_CUR, MAKE_FIX(start));
+  gen_dict_set(g, GK_END, MAKE_FIX(end));
+  gen_dict_set(g, GK_STP, MAKE_FIX(step));
+  unrefexp(e);
+  return g;
+}
+
+const char doc_gennext[] = "(gen-next! g) — advance generator g and return its "
+                           "next value, or *gen-done* when exhausted.";
+exp_t *gennext_cmd(exp_t *e, env_t *env) {
+  if (!e->next) { unrefexp(e); return GEN_DONE; }
+  exp_t *g = EVAL(e->next->content, env);
+  if (!g || iserror(g)) { unrefexp(e); return g ? g : NIL_EXP; }
+  exp_t *ret = alc_gen_step(g, env);
+  unrefexp(g);
+  unrefexp(e);
+  return ret ? ret : GEN_DONE;
+}
+
+const char doc_gencollect[] =
+    "(gen-collect g) — drain generator g into a list and return it.";
+exp_t *gencollect_cmd(exp_t *e, env_t *env) {
+  if (!e->next) { unrefexp(e); return NIL_EXP; }
+  exp_t *g = EVAL(e->next->content, env);
+  if (!g || iserror(g)) { unrefexp(e); return g ? g : NIL_EXP; }
+  exp_t *head = NIL_EXP, *tail = NULL;
+  for (;;) {
+    exp_t *v = alc_gen_step(g, env);
+    if (!v || isgen_done(v)) break;
+    if (iserror(v)) {
+      unrefexp(head == NIL_EXP ? NULL : head);
+      unrefexp(g); unrefexp(e);
+      return v;
+    }
+    list_append_owned(&head, &tail, v);
+  }
+  unrefexp(g);
+  unrefexp(e);
+  return head;
+}
+
+const char doc_genmap[] =
+    "(gen-map fn g) — return a generator that yields (fn x) for each x from g.";
+exp_t *genmap_cmd(exp_t *e, env_t *env) {
+  if (!e->next || !e->next->next) { unrefexp(e); return NIL_EXP; }
+  EVAL_ARG_1(fn);
+  exp_t *g = EVAL(e->next->next->content, env);
+  if (!fn || iserror(fn)) { unrefexp(g); unrefexp(e); return fn ? fn : NIL_EXP; }
+  if (!g  || iserror(g))  { unrefexp(fn); unrefexp(e); return g  ? g  : NIL_EXP; }
+  exp_t *out = make_gen_dict(GK_MAP);
+  gen_dict_set(out, GK_FN, fn);
+  gen_dict_set(out, GK_IN, g);
+  unrefexp(fn); unrefexp(g);
+  unrefexp(e);
+  return out;
+}
+
+const char doc_genfilter[] =
+    "(gen-filter pred g) — return a generator yielding only elements of g "
+    "for which (pred x) is truthy.";
+exp_t *genfilter_cmd(exp_t *e, env_t *env) {
+  if (!e->next || !e->next->next) { unrefexp(e); return NIL_EXP; }
+  EVAL_ARG_1(pred);
+  exp_t *g = EVAL(e->next->next->content, env);
+  if (!pred || iserror(pred)) { unrefexp(g); unrefexp(e); return pred ? pred : NIL_EXP; }
+  if (!g    || iserror(g))    { unrefexp(pred); unrefexp(e); return g ? g : NIL_EXP; }
+  exp_t *out = make_gen_dict(GK_FILTER);
+  gen_dict_set(out, GK_FN, pred);
+  gen_dict_set(out, GK_IN, g);
+  unrefexp(pred); unrefexp(g);
+  unrefexp(e);
+  return out;
+}
+
+const char doc_forgen[] =
+    "(for-gen var gen body ...) — iterate generator gen, binding each yielded "
+    "value to var and evaluating body forms. Returns nil.";
+exp_t *forgencmd(exp_t *e, env_t *env) {
+  if (!e->next || !e->next->next || !e->next->next->next) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env,
+                 "(for-gen var gen body ...)");
+  }
+  exp_t *varname = e->next->content;
+  if (!issymbol(varname)) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "for-gen: first arg must be a symbol");
+  }
+  exp_t *g = EVAL(e->next->next->content, env);
+  if (!g || iserror(g)) { unrefexp(e); return g ? g : NIL_EXP; }
+  exp_t *body_start = e->next->next->next;
+  env_t *loop_env = make_env(env);
+  int was_tail = in_tail_position;
+  in_tail_position = 0;
+  exp_t *ret = NIL_EXP;
+  for (;;) {
+    exp_t *v = alc_gen_step(g, env);
+    if (!v || isgen_done(v)) break;
+    if (iserror(v)) { ret = v; break; }
+    /* Rebind the loop variable each iteration. */
+    if (!loop_env->d) loop_env->d = create_dict();
+    set_get_keyval_dict(loop_env->d, (char *)varname->ptr, v);
+    unrefexp(v);
+    /* Evaluate body forms. */
+    exp_t *bc = body_start;
+    while (bc) {
+      if (ret) unrefexp(ret);
+      ret = EVAL(bc->content, loop_env);
+      if (ret && iserror(ret)) goto done;
+      bc = bc->next;
+    }
+  }
+done:
+  if (ret && iserror(ret)) { /* propagate */ }
+  else { unrefexp(ret); ret = NIL_EXP; }
+  in_tail_position = was_tail;
+  destroy_env(loop_env);
+  unrefexp(g);
+  unrefexp(e);
+  return ret;
+}
+
 /* Bind a single name (sym->ptr) to val in env; takes ownership of val. */
 static void var2env_bind(char *name, exp_t *val, env_t *env) {
   if (env->n_inline < ENV_INLINE_SLOTS) {
@@ -8777,6 +9357,26 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
         retvar = NIL_EXP;
       if (issymbol(curvar->content)) {
         var2env_bind((char *)curvar->content->ptr, retvar, env);
+      } else if (ispair(curvar->content) && istrue(curvar->content)) {
+        /* Destructuring param: (def f ((x y) z) body) binds the first arg
+           as a list, extracting x and y from its elements. */
+        exp_t *subpat = curvar->content;
+        exp_t *subval = retvar;
+        while (subpat && subpat->content) {
+          exp_t *nm = subpat->content;
+          if (!issymbol(nm)) {
+            unrefexp(retvar);
+            return error(ERROR_ILLEGAL_VALUE, e, env,
+                         "destructuring param: symbol expected");
+          }
+          int have_val = subval && ispair(subval) && istrue(subval);
+          var2env_bind((char *)nm->ptr,
+                       refexp(have_val ? subval->content : NIL_EXP),
+                       env);
+          subpat = subpat->next;
+          if (have_val) subval = subval->next;
+        }
+        unrefexp(retvar);
       } else {
         unrefexp(retvar);
         return NULL;
@@ -18668,6 +19268,7 @@ int main(int argc, char *argv[]) {
   /* Allocate immortal singletons before any other code references them. */
   nil_singleton = make_nil();
   true_singleton = make_symbol("t", 1);
+  gen_done_singleton = make_symbol("*gen-done*", 10);
   set_get_keyval_dict(reserved_symbol, "nil", nil = NIL_EXP);
   set_get_keyval_dict(reserved_symbol, "t", t = TRUE_EXP);
 
