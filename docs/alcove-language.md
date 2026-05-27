@@ -133,12 +133,17 @@ Container types follow the same emptiness rule: an empty `vec`,
 (while cond body...)                   ; loop while cond truthy
 (quote x)                              ; same as 'x
 (= place val)                          ; assignment — see below
+(setf place val)                       ; exact synonym of = (readable head)
 ```
 
-### `(= place val)` and `(setq sym val)` — assignment
+### `(= place val)` / `(setf place val)` and `(setq sym val)` — assignment
 
-There is no `set!`, no `inc!`, no generalized `setf`. Most mutation
-uses `=`. The left-hand side may be:
+There is no `set!` or `inc!`. Most mutation uses `=`. `setf` is an
+**exact synonym** of `=` (same place handling, same scope rules) — it
+exists purely as a more readable head, especially in indented Alcove
+Script where `setf total 0` reads better than `= total 0`. (`set` is
+*not* an alias — it is the set-constructor; see [Sets](#sets).) The
+left-hand side may be:
 
 - a bare symbol — `(= x 5)` binds or rebinds the symbol in the
   innermost scope where it is bound. At the REPL or file top level this

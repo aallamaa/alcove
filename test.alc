@@ -158,6 +158,13 @@
 ; 10. let + mutation: assign into let-bound slot, then read.
 (assert "= into let slot"            (let c 10 (= c 20) c)        20)
 
+; 10b. setf — exact synonym of = (symbol, place, let-slot, compiled body).
+(assert "setf symbol"                (do (setf sf1 7) sf1)        7)
+(assert "setf place car"             (do (setf sf2 (list 1 2)) (setf (car sf2) 9) sf2) (list 9 2))
+(assert "setf into let slot"         (let c 10 (setf c 20) c)     20)
+(def setf-acc (n a) (if (is n 0) a (do (setf a (+ a n)) (setf-acc (- n 1) a))))
+(assert "setf compiled accumulator"  (setf-acc 100 0)             5050)
+
 ; 11. for compiled: body returns last expr of last iter; empty range
 ;     returns nil; sum via (= s (+ s i)).
 (def lastsq (n) (for i 1 n (* i i)))

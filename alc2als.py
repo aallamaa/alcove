@@ -175,6 +175,28 @@ HEADER_ARITY = {
 LADDER_HEADS = {"list", "cons", "append", "quasiquote"}
 
 
+# Head-symbol aliases emitted purely for readability in .als output:
+# `= a 1` reads oddly in indented code, so we print `setf a 1`. `setf`
+# is a real exact synonym of `=` in the runtime + compiler, so the
+# output runs everywhere (including nested, e.g. `prn (setf x 5)`).
+# Applied ONLY in operator/head position — never to a quoted `'=` or an
+# `=` passed as a value (e.g. `(map = xs ys)`).
+HEAD_ALIAS = {"=": "setf"}
+
+
+def head_tok(head):
+    """Render a form's head, applying readability aliases. Use only for
+    the first element of a call form."""
+    if isinstance(head, Sym) and head.t in HEAD_ALIAS:
+        return HEAD_ALIAS[head.t]
+    return expr(head)
+
+
+def joined(f, hi):
+    """Space-join f[0:hi] for a call form, aliasing the head symbol."""
+    return " ".join([head_tok(f[0])] + [expr(e) for e in f[1:hi]])
+
+
 def tok(x):
     if not isinstance(x, Str):
         return x.t
@@ -196,7 +218,7 @@ def expr(f):
         return tok(f)
     if is_quote(f):
         return "'" + expr(f[1])
-    return "(" + " ".join(expr(e) for e in f) + ")"
+    return "(" + joined(f, len(f)) + ")"
 
 
 def stmt(f, indent, lines):
@@ -214,14 +236,14 @@ def stmt(f, indent, lines):
         return
     head = f[0]
     if len(f) == 1 and isinstance(head, Sym):
-        lines.append(pad + tok(head) + "()")        # no-arg call
+        lines.append(pad + head_tok(head) + "()")    # no-arg call
         return
 
     # body-bearing form -> header line + indented child statements
     if isinstance(head, Sym) and head.t in HEADER_ARITY:
         ha = HEADER_ARITY[head.t]
         if len(f) > ha:
-            header = " ".join(expr(e) for e in f[:ha])
+            header = joined(f, ha)
             lines.append(f"{pad}{header}:")
             for child in f[ha:]:
                 stmt(child, indent + 2, lines)
@@ -238,14 +260,14 @@ def stmt(f, indent, lines):
                and f[k - 1][0].t in LADDER_HEADS):
             k -= 1
         if k < len(f):  # at least one trailing builder child to ladder
-            header = " ".join(expr(e) for e in f[:k])
+            header = joined(f, k)
             lines.append(f"{pad}{header}:")
             for child in f[k:]:
                 stmt(child, indent + 2, lines)
             return
 
     # plain statement: unwrapped head + operands on one line
-    line = " ".join(expr(e) for e in f)
+    line = joined(f, len(f))
     if len(line) + indent <= WIDTH:
         lines.append(pad + line)
         return
@@ -259,7 +281,7 @@ def stmt(f, indent, lines):
     if k >= len(f):
         lines.append(pad + line)
         return
-    header = " ".join(expr(e) for e in f[:k])
+    header = joined(f, k)
     lines.append(f"{pad}{header}:")
     for child in f[k:]:
         stmt(child, indent + 2, lines)

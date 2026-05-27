@@ -508,13 +508,16 @@ vars/atoms/refs depending on target
 <td>
 <code>(= place value)</code> updates the nearest existing lexical binding.
 At top level it creates/updates a session binding; inside a function an
-unbound symbol becomes local to that call. <code>(setq sym value)</code>
+unbound symbol becomes local to that call. <code>(setf place value)</code>
+is an exact synonym of <code>=</code>. <code>(setq sym value)</code>
 is variable-only and falls back to a top-level session binding when no
-local binding exists.
+local binding exists. (<code>set</code> is the set-constructor, not
+assignment.)
 </td>
 <td>
-<code>set place value</code> maps to <code>=</code> with the same scope rules.
-Use <code>setq sym value</code> for variable assignment that falls back to a
+<code>setf place value</code> (or <code>= place value</code>) — same scope
+rules; <code>setf</code> reads better in indented code. Use
+<code>setq sym value</code> for variable assignment that falls back to a
 top-level session binding when no local binding exists.
 </td>
 </tr>
@@ -1438,12 +1441,13 @@ match the backtick reader (<code>`</code>, <code>,</code>,
 <code>each</code> map to loop libraries or sequence functions</td>
 </tr>
 <tr class="even">
-<td>Comparison/equality</td>
-<td><code>=</code>, <code>&lt;</code>, <code>&gt;</code>,
-<code>&lt;=</code>, <code>&gt;=</code>, <code>is</code>,
-<code>iso</code>, <code>in</code>, <code>no</code></td>
-<td><code>eq</code>/<code>equal</code> families; membership functions;
-<code>not</code></td>
+<td>Assignment/comparison</td>
+<td><code>=</code>, <code>setf</code> (exact synonym of <code>=</code>),
+<code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>,
+<code>&gt;=</code>, <code>is</code>, <code>iso</code>, <code>in</code>,
+<code>no</code></td>
+<td>CL/Elisp <code>setf</code> for assignment; <code>eq</code>/<code>equal</code>
+families; membership functions; <code>not</code></td>
 </tr>
 <tr class="odd">
 <td>Arithmetic/math</td>

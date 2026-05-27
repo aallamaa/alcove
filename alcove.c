@@ -111,6 +111,7 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("with", withcmd, doc_with),
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
+    LISPCMD("setf", equalcmd, doc_setf), /* exact synonym of = (readable head) */
     LISPCMD("<", cmpcmd, doc_lt),
     LISPCMD(">", cmpcmd, doc_gt),
     LISPCMD("<=", cmpcmd, doc_le),
@@ -3122,6 +3123,9 @@ exp_t *setqcmd(exp_t *e, env_t *env) {
 const char doc_eq[] =
     "(= place val) — assign val to place. Place can be a symbol, (car/cdr "
     "...), or (str i) for in-place char update.";
+const char doc_setf[] =
+    "(setf place val) — exact synonym of (= place val); a more readable head "
+    "for assignment, especially in indented Alcove Script.";
 exp_t *equalcmd(exp_t *e, env_t *env) {
   /* Strict arity: exactly (= place val). Silent truncation was hiding
      real bugs — (= a 1 2 3 4) used to bind a=1 and discard the rest;
@@ -15297,7 +15301,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       compile_for(c, e, tail);
       return;
     }
-    if (!strcmp(s, "=")) {
+    if (!strcmp(s, "=") || !strcmp(s, "setf")) {
       compile_assign(c, e, tail);
       return;
     }
@@ -17134,7 +17138,8 @@ static int rl_paren_depth(const char *s) {
 static const char *alcove_kw[] = {
     "def",    "fn",    "if",   "do",   "let", "for", "while", "and",     "or",
     "not",    "is",    "isnt", "no",   "yes", "t",   "nil",   "cond",    "when",
-    "unless", "quote", "with", "each", "mac", "set", "=",     " return", NULL};
+    "unless", "quote", "with", "each", "mac", "set", "=",     "setf",
+    " return", NULL};
 static int alc_is_kw(const char *s, int n) {
   int i;
   for (i = 0; alcove_kw[i]; i++) {

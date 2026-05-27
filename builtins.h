@@ -12,7 +12,7 @@ exp_t *unlesscmd(exp_t *e, env_t *env);
 extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
 extern const char doc_let[], doc_letstar[], doc_with[];
 exp_t *letstar_cmd(exp_t *e, env_t *env);
-extern const char doc_eq[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
+extern const char doc_eq[], doc_setf[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
 extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
 extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
 extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
