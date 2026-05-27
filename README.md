@@ -186,7 +186,12 @@ and lambda (re-compiled on load).
 Inspect with `(disasm f)` — it prints the bytecode plus the JIT
 install status.
 
-### 7. Alcove Script — a Python-like surface syntax
+### 7. Alcove Script — a Pythonic Lisp
+
+**Alcove Script is an attempt to make a Pythonic Lisp** — Lisp's
+homoiconic core dressed in Python's indentation-based, paren-light
+surface syntax. The goal is code that reads like Python while staying
+fully a Lisp underneath, with no loss of macros or code-as-data.
 
 `make als` builds `alcoves`: the full runtime plus a whitespace /
 `:`-block reader. It is *not* a new language — the reader turns

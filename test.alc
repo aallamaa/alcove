@@ -123,10 +123,37 @@
 (assert "let basic"                  (let x 3 (+ x 4))            7)
 (assert "let uses caller scope"      ((fn (y) (let x 10 (+ x y))) 5) 15)
 (assert "nested let shadows"         (let x 1 (let x 2 x))        2)
+(assert "let multi-body"             (let x 5 (+ x 1) (+ x 10))   15)
+(assert "let destructuring"          (let (a b) (list 1 2) (+ a b)) 3)
+
+; 8b. let* — sequential bindings (list form + flat legacy form).
+(assert "let* sequential"            (let* (a 1 b (* a 10)) (+ a b)) 11)
+(assert "let* multi-body"            (let* (x 5) (+ x 1) (+ x 10))  15)
+(assert "let* flat legacy"           (let* x 1 y 2 (+ x y))       3)
+
+; 8c. when / unless multi-body and false paths.
+(assert "when multi-body"            (when t 1 2 3)               3)
+(assert "when false -> nil"          (when nil 99)                nil)
+(assert "unless multi-body"          (unless nil 1 2 3)           3)
+(assert "unless true -> nil"         (unless t 99)                nil)
+
+; 8d. TCO through let / let* / with / when / unless (compiled tail calls).
+;     1e6 deep — would overflow the C stack without proper trampolining.
+(def tco-let (n)    (if (is n 0) 'ok (let m (- n 1) (tco-let m))))
+(def tco-lets (n)   (if (is n 0) 'ok (let* (m (- n 1)) (tco-lets m))))
+(def tco-with (n)   (if (is n 0) 'ok (with (m (- n 1)) (tco-with m))))
+(def tco-when (n)   (if (is n 0) 'ok (when t (tco-when (- n 1)))))
+(def tco-unless (n) (unless (is n 0) (tco-unless (- n 1))))
+(assert "tco through let"            (tco-let 1000000)            'ok)
+(assert "tco through let*"           (tco-lets 1000000)           'ok)
+(assert "tco through with"           (tco-with 1000000)           'ok)
+(assert "tco through when"           (tco-when 1000000)           'ok)
+(assert "tco through unless"         (tco-unless 1000000)         nil)
 
 ; 9. Phase-2 compiler — `with` (multi-binding).
 (assert "with 2 bindings"            (with (a 3 b 4) (+ a b))     7)
 (assert "with shadows"               (let a 1 (with (a 9) a))     9)
+(assert "with multi-body"            (with (a 3 b 4) (+ a 1) (+ a b)) 7)
 
 ; 10. let + mutation: assign into let-bound slot, then read.
 (assert "= into let slot"            (let c 10 (= c 20) c)        20)
@@ -1889,3 +1916,72 @@
 (assert "normal refcount still works" (+ 1 2)                         3)
 (= _tmp_str "guard test") (= _tmp_str nil)  ;; exercise unrefexp on a heap obj
 (assert "string unrefexp ok"          1                               1)
+
+;; ===================================================================
+;; Smoke tests for the language-improvements feature set. One assert
+;; per builtin family — enough to catch a regression that silently
+;; drops or breaks a feature, without duplicating exhaustive coverage.
+;; ===================================================================
+
+;; --- math group (all return floats) ---
+(assert "round"                       (iso (round 2.6) 3.0)            t)
+(assert "floor"                       (iso (floor 2.9) 2.0)            t)
+(assert "ceil"                        (iso (ceil 2.1) 3.0)             t)
+(assert "truncate toward zero"        (iso (truncate -2.7) -2.0)       t)
+(assert "log 1 = 0"                   (iso (log 1.0) 0.0)              t)
+(assert "sin 0 = 0"                   (iso (sin 0.0) 0.0)              t)
+(assert "cos 0 = 1"                   (iso (cos 0.0) 1.0)              t)
+(assert "float coerces int"           (iso (float 5) 5.0)              t)
+(assert "int truncates float"         (int 3.9)                        3)
+
+;; --- fmt: default + printf specs + injection guard ---
+(assert "fmt default + float spec"    (fmt "{} + {} = {:.1f}" 1 2 3.0) "1 + 2 = 3.0")
+(assert "fmt hex spec"                (fmt "{:x}" 255)                 "ff")
+(assert "fmt zero-pad width"          (fmt "{:05d}" 42)                "00042")
+(assert "fmt rejects '*' (no UB)"     (fmt "{:*d}" 5)                  "{:*d}")
+(assert "fmt rejects embedded %"      (fmt "{:d%d}" 5)                 "{:d%d}")
+
+;; --- quasiquote / unquote / unquote-splicing ---
+(assert "quasiquote unquote"          (iso `(1 ,(+ 1 1) 3) (list 1 2 3))         t)
+(= _qsplice (list 2 3))
+(assert "quasiquote splice"           (iso `(1 ,@_qsplice 4) (list 1 2 3 4))     t)
+
+;; --- list utilities ---
+(assert "sort default"                (iso (sort (list 3 1 2)) (list 1 2 3))     t)
+(assert "sort-by key-fn"              (iso (sort-by (fn (x) (- 0 x)) (list 1 2 3))
+                                           (list 3 2 1))                          t)
+(assert "take n"                      (iso (take 2 (list 1 2 3 4)) (list 1 2))   t)
+(assert "drop n"                      (iso (drop 2 (list 1 2 3 4)) (list 3 4))   t)
+(assert "range start end"             (iso (range 0 4) (list 0 1 2 3))           t)
+(assert "range with step"             (iso (range 0 6 2) (list 0 2 4))           t)
+(assert "zip stops at shorter"        (iso (zip (list 1 2) (list 3 4))
+                                           (list (list 1 3) (list 2 4)))          t)
+(assert "flatten nested"              (iso (flatten (list 1 (list 2 (list 3))))
+                                           (list 1 2 3))                          t)
+(assert "list? proper list"           (list? (list 1 2))               t)
+(assert "null? nil"                   (null? nil)                      t)
+
+;; --- gensym / with-gensyms ---
+(assert "gensym is a symbol"          (symbol? (gensym))               t)
+(assert "with-gensyms binds symbols"  (with-gensyms (a b) (symbol? a)) t)
+(assert "with-gensyms names distinct" (with-gensyms (a b) (is a b))    nil)
+
+;; --- string utilities ---
+(assert "string-contains? hit"        (string-contains? "hello world" "world")   t)
+(assert "string-contains? miss"       (string-contains? "abc" "xyz")             nil)
+(assert "string-index"                (string-index "hello" "ll")     2)
+(assert "string-replace all"          (string-replace "a-b-c" "-" "+") "a+b+c")
+
+;; --- error handling: error? / error-message / try ---
+(assert "error? on error value"       (error? (/ 1 0))                 t)
+(assert "error? on non-error"         (error? 5)                       nil)
+(assert "error-message is a string"   (string? (error-message (/ 1 0))) t)
+(assert "try passes value through"    (try (+ 1 2) (fn (e) 99))        3)
+(assert "try catches + runs handler"  (try (/ 1 0) (fn (e) 'caught))   'caught)
+
+;; --- rest params: bare-symbol and dotted ---
+(def restfn-all args args)
+(assert "rest: bare-symbol collects"  (iso (restfn-all 1 2 3) (list 1 2 3))      t)
+(def restfn-dot (a . rest) rest)
+(assert "rest: dotted after fixed"    (iso (restfn-dot 1 2 3) (list 2 3))        t)
+(assert "rest: anon fn bare-symbol"   (iso ((fn xs xs) 7 8) (list 7 8))          t)

@@ -108,7 +108,7 @@ typedef struct {
 
 static int als_is_delim(char c) {
   return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' ||
-         c == '\'';
+         c == '\'' || c == '`' || c == ',';
 }
 
 static als_node *als_read_one(als_lr *r);
@@ -136,9 +136,16 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
         als_push(call, f);
         als_free(args);
         als_push(out, call);
-      } else {                       /* name(a b) -> name (a b) */
-        als_push(out, f);
-        als_push(out, args);
+      } else {                       /* name(a b) -> (name a b) */
+        als_node *call = als_list();
+        als_push(call, f);
+        for (int i = 0; i < args->n; i++) {
+          als_node *kid = args->kid[i];
+          args->kid[i] = NULL;
+          als_push(call, kid);
+        }
+        als_free(args);
+        als_push(out, call);
       }
       continue;
     }
@@ -175,6 +182,27 @@ static als_node *als_read_one(als_lr *r) {
       r->i++;
     als_node *q = als_list();
     als_push(q, als_atom("quote", 5));
+    als_push(q, als_read_one(r));
+    return q;
+  }
+  if (c == '`') {
+    r->i++;
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+      r->i++;
+    als_node *q = als_list();
+    als_push(q, als_atom("quasiquote", 10));
+    als_push(q, als_read_one(r));
+    return q;
+  }
+  if (c == ',') {
+    r->i++; /* consume ',' */
+    int splice = r->i < r->n && r->s[r->i] == '@';
+    if (splice) r->i++; /* consume '@' */
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+      r->i++;
+    als_node *q = als_list();
+    als_push(q, als_atom(splice ? "unquote-splicing" : "unquote",
+                         splice ? 16 : 7));
     als_push(q, als_read_one(r));
     return q;
   }
@@ -292,6 +320,12 @@ static void als_emit(als_node *x, als_buf *b) {
   als_buf_putc(b, ')');
 }
 
+/* Check if trimmed body starts with a keyword (null-terminated kwlen chars). */
+static int als_starts_with(const char *s, const char *kw, size_t kwlen) {
+  return strncmp(s, kw, kwlen) == 0 &&
+         (s[kwlen] == '\0' || s[kwlen] == ' ' || s[kwlen] == '\t');
+}
+
 /* ---- top level: src -> s-expr string ---- */
 char *als_to_sexpr(const char *src) {
   /* split into lines (keep leading whitespace for indent calc) */
@@ -303,7 +337,10 @@ char *als_to_sexpr(const char *src) {
   enum { MAXD = 256 };
   int ind_stack[MAXD];
   als_node *node_stack[MAXD];
+  /* if_stack: tracks the 'if' node at each indent for elif/else attachment */
+  als_node *if_stack[MAXD];
   int sp = 0;
+  memset(if_stack, 0, sizeof(if_stack));
   als_node *roots = als_list();
 
   size_t i = 0;
@@ -337,6 +374,40 @@ char *als_to_sexpr(const char *src) {
     }
 
     int block = als_opens_block(body);
+
+    /* Detect elif/else blocks — they extend the preceding 'if' node
+       at the same indent level rather than creating a new top-level form. */
+    int is_else = block && strcmp(body, "else") == 0;
+    int is_elif = block && als_starts_with(body, "elif", 4);
+
+    if (is_else || is_elif) {
+      /* Pop stack back to the level of the matching if */
+      while (sp > 0 && indent <= ind_stack[sp - 1])
+        sp--;
+      als_node *target = if_stack[indent];
+      if (target) {
+        if (is_elif) {
+          /* Append the elif condition to the existing if node */
+          char *cond_text = body + 4; /* skip "elif" */
+          while (*cond_text == ' ' || *cond_text == '\t') cond_text++;
+          als_node *cond = als_line_node(cond_text);
+          als_push(target, cond);
+        }
+        /* Insert a fresh (do ...) for the branch body */
+        als_node *do_node = als_list();
+        als_push(do_node, als_atom("do", 2));
+        als_push(target, do_node);
+        if (sp < MAXD) {
+          ind_stack[sp] = indent;
+          node_stack[sp] = do_node;
+          sp++;
+        }
+        if (is_else) if_stack[indent] = NULL; /* else terminates the chain */
+      }
+      free(body);
+      continue;
+    }
+
     als_node *node = als_line_node(body);
     free(body);
 
@@ -349,6 +420,16 @@ char *als_to_sexpr(const char *src) {
 
     while (sp > 0 && indent <= ind_stack[sp - 1])
       sp--;
+
+    /* Track if/when/unless nodes for subsequent elif/else attachment. */
+    if_stack[indent] = NULL;
+    if (block && node->is_list && node->n > 0 && !node->kid[0]->is_list) {
+      const char *head = node->kid[0]->atom;
+      if (head && (strcmp(head, "if") == 0 ||
+                   strcmp(head, "when") == 0 ||
+                   strcmp(head, "unless") == 0))
+        if_stack[indent] = node;
+    }
 
     if (sp > 0) {
       als_push(node_stack[sp - 1], node);

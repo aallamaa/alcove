@@ -6,10 +6,12 @@
 /* Forward declarations for doc strings defined alongside each cmd
    function. Each is `static const char doc_<symbolname>[]` so a future
    reader can grep `doc_+` to land directly on the help text + the body. */
-extern const char doc_quote[], doc_if[], doc_do[];
-extern const char doc_when[], doc_while[], doc_repeat[];
+extern const char doc_quote[], doc_quasiquote[], doc_if[], doc_do[];
+extern const char doc_when[], doc_unless[], doc_while[], doc_repeat[];
+exp_t *unlesscmd(exp_t *e, env_t *env);
 extern const char doc_and[], doc_or[], doc_case[], doc_for[], doc_each[];
-extern const char doc_let[], doc_with[];
+extern const char doc_let[], doc_letstar[], doc_with[];
+exp_t *letstar_cmd(exp_t *e, env_t *env);
 extern const char doc_eq[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
 extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
 extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
@@ -17,6 +19,19 @@ extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
 extern const char doc_bitand[], doc_bitor[], doc_bitxor[], doc_bitnot[];
 extern const char doc_shl[], doc_shr[];
 extern const char doc_sqrt[], doc_sqrtint[], doc_exp[], doc_expt[], doc_random[];
+extern const char doc_round[], doc_floor[], doc_ceil[], doc_truncate[];
+extern const char doc_log[], doc_sin[], doc_cos[], doc_tan[];
+extern const char doc_float[], doc_int[];
+exp_t *roundcmd(exp_t *e, env_t *env);
+exp_t *floorcmd(exp_t *e, env_t *env);
+exp_t *ceilcmd(exp_t *e, env_t *env);
+exp_t *truncatecmd(exp_t *e, env_t *env);
+exp_t *logcmd(exp_t *e, env_t *env);
+exp_t *sincmd(exp_t *e, env_t *env);
+exp_t *coscmd(exp_t *e, env_t *env);
+exp_t *tancmd(exp_t *e, env_t *env);
+exp_t *floatcmd(exp_t *e, env_t *env);
+exp_t *intcmd(exp_t *e, env_t *env);
 extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
 extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
 extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
@@ -24,6 +39,28 @@ extern const char doc_def[], doc_fn[], doc_defmacro[], doc_macroexpand[];
 extern const char doc_eval[], doc_apply[], doc_setq[];
 extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
 extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
+extern const char doc_listp[], doc_nullp[], doc_gensym[], doc_withgensyms[];
+exp_t *withgensymscmd(exp_t *e, env_t *env);
+extern const char doc_take[], doc_drop[], doc_range[], doc_zip[], doc_flatten[];
+extern const char doc_sort[], doc_sortby[];
+extern const char doc_stringcontainsp[], doc_stringindex[], doc_stringreplace[];
+extern const char doc_errorp[], doc_errormessage[], doc_try[];
+exp_t *errorpcmd(exp_t *e, env_t *env);
+exp_t *errormessagecmd(exp_t *e, env_t *env);
+exp_t *trycmd(exp_t *e, env_t *env);
+exp_t *listpcmd(exp_t *e, env_t *env);
+exp_t *nullpcmd(exp_t *e, env_t *env);
+exp_t *gensymcmd(exp_t *e, env_t *env);
+exp_t *takecmd(exp_t *e, env_t *env);
+exp_t *dropcmd(exp_t *e, env_t *env);
+exp_t *rangecmd(exp_t *e, env_t *env);
+exp_t *zipcmd(exp_t *e, env_t *env);
+exp_t *flattencmd(exp_t *e, env_t *env);
+exp_t *sortcmd(exp_t *e, env_t *env);
+exp_t *sortbycmd(exp_t *e, env_t *env);
+exp_t *stringcontainspcmd(exp_t *e, env_t *env);
+exp_t *stringindexcmd(exp_t *e, env_t *env);
+exp_t *stringreplacecmd(exp_t *e, env_t *env);
 extern const char doc_vecp[], doc_blobp[], doc_dictp[], doc_dequep[], doc_setp[];
 exp_t *vecpcmd(exp_t *e, env_t *env);
 exp_t *blobpcmd(exp_t *e, env_t *env);
@@ -31,7 +68,7 @@ exp_t *dictpcmd(exp_t *e, env_t *env);
 exp_t *dequepcmd(exp_t *e, env_t *env);
 exp_t *setpcmd(exp_t *e, env_t *env);
 extern const char doc_pr[], doc_prn[];
-extern const char doc_str[], doc_substr[], doc_stringappend[],
+extern const char doc_str[], doc_fmt[], doc_substr[], doc_stringappend[],
                   doc_stringsplit[], doc_stringjoin[], doc_stringtrim[],
                   doc_stringupcase[], doc_stringdowncase[];
 extern const char doc_readstring[], doc_writestring[], doc_appendstring[],
@@ -73,6 +110,7 @@ extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
    visible at table-init time. The original cmds had a top-level
    #pragma-style sweep (functions all sit in alcove.c above this point);
    newer additions land below and need explicit decls. */
+exp_t *quasiquotecmd(exp_t *e, env_t *env);
 exp_t *doccmd(exp_t *e, env_t *env);
 exp_t *helpcmd(exp_t *e, env_t *env);
 exp_t *bitandcmd(exp_t *e, env_t *env);
@@ -115,6 +153,7 @@ exp_t *blob2stringcmd(exp_t *e, env_t *env);
 exp_t *string2blobcmd(exp_t *e, env_t *env);
 exp_t *readbytescmd(exp_t *e, env_t *env);
 exp_t *strcmd(exp_t *e, env_t *env);
+exp_t *fmtcmd(exp_t *e, env_t *env);
 exp_t *substrcmd(exp_t *e, env_t *env);
 exp_t *stringappendcmd(exp_t *e, env_t *env);
 exp_t *stringsplitcmd(exp_t *e, env_t *env);

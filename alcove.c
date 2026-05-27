@@ -94,9 +94,11 @@ static ALCOVE_TLS int in_tail_position = 0;
 lispProc lispProcList[] = {
     /* Special forms / control flow */
     LISPCMD("quote", quotecmd, doc_quote),
+    LISPCMD("quasiquote", quasiquotecmd, doc_quasiquote),
     LISPCMD_TAIL("if", ifcmd, doc_if),
     LISPCMD_TAIL("do", docmd, doc_do),
     LISPCMD_TAIL("when", whencmd, doc_when),
+    LISPCMD_TAIL("unless", unlesscmd, doc_unless),
     LISPCMD("while", whilecmd, doc_while),
     LISPCMD("repeat", repeatcmd, doc_repeat),
     LISPCMD_TAIL("and", andcmd, doc_and),
@@ -104,8 +106,9 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("case", casecmd, doc_case),
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
-    LISPCMD("let", letcmd, doc_let),
-    LISPCMD("with", withcmd, doc_with),
+    LISPCMD_TAIL("let", letcmd, doc_let),
+    LISPCMD_TAIL("let*", letstar_cmd, doc_letstar),
+    LISPCMD_TAIL("with", withcmd, doc_with),
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
     LISPCMD("<", cmpcmd, doc_lt),
@@ -132,6 +135,16 @@ lispProc lispProcList[] = {
     LISPCMD("expt", exptcmd, doc_expt),
     LISPCMD("**", exptcmd, doc_expt), /* Python-ish alias */
     LISPCMD("random", randomcmd, doc_random),
+    LISPCMD("round", roundcmd, doc_round),
+    LISPCMD("floor", floorcmd, doc_floor),
+    LISPCMD("ceil", ceilcmd, doc_ceil),
+    LISPCMD("truncate", truncatecmd, doc_truncate),
+    LISPCMD("log", logcmd, doc_log),
+    LISPCMD("sin", sincmd, doc_sin),
+    LISPCMD("cos", coscmd, doc_cos),
+    LISPCMD("tan", tancmd, doc_tan),
+    LISPCMD("float", floatcmd, doc_float),
+    LISPCMD("int", intcmd, doc_int),
     /* Bitwise — int-only. C-style spelling + Lisp-style aliases. */
     LISPCMD("bit-and", bitandcmd, doc_bitand),
     LISPCMD("&", bitandcmd, doc_bitand),
@@ -190,11 +203,27 @@ lispProc lispProcList[] = {
     LISPCMD("reduce", reducecmd, doc_reduce),
     LISPCMD("any?", anypcmd, doc_any),
     LISPCMD("all?", allpcmd, doc_all),
+    LISPCMD("sort", sortcmd, doc_sort),
+    LISPCMD("sort-by", sortbycmd, doc_sortby),
+    /* List utilities */
+    LISPCMD("take", takecmd, doc_take),
+    LISPCMD("drop", dropcmd, doc_drop),
+    LISPCMD("range", rangecmd, doc_range),
+    LISPCMD("zip", zipcmd, doc_zip),
+    LISPCMD("flatten", flattencmd, doc_flatten),
+    LISPCMD("gensym", gensymcmd, doc_gensym),
+    LISPCMD("with-gensyms", withgensymscmd, doc_withgensyms),
+    /* Error handling */
+    LISPCMD("error?", errorpcmd, doc_errorp),
+    LISPCMD("error-message", errormessagecmd, doc_errormessage),
+    LISPCMD("try", trycmd, doc_try),
     /* Predicates */
     LISPCMD("number?", numberpcmd, doc_numberp),
     LISPCMD("string?", stringpcmd, doc_stringp),
     LISPCMD("symbol?", symbolpcmd, doc_symbolp),
     LISPCMD("pair?", pairpcmd, doc_pairp),
+    LISPCMD("list?", listpcmd, doc_listp),
+    LISPCMD("null?", nullpcmd, doc_nullp),
     LISPCMD("fn?", fnpcmd, doc_fnp),
     LISPCMD("vec?", vecpcmd, doc_vecp),
     LISPCMD("blob?", blobpcmd, doc_blobp),
@@ -208,6 +237,7 @@ lispProc lispProcList[] = {
     LISPCMD("println", prncmd, doc_prn),
     /* Strings and whole-file I/O */
     LISPCMD("str", strcmd, doc_str),
+    LISPCMD("fmt", fmtcmd, doc_fmt),
     LISPCMD("substr", substrcmd, doc_substr),
     LISPCMD("string-append", stringappendcmd, doc_stringappend),
     LISPCMD("string-split", stringsplitcmd, doc_stringsplit),
@@ -215,6 +245,9 @@ lispProc lispProcList[] = {
     LISPCMD("string-trim", stringtrimcmd, doc_stringtrim),
     LISPCMD("string-upcase", stringupcasecmd, doc_stringupcase),
     LISPCMD("string-downcase", stringdowncasecmd, doc_stringdowncase),
+    LISPCMD("string-contains?", stringcontainspcmd, doc_stringcontainsp),
+    LISPCMD("string-index", stringindexcmd, doc_stringindex),
+    LISPCMD("string-replace", stringreplacecmd, doc_stringreplace),
     LISPCMD("read-string", readstringcmd, doc_readstring),
     LISPCMD("write-string", writestringcmd, doc_writestring),
     LISPCMD("append-string", appendstringcmd, doc_appendstring),
@@ -1207,7 +1240,7 @@ void print_node(exp_t *node) {
   else if (node->type == EXP_STRING)
     printf("\x1B[92m\"%s\"\x1B[39m", (char *)node->ptr);
   else if (node->type == EXP_FLOAT)
-    printf("\x1B[92m%lf\x1B[39m", node->f);
+    printf("\x1B[92m%g\x1B[39m", node->f);
   else if (node->type == EXP_VECTOR) {
     int64_t n = vec_len(node);
     printf("#[");
@@ -2183,6 +2216,20 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
   } else if (x == '\'') {
     vnode = reader(stream, 0, 0);
     return make_quote(vnode);
+  } else if (x == '`') {
+    vnode = reader(stream, 0, 0);
+    exp_t *qq = make_node(make_symbol("quasiquote", 10));
+    qq->next = make_node(vnode);
+    return qq;
+  } else if (x == ',') {
+    int c = getc(stream);
+    int splice = (c == '@');
+    if (!splice) ungetc(c, stream);
+    vnode = reader(stream, 0, 0);
+    char *tag = splice ? "unquote-splicing" : "unquote";
+    exp_t *uq = make_node(make_symbol(tag, strlen(tag)));
+    uq->next = make_node(vnode);
+    return uq;
   } else if (x == ';') {
     /* Line comment — skip to EOL or EOF. Without this handler `;` was
      * a TERMMACRO that returned EXP_ERROR_PARSING_MACROCHAR; the error
@@ -2674,7 +2721,8 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   exp_t *header;
   exp_t *body;
   exp_t *cur = cdr(e);
-  if (cur && ispair(cur->content)) {
+  /* Accept list params OR bare symbol for rest-only: (fn xs body) */
+  if (cur && (ispair(cur->content) || issymbol(cur->content))) {
     header = car(cur);
     cur = cdr(cur);
     if (cur) {
@@ -2682,7 +2730,13 @@ exp_t *fncmd(exp_t *e, env_t *env) {
          as well as a pair — all are legal body expressions. */
       body = cur;
       vali = make_node(refexp(body));
-      val = make_node(refexp(header));
+      if (issymbol(header)) {
+        exp_t *dot = make_node(make_symbol(".", 1));
+        dot->next = make_node(refexp(header));
+        val = make_node(dot);
+      } else {
+        val = make_node(refexp(header));
+      }
       val->next = vali;
       val->type = EXP_LAMBDA;
       /* Closure: stash the env at fn-creation time in the wrapper
@@ -2721,7 +2775,8 @@ exp_t *defcmd(exp_t *e, env_t *env) {
   if (cur && issymbol(cur->content)) {
     name = car(cur);
     cur = cdr(cur);
-    if (cur && ispair(cur->content)) {
+    /* Accept (params...) list OR bare symbol for rest-only: (def f xs body) */
+    if (cur && (ispair(cur->content) || issymbol(cur->content))) {
       header = car(cur);
       cur = cdr(cur);
       if (cur) {
@@ -2729,7 +2784,21 @@ exp_t *defcmd(exp_t *e, env_t *env) {
            as well as a pair — all are legal body expressions. */
         body = cur;
         vali = make_node(refexp(body));
-        val = make_node(refexp(header));
+        /* For bare-symbol params, wrap in a 1-element list so lambda_params
+           always returns a list. We mark this as a rest-param lambda by
+           storing the symbol directly as the sole param wrapped in a pair
+           whose first element is itself a symbol — compile_lambda will see
+           FLAG_REST and skip compilation, falling back to AST eval where
+           var2env handles the rest collection. */
+        if (issymbol(header)) {
+          /* Bare-symbol params: represent as (. sym) so var2env collects
+             all args into a list bound to sym. */
+          exp_t *dot = make_node(make_symbol(".", 1));
+          dot->next = make_node(refexp(header));
+          val = make_node(dot);
+        } else {
+          val = make_node(refexp(header));
+        }
         val->next = vali;
         val->type = EXP_LAMBDA;
         val->meta = (keyval_t *)strdup(name->ptr);
@@ -2835,6 +2904,93 @@ exp_t *quotecmd(exp_t *e, env_t *env) {
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
+
+/* quasiquote expander — walks the template, returns a new AST that when
+   evaluated produces the filled-in structure.
+   Atoms → (quote atom)
+   (unquote x) → x  (evaluated at runtime)
+   list with unquote-splicing elements → (append <spliced> (cons ...))
+   other lists → (cons (qq car) (qq cdr)) */
+static exp_t *qq_expand(exp_t *tmpl, int depth);
+static exp_t *qq_make_list2(char *sym, exp_t *a, exp_t *b) {
+  exp_t *head = make_node(make_symbol(sym, strlen(sym)));
+  head->next = make_node(a);
+  head->next->next = make_node(b);
+  return head;
+}
+static exp_t *qq_expand(exp_t *tmpl, int depth) {
+  if (!tmpl || !ispair(tmpl) || !istrue(tmpl)) {
+    /* atom: (quote tmpl) */
+    exp_t *q = make_node(make_symbol("quote", 5));
+    q->next = make_node(refexp(tmpl));
+    return q;
+  }
+  /* check for (unquote x) */
+  if (issymbol(tmpl->content) &&
+      !strcmp((char *)tmpl->content->ptr, "unquote")) {
+    if (depth == 0)
+      return refexp(cadr(tmpl)); /* splice evaluation site */
+    /* nested quasiquote — decrease depth, still expand */
+    exp_t *inner = qq_expand(cadr(tmpl), depth - 1);
+    exp_t *uq = make_node(make_symbol("unquote", 7));
+    uq->next = make_node(inner);
+    exp_t *q = make_node(make_symbol("quote", 5));
+    q->next = make_node(uq);
+    return q;
+  }
+  /* check for (quasiquote x) — nested, increase depth */
+  if (issymbol(tmpl->content) &&
+      !strcmp((char *)tmpl->content->ptr, "quasiquote")) {
+    exp_t *inner = qq_expand(cadr(tmpl), depth + 1);
+    exp_t *qq_sym = make_node(make_symbol("quasiquote", 10));
+    qq_sym->next = make_node(inner);
+    exp_t *q = make_node(make_symbol("quote", 5));
+    q->next = make_node(qq_sym);
+    return q;
+  }
+  /* list: expand element by element, building (cons car-exp cdr-exp) chain.
+     If an element is (unquote-splicing xs), use (append xs ...) instead. */
+  exp_t *car = tmpl->content;
+  exp_t *cdr = tmpl->next; /* remaining nodes (raw, not wrapped) */
+
+  if (ispair(car) && istrue(car) && issymbol(car->content) &&
+      !strcmp((char *)car->content->ptr, "unquote-splicing")) {
+    /* (append <splice-form> <rest-expansion>) */
+    exp_t *splice = refexp(cadr(car));
+    exp_t *rest_exp;
+    if (!cdr || !istrue(cdr))
+      rest_exp = refexp(NIL_EXP);
+    else
+      rest_exp = qq_expand(cdr, depth);
+    return qq_make_list2("append", splice, rest_exp);
+  } else {
+    exp_t *car_exp = qq_expand(car, depth);
+    exp_t *cdr_exp;
+    if (!cdr || !istrue(cdr))
+      cdr_exp = make_node(make_symbol("quote", 5));
+    else {
+      /* cdr is the raw next node(s) — treat as a list by wrapping it */
+      cdr_exp = qq_expand(cdr, depth);
+      goto done;
+    }
+    /* (quote nil) for empty cdr */
+    cdr_exp->next = make_node(refexp(NIL_EXP));
+    done:
+    return qq_make_list2("cons", car_exp, cdr_exp);
+  }
+}
+
+const char doc_quasiquote[] =
+    "(quasiquote tmpl) — template expansion. `x reader shorthand. "
+    "Evaluates (unquote expr) sub-forms and splices (unquote-splicing list) "
+    "sub-forms into the surrounding list. Shorthands: ,expr and ,@list.";
+exp_t *quasiquotecmd(exp_t *e, env_t *env) {
+  exp_t *tmpl = cadr(e);
+  exp_t *expanded = qq_expand(tmpl, 0);
+  unrefexp(e);
+  /* EVAL takes ownership of expanded — do NOT unrefexp it after. */
+  return EVAL(expanded, env);
+}
 
 const char doc_if[] =
     "(if test then [else]) — branch on test. Falsey is nil/empty; everything "
@@ -2967,6 +3123,16 @@ const char doc_eq[] =
     "(= place val) — assign val to place. Place can be a symbol, (car/cdr "
     "...), or (str i) for in-place char update.";
 exp_t *equalcmd(exp_t *e, env_t *env) {
+  /* Strict arity: exactly (= place val). Silent truncation was hiding
+     real bugs — (= a 1 2 3 4) used to bind a=1 and discard the rest;
+     (= a) silently bound a to nil. */
+  exp_t *args = cdr(e);
+  if (!args || !cdr(args) || cddr(args)) {
+    exp_t *err = error(ERROR_MISSING_PARAMETER, e, env,
+                       "(= place val): expected exactly 2 arguments");
+    unrefexp(e);
+    return err;
+  }
   exp_t *tmpexp = EVAL(caddr(e), env);
   exp_t *tmpkey = refexp(cadr(e));
   unrefexp(e);
@@ -4859,6 +5025,53 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
+#define FLOAT_UNARY_CMD(cname, fname, docstr, cdoc_sym) \
+const char cdoc_sym[] = docstr; \
+exp_t *cname(exp_t *e, env_t *env) { \
+  exp_t *v = EVAL(cadr(e), env); \
+  if (iserror(v)) { unrefexp(e); return v; } \
+  exp_t *ret; \
+  if (isfloat(v)) ret = make_floatf(fname(v->f)); \
+  else if (isnumber(v)) ret = make_floatf(fname((double)FIX_VAL(v))); \
+  else { unrefexp(v); unrefexp(e); \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, #cname ": arg must be a number"); } \
+  unrefexp(v); unrefexp(e); return ret; \
+}
+
+FLOAT_UNARY_CMD(roundcmd,  round,  "(round x) — round to nearest integer, as float.", doc_round)
+FLOAT_UNARY_CMD(floorcmd,  floor,  "(floor x) — largest integer not greater than x, as float.", doc_floor)
+FLOAT_UNARY_CMD(ceilcmd,   ceil,   "(ceil x) — smallest integer not less than x, as float.", doc_ceil)
+FLOAT_UNARY_CMD(truncatecmd, trunc, "(truncate x) — round toward zero, as float.", doc_truncate)
+FLOAT_UNARY_CMD(logcmd,    log,    "(log x) — natural logarithm of x.", doc_log)
+FLOAT_UNARY_CMD(sincmd,    sin,    "(sin x) — sine of x (radians).", doc_sin)
+FLOAT_UNARY_CMD(coscmd,    cos,    "(cos x) — cosine of x (radians).", doc_cos)
+FLOAT_UNARY_CMD(tancmd,    tan,    "(tan x) — tangent of x (radians).", doc_tan)
+#undef FLOAT_UNARY_CMD
+
+const char doc_float[] = "(float x) — coerce integer to floating-point.";
+exp_t *floatcmd(exp_t *e, env_t *env) {
+  exp_t *v = EVAL(cadr(e), env);
+  if (iserror(v)) { unrefexp(e); return v; }
+  exp_t *ret;
+  if (isfloat(v)) { ret = v; unrefexp(e); return ret; }
+  if (isnumber(v)) ret = make_floatf((double)FIX_VAL(v));
+  else { unrefexp(v); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "float: arg must be a number"); }
+  unrefexp(v); unrefexp(e); return ret;
+}
+
+const char doc_int[] = "(int x) — coerce float to integer by truncation.";
+exp_t *intcmd(exp_t *e, env_t *env) {
+  exp_t *v = EVAL(cadr(e), env);
+  if (iserror(v)) { unrefexp(e); return v; }
+  exp_t *ret;
+  if (isnumber(v)) { ret = v; unrefexp(e); return ret; }
+  if (isfloat(v)) ret = make_integeri((int64_t)v->f);
+  else { unrefexp(v); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "int: arg must be a number"); }
+  unrefexp(v); unrefexp(e); return ret;
+}
+
 /* prcmd backs both `pr` and `print`; prncmd backs `prn` and `println`. */
 const char doc_pr[] = "(pr x ...) — print each arg with no separator and no "
                       "trailing newline. Alias: print.";
@@ -4930,6 +5143,17 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
     if (b && b->len)
       str_buf_put(buf, len, cap, b->bytes, b->len);
+  } else if (ispair(v)) {
+    str_buf_put(buf, len, cap, "(", 1);
+    exp_t *n = v;
+    int first = 1;
+    while (n && ispair(n) && istrue(n)) {
+      if (!first) str_buf_put(buf, len, cap, " ", 1);
+      first = 0;
+      exp_to_string_buf(n->content, buf, len, cap);
+      n = n->next;
+    }
+    str_buf_put(buf, len, cap, ")", 1);
   } else {
     int n = snprintf(tmp, sizeof tmp, "#<%s@%p>",
                      is_ptr(v) ? inspect_type_name(v->type) : "value",
@@ -4954,6 +5178,125 @@ exp_t *strcmd(exp_t *e, env_t *env) {
   }
   exp_t *ret = make_string(buf, (int)len);
   free(buf);
+  unrefexp(e);
+  return ret;
+}
+
+#define FMT_SPEC_MAX 32
+const char doc_fmt[] =
+    "(fmt template arg ...) — format string with {} placeholders. Use {} for "
+    "default rendering or {:<spec>} for printf-style: {:.2f} {:%d} {:x} {:s}. "
+    "Example: (fmt \"{} + {} = {:.1f}\" 1 2 3.0) → \"1 + 2 = 3.0\".";
+exp_t *fmtcmd(exp_t *e, env_t *env) {
+  exp_t *fmtarg = EVAL(cadr(e), env);
+  if (iserror(fmtarg)) { unrefexp(e); return fmtarg; }
+  if (!isstring(fmtarg)) {
+    unrefexp(fmtarg); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "fmt: first arg must be a string template");
+  }
+  const char *tmpl = (const char *)fmtarg->ptr;
+  size_t cap = 128, len = 0;
+  char *buf = memalloc(cap, 1);
+  exp_t *cur = cddr(e);
+  for (size_t i = 0; tmpl[i]; i++) {
+    if (tmpl[i] != '{') {
+      str_buf_put(&buf, &len, &cap, tmpl + i, 1);
+      continue;
+    }
+    if (tmpl[i + 1] == '}') {
+      i++;
+      if (!cur) continue;
+      exp_t *v = EVAL(car(cur), env);
+      if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
+      exp_to_string_buf(v, &buf, &len, &cap);
+      unrefexp(v);
+      cur = cur->next;
+    } else if (tmpl[i + 1] == ':') {
+      size_t j = i + 2;
+      while (tmpl[j] && tmpl[j] != '}') j++;
+      size_t spec_len = j - (i + 2);
+      if (!tmpl[j] || spec_len == 0 || spec_len >= FMT_SPEC_MAX) {
+        str_buf_put(&buf, &len, &cap, "{", 1);
+        continue;
+      }
+      char printf_fmt[FMT_SPEC_MAX + 2]; /* '%' + spec + '\0' */
+      printf_fmt[0] = '%';
+      memcpy(printf_fmt + 1, tmpl + i + 2, spec_len);
+      printf_fmt[spec_len + 1] = '\0';
+      char ftype = printf_fmt[spec_len];
+      /* Reject anything other than printf flags/width/precision in the
+         spec body (every char before the final type char). This blocks
+         format-string injection: an embedded '%' or conversion letter
+         would feed snprintf a second specifier, and a '*' would consume
+         the arg as a width then read a nonexistent second arg — both
+         undefined behavior. Invalid specs degrade to literal text. */
+      int spec_ok = 1;
+      for (size_t k = 0; k + 1 < spec_len; k++) {
+        char sc = printf_fmt[1 + k];
+        if (!(sc == '-' || sc == '+' || sc == ' ' || sc == '#' ||
+              sc == '.' || (sc >= '0' && sc <= '9'))) {
+          spec_ok = 0;
+          break;
+        }
+      }
+      if (!spec_ok) {
+        str_buf_put(&buf, &len, &cap, "{", 1);
+        continue;
+      }
+      i = j;
+      if (!cur) continue;
+      exp_t *v = EVAL(car(cur), env);
+      if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
+      char tmp[256];
+      char *out = tmp;
+      char *heap = NULL;
+      int n = 0;
+      if (ftype == 'd' || ftype == 'i' || ftype == 'o' ||
+          ftype == 'u' || ftype == 'x' || ftype == 'X') {
+        int64_t iv = isnumber(v) ? FIX_VAL(v) :
+                     isfloat(v)  ? (int64_t)v->f : 0LL;
+        /* int64_t needs 'll' length modifier before the type letter */
+        char safe_fmt[FMT_SPEC_MAX + 4]; /* '%' + spec + 'll' + '\0' */
+        memcpy(safe_fmt, printf_fmt, spec_len);
+        safe_fmt[spec_len]     = 'l';
+        safe_fmt[spec_len + 1] = 'l';
+        safe_fmt[spec_len + 2] = ftype;
+        safe_fmt[spec_len + 3] = '\0';
+        n = snprintf(tmp, sizeof(tmp), safe_fmt, iv);
+      } else if (ftype == 'f' || ftype == 'e' || ftype == 'E' ||
+                 ftype == 'g' || ftype == 'G') {
+        double dv = isfloat(v)  ? v->f :
+                    isnumber(v) ? (double)FIX_VAL(v) : 0.0;
+        n = snprintf(tmp, sizeof(tmp), printf_fmt, dv);
+      } else if (ftype == 's') {
+        const char *sv = isstring(v) ? (char *)v->ptr : "";
+        n = snprintf(tmp, sizeof(tmp), printf_fmt, sv);
+        /* %s with width or long strings can exceed tmp; retry on heap */
+        if (n >= (int)sizeof(tmp)) {
+          heap = memalloc((size_t)n + 1, 1);
+          n = snprintf(heap, (size_t)n + 1, printf_fmt, sv);
+          out = heap;
+        }
+      } else {
+        exp_to_string_buf(v, &buf, &len, &cap);
+      }
+      if (n > 0)
+        str_buf_put(&buf, &len, &cap, out,
+                    (size_t)(n < (int)sizeof(tmp) || out == heap
+                                 ? n
+                                 : (int)sizeof(tmp) - 1));
+      if (heap) free(heap);
+      unrefexp(v);
+      cur = cur->next;
+    } else {
+      str_buf_put(&buf, &len, &cap, "{", 1);
+    }
+  }
+  buf[len] = 0;
+  exp_t *ret = make_string(buf, (int)len);
+  free(buf);
+  unrefexp(fmtarg);
   unrefexp(e);
   return ret;
 }
@@ -5281,8 +5624,11 @@ exp_t *loadcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(path, ret);
 }
 
-/* Forward decl needed by applycmd below; defined further down. */
+/* Forward decls needed by HOFs and alc_apply helpers below. */
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env);
+static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env);
 
 /* ---------------- FFI (libffi-backed) ----------------
    Lets alcove call into shared libraries (libc, libm, custom .so's).
@@ -6136,8 +6482,7 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
@@ -6173,8 +6518,7 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
@@ -6244,10 +6588,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
                                      : (a * b);
         acc = MAKE_FIX(r);
       } else {
-        /* Slow path for this element — fall back to vm_invoke_values
-           and resume fast-path on the next element. */
-        exp_t *argv[2] = {acc, refexp(x)};
-        acc = vm_invoke_values(fn, 2, argv, env);
+        acc = alc_apply2(fn, acc, refexp(x), env);
         if (acc && iserror(acc))
           CLEAN_RETURN_2(fn, xs, acc);
         if (!acc)
@@ -6257,8 +6598,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     }
   } else {
     while (ispair(cur) && cur->content) {
-      exp_t *argv[2] = {acc, refexp(cur->content)};
-      acc = vm_invoke_values(fn, 2, argv, env);
+      acc = alc_apply2(fn, acc, refexp(cur->content), env);
       if (acc && iserror(acc))
         CLEAN_RETURN_2(fn, xs, acc);
       if (!acc)
@@ -6287,8 +6627,7 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res))
       CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
@@ -6319,8 +6658,7 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
 
   exp_t *cur = xs;
   while (ispair(cur) && cur->content) {
-    exp_t *argv[1] = {refexp(cur->content)};
-    exp_t *res = vm_invoke_values(fn, 1, argv, env);
+    exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res))
       CLEAN_RETURN_2(fn, xs, res);
     int truthy = (res != NULL && res != NIL_EXP);
@@ -6383,6 +6721,472 @@ exp_t *applycmd(exp_t *e, env_t *env) {
   unrefexp(e);
   return ret;
 }
+
+/* Call any callable (lambda or builtin) with pre-evaluated args.
+   Builtins receive their canonical `e` list; lambdas use vm_invoke_values.
+   The caller keeps ownership of `fn`; argv ownership is transferred. */
+static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
+  if (islambda(fn))
+    return vm_invoke_values(fn, nargs, argv, env);
+  if (isinternal(fn)) {
+    exp_t *head = make_node(refexp(fn));
+    exp_t *cur = head;
+    for (int i = 0; i < nargs; i++)
+      cur = cur->next = make_node(argv[i]);
+    int was_tail = in_tail_position;
+    in_tail_position = 0;
+    exp_t *ret = fn->fnc(head, env);
+    in_tail_position = was_tail;
+    return ret;
+  }
+  for (int i = 0; i < nargs; i++) unrefexp(argv[i]);
+  return error(ERROR_ILLEGAL_VALUE, fn, env, "not a callable");
+}
+static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env) {
+  exp_t *argv[1] = {refexp(arg)};
+  return alc_apply_n(fn, 1, argv, env);
+}
+static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env) {
+  exp_t *argv[2] = {a, b};
+  return alc_apply_n(fn, 2, argv, env);
+}
+
+/* ---- New stdlib additions -------------------------------------------- */
+
+/* (list? x) — t if x is nil or a proper list (all cdrs end with nil). */
+const char doc_listp[] = "(list? x) — t if x is nil or a proper list.";
+exp_t *listpcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    exp_t *cur = a;
+    while (ispair(cur) && cur->content)
+      cur = cur->next;
+    if (!cur || cur == NIL_EXP)
+      ret = TRUE_EXP;
+  }
+  unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (null? x) — t if x is nil (empty list / false). Complements pair?. */
+const char doc_nullp[] = "(null? x) — t if x is nil.";
+exp_t *nullpcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (iserror(a)) { unrefexp(e); return a; }
+    if (!a || a == NIL_EXP) ret = TRUE_EXP;
+  }
+  unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+static int64_t gensym_counter = 0;
+static exp_t *make_gensym(void) {
+  char buf[32];
+  int n = snprintf(buf, sizeof buf, "G%lld", (long long)gensym_counter++);
+  return make_symbol(buf, n);
+}
+
+/* (gensym) — return a fresh symbol G0, G1, G2, … unique per session. */
+const char doc_gensym[] = "(gensym) — unique symbol each call: G0, G1, …";
+exp_t *gensymcmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  (void)env;
+  return make_gensym();
+}
+
+const char doc_withgensyms[] =
+    "(with-gensyms (s ...) body ...) — bind each name to a fresh unique "
+    "symbol, then evaluate body forms in that scope. Used inside defmacro "
+    "to avoid variable capture: "
+    "(with-gensyms (tmp) `(let ,tmp ,x ,tmp)).";
+exp_t *withgensymscmd(exp_t *e, env_t *env) {
+  exp_t *names_node = e->next;
+  exp_t *body_start = names_node ? names_node->next : NULL;
+  /* names_node->content is either a pair (non-empty list) or nil (()) */
+  if (!names_node || !body_start ||
+      (!ispair(names_node->content) && istrue(names_node->content))) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env,
+                 "with-gensyms: expected (name-list body...)");
+  }
+  env_t *newenv = make_env(env);
+  if (!newenv->d) newenv->d = create_dict();
+  exp_t *names = names_node->content;
+  while (names && ispair(names) && istrue(names)) {
+    exp_t *nm = names->content;
+    if (!issymbol(nm)) {
+      destroy_env(newenv);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "with-gensyms: names must be symbols");
+    }
+    exp_t *gs = make_gensym();
+    set_get_keyval_dict(newenv->d, nm->ptr, gs);
+    unrefexp(gs);
+    names = names->next;
+  }
+  exp_t *ret = NIL_EXP;
+  for (exp_t *b = body_start; b; b = b->next) {
+    if (ret != NIL_EXP) unrefexp(ret);
+    ret = EVAL(b->content, newenv);
+    if (iserror(ret)) break;
+  }
+  destroy_env(newenv);
+  unrefexp(e);
+  return ret;
+}
+
+/* (take n xs) — first n elements of list xs. */
+const char doc_take[] = "(take n xs) — list of the first n elements of xs.";
+exp_t *takecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(n, xs);
+  if (!n || !isnumber(n))
+    CLEAN_RETURN_2(n, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                "take: first arg must be a number"));
+  int64_t count = FIX_VAL(n);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  exp_t *cur = xs;
+  for (int64_t i = 0; i < count && ispair(cur) && cur->content; i++) {
+    list_append_owned(&ret, &tail, refexp(cur->content));
+    cur = cur->next;
+  }
+  CLEAN_RETURN_2(n, xs, ret);
+}
+
+/* (drop n xs) — xs with the first n elements removed. */
+const char doc_drop[] = "(drop n xs) — xs without its first n elements.";
+exp_t *dropcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(n, xs);
+  if (!n || !isnumber(n))
+    CLEAN_RETURN_2(n, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                "drop: first arg must be a number"));
+  int64_t count = FIX_VAL(n);
+  exp_t *cur = xs;
+  for (int64_t i = 0; i < count && ispair(cur) && cur->content; i++)
+    cur = cur->next;
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  while (ispair(cur) && cur->content) {
+    list_append_owned(&ret, &tail, refexp(cur->content));
+    cur = cur->next;
+  }
+  CLEAN_RETURN_2(n, xs, ret);
+}
+
+/* (range start end) / (range start end step) — list of integers. */
+const char doc_range[] =
+    "(range start end) or (range start end step) — list of integers "
+    "from start (inclusive) to end (exclusive).";
+exp_t *rangecmd(exp_t *e, env_t *env) {
+  exp_t *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
+  if (!e->next) goto bad;
+  arg1 = EVAL(e->next->content, env);
+  if (iserror(arg1)) { unrefexp(e); return arg1; }
+  if (!e->next->next) goto bad;
+  arg2 = EVAL(e->next->next->content, env);
+  if (iserror(arg2)) { unrefexp(arg1); unrefexp(e); return arg2; }
+  if (e->next->next->next) {
+    arg3 = EVAL(e->next->next->next->content, env);
+    if (iserror(arg3)) { unrefexp(arg1); unrefexp(arg2); unrefexp(e); return arg3; }
+  }
+  if (!isnumber(arg1) || !isnumber(arg2) || (arg3 && !isnumber(arg3))) {
+    unrefexp(arg1); unrefexp(arg2); unrefexp(arg3); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "range: args must be integers");
+  }
+  {
+    int64_t start = FIX_VAL(arg1), end = FIX_VAL(arg2);
+    int64_t step = arg3 ? FIX_VAL(arg3) : (start <= end ? 1 : -1);
+    unrefexp(arg1); unrefexp(arg2); unrefexp(arg3); unrefexp(e);
+    if (step == 0)
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "range: step cannot be 0");
+    exp_t *ret = NIL_EXP, *tail = NULL;
+    for (int64_t i = start; step > 0 ? i < end : i > end; i += step)
+      list_append_owned(&ret, &tail, MAKE_FIX(i));
+    return ret;
+  }
+bad:
+  unrefexp(arg1); unrefexp(arg2); unrefexp(e);
+  return error(ERROR_MISSING_PARAMETER, e, env, "(range start end [step])");
+}
+
+/* (zip xs ys) — list of (x y) pairs from two lists. Stops at shorter. */
+const char doc_zip[] =
+    "(zip xs ys) — list of (x y) pairs; stops at the shorter list.";
+exp_t *zipcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(xs, ys);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  exp_t *cx = xs, *cy = ys;
+  while (ispair(cx) && cx->content && ispair(cy) && cy->content) {
+    exp_t *pair = make_node(refexp(cx->content));
+    pair->next = make_node(refexp(cy->content));
+    list_append_owned(&ret, &tail, pair);
+    cx = cx->next; cy = cy->next;
+  }
+  CLEAN_RETURN_2(xs, ys, ret);
+}
+
+/* flatten helper (non-recursive, uses a stack to avoid C stack growth) */
+static void flatten_into(exp_t *x, exp_t **ret, exp_t **tail) {
+  if (!x || x == NIL_EXP) return;
+  if (!ispair(x) || !x->content) {
+    list_append_owned(ret, tail, refexp(x));
+    return;
+  }
+  exp_t *cur = x;
+  while (ispair(cur) && cur->content) {
+    exp_t *v = cur->content;
+    if (ispair(v) && v->content)
+      flatten_into(v, ret, tail);
+    else if (v && v != NIL_EXP)
+      list_append_owned(ret, tail, refexp(v));
+    cur = cur->next;
+  }
+}
+
+/* (flatten xs) — recursively flatten nested lists into a flat list. */
+const char doc_flatten[] =
+    "(flatten xs) — recursively flatten nested lists.";
+exp_t *flattencmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(xs);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  flatten_into(xs, &ret, &tail);
+  CLEAN_RETURN_1(xs, ret);
+}
+
+/* sort helpers */
+typedef struct { exp_t **arr; int n; } sort_ctx;
+
+static int sort_cmp_default(const void *a, const void *b) {
+  exp_t *x = *(exp_t **)a, *y = *(exp_t **)b;
+  if (isnumber(x) && isnumber(y)) {
+    int64_t dx = FIX_VAL(x), dy = FIX_VAL(y);
+    return dx < dy ? -1 : dx > dy ? 1 : 0;
+  }
+  if (isfloat(x) && isfloat(y))
+    return x->f < y->f ? -1 : x->f > y->f ? 1 : 0;
+  if (isnumber(x) && isfloat(y)) {
+    double dx = (double)FIX_VAL(x);
+    return dx < y->f ? -1 : dx > y->f ? 1 : 0;
+  }
+  if (isfloat(x) && isnumber(y)) {
+    double dy = (double)FIX_VAL(y);
+    return x->f < dy ? -1 : x->f > dy ? 1 : 0;
+  }
+  if (isstring(x) && isstring(y))
+    return strcmp((char *)x->ptr, (char *)y->ptr);
+  return 0;
+}
+
+/* (sort xs) — sort list with default < ordering (numbers, strings). */
+const char doc_sort[] =
+    "(sort xs) — sort list using default ordering (numbers by value, "
+    "strings lexicographically).";
+exp_t *sortcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(xs);
+  if (!xs || xs == NIL_EXP) CLEAN_RETURN_1(xs, NIL_EXP);
+  if (!ispair(xs))
+    CLEAN_RETURN_1(xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                             "sort: arg must be a list"));
+  int n = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) n++;
+  exp_t **arr = memalloc(n, sizeof *arr);
+  int i = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next)
+    arr[i++] = c->content;
+  qsort(arr, n, sizeof *arr, sort_cmp_default);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  for (i = 0; i < n; i++)
+    list_append_owned(&ret, &tail, refexp(arr[i]));
+  free(arr);
+  CLEAN_RETURN_1(xs, ret);
+}
+
+/* (sort-by key-fn xs) — sort list by (key-fn element). */
+const char doc_sortby[] =
+    "(sort-by key-fn xs) — sort xs by (key-fn element).";
+
+typedef struct { exp_t *val; exp_t *key; } sortby_pair;
+
+static int sort_cmp_by(const void *a, const void *b) {
+  const sortby_pair *pa = (const sortby_pair *)a;
+  const sortby_pair *pb = (const sortby_pair *)b;
+  return sort_cmp_default(&pa->key, &pb->key);
+}
+
+exp_t *sortbycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !xs)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env,
+                                 "(sort-by key-fn xs)"));
+  if (xs == NIL_EXP) CLEAN_RETURN_2(fn, xs, NIL_EXP);
+  if (!ispair(xs))
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "sort-by: second arg must be a list"));
+  int n = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) n++;
+  sortby_pair *pairs = memalloc(n, sizeof *pairs);
+  int i = 0;
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) {
+    pairs[i].val = c->content;
+    pairs[i].key = alc_apply1(fn, c->content, env);
+    if (!pairs[i].key) pairs[i].key = NIL_EXP;
+    if (iserror(pairs[i].key)) {
+      exp_t *err = pairs[i].key;
+      for (int j = 0; j < i; j++) unrefexp(pairs[j].key);
+      free(pairs);
+      CLEAN_RETURN_2(fn, xs, err);
+    }
+    i++;
+  }
+  qsort(pairs, n, sizeof *pairs, sort_cmp_by);
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  for (i = 0; i < n; i++) {
+    list_append_owned(&ret, &tail, refexp(pairs[i].val));
+    unrefexp(pairs[i].key);
+  }
+  free(pairs);
+  CLEAN_RETURN_2(fn, xs, ret);
+}
+
+/* (string-contains? s sub) — t if s contains substring sub. */
+const char doc_stringcontainsp[] =
+    "(string-contains? s sub) — t if string s contains substring sub.";
+exp_t *stringcontainspcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, sub);
+  if (!isstring(s) || !isstring(sub))
+    CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "string-contains?: args must be strings"));
+  exp_t *ret = strstr((char *)s->ptr, (char *)sub->ptr) ? TRUE_EXP : NIL_EXP;
+  CLEAN_RETURN_2(s, sub, ret);
+}
+
+/* (string-index s sub) — 0-based index of first occurrence, or nil. */
+const char doc_stringindex[] =
+    "(string-index s sub) — index of first occurrence of sub in s, or nil.";
+exp_t *stringindexcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, sub);
+  if (!isstring(s) || !isstring(sub))
+    CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "string-index: args must be strings"));
+  char *found = strstr((char *)s->ptr, (char *)sub->ptr);
+  exp_t *ret = found ? MAKE_FIX((int64_t)(found - (char *)s->ptr)) : NIL_EXP;
+  CLEAN_RETURN_2(s, sub, ret);
+}
+
+/* (string-replace s old new) — replace all occurrences of old with new. */
+const char doc_stringreplace[] =
+    "(string-replace s old new) — replace all occurrences of old with new.";
+exp_t *stringreplacecmd(exp_t *e, env_t *env) {
+  exp_t *s = NULL, *old = NULL, *nw = NULL;
+  if (!e->next || !e->next->next || !e->next->next->next)
+    goto bad;
+  s = EVAL(e->next->content, env);
+  if (iserror(s)) { unrefexp(e); return s; }
+  old = EVAL(e->next->next->content, env);
+  if (iserror(old)) { unrefexp(s); unrefexp(e); return old; }
+  nw = EVAL(e->next->next->next->content, env);
+  if (iserror(nw)) { unrefexp(s); unrefexp(old); unrefexp(e); return nw; }
+  if (!isstring(s) || !isstring(old) || !isstring(nw)) {
+    unrefexp(s); unrefexp(old); unrefexp(nw); unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "string-replace: args must be strings");
+  }
+  {
+    const char *haystack = (char *)s->ptr;
+    const char *needle = (char *)old->ptr;
+    const char *replacement = (char *)nw->ptr;
+    size_t nlen = strlen(needle), rlen = strlen(replacement);
+    size_t cap = 64, len = 0;
+    char *buf = memalloc(cap, 1);
+    const char *p = haystack;
+    if (nlen == 0) {
+      str_buf_put(&buf, &len, &cap, p, strlen(p));
+    } else {
+      const char *found;
+      while ((found = strstr(p, needle)) != NULL) {
+        str_buf_put(&buf, &len, &cap, p, (size_t)(found - p));
+        str_buf_put(&buf, &len, &cap, replacement, rlen);
+        p = found + nlen;
+      }
+      str_buf_put(&buf, &len, &cap, p, strlen(p));
+    }
+    exp_t *ret = make_string(buf, (int)len);
+    free(buf);
+    unrefexp(s); unrefexp(old); unrefexp(nw); unrefexp(e);
+    return ret;
+  }
+bad:
+  unrefexp(s); unrefexp(old); unrefexp(e);
+  return error(ERROR_MISSING_PARAMETER, e, env,
+               "(string-replace s old new)");
+}
+
+/* (error? x) — t if x is an error value. */
+const char doc_errorp[] = "(error? x) — t if x is an error value.";
+exp_t *errorpcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    /* Don't propagate: we want to inspect the error, not re-raise it. */
+    if (a && iserror(a)) ret = TRUE_EXP;
+  }
+  if (a && !iserror(a)) unrefexp(a);
+  else if (a) unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (error-message x) — string message from an error value, or nil. */
+const char doc_errormessage[] =
+    "(error-message x) — extract the message string from an error value.";
+exp_t *errormessagecmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env);
+    if (a && iserror(a) && a->ptr)
+      ret = make_string((char *)a->ptr, (int)strlen((char *)a->ptr));
+  }
+  if (a) unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+/* (try body-expr handler) — evaluate body; on error call (handler err).
+   Unlike normal propagation, the error is caught here and not re-raised.
+   handler receives the error exp_t and may call (error-message e) on it. */
+const char doc_try[] =
+    "(try body handler) — evaluate body; if it signals an error, call "
+    "(handler error-value) instead of propagating. Returns body's value or "
+    "handler's return value.";
+exp_t *trycmd(exp_t *e, env_t *env) {
+  if (!e->next || !e->next->next) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env, "(try body handler)");
+  }
+  exp_t *result = EVAL(e->next->content, env);
+  if (!result || !iserror(result)) {
+    unrefexp(e);
+    return result ? result : NIL_EXP;
+  }
+  /* Error caught — evaluate handler and call it. */
+  exp_t *handler = EVAL(e->next->next->content, env);
+  unrefexp(e);
+  if (!handler || iserror(handler)) {
+    unrefexp(result);
+    return handler ? handler : NIL_EXP;
+  }
+  exp_t *ret = alc_apply1(handler, result, env);
+  unrefexp(handler);
+  unrefexp(result);
+  return ret ? ret : NIL_EXP;
+}
+
+/* ---- End new stdlib additions ---------------------------------------- */
 
 const char doc_odd[] = "(odd x) — t if integer x is odd, nil otherwise.";
 exp_t *oddcmd(exp_t *e, env_t *env) {
@@ -6460,6 +7264,40 @@ exp_t *whencmd(exp_t *e, env_t *env) {
      NIL_EXP, so (when t 42) gave nil. If the body never ran (falsey
      test, or no body forms), discard ret (which holds the test value
      or last body iteration's truthy ret) and return NIL_EXP. */
+  unrefexp(e);
+  if (!body_ran) {
+    unrefexp(ret);
+    return NIL_EXP;
+  }
+  return ret ? ret : NIL_EXP;
+}
+
+const char doc_unless[] = "(unless test expr ...) — if test is falsey, evaluate "
+                          "the body in order; else nil.";
+exp_t *unlesscmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
+  exp_t *val = cadr(e);
+  exp_t *cur = cddr(e);
+  in_tail_position = 0;
+  exp_t *ret = EVAL(val, env);
+  if iserror (ret) {
+    in_tail_position = outer_tail;
+    unrefexp(e);
+    return ret;
+  }
+  int body_ran = 0;
+  if (!istrue(ret) && cur)
+    do {
+      unrefexp(ret);
+      body_ran = 1;
+      in_tail_position = (cur->next == NULL) ? outer_tail : 0;
+      ret = EVAL(car(cur), env);
+    } while ((cur = cdr(cur)) && !(ret && iserror(ret)));
+  in_tail_position = outer_tail;
+  if (ret && iserror(ret)) {
+    unrefexp(e);
+    return ret;
+  }
   unrefexp(e);
   if (!body_ran) {
     unrefexp(ret);
@@ -7670,9 +8508,14 @@ exp_t *evalcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-const char doc_let[] = "(let var val body) — bind var to val in body. The "
-                       "binding is local; body returns its last expression.";
+static void var2env_bind(char *name, exp_t *val, env_t *env);
+
+const char doc_let[] =
+    "(let var val body) — bind var to val in body; (let (a b) val body) — "
+    "destructure val as a list, binding each name to the corresponding "
+    "element (missing elements get nil). Binding is local to body.";
 exp_t *letcmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
   env_t *newenv = make_env(env);
   exp_t *ret;
   exp_t *curvar;
@@ -7680,15 +8523,38 @@ exp_t *letcmd(exp_t *e, env_t *env) {
 
   if ((curvar = e->next)) {
     if ((curval = curvar->next)) {
-      if (!(newenv->d))
-        newenv->d = create_dict();
-
+      in_tail_position = 0;
       if (issymbol(curvar->content)) {
         if ((ret = EVAL(curval->content, env)) == NULL)
           ret = NIL_EXP;
         if iserror (ret)
           goto finish;
-        set_get_keyval_dict(newenv->d, curvar->content->ptr, ret);
+        var2env_bind(curvar->content->ptr, ret, newenv);
+        ret = NULL;
+      } else if (ispair(curvar->content)) {
+        /* Destructuring: (let (a b ...) val body)
+           Eval val once, then bind each name to the corresponding list
+           element; names without a matching element get nil. */
+        ret = EVAL(curval->content, env);
+        if (ret == NULL) ret = NIL_EXP;
+        if (iserror(ret)) goto finish;
+        exp_t *dnames = curvar->content;
+        exp_t *dvals  = ret;
+        while (dnames && ispair(dnames) && istrue(dnames)) {
+          exp_t *nm = dnames->content;
+          if (!issymbol(nm)) {
+            unrefexp(ret);
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                        "let: destructuring name must be a symbol");
+            goto finish;
+          }
+          int have_val = dvals && ispair(dvals) && istrue(dvals);
+          var2env_bind(nm->ptr,
+                       refexp(have_val ? dvals->content : NIL_EXP),
+                       newenv);
+          dnames = dnames->next;
+          if (have_val) dvals = dvals->next;
+        }
         unrefexp(ret);
         ret = NULL;
       } else {
@@ -7696,7 +8562,16 @@ exp_t *letcmd(exp_t *e, env_t *env) {
         goto finish;
       }
       if (curval->next) {
-        ret = EVAL(curval->next->content, newenv);
+        exp_t *body = curval->next;
+        while (body->next) {
+          in_tail_position = 0;
+          ret = EVAL(body->content, newenv);
+          if (iserror(ret)) goto finish;
+          unrefexp(ret); ret = NULL;
+          body = body->next;
+        }
+        in_tail_position = outer_tail;
+        ret = EVAL(body->content, newenv);
         goto finish;
       }
     }
@@ -7704,6 +8579,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
   ret = error(ERROR_MISSING_PARAMETER, e, env,
               "Missing parameter in let"); /* MISSING PARAMETER*/
 finish:
+  in_tail_position = outer_tail;
   destroy_env(newenv);
   unrefexp(e);
   return ret;
@@ -7712,6 +8588,7 @@ finish:
 const char doc_with[] = "(with (var1 val1 var2 val2 ...) body) — bind all "
                         "pairs in parallel, then evaluate body.";
 exp_t *withcmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
   env_t *newenv = make_env(env);
   exp_t *ret;
   exp_t *curvar;
@@ -7726,16 +8603,13 @@ exp_t *withcmd(exp_t *e, env_t *env) {
     if ((curex = curvar->next)) {
       curvar = curvar->content;
       if ((curval = curvar->next)) {
-        if (!(newenv->d))
-          newenv->d = create_dict();
-
+        in_tail_position = 0;
         while (curvar && curval) {
           if (issymbol(curvar->content)) {
             ret = EVAL(curval->content, env);
             if iserror (ret)
               goto finish;
-            set_get_keyval_dict(newenv->d, curvar->content->ptr, ret);
-            unrefexp(ret);
+            var2env_bind(curvar->content->ptr, ret, newenv);
             ret = NULL;
           }
 
@@ -7753,6 +8627,14 @@ exp_t *withcmd(exp_t *e, env_t *env) {
           }
         }
 
+        while (curex->next) {
+          in_tail_position = 0;
+          ret = EVAL(curex->content, newenv);
+          if (iserror(ret)) goto finish;
+          unrefexp(ret); ret = NULL;
+          curex = curex->next;
+        }
+        in_tail_position = outer_tail;
         ret = EVAL(curex->content, newenv);
         goto finish;
       }
@@ -7761,9 +8643,108 @@ exp_t *withcmd(exp_t *e, env_t *env) {
 
   ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in with");
 finish:
+  in_tail_position = outer_tail;
   destroy_env(newenv);
   unrefexp(e);
   return ret;
+}
+
+const char doc_letstar[] =
+    "(let* (v1 val1 v2 val2 ...) body ...) — sequential bindings: each val "
+    "is evaluated in the scope that includes all preceding bindings. The "
+    "flat form (let* v1 val1 ... single-body) is also accepted for the "
+    "single-body case.";
+exp_t *letstar_cmd(exp_t *e, env_t *env) {
+  int outer_tail = in_tail_position;
+  exp_t *cur = cdr(e);
+  if (!cur || !cur->next) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env,
+                 "let*: need bindings and a body");
+  }
+  env_t *newenv = make_env(env);
+  exp_t *ret = NULL;
+  in_tail_position = 0;
+
+  /* New form: bindings collected into a single list — supports multi-body.
+     (let* (v1 val1 v2 val2 ...) body ...) */
+  if (ispair(cur->content)) {
+    exp_t *bcur = cur->content;
+    exp_t *body_start = cur->next;
+    while (bcur && bcur->content) {
+      exp_t *var = bcur->content;
+      if (!issymbol(var)) {
+        ret = error(ERROR_ILLEGAL_VALUE, NULL, newenv,
+                    "let*: binding name must be a symbol");
+        goto finish;
+      }
+      exp_t *val_node = bcur->next;
+      if (!val_node) {
+        ret = error(ERROR_MISSING_PARAMETER, NULL, newenv,
+                    "let*: binding without value");
+        goto finish;
+      }
+      ret = EVAL(val_node->content, newenv);
+      if (iserror(ret)) goto finish;
+      var2env_bind(var->ptr, ret, newenv);
+      ret = NULL;
+      bcur = val_node->next;
+    }
+    exp_t *body = body_start;
+    while (body && body->next) {
+      in_tail_position = 0;
+      ret = EVAL(body->content, newenv);
+      if (iserror(ret)) goto finish;
+      unrefexp(ret); ret = NULL;
+      body = body->next;
+    }
+    in_tail_position = outer_tail;
+    ret = body ? EVAL(body->content, newenv) : NIL_EXP;
+    goto finish;
+  }
+
+  /* Old form: flat pairs followed by exactly one body expression.
+     (let* v1 val1 v2 val2 ... body) */
+  if (!cur->next->next) {
+    ret = error(ERROR_MISSING_PARAMETER, NULL, env,
+                "let*: need at least one binding and a body");
+    goto finish;
+  }
+  while (cur && cur->next && cur->next->next) {
+    exp_t *var = cur->content;
+    exp_t *val_node = cur->next;
+    if (!issymbol(var)) {
+      ret = error(ERROR_ILLEGAL_VALUE, NULL, newenv,
+                  "let*: binding name must be a symbol");
+      goto finish;
+    }
+    ret = EVAL(val_node->content, newenv);
+    if (iserror(ret)) goto finish;
+    var2env_bind(var->ptr, ret, newenv);
+    ret = NULL;
+    cur = val_node->next;
+  }
+  in_tail_position = outer_tail;
+  ret = cur ? EVAL(cur->content, newenv) : NIL_EXP;
+finish:
+  in_tail_position = outer_tail;
+  destroy_env(newenv);
+  unrefexp(e);
+  return ret;
+}
+
+/* Bind a single name (sym->ptr) to val in env; takes ownership of val. */
+static void var2env_bind(char *name, exp_t *val, env_t *env) {
+  if (env->n_inline < ENV_INLINE_SLOTS) {
+    env->inline_keys[env->n_inline] = name;
+    env->inline_vals[env->n_inline] = val;
+    env->n_inline++;
+  } else {
+    if (!env->d)
+      env->d = create_dict();
+    set_get_keyval_dict(env->d, (char *)name, val);
+    unrefexp(val);
+  }
 }
 
 exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
@@ -7777,6 +8758,28 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
      once and either bind NULL as a key or hit "missing parameter" if
      no args were passed. The content check makes 0-arg defs work. */
   while (curvar && curvar->content) {
+    /* Rest-param marker: (a b . rest) reads as (a b . rest) — detect the
+       dot symbol and collect remaining args into a list for the next param. */
+    if (issymbol(curvar->content) &&
+        strcmp((char *)curvar->content->ptr, ".") == 0) {
+      if (!curvar->next || !curvar->next->content ||
+          !issymbol(curvar->next->content))
+        return error(ERROR_ILLEGAL_VALUE, e, env,
+                     "rest param: symbol expected after '.'");
+      char *rest_name = (char *)curvar->next->content->ptr;
+      exp_t *rest_head = NIL_EXP, *rest_tail = NULL;
+      while (curval) {
+        exp_t *rv = evalexp ? EVAL(curval->content, env->root)
+                            : refexp(curval->content);
+        if (!rv) rv = NIL_EXP;
+        if (evalexp && iserror(rv)) return rv;
+        list_append_owned(&rest_head, &rest_tail, rv);
+        curval = curval->next;
+      }
+      var2env_bind(rest_name, rest_head, env);
+      return NULL;
+    }
+
     if ((curval)) {
       if ((retvar = (evalexp ? EVAL(curval->content, env->root)
                              : refexp(curval->content)))) {
@@ -7786,20 +8789,7 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
       } else
         retvar = NIL_EXP;
       if (issymbol(curvar->content)) {
-        /* Fast path: use inline slots for function-param bindings.
-           Keys BORROW from the symbol's ptr; caller guarantees lifetime
-           by holding a ref to the lambda header. Falls back to the
-           dict once inline slots overflow. */
-        if (env->n_inline < ENV_INLINE_SLOTS) {
-          env->inline_keys[env->n_inline] = curvar->content->ptr;
-          env->inline_vals[env->n_inline] = retvar; /* ownership transferred */
-          env->n_inline++;
-        } else {
-          if (!env->d)
-            env->d = create_dict();
-          set_get_keyval_dict(env->d, curvar->content->ptr, retvar);
-          unrefexp(retvar);
-        }
+        var2env_bind((char *)curvar->content->ptr, retvar, env);
       } else {
         unrefexp(retvar);
         return NULL;
@@ -13675,6 +14665,28 @@ static int op_for_head(const char *s) {
   return -1;
 }
 
+/* Compile a sequence of body forms (e.g. a multi-expression let/with/
+   when body): evaluate each in order, POP all but the last, and let the
+   last keep the caller's tail position. Empty body compiles to nil. */
+static void compile_body_seq(compiler_t *c, exp_t *body, int tail) {
+  if (!body) {
+    int k = add_const(c, nil_singleton);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+    return;
+  }
+  int saw_any = 0;
+  for (; body; body = body->next) {
+    if (saw_any)
+      emit_u8(c, OP_POP);
+    int is_last = (body->next == NULL);
+    compile_expr(c, body->content, is_last && tail);
+    if (c->failed)
+      return;
+    saw_any = 1;
+  }
+}
+
 static void compile_if(compiler_t *c, exp_t *form, int tail) {
   /* (if cond then else)  — only 2-way for phase 1 */
   exp_t *cond = cadr(form);
@@ -13882,12 +14894,14 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
   /* STORE_SLOT re-pushes the stored value so (= x v) returns v. */
 }
 
-/* (let var val body) — single binding, evaluates body in extended scope.
-   Falls back to AST if slot count would exceed ENV_INLINE_SLOTS. */
+/* (let var val body ...) — single binding, evaluates body in extended
+   scope. Destructuring (let (a b) val body) falls back to AST (var is a
+   pair, not a symbol). Falls back if slot count would overflow. */
 static void compile_let(compiler_t *c, exp_t *form, int tail) {
   exp_t *var = cadr(form);
   exp_t *val = caddr(form);
-  exp_t *body = cadddr(form);
+  exp_t *body = form->next ? (form->next->next ? form->next->next->next : NULL)
+                           : NULL;
   if (!issymbol(var) || !body) {
     c->failed = 1;
     return;
@@ -13905,18 +14919,13 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
   c->slot_names[slot] = (char *)var->ptr;
   c->nslots++;
   c->nlet_depth++;
-  compile_expr(c, body, tail);
+  compile_body_seq(c, body, tail);
   if (c->failed)
     return;
   c->nlet_depth--;
   c->nslots--;
-  /* Body's value is on the stack. Peek-unbind: swap top of stack with
-     the slot, but we only have POP/PUSH — cheapest is stash via a temp
-     dedicated op. Simpler: store body result into slot (STORE discards
-     old binding), emit LOAD_SLOT, emit UNBIND_SLOT — round-trip but
-     clean. Actually simpler yet: the binding's owning ref is still in
-     the slot; we can just emit UNBIND_SLOT which unrefs and NULLs it,
-     leaving the body result untouched on the stack. */
+  /* Body's value is on the stack; the binding's owning ref is still in
+     the slot. UNBIND_SLOT unrefs and NULLs it, leaving the result. */
   emit_u8(c, OP_UNBIND_SLOT);
   emit_u8(c, (uint8_t)slot);
 }
@@ -13927,7 +14936,7 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
    matching the tree-walker's withcmd). */
 static void compile_with(compiler_t *c, exp_t *form, int tail) {
   exp_t *pairs = cadr(form);
-  exp_t *body = caddr(form);
+  exp_t *body = form->next ? form->next->next : NULL;
   if (!ispair(pairs) || !body) {
     c->failed = 1;
     return;
@@ -13936,7 +14945,7 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
   int start_slot = c->nslots;
   int nbindings = 0;
   exp_t *p = pairs;
-  while (p) {
+  while (p && p->content) {
     exp_t *var = p->content;
     exp_t *nxt = p->next;
     if (!nxt) {
@@ -13963,7 +14972,7 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
     p = nxt->next;
   }
   c->nlet_depth++;
-  compile_expr(c, body, tail);
+  compile_body_seq(c, body, tail);
   if (c->failed)
     return;
   c->nlet_depth--;
@@ -13974,6 +14983,111 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
     emit_u8(c, (uint8_t)(start_slot + i));
   }
   c->nslots -= nbindings;
+}
+
+/* (let* (v1 e1 v2 e2 ...) body ...) — sequential bindings: each val sees
+   the slots bound by earlier pairs. The flat legacy form
+   (let* v1 e1 ... single-body) is left to the tree-walker. */
+static void compile_letstar(compiler_t *c, exp_t *form, int tail) {
+  exp_t *first = cadr(form);
+  if (!ispair(first)) { /* flat legacy form — defer to AST */
+    c->failed = 1;
+    return;
+  }
+  exp_t *body = form->next ? form->next->next : NULL;
+  if (!body) {
+    c->failed = 1;
+    return;
+  }
+  int start_slot = c->nslots;
+  int nbindings = 0;
+  exp_t *p = first;
+  while (p && p->content) {
+    exp_t *var = p->content;
+    exp_t *nxt = p->next;
+    if (!nxt || !issymbol(var)) {
+      c->failed = 1;
+      return;
+    }
+    if (c->nslots >= ENV_INLINE_SLOTS) {
+      c->failed = 1;
+      return;
+    }
+    /* Compile val BEFORE registering this var's slot name, but AFTER
+       earlier vars are visible — that gives let*'s sequential scope. */
+    compile_expr(c, nxt->content, 0);
+    if (c->failed)
+      return;
+    emit_u8(c, OP_BIND_SLOT);
+    emit_u8(c, (uint8_t)c->nslots);
+    c->slot_names[c->nslots] = (char *)var->ptr;
+    c->nslots++;
+    nbindings++;
+    p = nxt->next;
+  }
+  c->nlet_depth++;
+  compile_body_seq(c, body, tail);
+  if (c->failed)
+    return;
+  c->nlet_depth--;
+  int i;
+  for (i = nbindings - 1; i >= 0; i--) {
+    emit_u8(c, OP_UNBIND_SLOT);
+    emit_u8(c, (uint8_t)(start_slot + i));
+  }
+  c->nslots -= nbindings;
+}
+
+/* (when cond body ...) / (unless cond body ...). For `when`, the body runs
+   when cond is truthy; for `unless`, when cond is falsey. The other case
+   yields nil. `negate` selects unless semantics. */
+static void compile_when_unless(compiler_t *c, exp_t *form, int tail,
+                                int negate) {
+  exp_t *cond = cadr(form);
+  exp_t *body = form->next ? form->next->next : NULL;
+  if (!cond) {
+    c->failed = 1;
+    return;
+  }
+  compile_expr(c, cond, 0);
+  if (c->failed)
+    return;
+  emit_u8(c, OP_BR_IF_FALSE);
+  int patch_false = c->ncode;
+  emit_i16(c, 0);
+  /* Fall-through path = cond truthy. For `when` that runs the body; for
+     `unless` it yields nil. The false-branch target is the opposite. */
+  exp_t *run = negate ? NULL : body;   /* truthy path */
+  exp_t *skip = negate ? body : NULL;  /* falsey path */
+  if (run)
+    compile_body_seq(c, run, tail);
+  else {
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+  }
+  if (c->failed)
+    return;
+  emit_u8(c, OP_JUMP);
+  int patch_end = c->ncode;
+  emit_i16(c, 0);
+  int false_target = c->ncode;
+  if (skip)
+    compile_body_seq(c, skip, tail);
+  else {
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+  }
+  if (c->failed)
+    return;
+  int end_target = c->ncode;
+  int16_t off_false = (int16_t)(false_target - (patch_false + 2));
+  int16_t off_end = (int16_t)(end_target - (patch_end + 2));
+  c->code[patch_false] = off_false & 0xff;
+  c->code[patch_false + 1] = (off_false >> 8) & 0xff;
+  c->code[patch_end] = off_end & 0xff;
+  c->code[patch_end + 1] = (off_end >> 8) & 0xff;
 }
 
 /* (for counter start end body...) — counter iterates start..end inclusive.
@@ -14163,8 +15277,20 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       compile_let(c, e, tail);
       return;
     }
+    if (!strcmp(s, "let*")) {
+      compile_letstar(c, e, tail);
+      return;
+    }
     if (!strcmp(s, "with")) {
       compile_with(c, e, tail);
+      return;
+    }
+    if (!strcmp(s, "when")) {
+      compile_when_unless(c, e, tail, 0);
+      return;
+    }
+    if (!strcmp(s, "unless")) {
+      compile_when_unless(c, e, tail, 1);
       return;
     }
     if (!strcmp(s, "for")) {
@@ -14427,7 +15553,8 @@ int compile_lambda(exp_t *fn) {
   compiler_t c = {0};
   c.self_name = (const char *)fn->meta; /* may be NULL for anon fn */
 
-  /* Register params into slots 0..N-1 matching env->inline_slots. */
+  /* Register params into slots 0..N-1 matching env->inline_slots.
+     Rest params (dot notation or bare-symbol wrap) fall back to AST. */
   exp_t *p;
   for (p = params; p; p = p->next) {
     if (c.nparams >= ENV_INLINE_SLOTS) {
@@ -14435,6 +15562,11 @@ int compile_lambda(exp_t *fn) {
       break;
     }
     if (!is_ptr(p->content) || !issymbol(p->content)) {
+      c.failed = 1;
+      break;
+    }
+    /* Dot marker means rest params — AST eval handles collection. */
+    if (strcmp((char *)p->content->ptr, ".") == 0) {
       c.failed = 1;
       break;
     }
@@ -15394,7 +16526,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     }
     exp_t *p = lambda_params(fn);
     int i = 0;
-    while (p && i < nargs) {
+    while (p && p->content) {
       if (!is_ptr(p->content) || !issymbol(p->content)) {
         int j;
         for (j = i; j < nargs; j++)
@@ -15402,16 +16534,30 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
         destroy_env(newenv);
         return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
       }
-      if (newenv->n_inline < ENV_INLINE_SLOTS) {
-        newenv->inline_keys[newenv->n_inline] = (char *)p->content->ptr;
-        newenv->inline_vals[newenv->n_inline] = argv[i];
-        newenv->n_inline++;
-      } else {
-        if (!newenv->d)
-          newenv->d = create_dict();
-        set_get_keyval_dict(newenv->d, p->content->ptr, argv[i]);
-        unrefexp(argv[i]);
+      /* Rest param — collect remaining argv into a list and bind. */
+      if (strcmp((char *)p->content->ptr, ".") == 0) {
+        if (!p->next || !p->next->content || !issymbol(p->next->content)) {
+          int j;
+          for (j = i; j < nargs; j++) unrefexp(argv[j]);
+          destroy_env(newenv);
+          return error(ERROR_ILLEGAL_VALUE, fn, env,
+                       "rest param: symbol expected after '.'");
+        }
+        exp_t *rest_head = NIL_EXP, *rest_tail = NULL;
+        for (; i < nargs; i++)
+          list_append_owned(&rest_head, &rest_tail, argv[i]);
+        var2env_bind((char *)p->next->content->ptr, rest_head, newenv);
+        p = NULL; /* done */
+        break;
       }
+      if (i >= nargs) {
+        int j;
+        for (j = i; j < nargs; j++) unrefexp(argv[j]);
+        destroy_env(newenv);
+        return error(ERROR_MISSING_PARAMETER, fn, env,
+                     "wrong number of args");
+      }
+      var2env_bind((char *)p->content->ptr, argv[i], newenv);
       p = p->next;
       i++;
     }
@@ -15864,6 +17010,7 @@ finisht:
 #ifdef ALCOVE_READLINE
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <sys/stat.h> /* chmod(0600) on the persisted history file */
 
 /* Iterate over a dict and emit names matching `prefix` into the
    readline-allocated match list. Each match must be malloc'd; readline
@@ -17573,6 +18720,8 @@ int main(int argc, char *argv[]) {
      passes flags first, last, or in the middle. */
   int auto_load = 1;
   int run_init = 1;
+  int save_history = 1;
+  char alc_hist_path[1024] = {0}; /* set in the rl_active block below */
   char *eval_string = NULL;
 #ifndef ALCOVE_WEB
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
@@ -17588,6 +18737,9 @@ int main(int argc, char *argv[]) {
       } else if (strcmp(argv[src], "--no-init") == 0 ||
                  strcmp(argv[src], "--noinit") == 0) {
         run_init = 0;
+      } else if (strcmp(argv[src], "--no-history") == 0 ||
+                 strcmp(argv[src], "--nohistory") == 0) {
+        save_history = 0;
       } else if (strcmp(argv[src], "-e") == 0 && src + 1 < argc) {
         eval_string = argv[++src];
       } else if (strcmp(argv[src], "--db") == 0 && src + 1 < argc) {
@@ -17756,6 +18908,22 @@ int main(int argc, char *argv[]) {
     rl_redisplay_function = alcove_colored_redisplay;
     using_history();
     stifle_history(1000);
+    if (save_history) {
+      const char *home = getenv("HOME");
+#ifdef ALCOVE_ALS
+      const char *hist_name = "/.alcoves_history";
+#else
+      const char *hist_name = "/.alcove_history";
+#endif
+      if (home && snprintf(alc_hist_path, sizeof alc_hist_path,
+                           "%s%s", home, hist_name) > 0
+                  && (size_t)snprintf(NULL, 0, "%s%s", home, hist_name)
+                       < sizeof alc_hist_path) {
+        read_history(alc_hist_path); /* missing file on first run is fine */
+      } else {
+        alc_hist_path[0] = 0; /* path too long — disable persistence */
+      }
+    }
   }
 #endif
 
@@ -17892,6 +19060,13 @@ int main(int argc, char *argv[]) {
     }
   }
 endcleanly:
+#ifdef ALCOVE_READLINE
+  if (alc_hist_path[0]) {
+    write_history(alc_hist_path);
+    history_truncate_file(alc_hist_path, 1000);
+    chmod(alc_hist_path, 0600); /* may have pasted secrets */
+  }
+#endif
   destroy_dict(dict);
   destroy_env(global);
   destroy_dict(reserved_symbol);
