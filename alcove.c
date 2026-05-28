@@ -271,6 +271,11 @@ lispProc lispProcList[] = {
     LISPCMD("dict?", dictpcmd, doc_dictp),
     LISPCMD("deque?", dequepcmd, doc_dequep),
     LISPCMD("set?", setpcmd, doc_setp),
+    /* Introspection (return testable values, not printed) */
+    LISPCMD("compiled?", compiledpcmd, doc_compiledp),
+    LISPCMD("jit?", jitpcmd, doc_jitp),
+    LISPCMD("inline?", inlinepcmd, doc_inlinep),
+    LISPCMD("exp-flags", expflagscmd, doc_expflags),
     /* I/O */
     LISPCMD("pr", prcmd, doc_pr),
     LISPCMD("print", prcmd, doc_pr),
@@ -6852,7 +6857,40 @@ PRED_CMD(blobpcmd, isblob(a))
 PRED_CMD(dictpcmd, isdict(a))
 PRED_CMD(dequepcmd, islist(a))
 PRED_CMD(setpcmd, isset(a))
+/* Introspection predicates — let tests assert on internal optimizations.
+   compiled?: lambda body compiled to bytecode (vs AST fallback).
+   jit?: bytecode also has native code installed (only in JIT builds).
+   inline?: symbol/string text stored inline (FLAG_INLINE_TXT). Guarded by
+   is_ptr first — a tagged immediate (fixnum/char) has no flags word. */
+PRED_CMD(compiledpcmd, (islambda(a) && (a->flags & FLAG_COMPILED) && a->bc))
+PRED_CMD(jitpcmd,
+         (islambda(a) && (a->flags & FLAG_COMPILED) && a->bc && a->bc->jit))
+PRED_CMD(inlinepcmd, (is_ptr(a) && (a->flags & FLAG_INLINE_TXT)))
 #undef PRED_CMD
+
+const char doc_compiledp[] =
+    "(compiled? fn) — t if fn's body is compiled to bytecode (not AST).";
+const char doc_jitp[] =
+    "(jit? fn) — t if fn has native JIT code installed (JIT builds only).";
+const char doc_inlinep[] =
+    "(inline? x) — t if x is a symbol/string whose text is stored inline "
+    "(<= 7 chars) rather than heap-allocated.";
+const char doc_expflags[] =
+    "(exp-flags x) — integer flags word of x (0 for tagged immediates). "
+    "Introspection/testing: bit 2 (4) = compiled, bit 6 (64) = inline-text.";
+/* Value-returning flags accessor — the user-facing counterpart to inspect,
+   for assertions on the raw flags word. */
+exp_t *expflagscmd(exp_t *e, env_t *env) {
+  exp_t *a = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  if (iserror(a)) {
+    unrefexp(e);
+    return a;
+  }
+  int f = is_ptr(a) ? a->flags : 0;
+  unrefexp(a);
+  unrefexp(e);
+  return MAKE_FIX(f);
+}
 
 /* (exit) / (exit code) — terminate the process. */
 const char doc_exit[] = "(exit) or (exit code) — terminate the process. "

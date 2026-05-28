@@ -605,6 +605,50 @@ assert "empty inline string length" (length "") 0
 
 assert "empty inline string eq" "" ""
 
+assert "inline? short symbol" (inline? 'abc) t
+
+assert "inline? 7-char boundary" (inline? 'abcdefg) t
+
+assert "inline? 8-char is heap" (inline? 'abcdefgh) nil
+
+assert "inline? short string" (inline? "hi") t
+
+assert "inline? tagged immediate" (inline? 42) nil
+
+assert "exp-flags inline bit (64)" (exp-flags 'abc) 64
+
+assert "exp-flags heap sym (0)" (exp-flags 'abcdefgh) 0
+
+def itest-add (x):
+  + x 1
+
+assert "compiled? simple fn" (compiled? itest-add) t
+
+def itest-zero ():
+  5
+
+assert "compiled? 0-arg fn" (compiled? itest-zero) t
+
+def itest-mk ():
+  let n 0:
+    fn ():
+      setf n (+ n 1)
+      n
+
+assert "compiled? mutating closure" (compiled? (itest-mk)) t
+
+def itest-rest xs:
+  car xs
+
+assert "compiled? rest-param is nil" (compiled? itest-rest) nil
+
+assert "compiled? non-fn is nil" (compiled? 42) nil
+
+assert "jit? non-fn is nil" (jit? 42) nil
+
+assert "jit? implies compiled?" (if (jit? itest-add) (compiled? itest-add) t):
+  t
+
 assert "str concatenates values" (str "a" 12 'b #\c) "a12bc"
 
 assert "string-append" (string-append "ab" "cd" "") "abcd"

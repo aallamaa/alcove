@@ -81,6 +81,14 @@ exp_t *blobpcmd(exp_t *e, env_t *env);
 exp_t *dictpcmd(exp_t *e, env_t *env);
 exp_t *dequepcmd(exp_t *e, env_t *env);
 exp_t *setpcmd(exp_t *e, env_t *env);
+/* Introspection predicates/accessors — expose internal exp_t state as real
+   return values (not just printed) so regression tests can assert on the
+   bytecode-compilation, JIT, and inline-text optimizations. */
+exp_t *compiledpcmd(exp_t *e, env_t *env);
+exp_t *jitpcmd(exp_t *e, env_t *env);
+exp_t *inlinepcmd(exp_t *e, env_t *env);
+exp_t *expflagscmd(exp_t *e, env_t *env);
+extern const char doc_compiledp[], doc_jitp[], doc_inlinep[], doc_expflags[];
 extern const char doc_pr[], doc_prn[];
 extern const char doc_str[], doc_fmt[], doc_substr[], doc_stringappend[],
                   doc_stringsplit[], doc_stringjoin[], doc_stringtrim[],
