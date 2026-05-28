@@ -198,16 +198,22 @@ ifeq ($(FFI_OK),yes)
 endif
 
 # Cross-variant matrix: build and run the full suite against every core
-# build variant (parser/speed/mono/jit/jit-mono) — this is what catches
-# JIT- and threading-specific regressions — then smoke- and crash-test the
-# alcove-script front end (alcoves). Prints one line per variant and exits
-# non-zero if ANY variant fails to build, crashes, or reports a non-zero
-# failed count. Leaves ./alcove as the default jit build.
+# build variant (parser/speed/mono/jit/jit-mono) for the native `alcove`,
+# AND the same five variants of the alcove-script front end `alcoves`
+# (running test.als + a new-features.als crash check) — so JIT- and
+# threading-specific regressions are caught on both binaries. Prints one
+# line per variant and exits non-zero if ANY variant fails to build,
+# crashes, or reports a non-zero failed count. Restores ./alcove (jit) and
+# ./alcoves (als) at the end.
 TEST_VARIANTS := parser speed mono jit jit-mono
+# Per-variant compiler flags, matching the parser/speed/mono/jit/jit-mono
+# targets. Used to build alcoves.c (which #includes alcove.c) in each config.
+ALS_SPECS := "parser:-g3" "speed:-O3" "mono:-O3 -DALCOVE_SINGLE_THREADED=1" \
+             "jit:-O3 $(JIT_FLAGS)" "jit-mono:-O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1"
 test-all:
 	@ok=1; bld=/tmp/alcove-bld.$$$$; \
 	for V in $(TEST_VARIANTS); do \
-	  printf '\n=== variant: %s ===\n' "$$V"; \
+	  printf '\n=== alcove/%s ===\n' "$$V"; \
 	  if $(MAKE) -s $$V >"$$bld" 2>&1; then :; \
 	  else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; continue; fi; \
 	  res=$$(./alcove --noload test.alc 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
@@ -217,22 +223,23 @@ test-all:
 	    *) echo "  FAILURES — $$res"; ok=0;; \
 	  esac; \
 	done; \
-	printf '\n=== variant: als (alcove-script front end) ===\n'; \
-	if $(MAKE) -s als >"$$bld" 2>&1; then \
-	  res=$$(./alcoves --noload test.als 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
-	  case "$$res" in \
-	    *" 0 failed") echo "  OK — $$res (test.als via alcoves)";; \
-	    "") echo "  CRASH / early exit — no TEST RESULT line"; ok=0;; \
-	    *) echo "  FAILURES — $$res"; ok=0;; \
-	  esac; \
-	  af=0; \
-	  for i in 1 2 3 4 5 6; do \
-	    ./alcoves --noload examples/alcove-script/new-features.als >/dev/null 2>&1 || af=1; \
-	  done; \
-	  [ $$af -eq 0 ] || { echo "  CRASH in new-features.als run"; ok=0; }; \
-	else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
-	rm -f "$$bld"; \
-	$(MAKE) -s jit >/dev/null 2>&1; \
+	abin=/tmp/alcoves-test.$$$$; \
+	for spec in $(ALS_SPECS); do \
+	  aname=$${spec%%:*}; aflags=$${spec#*:}; \
+	  printf '\n=== alcoves/%s (alcove-script front end) ===\n' "$$aname"; \
+	  if $(CC) -Wall -W $$aflags -o "$$abin" alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
+	    res=$$("$$abin" --noload test.als 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	    case "$$res" in \
+	      *" 0 failed") echo "  OK — $$res (test.als)";; \
+	      "") echo "  CRASH / early exit — no TEST RESULT line"; ok=0;; \
+	      *) echo "  FAILURES — $$res"; ok=0;; \
+	    esac; \
+	    af=0; for i in 1 2 3 4; do "$$abin" --noload examples/alcove-script/new-features.als >/dev/null 2>&1 || af=1; done; \
+	    [ $$af -eq 0 ] || { echo "  CRASH in new-features.als run"; ok=0; }; \
+	  else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
+	done; \
+	rm -f "$$abin" "$$bld"; \
+	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s als >/dev/null 2>&1; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
 	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi
