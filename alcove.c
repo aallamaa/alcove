@@ -110,26 +110,29 @@ lispProc lispProcList[] = {
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
     LISPCMD_TAIL("for-gen", forgencmd, doc_forgen),
-    LISPCMD_TAIL("for!", forgencmd, doc_forgen), /* suffix alias */
+    LISPCMD_TAIL("for-each!", forgencmd, doc_forgen), /* canonical !-suffix */
     LISPCMD_TAIL("let", letcmd, doc_let),
     LISPCMD_TAIL("let*", letstar_cmd, doc_letstar),
     LISPCMD_TAIL("with", withcmd, doc_with),
-    /* Generators — gen-* canonical names + !-suffix aliases */
+    /* Generators — gen-* names kept for compat; !-suffix are the preferred forms.
+       Convention: ! = operates in the stateful/mutable iterator domain;
+                   ? = predicate; no suffix = pure eager list operations. */
     LISPCMD("*gen-done*", gendone_cmd, doc_gendone),
-    LISPCMD("gen-done?", gendonep_cmd, doc_gendonep),
-    LISPCMD("done?", gendonep_cmd, doc_gendonep),
-    LISPCMD("gen-list", genlist_cmd, doc_genlist),
-    LISPCMD("iter!", genlist_cmd, doc_genlist),
-    LISPCMD("gen-range", genrange_cmd, doc_genrange),
-    LISPCMD("range!", genrange_cmd, doc_genrange),
-    LISPCMD("gen-next!", gennext_cmd, doc_gennext),
-    LISPCMD("next!", gennext_cmd, doc_gennext),
-    LISPCMD("gen-collect", gencollect_cmd, doc_gencollect),
-    LISPCMD("collect!", gencollect_cmd, doc_gencollect),
-    LISPCMD("gen-map", genmap_cmd, doc_genmap),
-    LISPCMD("map!", genmap_cmd, doc_genmap),
+    LISPCMD("*done*",     gendone_cmd, doc_gendone),    /* preferred short name */
+    LISPCMD("gen-done?",  gendonep_cmd, doc_gendonep),
+    LISPCMD("done?",      gendonep_cmd, doc_gendonep),  /* preferred */
+    LISPCMD("gen-list",   genlist_cmd, doc_genlist),
+    LISPCMD("iter!",      genlist_cmd, doc_genlist),    /* preferred */
+    LISPCMD("gen-range",  genrange_cmd, doc_genrange),
+    LISPCMD("range!",     genrange_cmd, doc_genrange),  /* preferred */
+    LISPCMD("gen-next!",  gennext_cmd, doc_gennext),
+    LISPCMD("next!",      gennext_cmd, doc_gennext),    /* preferred */
+    LISPCMD("gen-collect",gencollect_cmd, doc_gencollect),
+    LISPCMD("collect!",   gencollect_cmd, doc_gencollect), /* preferred */
+    LISPCMD("gen-map",    genmap_cmd, doc_genmap),
+    LISPCMD("map!",       genmap_cmd, doc_genmap),      /* preferred */
     LISPCMD("gen-filter", genfilter_cmd, doc_genfilter),
-    LISPCMD("filter!", genfilter_cmd, doc_genfilter),
+    LISPCMD("filter!",    genfilter_cmd, doc_genfilter), /* preferred */
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
     LISPCMD("setf", equalcmd, doc_setf), /* exact synonym of = (readable head) */
@@ -19276,7 +19279,7 @@ int main(int argc, char *argv[]) {
   /* Allocate immortal singletons before any other code references them. */
   nil_singleton = make_nil();
   true_singleton = make_symbol("t", 1);
-  gen_done_singleton = make_symbol("*gen-done*", 10);
+  gen_done_singleton = make_symbol("*done*", 6);
   set_get_keyval_dict(reserved_symbol, "nil", nil = NIL_EXP);
   set_get_keyval_dict(reserved_symbol, "t", t = TRUE_EXP);
 
