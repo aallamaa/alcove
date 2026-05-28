@@ -108,7 +108,7 @@ typedef struct {
 
 static int als_is_delim(char c) {
   return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' ||
-         c == '\'' || c == '`' || c == ',';
+         c == '\'' || c == '`' || c == ',' || c == '[' || c == ']';
 }
 
 static als_node *als_read_one(als_lr *r);
@@ -205,6 +205,16 @@ static als_node *als_read_one(als_lr *r) {
     r->i += 3;
     return a;
   }
+  /* vector literal #[a b c] -> (vector a b c). alcove's own reader expands
+     #[...] the same way; we lower it here so the indentation reader's
+     line/atom logic doesn't choke on the brackets. */
+  if (c == '#' && r->i + 1 < r->n && r->s[r->i + 1] == '[') {
+    r->i += 2; /* consume #[ */
+    als_node *vec = als_list();
+    als_push(vec, als_atom("vector", 6));
+    als_read_forms(r, ']', vec);
+    return vec;
+  }
   size_t start = r->i;
   while (r->i < r->n && !als_is_delim(r->s[r->i]))
     r->i++;
@@ -246,7 +256,9 @@ static char *als_strip_comment(const char *line) {
       if (c == '"')
         in_str = 0;
     } else {
-      if (c == '#' && line[i + 1] != '\\')
+      /* `#` starts a comment, EXCEPT `#\` (char literal) and `#[` (vector
+         literal) which are real tokens that must survive to the reader. */
+      if (c == '#' && line[i + 1] != '\\' && line[i + 1] != '[')
         break;
       out[o++] = c;
       if (c == '"')

@@ -123,6 +123,11 @@ class LineReader:
             self.i += 1
             self.skip_ws()
             return [Sym("quote"), self.read_one()]
+        # vector literal #[a b c] -> (vector a b c); alcove's reader expands
+        # #[...] the same way. (#\X char literals are handled in read_atom.)
+        if self.s[self.i:self.i + 2] == "#[":
+            self.i += 2
+            return [Sym("vector")] + self.read_forms(terminator="]")
         return self.read_atom()
 
     def read_string(self):
@@ -148,7 +153,7 @@ class LineReader:
             self.i += 3
             return Sym(tok)
         start = self.i
-        while self.i < self.n and self.s[self.i] not in ' \t()"\'':
+        while self.i < self.n and self.s[self.i] not in ' \t()[]"\'':
             self.i += 1
         tok = self.s[start:self.i]
         # alcove-target literal mapping
@@ -177,7 +182,8 @@ def strip_comment(line):
             if c == '"':
                 in_str = False
         else:
-            if c == "#" and line[i + 1:i + 2] != "\\":
+            # `#` starts a comment, except `#\` (char) and `#[` (vector).
+            if c == "#" and line[i + 1:i + 2] not in ("\\", "["):
                 break
             out.append(c)
             if c == '"':

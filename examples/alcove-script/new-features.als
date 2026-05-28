@@ -301,3 +301,16 @@ def running-sum (gen):
       acc
 
 prn (collect! (running-sum (range! 1 6)))   # (1 3 6 10 15)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 6. vector literals — #[...] works in Alcove Script (lowered to (vector ...))
+# ──────────────────────────────────────────────────────────────────────────
+prn #[1 2 3]                          # #[1 2 3]
+prn (vec-ref #[10 20 30] 1)           # 20
+prn (vec-len #[5 6 7 8])              # 4
+prn #[#[1 2] #[3 4]]                  # nested: #[#[1 2] #[3 4]]
+= grid #[#[1 2 3] #[4 5 6]]
+prn (vec-ref (vec-ref grid 1) 2)      # 6
+# `#` still starts a comment everywhere else:
+prn "comments still work"             # this trailing text is ignored
