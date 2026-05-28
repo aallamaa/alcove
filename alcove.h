@@ -190,6 +190,21 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
    set, so the atomic macros run instead. Cleared on fresh exps. */
 #define FLAG_SHARED 8
 
+/* Small-text optimization for EXP_SYMBOL / EXP_STRING. When the text fits
+   (≤ INLINE_TXT_CAP chars + NUL), it is stored INLINE in the primary union
+   (`istr`, overlapping `ptr`) instead of a separate heap allocation. The
+   text lives in the `ptr` union — NOT the `meta` union — specifically so a
+   symbol's resolution cache (which lives in `meta`) keeps working for short
+   builtins like +, car, if. Two rules the rest of the code must respect:
+     1. Read the bytes via exp_text(), never `->ptr` directly, when the flag
+        may be set — `->ptr` reinterprets the inline bytes as a pointer.
+     2. unrefexp must NOT free(ptr) when this flag is set (there is no heap
+        allocation; the bytes are in the struct) — see the free path.
+   Bit 6: bits 0-3 are the FLAG_* above, bits 4-5 are the EXP_VECTOR element
+   kind. Symbols/strings are never vectors, so there is no overlap. */
+#define FLAG_INLINE_TXT 64
+#define INLINE_TXT_CAP 7 /* 7 chars + NUL fit the 8-byte union slot */
+
 /* For EXP_VECTOR only: element kind, encoded in bits 4-5 of exp_t->flags.
    GEN keeps the old behavior — each slot is an owning exp_t* ref. I64/F64
    store raw 8-byte numerics inline, skipping per-cell heap exp_t boxing.
@@ -217,6 +232,11 @@ typedef struct exp_t {
     int64_t s64;
     expfloat f;
     lispCmd *fnc;
+    char istr[8];           /* FLAG_INLINE_TXT: inline symbol/string bytes,
+                               overlapping `ptr`. Read via exp_text(), never
+                               via `->ptr` directly, when the flag is set.
+                               Lives here (not the meta union) so the symbol
+                               resolution cache in `meta` stays usable. */
   };
   union {                /* 8 bytes — overloaded by node role:
                               - on the lambda/macro head: strdup'd name
@@ -237,6 +257,15 @@ typedef struct exp_t {
   struct exp_t *next;    /* 8 bytes */
 } exp_t;                 /* 32 bytes */
 _Static_assert(sizeof(exp_t) == 32, "exp_t layout changed — audit JIT and refcount paths");
+
+/* Text of an EXP_SYMBOL / EXP_STRING / EXP_ERROR, transparent to inlining.
+   Use this everywhere a symbol or string name is read as a C string. For
+   non-inline exps it is just `->ptr`; for FLAG_INLINE_TXT it returns the
+   in-struct bytes. The branch is on a field already in the same cache line
+   and is perfectly predictable per-exp, so the cost over a bare load is ~0. */
+static inline char *exp_text(const exp_t *e) {
+  return (e->flags & FLAG_INLINE_TXT) ? (char *)e->istr : (char *)e->ptr;
+}
 
 /* ---------------- Bytecode VM ----------------
    Lambda bodies that use only supported forms (fixnum arithmetic,

@@ -77,10 +77,10 @@ static int is_reserved_name(const char *name);            /* defined below; used
    (cleanup + return/propagate). `env` must be in scope at the use site. */
 #define REJECT_RESERVED_ASSIGN(SYM, ERRLV, FAIL)                              \
   do {                                                                        \
-    if (issymbol(SYM) && is_reserved_name((char *)(SYM)->ptr)) {              \
+    if (issymbol(SYM) && is_reserved_name(exp_text(SYM))) {                   \
       (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                         \
                       "cannot assign to reserved name '%s'",                  \
-                      (char *)(SYM)->ptr);                                    \
+                      exp_text(SYM));                                         \
       FAIL;                                                                    \
     }                                                                         \
   } while (0)
@@ -597,10 +597,18 @@ static inline int unrefexp(exp_t *e) {
       e->next->meta = NULL;
     }
     exp_t *next = e->next;
-    if ((e->type == EXP_SYMBOL) || (e->type == EXP_STRING) ||
-        (e->type == EXP_ERROR))
+    /* ERROR always heap-allocates its message (vasprintf), and its `flags`
+       field is overloaded as the error code — so never flag-test it here. */
+    if (e->type == EXP_ERROR) {
       free(e->ptr);
-    else if (e->type == EXP_FFI) {
+    } else if (e->type == EXP_SYMBOL || e->type == EXP_STRING) {
+      /* Handle symbols/strings entirely here so they never fall through to
+         the `unrefexp(e->content)` recurse below — for an inline exp,
+         `content`/`ptr` hold text bytes, not a child pointer. Free the heap
+         text only when it isn't inline (inline lives in the struct). */
+      if (!(e->flags & FLAG_INLINE_TXT))
+        free(e->ptr);
+    } else if (e->type == EXP_FFI) {
       extern void alc_ffi_free(void *ptr); /* defined alongside ffi_call */
       alc_ffi_free(e->ptr);
     } else if (e->type == EXP_VECTOR && e->ptr) {
@@ -1204,7 +1212,7 @@ const char *alcove_arg_string(exp_t *e, env_t *env, int n) {
     return NULL;
   exp_t *val = EVAL(cur->content, env);
   if (!val) return NULL;
-  const char *s = (is_ptr(val) && val->type == EXP_STRING) ? (const char *)val->ptr : NULL;
+  const char *s = (is_ptr(val) && val->type == EXP_STRING) ? (const char *)exp_text(val) : NULL;
   /* Copy into a static round-robin buffer so the pointer is safe to
      return after we unref. Round-robin gives a few concurrent slots
      for the common pattern of reading several string args in a row. */
@@ -1293,7 +1301,7 @@ void print_node(exp_t *node) {
     return;
   }
   if (node->type == EXP_ERROR) {
-    printf("\x1B[91mError: \x1B[39m%s\n", (char *)node->ptr);
+    printf("\x1B[91mError: \x1B[39m%s\n", (char *)exp_text(node));
   } else if (node->type == EXP_TREE) {
     printf("[ ");
     if (node->content)
@@ -1336,9 +1344,9 @@ void print_node(exp_t *node) {
   }
 
   else if (node->type == EXP_SYMBOL)
-    printf("\x1B[92m%s\x1B[39m", (char *)node->ptr);
+    printf("\x1B[92m%s\x1B[39m", (char *)exp_text(node));
   else if (node->type == EXP_STRING)
-    printf("\x1B[92m\"%s\"\x1B[39m", (char *)node->ptr);
+    printf("\x1B[92m\"%s\"\x1B[39m", (char *)exp_text(node));
   else if (node->type == EXP_FLOAT)
     printf("\x1B[92m%g\x1B[39m", node->f);
   else if (node->type == EXP_VECTOR) {
@@ -1433,25 +1441,48 @@ void print_node(exp_t *node) {
 }
 
 exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
-  char *ptr = realloc(token->data, final_length + 1);
-  if (!ptr)
-    graceful_shutdown("Fatal error: Out of memory");
-  if (offset > 0)
-    memmove(ptr, ptr + offset, final_length);
-  ptr[final_length] = '\0';
+  exp_t *cur = make_nil();
+  cur->type = EXP_STRING;
+  if (final_length <= INLINE_TXT_CAP) {
+    /* Short string literal: store inline, no heap bytes. */
+    cur->flags |= FLAG_INLINE_TXT;
+    memcpy(cur->istr, token->data + offset, final_length);
+    cur->istr[final_length] = '\0';
+    free(token->data);
+  } else {
+    char *ptr = realloc(token->data, final_length + 1);
+    if (!ptr)
+      graceful_shutdown("Fatal error: Out of memory");
+    if (offset > 0)
+      memmove(ptr, ptr + offset, final_length);
+    ptr[final_length] = '\0';
+    cur->ptr = ptr;
+  }
   free(token);
-  MAKE_TYPED(cur, EXP_STRING, ptr);
   return cur;
 }
 
 exp_t *make_symbol_from_token(token_t *token) {
-  int final_length = token->size;
-  char *ptr = realloc(token->data, final_length + 1);
-  if (!ptr)
-    graceful_shutdown("Fatal error: Out of memory");
-  ptr[final_length] = '\0';
+  int n = token->size;
+  exp_t *cur = make_nil();
+  cur->type = EXP_SYMBOL;
+  if (n <= INLINE_TXT_CAP) {
+    /* Short name: store inline (no heap symbol bytes). This is the common
+       case for source symbols — keywords, identifiers, operators — so it
+       must inline here, not only in make_symbol. We own token->data. */
+    cur->flags |= FLAG_INLINE_TXT;
+    memcpy(cur->istr, token->data, n);
+    cur->istr[n] = '\0';
+    free(token->data);
+  } else {
+    /* Long name: reuse the token's own buffer as the heap symbol string. */
+    char *ptr = realloc(token->data, n + 1);
+    if (!ptr)
+      graceful_shutdown("Fatal error: Out of memory");
+    ptr[n] = '\0';
+    cur->ptr = ptr;
+  }
   free(token);
-  MAKE_TYPED(cur, EXP_SYMBOL, ptr);
   return cur;
 }
 
@@ -1462,14 +1493,29 @@ static inline char *alloc_str(char *str, int length) {
   return ptr;
 }
 
-inline exp_t *make_string(char *str, int length) {
-  MAKE_TYPED(cur, EXP_STRING, alloc_str(str, length));
+/* Build a SYMBOL/STRING, storing short text inline in the primary union
+   (no heap alloc); longer text falls back to the heap. The inline bytes
+   overlap `ptr`, so readers must go through exp_text() — `meta` is left
+   free for the symbol resolution cache. See FLAG_INLINE_TXT. */
+static inline exp_t *make_inline_txt(char *str, int length, int type) {
+  exp_t *cur = make_nil();
+  cur->type = (unsigned short)type;
+  if (length <= INLINE_TXT_CAP) {
+    cur->flags |= FLAG_INLINE_TXT;
+    memcpy(cur->istr, str, length);
+    cur->istr[length] = '\0';
+  } else {
+    cur->ptr = alloc_str(str, length);
+  }
   return cur;
 }
 
+inline exp_t *make_string(char *str, int length) {
+  return make_inline_txt(str, length, EXP_STRING);
+}
+
 inline exp_t *make_symbol(char *str, int length) {
-  MAKE_TYPED(cur, EXP_SYMBOL, alloc_str(str, length));
-  return cur;
+  return make_inline_txt(str, length, EXP_SYMBOL);
 }
 
 inline exp_t *make_quote(exp_t *node) {
@@ -1878,7 +1924,7 @@ exp_t *load_blob(exp_t *e, FILE *stream) {
 exp_t *dump_string(exp_t *e, FILE *stream) {
   if (dumptype(stream, &e->type) <= 0)
     return NULL;
-  if (dump_str(e->ptr, stream))
+  if (dump_str(exp_text(e), stream))
     return e;
   else
     return NULL;
@@ -1927,7 +1973,7 @@ exp_t *load_float(exp_t *e, FILE *stream) {
 exp_t *dump_symbol(exp_t *e, FILE *stream) {
   if (dumptype(stream, &e->type) <= 0)
     return NULL;
-  if (dump_str(e->ptr, stream))
+  if (dump_str(exp_text(e), stream))
     return e;
   return NULL;
 }
@@ -2731,11 +2777,11 @@ inline int istrue(exp_t *e) {
     return 1;
   if isatom (e) {
     if isstring (e)
-      ret = ((e->ptr) ? strlen(e->ptr) : 0);
+      { const char *_t = exp_text(e); ret = ((_t) ? strlen(_t) : 0); }
     else if isfloat (e)
       ret = (e->f != 0);
     else if issymbol (e)
-      ret = (strcmp(e->ptr, "nil") != 0);
+      ret = (strcmp(exp_text(e), "nil") != 0);
   } else if ispair (e) {
     if (e->content || e->next)
       ret = 1;
@@ -2746,16 +2792,19 @@ inline int istrue(exp_t *e) {
 inline exp_t *lookup(exp_t *e, env_t *env) {
   keyval_t *ret;
   env_t *curenv = env;
-  char *key = e->ptr;
 
   /* Cache fast path: symbols previously resolved into reserved_symbol
      (builtins like +, -, if, <, etc.) skip the hash lookup. On a
      symbol, meta != NULL uniquely means "cached resolution" — the
-     lambda/macro meta strings only exist on their own exp_t types. */
+     lambda/macro meta strings only exist on their own exp_t types.
+     Inlining keeps the cache: the text is in the `ptr` union, `meta`
+     is untouched, so a short builtin symbol caches just like a long one.
+     Read the key only after the cache miss (a hit needs no text). */
   if (e->meta) {
     return refexp((exp_t *)e->meta);
   }
 
+  char *key = exp_text(e);
   if ((ret = set_get_keyval_dict(reserved_symbol, key, NULL))) {
     e->meta = (struct keyval_t *)ret->val;
     return refexp(ret->val);
@@ -2789,7 +2838,7 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
                          { unrefexp(keyv); unrefexp(val); return _rerr; });
   if (issymbol(keyv) || isstring(keyv)) { // form (= "qweqwe" 10) (= weq 10)
     if (islambda(val) && val->meta == NULL)
-      val->meta = (keyval_t *)strdup(keyv->ptr);
+      val->meta = (keyval_t *)strdup(exp_text(keyv));
     /* Walk env chain inner→outer looking for an existing binding;
        mutate it in place if found. This is what makes mutable
        closures work — `(= n ...)` inside (fn (...) ...) finds the
@@ -2802,7 +2851,7 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
         int i;
         for (i = 0; i < cur->n_inline; i++) {
           const char *k = cur->inline_keys[i];
-          if (k && strcmp(k, keyv->ptr) == 0) {
+          if (k && strcmp(k, exp_text(keyv)) == 0) {
             unrefexp(cur->inline_vals[i]);
             cur->inline_vals[i] = refexp(val);
             unrefexp(keyv);
@@ -2810,7 +2859,7 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
           }
         }
         if (cur->d) {
-          keyval_t *kv = set_get_keyval_dict(cur->d, keyv->ptr, NULL);
+          keyval_t *kv = set_get_keyval_dict(cur->d, exp_text(keyv), NULL);
           if (kv) {
             /* Bump gen BEFORE the unref. The reverse order is a TOCTOU:
                under threading (or even under a JIT callout that re-enters
@@ -2832,14 +2881,14 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
     /* No existing binding anywhere — create in current env. */
     if (!(env->d))
       env->d = create_dict();
-    ret = set_get_keyval_dict(env->d, keyv->ptr, val);
+    ret = set_get_keyval_dict(env->d, exp_text(keyv), val);
     GEN_BUMP();
     unrefexp(keyv);
     return val;
   } else if (ispair(keyv)) { /*evaluate(keyv,env)=val*/
     key = car(keyv);
     if (key && issymbol(key)) {
-      if (strcmp(key->ptr, "car") == 0) // form (= (car x) 'z)
+      if (strcmp(exp_text(key), "car") == 0) // form (= (car x) 'z)
       {
         key = EVAL(cadr(keyv), env);
         if iserror (key) {
@@ -2852,7 +2901,7 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
         unrefexp(key);
         goto finish;
 
-      } else if (strcmp(key->ptr, "cdr") == 0) {
+      } else if (strcmp(exp_text(key), "cdr") == 0) {
         key = EVAL(cadr(keyv), env);
         if iserror (key) {
           unrefexp(keyv);
@@ -2880,8 +2929,8 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
           }
           if (idx && isnumber(idx) && ischar(val)) {
             if ((FIX_VAL(idx) >= 0) &&
-                (FIX_VAL(idx) < (int64_t)strlen(key->ptr))) {
-              *((char *)key->ptr + FIX_VAL(idx)) = (unsigned char)CHAR_VAL(val);
+                (FIX_VAL(idx) < (int64_t)strlen(exp_text(key)))) {
+              *((char *)exp_text(key) + FIX_VAL(idx)) = (unsigned char)CHAR_VAL(val);
               if (idx)
                 unrefexp(idx);
               unrefexp(key);
@@ -2939,13 +2988,13 @@ static int is_reserved_name(const char *name) {
    marker (a . rest), and nested destructuring patterns ((x y) z). */
 static const char *reserved_param_name(exp_t *params) {
   if (issymbol(params)) {
-    const char *nm = (const char *)params->ptr;
+    const char *nm = (const char *)exp_text(params);
     return (strcmp(nm, ".") != 0 && is_reserved_name(nm)) ? nm : NULL;
   }
   for (exp_t *p = params; p && ispair(p) && istrue(p); p = p->next) {
     exp_t *el = p->content;
     if (issymbol(el)) {
-      const char *nm = (const char *)el->ptr;
+      const char *nm = (const char *)exp_text(el);
       if (strcmp(nm, ".") != 0 && is_reserved_name(nm))
         return nm;
     } else if (ispair(el) && istrue(el)) {
@@ -3068,7 +3117,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         }
         val->next = vali;
         val->type = EXP_LAMBDA;
-        val->meta = (keyval_t *)strdup(name->ptr);
+        val->meta = (keyval_t *)strdup(exp_text(name));
         /* Closure: capture defining env (see fncmd for rationale). */
         if (env)
           val->next->meta = (struct keyval_t *)ref_env(env);
@@ -3077,7 +3126,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         compile_lambda(val, env && env->root);
         if (!(env->d))
           env->d = create_dict();
-        set_get_keyval_dict(env->d, name->ptr,
+        set_get_keyval_dict(env->d, exp_text(name),
                             val); /* return value (the kv) unused */
         GEN_BUMP(); /* invalidate bytecode global-resolution caches */
       } else
@@ -3137,12 +3186,12 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
         val = make_node(refexp(header));
         val->next = vali;
         val->type = EXP_MACRO;
-        val->meta = (keyval_t *)strdup(name->ptr);
+        val->meta = (keyval_t *)strdup(exp_text(name));
         if (env)
           val->next->meta = (struct keyval_t *)ref_env(env);
         if (!(env->d))
           env->d = create_dict();
-        set_get_keyval_dict(env->d, name->ptr,
+        set_get_keyval_dict(env->d, exp_text(name),
                             val); /* return value (the kv) unused */
         GEN_BUMP();
       }
@@ -3192,7 +3241,7 @@ static exp_t *qq_expand(exp_t *tmpl, int depth) {
   }
   /* check for (unquote x) */
   if (issymbol(tmpl->content) &&
-      !strcmp((char *)tmpl->content->ptr, "unquote")) {
+      !strcmp((char *)exp_text(tmpl->content), "unquote")) {
     if (depth == 0)
       return refexp(cadr(tmpl)); /* splice evaluation site */
     /* nested quasiquote — decrease depth, still expand */
@@ -3205,7 +3254,7 @@ static exp_t *qq_expand(exp_t *tmpl, int depth) {
   }
   /* check for (quasiquote x) — nested, increase depth */
   if (issymbol(tmpl->content) &&
-      !strcmp((char *)tmpl->content->ptr, "quasiquote")) {
+      !strcmp((char *)exp_text(tmpl->content), "quasiquote")) {
     exp_t *inner = qq_expand(cadr(tmpl), depth + 1);
     exp_t *qq_sym = make_node(make_symbol("quasiquote", 10));
     qq_sym->next = make_node(inner);
@@ -3219,7 +3268,7 @@ static exp_t *qq_expand(exp_t *tmpl, int depth) {
   exp_t *cdr = tmpl->next; /* remaining nodes (raw, not wrapped) */
 
   if (ispair(car) && istrue(car) && issymbol(car->content) &&
-      !strcmp((char *)car->content->ptr, "unquote-splicing")) {
+      !strcmp((char *)exp_text(car->content), "unquote-splicing")) {
     /* (append <splice-form> <rest-expansion>) */
     exp_t *splice = refexp(cadr(car));
     exp_t *rest_exp;
@@ -3319,14 +3368,14 @@ static exp_t *setq_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
   while (cur) {
     for (int i = 0; i < cur->n_inline; i++) {
       const char *k = cur->inline_keys[i];
-      if (k && strcmp(k, sym->ptr) == 0) {
+      if (k && strcmp(k, exp_text(sym)) == 0) {
         unrefexp(cur->inline_vals[i]);
         cur->inline_vals[i] = refexp(val);
         return val;
       }
     }
     if (cur->d) {
-      keyval_t *kv = set_get_keyval_dict(cur->d, sym->ptr, NULL);
+      keyval_t *kv = set_get_keyval_dict(cur->d, exp_text(sym), NULL);
       if (kv) {
         GEN_BUMP();
         unrefexp(kv->val);
@@ -3341,7 +3390,7 @@ static exp_t *setq_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
     root = env;
   if (!(root->d))
     root->d = create_dict();
-  set_get_keyval_dict(root->d, sym->ptr, val);
+  set_get_keyval_dict(root->d, exp_text(sym), val);
   GEN_BUMP();
   return val;
 }
@@ -3361,14 +3410,14 @@ static void assign_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
   while (cur) {
     for (int i = 0; i < cur->n_inline; i++) {
       const char *k = cur->inline_keys[i];
-      if (k && strcmp(k, sym->ptr) == 0) {
+      if (k && strcmp(k, exp_text(sym)) == 0) {
         unrefexp(cur->inline_vals[i]);
         cur->inline_vals[i] = refexp(val);
         return;
       }
     }
     if (cur->d) {
-      keyval_t *kv = set_get_keyval_dict(cur->d, sym->ptr, NULL);
+      keyval_t *kv = set_get_keyval_dict(cur->d, exp_text(sym), NULL);
       if (kv) {
         GEN_BUMP();
         unrefexp(kv->val);
@@ -3380,7 +3429,7 @@ static void assign_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
   }
   if (!(env->d))
     env->d = create_dict();
-  set_get_keyval_dict(env->d, sym->ptr, val);
+  set_get_keyval_dict(env->d, exp_text(sym), val);
   GEN_BUMP();
 }
 
@@ -3470,7 +3519,7 @@ exp_t *persistcmd(exp_t *e, env_t *env) {
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
-  ret = set_keyval_dict_timestamp(cur->d, tmpkey->ptr, gettimeusec());
+  ret = set_keyval_dict_timestamp(cur->d, exp_text(tmpkey), gettimeusec());
   unrefexp(tmpkey);
   return ret;
 }
@@ -3489,7 +3538,7 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
-  ret = get_keyval_dict_timestamp(cur->d, tmpkey->ptr);
+  ret = get_keyval_dict_timestamp(cur->d, exp_text(tmpkey));
   unrefexp(tmpkey);
   /* Only positive timestamps are persist marks. Negative values encode
      RESP TTL (absolute-µs expire-at) and must NOT report as persistent. */
@@ -3521,7 +3570,7 @@ exp_t *forgetcmd(exp_t *e, env_t *env) {
   while (cur->root)
     cur = cur->root;
   if (cur->d) {
-    del_keyval_dict(cur->d, tmpkey->ptr);
+    del_keyval_dict(cur->d, exp_text(tmpkey));
     GEN_BUMP();
   }
   unrefexp(tmpkey);
@@ -3543,7 +3592,7 @@ exp_t *unpersistcmd(exp_t *e, env_t *env) {
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
-  ret = set_keyval_dict_timestamp(cur->d, tmpkey->ptr, 0);
+  ret = set_keyval_dict_timestamp(cur->d, exp_text(tmpkey), 0);
   unrefexp(tmpkey);
   return ret;
 }
@@ -3843,7 +3892,7 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
       CLEAN_RETURN_1(path_arg,
                      error(ERROR_ILLEGAL_VALUE, NULL, env,
                            "savedb: optional argument must be a filename string"));
-    path = (const char *)path_arg->ptr;
+    path = (const char *)exp_text(path_arg);
   }
   /* Snapshot path before releasing path_arg — error() would receive a
      dangling pointer if we unrefexp(path_arg) first and its ptr was freed. */
@@ -3958,7 +4007,7 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
       CLEAN_RETURN_1(path_arg,
                      error(ERROR_ILLEGAL_VALUE, NULL, env,
                            "loaddb: optional argument must be a filename string"));
-    path = (const char *)path_arg->ptr;
+    path = (const char *)exp_text(path_arg);
   }
   int n = loaddb_from_file_path(env, path);
   if (n < 0) {
@@ -3995,7 +4044,7 @@ static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
     return 1;
   }
   if (isstring(a) && isstring(b)) {
-    *d = strcmp(a->ptr, b->ptr);
+    *d = strcmp(exp_text(a), exp_text(b));
     return 1;
   }
   if (ischar(a) && ischar(b)) {
@@ -4015,13 +4064,13 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
      bytecode SLOT_<cmp>_FIX uses, so chained results agree with the
      compiler's per-pair comparisons. */
   int op_kind;
-  if (strcmp(op->ptr, "<") == 0)
+  if (strcmp(exp_text(op), "<") == 0)
     op_kind = 0;
-  else if (strcmp(op->ptr, ">") == 0)
+  else if (strcmp(exp_text(op), ">") == 0)
     op_kind = 1;
-  else if (strcmp(op->ptr, "<=") == 0)
+  else if (strcmp(exp_text(op), "<=") == 0)
     op_kind = 2;
-  else if (strcmp(op->ptr, ">=") == 0)
+  else if (strcmp(exp_text(op), ">=") == 0)
     op_kind = 3;
   else {
     unrefexp(e);
@@ -5386,7 +5435,7 @@ exp_t *prcmd(exp_t *e, env_t *env) {
       return val;
     }
     if (val && isstring(val))
-      printf("%s", (char *)val->ptr);
+      printf("%s", (char *)exp_text(val));
     else
       print_node(val);
     unrefexp(val);
@@ -5436,7 +5485,7 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
       str_buf_put(buf, len, cap, &ch, 1);
     }
   } else if (isstring(v) || issymbol(v)) {
-    str_buf_put(buf, len, cap, (char *)v->ptr, strlen((char *)v->ptr));
+    { const char *_t = exp_text(v); str_buf_put(buf, len, cap, (char *)_t, strlen((char *)_t)); }
   } else if (isfloat(v)) {
     int n = snprintf(tmp, sizeof tmp, "%g", v->f);
     str_buf_put(buf, len, cap, tmp, (size_t)n);
@@ -5568,7 +5617,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "fmt: first arg must be a string template");
   }
-  const char *tmpl = (const char *)fmtarg->ptr;
+  const char *tmpl = (const char *)exp_text(fmtarg);
   size_t cap = 128, len = 0;
   char *buf = memalloc(cap, 1);
   exp_t *cur = cddr(e);
@@ -5643,7 +5692,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
                     isnumber(v) ? (double)FIX_VAL(v) : 0.0;
         n = snprintf(tmp, sizeof(tmp), printf_fmt, dv);
       } else if (ftype == 's') {
-        const char *sv = isstring(v) ? (char *)v->ptr : "";
+        const char *sv = isstring(v) ? (char *)exp_text(v) : "";
         n = snprintf(tmp, sizeof(tmp), printf_fmt, sv);
         /* %s with width or long strings can exceed tmp; retry on heap */
         if (n >= (int)sizeof(tmp)) {
@@ -5693,7 +5742,7 @@ exp_t *stringappendcmd(exp_t *e, env_t *env) {
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "string-append: args must be strings");
     }
-    str_buf_put(&buf, &len, &cap, (char *)v->ptr, strlen((char *)v->ptr));
+    { const char *_t = exp_text(v); str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t)); }
     unrefexp(v);
   }
   exp_t *ret = make_string(buf, (int)len);
@@ -5709,7 +5758,7 @@ exp_t *substrcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_3(s, start, end,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "substr: expected string and numeric bounds"));
-  int64_t n = (int64_t)strlen((char *)s->ptr);
+  int64_t n = (int64_t)strlen((char *)exp_text(s));
   int64_t a = FIX_VAL(start), b = FIX_VAL(end);
   if (a < 0)
     a = 0;
@@ -5721,7 +5770,7 @@ exp_t *substrcmd(exp_t *e, env_t *env) {
     b = a;
   if (b > n)
     b = n;
-  exp_t *ret = make_string((char *)s->ptr + a, (int)(b - a));
+  exp_t *ret = make_string((char *)exp_text(s) + a, (int)(b - a));
   CLEAN_RETURN_3(s, start, end, ret);
 }
 
@@ -5742,8 +5791,8 @@ exp_t *stringsplitcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(s, sep,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "string-split: args must be strings"));
-  const char *str = (const char *)s->ptr;
-  const char *needle = (const char *)sep->ptr;
+  const char *str = (const char *)exp_text(s);
+  const char *needle = (const char *)exp_text(sep);
   size_t nlen = strlen(needle);
   exp_t *ret = NIL_EXP, *tail = NULL;
   if (nlen == 0) {
@@ -5781,10 +5830,10 @@ exp_t *stringjoincmd(exp_t *e, env_t *env) {
                            "string-join: xs must be a list of strings"));
     }
     if (!first)
-      str_buf_put(&buf, &len, &cap, (char *)sep->ptr, strlen((char *)sep->ptr));
+      { const char *_t = exp_text(sep); str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t)); }
     first = 0;
-    str_buf_put(&buf, &len, &cap, (char *)car(p)->ptr,
-                strlen((char *)car(p)->ptr));
+    str_buf_put(&buf, &len, &cap, exp_text(car(p)),
+                strlen(exp_text(car(p))));
     p = cdr(p);
   }
   exp_t *ret = make_string(buf, (int)len);
@@ -5799,7 +5848,7 @@ exp_t *stringtrimcmd(exp_t *e, env_t *env) {
   if (!isstring(s))
     CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
                             "string-trim: arg must be a string"));
-  char *p = (char *)s->ptr;
+  char *p = (char *)exp_text(s);
   size_t n = strlen(p), a = 0, b = n;
   while (a < n && isspace((unsigned char)p[a]))
     a++;
@@ -5816,10 +5865,10 @@ exp_t *stringtrimcmd(exp_t *e, env_t *env) {
     if (!isstring(s))                                                          \
       CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,                  \
                               cname ": arg must be a string"));                \
-    size_t n = strlen((char *)s->ptr);                                         \
+    size_t n = strlen((char *)exp_text(s));                                         \
     char *buf = memalloc(n + 1, 1);                                            \
     for (size_t i = 0; i < n; i++)                                             \
-      buf[i] = (char)fn((unsigned char)((char *)s->ptr)[i]);                   \
+      buf[i] = (char)fn((unsigned char)((char *)exp_text(s))[i]);                   \
     exp_t *ret = make_string(buf, (int)n);                                     \
     free(buf);                                                                 \
     CLEAN_RETURN_1(s, ret);                                                    \
@@ -5891,7 +5940,7 @@ exp_t *readstringcmd(exp_t *e, env_t *env) {
   if (!isstring(path))
     CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                "read-string: path must be a string"));
-  exp_t *ret = slurp_file_as_string((char *)path->ptr);
+  exp_t *ret = slurp_file_as_string((char *)exp_text(path));
   CLEAN_RETURN_1(path, ret);
 }
 
@@ -5902,14 +5951,14 @@ static exp_t *write_string_mode(exp_t *e, env_t *env, const char *mode,
     CLEAN_RETURN_2(path, text,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "%s: path and text must be strings", (char *)name));
-  FILE *fp = fopen((char *)path->ptr, mode);
+  FILE *fp = fopen((char *)exp_text(path), mode);
   if (!fp)
     CLEAN_RETURN_2(path, text,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "%s: cannot open '%s'", (char *)name,
-                         (char *)path->ptr));
-  size_t n = strlen((char *)text->ptr);
-  int ok = (n == 0 || fwrite((char *)text->ptr, 1, n, fp) == n);
+                         (char *)exp_text(path)));
+  size_t n = strlen((char *)exp_text(text));
+  int ok = (n == 0 || fwrite((char *)exp_text(text), 1, n, fp) == n);
   fclose(fp);
   if (!ok)
     CLEAN_RETURN_2(path, text,
@@ -5937,11 +5986,11 @@ exp_t *readlinescmd(exp_t *e, env_t *env) {
   if (!isstring(path))
     CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                "read-lines: path must be a string"));
-  exp_t *s = slurp_file_as_string((char *)path->ptr);
+  exp_t *s = slurp_file_as_string((char *)exp_text(path));
   if (s == NIL_EXP)
     CLEAN_RETURN_1(path, NIL_EXP);
   exp_t *ret = NIL_EXP, *tail = NULL;
-  char *p = (char *)s->ptr;
+  char *p = (char *)exp_text(s);
   char *start = p;
   for (; *p; p++) {
     if (*p == '\n') {
@@ -5964,7 +6013,7 @@ exp_t *fileexistspcmd(exp_t *e, env_t *env) {
   if (!isstring(path))
     CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                "file-exists?: path must be a string"));
-  exp_t *ret = (access((char *)path->ptr, F_OK) == 0) ? TRUE_EXP : NIL_EXP;
+  exp_t *ret = (access((char *)exp_text(path), F_OK) == 0) ? TRUE_EXP : NIL_EXP;
   CLEAN_RETURN_1(path, ret);
 }
 
@@ -5976,11 +6025,11 @@ exp_t *writebytescmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(path, blob,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "write-bytes: expected path string and blob"));
-  FILE *fp = fopen((char *)path->ptr, "wb");
+  FILE *fp = fopen((char *)exp_text(path), "wb");
   if (!fp)
     CLEAN_RETURN_2(path, blob,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "write-bytes: cannot open '%s'", (char *)path->ptr));
+                         "write-bytes: cannot open '%s'", (char *)exp_text(path)));
   alc_blob_t *b = (alc_blob_t *)blob->ptr;
   int ok = (!b || b->len == 0 || fwrite(b->bytes, 1, b->len, fp) == b->len);
   fclose(fp);
@@ -5997,7 +6046,7 @@ exp_t *loadcmd(exp_t *e, env_t *env) {
   if (!isstring(path))
     CLEAN_RETURN_1(path, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                "load: path must be a string"));
-  exp_t *ret = eval_file_forms((char *)path->ptr, env);
+  exp_t *ret = eval_file_forms((char *)exp_text(path), env);
   CLEAN_RETURN_1(path, ret);
 }
 
@@ -6190,16 +6239,16 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
                 "ffi-fn: lib/name/rtype must be strings");
     goto cleanup;
   }
-  void *h = alc_ffi_dlopen((char *)libname->ptr);
+  void *h = alc_ffi_dlopen((char *)exp_text(libname));
   if (!h) {
     err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: dlopen failed (%s)",
                 dlerror());
     goto cleanup;
   }
-  void *sym = dlsym(h, (char *)fnname->ptr);
+  void *sym = dlsym(h, (char *)exp_text(fnname));
   if (!sym) {
     err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: dlsym failed for %s",
-                (char *)fnname->ptr);
+                (char *)exp_text(fnname));
     goto cleanup;
   }
 
@@ -6208,10 +6257,10 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   f->nargs = (unsigned int)n_a;
   alc_ffi_tag_t rt;
   ffi_type *rt_ffi;
-  if (alc_ffi_typeof((char *)rtype->ptr, &rt, &rt_ffi) < 0) {
+  if (alc_ffi_typeof((char *)exp_text(rtype), &rt, &rt_ffi) < 0) {
     free(f);
     err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown return type %s",
-                (char *)rtype->ptr);
+                (char *)exp_text(rtype));
     goto cleanup;
   }
   f->ret_tag = rt;
@@ -6228,7 +6277,7 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     if (alc_ffi_typeof((char *)atypes[i]->ptr, &at, &at_ffi) < 0) {
       free(f);
       err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown arg type %s",
-                  (char *)atypes[i]->ptr);
+                  (char *)exp_text(atypes[i]));
       goto cleanup;
     }
     f->arg_tags[i] = at;
@@ -6240,10 +6289,10 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: ffi_prep_cif failed");
     goto cleanup;
   }
-  size_t dnlen = strlen((char *)libname->ptr) + strlen((char *)fnname->ptr) + 2;
+  size_t dnlen = strlen((char *)exp_text(libname)) + strlen((char *)exp_text(fnname)) + 2;
   f->display_name = (char *)memalloc(dnlen, 1);
-  snprintf(f->display_name, dnlen, "%s:%s", (char *)libname->ptr,
-           (char *)fnname->ptr);
+  snprintf(f->display_name, dnlen, "%s:%s", (char *)exp_text(libname),
+           (char *)exp_text(fnname));
 
   INIT_TYPED(ret, EXP_FFI, f);
 
@@ -6348,7 +6397,7 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
       avalues[i] = &slots[i].d;
       break;
     case AFFI_STRING:
-      slots[i].s = (const char *)a->ptr;
+      slots[i].s = (const char *)exp_text(a);
       avalues[i] = &slots[i].s;
       break;
     case AFFI_PTR:
@@ -6636,7 +6685,7 @@ exp_t *lengthcmd(exp_t *e, env_t *env) {
     }
     int64_t n = 0;
     if (isstring(a))
-      n = a->ptr ? (int64_t)strlen((char *)a->ptr) : 0;
+      { const char *_t = exp_text(a); n = _t ? (int64_t)strlen((char *)_t) : 0; }
     else if (a == nil_singleton)
       n = 0;
     else if (ispair(a)) {
@@ -7212,7 +7261,7 @@ exp_t *withgensymscmd(exp_t *e, env_t *env) {
                    "with-gensyms: names must be symbols");
     }
     exp_t *gs = make_gensym();
-    set_get_keyval_dict(newenv->d, nm->ptr, gs);
+    set_get_keyval_dict(newenv->d, exp_text(nm), gs);
     unrefexp(gs);
     names = names->next;
   }
@@ -7363,7 +7412,7 @@ static int sort_cmp_default(const void *a, const void *b) {
     return x->f < dy ? -1 : x->f > dy ? 1 : 0;
   }
   if (isstring(x) && isstring(y))
-    return strcmp((char *)x->ptr, (char *)y->ptr);
+    return strcmp((char *)exp_text(x), (char *)exp_text(y));
   return 0;
 }
 
@@ -7446,7 +7495,7 @@ exp_t *stringcontainspcmd(exp_t *e, env_t *env) {
   if (!isstring(s) || !isstring(sub))
     CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                  "string-contains?: args must be strings"));
-  exp_t *ret = strstr((char *)s->ptr, (char *)sub->ptr) ? TRUE_EXP : NIL_EXP;
+  exp_t *ret = strstr((char *)exp_text(s), (char *)exp_text(sub)) ? TRUE_EXP : NIL_EXP;
   CLEAN_RETURN_2(s, sub, ret);
 }
 
@@ -7458,8 +7507,8 @@ exp_t *stringindexcmd(exp_t *e, env_t *env) {
   if (!isstring(s) || !isstring(sub))
     CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                  "string-index: args must be strings"));
-  char *found = strstr((char *)s->ptr, (char *)sub->ptr);
-  exp_t *ret = found ? MAKE_FIX((int64_t)(found - (char *)s->ptr)) : NIL_EXP;
+  char *found = strstr((char *)exp_text(s), (char *)exp_text(sub));
+  exp_t *ret = found ? MAKE_FIX((int64_t)(found - (char *)exp_text(s))) : NIL_EXP;
   CLEAN_RETURN_2(s, sub, ret);
 }
 
@@ -7482,9 +7531,9 @@ exp_t *stringreplacecmd(exp_t *e, env_t *env) {
                  "string-replace: args must be strings");
   }
   {
-    const char *haystack = (char *)s->ptr;
-    const char *needle = (char *)old->ptr;
-    const char *replacement = (char *)nw->ptr;
+    const char *haystack = (char *)exp_text(s);
+    const char *needle = (char *)exp_text(old);
+    const char *replacement = (char *)exp_text(nw);
     size_t nlen = strlen(needle), rlen = strlen(replacement);
     size_t cap = 64, len = 0;
     char *buf = memalloc(cap, 1);
@@ -7534,7 +7583,7 @@ exp_t *errormessagecmd(exp_t *e, env_t *env) {
   if (e->next) {
     a = EVAL(e->next->content, env);
     if (a && iserror(a) && a->ptr)
-      ret = make_string((char *)a->ptr, (int)strlen((char *)a->ptr));
+      { const char *_t = exp_text(a); ret = make_string((char *)_t, (int)strlen((char *)_t)); }
   }
   if (a) unrefexp(a);
   unrefexp(e);
@@ -7867,7 +7916,7 @@ int isequal(exp_t *cur1, exp_t *cur2) {
     if (isfloat(cur1))
       ret = (cur1->f == cur2->f);
     else if (issymbol(cur1) || isstring(cur1))
-      ret = (strcmp(cur1->ptr, cur2->ptr) == 0);
+      ret = (strcmp(exp_text(cur1), exp_text(cur2)) == 0);
     else if (iserror(cur1))
       ret = (cur1->s64 == cur2->s64);
     else if (isblob(cur1)) {
@@ -8059,7 +8108,7 @@ exp_t *forcmd(exp_t *e, env_t *env) {
         int64_t idx = FIX_VAL(lastidx) + 1;
         while (counter < idx) {
           /* Rebind the loop variable to a fresh tagged fixnum. */
-          set_get_keyval_dict(newenv->d, curvar->content->ptr,
+          set_get_keyval_dict(newenv->d, exp_text(curvar->content),
                               MAKE_FIX(counter));
           curval = curin;
           while (curval) {
@@ -8118,7 +8167,7 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
           curin = curval->next;
           tmpexp = retval;
           while (retval) {
-            set_get_keyval_dict(newenv->d, curvar->content->ptr, car(retval));
+            set_get_keyval_dict(newenv->d, exp_text(curvar->content), car(retval));
             curval = curin;
             while (curval) {
               ret = EVAL(curval->content, newenv);
@@ -8253,7 +8302,7 @@ static void inspect_value(exp_t *v) {
         printf(" ");
       first = 0;
       if (issymbol(p->content))
-        printf("%s", (char *)p->content->ptr);
+        printf("%s", (char *)exp_text(p->content));
     }
     printf(")\x1B[39m\n");
     if (v->flags & FLAG_COMPILED) {
@@ -8274,13 +8323,13 @@ static void inspect_value(exp_t *v) {
     }
   } else if (v->type == EXP_MACRO && v->meta) {
     printf("\x1B[96mname:\t%s\x1B[39m\n", (char *)v->meta);
-  } else if (v->type == EXP_STRING && v->ptr) {
-    printf("\x1B[96mvalue:\t\"%s\"\nlen:\t%zu\x1B[39m\n", (char *)v->ptr,
-           strlen((char *)v->ptr));
+  } else if (v->type == EXP_STRING && exp_text(v)) {
+    printf("\x1B[96mvalue:\t\"%s\"\nlen:\t%zu\x1B[39m\n", (char *)exp_text(v),
+           strlen((char *)exp_text(v)));
   } else if (v->type == EXP_FLOAT) {
     printf("\x1B[96mvalue:\t%g\x1B[39m\n", v->f);
-  } else if (v->type == EXP_SYMBOL && v->ptr) {
-    printf("\x1B[96msym:\t%s\x1B[39m\n", (char *)v->ptr);
+  } else if (v->type == EXP_SYMBOL && exp_text(v)) {
+    printf("\x1B[96msym:\t%s\x1B[39m\n", (char *)exp_text(v));
   }
 }
 
@@ -8360,7 +8409,7 @@ exp_t *dircmd(exp_t *e, env_t *env) {
     show_builtins = 1;
   /* needle: accept symbol or string; nil / other → no filter */
   if (is_ptr(needle_arg) && (issymbol(needle_arg) || isstring(needle_arg)))
-    needle = (const char *)needle_arg->ptr;
+    needle = (const char *)exp_text(needle_arg);
 
   dir_entry_t *arr = NULL;
   int n = 0, cap = 0;
@@ -8420,7 +8469,7 @@ exp_t *dircmd(exp_t *e, env_t *env) {
             printf(" ");
           first = 0;
           if (issymbol(p->content))
-            printf("%s", (char *)p->content->ptr);
+            printf("%s", (char *)exp_text(p->content));
         }
         printf(")");
       }
@@ -8530,8 +8579,8 @@ static int pp_flat_width(exp_t *e) {
   switch (e->type) {
   case EXP_SYMBOL:
   case EXP_STRING:
-    return e->ptr
-               ? (int)strlen((char *)e->ptr) + (e->type == EXP_STRING ? 2 : 0)
+    return exp_text(e)
+               ? (int)strlen((char *)exp_text(e)) + (e->type == EXP_STRING ? 2 : 0)
                : 3;
   case EXP_FLOAT:
     return 12; /* approx */
@@ -8578,7 +8627,7 @@ static void pp_form(exp_t *e, int indent) {
   }
 
   exp_t *head = car(e);
-  const char *s = (issymbol(head)) ? (const char *)head->ptr : NULL;
+  const char *s = (issymbol(head)) ? (const char *)exp_text(head) : NULL;
 
   /* If the whole form is small, stay on one line. */
   if (pp_flat_width(e) <= PP_WIDTH - indent) {
@@ -8721,12 +8770,12 @@ static int als_is_builder(const char *s) {
 /* a list whose head is list/cons/append/quasiquote */
 static int als_builder_node(exp_t *e) {
   return e && ispair(e) && istrue(e) && issymbol(e->content) &&
-         als_is_builder((char *)e->content->ptr);
+         als_is_builder((char *)exp_text(e->content));
 }
 static void als_expr(exp_t *x);
 static int als_is_quote(exp_t *x) {
   return x && ispair(x) && istrue(x) && als_len(x) == 2 &&
-         issymbol(x->content) && !strcmp((char *)x->content->ptr, "quote");
+         issymbol(x->content) && !strcmp((char *)exp_text(x->content), "quote");
 }
 static void als_expr(exp_t *x) { /* argument position: keep parens */
   if (!x || !ispair(x) || !istrue(x)) {
@@ -8755,7 +8804,7 @@ static void als_stmt(exp_t *x, int ind) { /* statement position */
   }
   int len = als_len(x);
   exp_t *head = x->content;
-  const char *hs = issymbol(head) ? (const char *)head->ptr : NULL;
+  const char *hs = issymbol(head) ? (const char *)exp_text(head) : NULL;
   if (als_is_quote(x)) {
     putchar('\'');
     als_expr(x->next->content);
@@ -8968,7 +9017,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
           ret = NIL_EXP;
         if iserror (ret)
           goto finish;
-        var2env_bind(curvar->content->ptr, ret, newenv);
+        var2env_bind(exp_text(curvar->content), ret, newenv);
         ret = NULL;
       } else if (ispair(curvar->content)) {
         /* Destructuring: (let (a b ...) val body)
@@ -8988,7 +9037,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
             goto finish;
           }
           int have_val = dvals && ispair(dvals) && istrue(dvals);
-          var2env_bind(nm->ptr,
+          var2env_bind(exp_text(nm),
                        refexp(have_val ? dvals->content : NIL_EXP),
                        newenv);
           dnames = dnames->next;
@@ -9049,7 +9098,7 @@ exp_t *withcmd(exp_t *e, env_t *env) {
             ret = EVAL(curval->content, env);
             if iserror (ret)
               goto finish;
-            var2env_bind(curvar->content->ptr, ret, newenv);
+            var2env_bind(exp_text(curvar->content), ret, newenv);
             ret = NULL;
           }
 
@@ -9127,7 +9176,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
       }
       ret = EVAL(val_node->content, newenv);
       if (iserror(ret)) goto finish;
-      var2env_bind(var->ptr, ret, newenv);
+      var2env_bind(exp_text(var), ret, newenv);
       ret = NULL;
       bcur = val_node->next;
     }
@@ -9162,7 +9211,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
     CHECK_RESERVED_BIND(var, ret, "in let*", goto finish);
     ret = EVAL(val_node->content, newenv);
     if (iserror(ret)) goto finish;
-    var2env_bind(var->ptr, ret, newenv);
+    var2env_bind(exp_text(var), ret, newenv);
     ret = NULL;
     cur = val_node->next;
   }
@@ -9243,7 +9292,7 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
   *err = NULL;
 
   /* Wildcard `_` */
-  if (issymbol(pat) && strcmp((char *)pat->ptr, "_") == 0)
+  if (issymbol(pat) && strcmp((char *)exp_text(pat), "_") == 0)
     return 1;
 
   /* Literal nil — matches nil/empty-list */
@@ -9264,13 +9313,13 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
 
   /* String literal */
   if (isstring(pat))
-    return (isstring(val) && strcmp((char *)pat->ptr, (char *)val->ptr) == 0)
+    return (isstring(val) && strcmp((char *)exp_text(pat), (char *)exp_text(val)) == 0)
            ? 1 : 0;
 
   /* Plain symbol: capture binding — var2env_bind is forward-declared static
      at file scope above; the in-body extern was UB (C11 §6.2.2p7). */
   if (issymbol(pat)) {
-    var2env_bind((char *)pat->ptr, refexp(val ? val : NIL_EXP), newenv);
+    var2env_bind((char *)exp_text(pat), refexp(val ? val : NIL_EXP), newenv);
     return 1;
   }
 
@@ -9282,7 +9331,7 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
   exp_t *rest = pat->next;
 
   if (issymbol(head)) {
-    const char *hn = (const char *)head->ptr;
+    const char *hn = (const char *)exp_text(head);
 
     /* (quote sym) — match a specific symbol */
     if (strcmp(hn, "quote") == 0) {
@@ -9293,7 +9342,7 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
       }
       exp_t *q = rest->content;
       return (issymbol(q) && issymbol(val) &&
-              strcmp((char *)q->ptr, (char *)val->ptr) == 0) ? 1 : 0;
+              strcmp((char *)exp_text(q), (char *)exp_text(val)) == 0) ? 1 : 0;
     }
 
     /* (? pred) — guard: call pred on val */
@@ -9699,7 +9748,7 @@ exp_t *forgencmd(exp_t *e, env_t *env) {
     if (iserror(v)) { ret = v; break; }
     /* Rebind the loop variable each iteration. */
     if (!loop_env->d) loop_env->d = create_dict();
-    set_get_keyval_dict(loop_env->d, (char *)varname->ptr, v);
+    set_get_keyval_dict(loop_env->d, (char *)exp_text(varname), v);
     unrefexp(v);
     /* Evaluate body forms. */
     exp_t *bc = body_start;
@@ -9748,12 +9797,12 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
     /* Rest-param marker: (a b . rest) reads as (a b . rest) — detect the
        dot symbol and collect remaining args into a list for the next param. */
     if (issymbol(curvar->content) &&
-        strcmp((char *)curvar->content->ptr, ".") == 0) {
+        strcmp((char *)exp_text(curvar->content), ".") == 0) {
       if (!curvar->next || !curvar->next->content ||
           !issymbol(curvar->next->content))
         return error(ERROR_ILLEGAL_VALUE, e, env,
                      "rest param: symbol expected after '.'");
-      char *rest_name = (char *)curvar->next->content->ptr;
+      char *rest_name = (char *)exp_text(curvar->next->content);
       exp_t *rest_head = NIL_EXP, *rest_tail = NULL;
       while (curval) {
         exp_t *rv = evalexp ? EVAL(curval->content, env->root)
@@ -9776,7 +9825,7 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
       } else
         retvar = NIL_EXP;
       if (issymbol(curvar->content)) {
-        var2env_bind((char *)curvar->content->ptr, retvar, env);
+        var2env_bind((char *)exp_text(curvar->content), retvar, env);
       } else if (ispair(curvar->content) && istrue(curvar->content)) {
         /* Destructuring param: (def f ((x y) z) body) binds the first arg
            as a list, extracting x and y from its elements. */
@@ -9790,7 +9839,7 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
                          "destructuring param: symbol expected");
           }
           int have_val = subval && ispair(subval) && istrue(subval);
-          var2env_bind((char *)nm->ptr,
+          var2env_bind((char *)exp_text(nm),
                        refexp(have_val ? subval->content : NIL_EXP),
                        env);
           subpat = subpat->next;
@@ -10268,7 +10317,7 @@ static int try_jit_build_inc_cons_c(bytecode_t *bc) {
 static int try_jit_nqueens_solve_c(bytecode_t *bc) {
   if (!bc || !bc->self_name || strcmp(bc->self_name, "solve") != 0 ||
       bc->nconsts < 1 || !issymbol(bc->consts[0]) ||
-      strcmp((char *)bc->consts[0]->ptr, "try-cols") != 0)
+      strcmp(exp_text(bc->consts[0]), "try-cols") != 0)
     return 0;
 
   uint8_t *c = bc->code;
@@ -10953,9 +11002,9 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
   exp_t *cb = bc->consts[idx_b];
   if (!(issymbol(ca) && issymbol(cb)))
     return 0;
-  if (strcmp((const char *)ca->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(ca), bc->self_name) != 0)
     return 0;
-  if (strcmp((const char *)cb->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(cb), bc->self_name) != 0)
     return 0;
   int is_fib_like = op_a == OP_SLOT_SUB_FIX && op_b == OP_SLOT_SUB_FIX &&
                     ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
@@ -11102,7 +11151,7 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   exp_t *callee = bc->consts[idx_call];
   if (!issymbol(callee))
     return 0;
-  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
     return 0;
 
   int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
@@ -11378,9 +11427,9 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint32_t *out, int *outn) {
   if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts)
     return 0;
   exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
-  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)exp_text(ct), "t") != 0)
     return 0;
-  if (!issymbol(cnil) || strcmp((const char *)cnil->ptr, "nil") != 0)
+  if (!issymbol(cnil) || strcmp((const char *)exp_text(cnil), "nil") != 0)
     return 0;
   if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
     return 0;
@@ -11614,14 +11663,14 @@ static int try_jit_safe_p(bytecode_t *bc, uint32_t *out, int *outn) {
   if (idx_t >= bc->nconsts)
     return 0;
   exp_t *ct = bc->consts[idx_t];
-  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)exp_text(ct), "t") != 0)
     return 0;
   for (int k = 0; k < 3; k++) {
     uint8_t idx = (k == 0) ? idx_nil1 : (k == 1) ? idx_nil2 : idx_nil3;
     if (idx >= bc->nconsts)
       return 0;
     exp_t *cn = bc->consts[idx];
-    if (!issymbol(cn) || strcmp((const char *)cn->ptr, "nil") != 0)
+    if (!issymbol(cn) || strcmp((const char *)exp_text(cn), "nil") != 0)
       return 0;
   }
   if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
@@ -11856,9 +11905,9 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
   if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
     return 0;
   exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!issymbol(cn1) || strcmp((const char *)cn1->ptr, "nil") != 0)
+  if (!issymbol(cn1) || strcmp((const char *)exp_text(cn1), "nil") != 0)
     return 0;
-  if (!issymbol(cn2) || strcmp((const char *)cn2->ptr, "nil") != 0)
+  if (!issymbol(cn2) || strcmp((const char *)exp_text(cn2), "nil") != 0)
     return 0;
 
   if (s_j >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
@@ -12170,9 +12219,9 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
         *kc = bc->consts[idx_c];
   if (!issymbol(ka) || !issymbol(kb) || !issymbol(kc))
     return 0;
-  if (strcmp((const char *)ka->ptr, bc->self_name) != 0 ||
-      strcmp((const char *)kb->ptr, bc->self_name) != 0 ||
-      strcmp((const char *)kc->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(ka), bc->self_name) != 0 ||
+      strcmp((const char *)exp_text(kb), bc->self_name) != 0 ||
+      strcmp((const char *)exp_text(kc), bc->self_name) != 0)
     return 0;
 
   int off_x = (int)offsetof(env_t, inline_vals[0]) + (int)s_x * 8;
@@ -12361,7 +12410,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
   exp_t *callee = bc->consts[idx_call];
   if (!issymbol(callee))
     return 0;
-  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
     return 0;
   if (c[50] != OP_TAIL_SELF || c[51] != 2 || c[52] != OP_RET)
     return 0;
@@ -13450,8 +13499,8 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *ca = bc->consts[idx_a];
   exp_t *cb = bc->consts[idx_b];
   int self_calls = bc->self_name && issymbol(ca) && issymbol(cb) &&
-                   strcmp((const char *)ca->ptr, bc->self_name) == 0 &&
-                   strcmp((const char *)cb->ptr, bc->self_name) == 0;
+                   strcmp((const char *)exp_text(ca), bc->self_name) == 0 &&
+                   strcmp((const char *)exp_text(cb), bc->self_name) == 0;
   int is_fib_like = self_calls && op_a == OP_SLOT_SUB_FIX &&
                     op_b == OP_SLOT_SUB_FIX &&
                     ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
@@ -13764,14 +13813,14 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_t >= bc->nconsts)
     return 0;
   exp_t *ct = bc->consts[idx_t];
-  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)exp_text(ct), "t") != 0)
     return 0;
   for (int k = 0; k < 3; k++) {
     uint8_t idx = (k == 0) ? idx_nil1 : (k == 1) ? idx_nil2 : idx_nil3;
     if (idx >= bc->nconsts)
       return 0;
     exp_t *cn = bc->consts[idx];
-    if (!issymbol(cn) || strcmp((const char *)cn->ptr, "nil") != 0)
+    if (!issymbol(cn) || strcmp((const char *)exp_text(cn), "nil") != 0)
       return 0;
   }
   if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
@@ -14047,9 +14096,9 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts)
     return 0;
   exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
-  if (!issymbol(ct) || strcmp((const char *)ct->ptr, "t") != 0)
+  if (!issymbol(ct) || strcmp((const char *)exp_text(ct), "t") != 0)
     return 0;
-  if (!issymbol(cnil) || strcmp((const char *)cnil->ptr, "nil") != 0)
+  if (!issymbol(cnil) || strcmp((const char *)exp_text(cnil), "nil") != 0)
     return 0;
   if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
     return 0;
@@ -14460,9 +14509,9 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
     return 0;
   exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!issymbol(cn1) || strcmp((const char *)cn1->ptr, "nil") != 0)
+  if (!issymbol(cn1) || strcmp((const char *)exp_text(cn1), "nil") != 0)
     return 0;
-  if (!issymbol(cn2) || strcmp((const char *)cn2->ptr, "nil") != 0)
+  if (!issymbol(cn2) || strcmp((const char *)exp_text(cn2), "nil") != 0)
     return 0;
   if (s_j >= ENV_INLINE_SLOTS)
     return 0;
@@ -14664,9 +14713,9 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *cc = bc->consts[idx_c];
   if (!issymbol(ca) || !issymbol(cb) || !issymbol(cc))
     return 0;
-  if (strcmp((const char *)ca->ptr, bc->self_name) != 0 ||
-      strcmp((const char *)cb->ptr, bc->self_name) != 0 ||
-      strcmp((const char *)cc->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(ca), bc->self_name) != 0 ||
+      strcmp((const char *)exp_text(cb), bc->self_name) != 0 ||
+      strcmp((const char *)exp_text(cc), bc->self_name) != 0)
     return 0;
   if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS ||
       s_z >= ENV_INLINE_SLOTS)
@@ -14908,7 +14957,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *callee = bc->consts[idx];
   if (!issymbol(callee))
     return 0;
-  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
     return 0;
 
   int32_t off_m =
@@ -15251,7 +15300,7 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   exp_t *callee = bc->consts[idx];
   if (!issymbol(callee))
     return 0;
-  if (strcmp((const char *)callee->ptr, bc->self_name) != 0)
+  if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
     return 0;
 
   int32_t slot_off =
@@ -15755,7 +15804,7 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
      string-as-callable arm (ticket 6). The earlier blanket refusal
      was too conservative. */
   int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
-                     issymbol(head) && strcmp(head->ptr, c->self_name) == 0;
+                     issymbol(head) && strcmp(exp_text(head), c->self_name) == 0;
   /* Cross-function tail call is safe regardless of nlet_depth:
      OP_TAIL_CALL wholesale releases current env's inline slots. */
   int is_cross_tail = tail && !is_self_tail;
@@ -15764,7 +15813,7 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
      dispatch + PUSH/POP and call via the gcache directly. */
   int use_call_global = 0, global_idx = -1;
   if (!is_self_tail && !is_cross_tail && issymbol(head) &&
-      find_slot(c, head->ptr) < 0) {
+      find_slot(c, exp_text(head)) < 0) {
     global_idx = add_const(c, head);
     if (global_idx < 0) {
       c->failed = 1;
@@ -15855,7 +15904,7 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
   if (is_binary) {
     int fused = fuse_slot_fix(op);
     if (fused && issymbol(arg1) && isnumber(arg2)) {
-      int slot = find_slot(c, arg1->ptr);
+      int slot = find_slot(c, exp_text(arg1));
       int64_t v = FIX_VAL(arg2);
       if (slot >= 0 && v >= INT16_MIN && v <= INT16_MAX) {
         emit_u8(c, (uint8_t)fused);
@@ -15891,7 +15940,7 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
     c->failed = 1;
     return;
   }
-  int slot = find_slot(c, key->ptr);
+  int slot = find_slot(c, exp_text(key));
   compile_expr(c, val, 0);
   if (c->failed)
     return;
@@ -15936,7 +15985,7 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
     return;
   emit_u8(c, OP_BIND_SLOT);
   emit_u8(c, (uint8_t)slot);
-  c->slot_names[slot] = (char *)var->ptr;
+  c->slot_names[slot] = (char *)exp_text(var);
   c->nslots++;
   c->nlet_depth++;
   compile_body_seq(c, body, tail);
@@ -15986,7 +16035,7 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
       return;
     emit_u8(c, OP_BIND_SLOT);
     emit_u8(c, (uint8_t)c->nslots);
-    c->slot_names[c->nslots] = (char *)var->ptr;
+    c->slot_names[c->nslots] = (char *)exp_text(var);
     c->nslots++;
     nbindings++;
     p = nxt->next;
@@ -16040,7 +16089,7 @@ static void compile_letstar(compiler_t *c, exp_t *form, int tail) {
       return;
     emit_u8(c, OP_BIND_SLOT);
     emit_u8(c, (uint8_t)c->nslots);
-    c->slot_names[c->nslots] = (char *)var->ptr;
+    c->slot_names[c->nslots] = (char *)exp_text(var);
     c->nslots++;
     nbindings++;
     p = nxt->next;
@@ -16156,7 +16205,7 @@ static void compile_for(compiler_t *c, exp_t *form, int tail) {
     return;
   emit_u8(c, OP_BIND_SLOT);
   emit_u8(c, (uint8_t)counter_slot);
-  c->slot_names[counter_slot] = (char *)var->ptr;
+  c->slot_names[counter_slot] = (char *)exp_text(var);
   c->nslots++;
 
   compile_expr(c, end_node->content, 0);
@@ -16267,7 +16316,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     return;
   }
   if (issymbol(e)) {
-    int slot = find_slot(c, e->ptr);
+    int slot = find_slot(c, exp_text(e));
     if (slot >= 0) {
       emit_u8(c, OP_LOAD_SLOT);
       emit_u8(c, (uint8_t)slot);
@@ -16288,7 +16337,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   /* Call form. Dispatch on head. */
   exp_t *head = car(e);
   if (issymbol(head)) {
-    const char *s = (const char *)head->ptr;
+    const char *s = exp_text(head);
     if (!strcmp(s, "if")) {
       compile_if(c, e, tail);
       return;
@@ -16336,7 +16385,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         compile_expr(c, cadr(a), 0);
         if (c->failed)
           return;
-        int slot = find_slot(c, sym->ptr);
+        int slot = find_slot(c, exp_text(sym));
         if (slot >= 0) {
           emit_u8(c, OP_STORE_SLOT);
           emit_u8(c, (uint8_t)slot);
@@ -16590,11 +16639,11 @@ int compile_lambda(exp_t *fn, int is_closure) {
       break;
     }
     /* Dot marker means rest params — AST eval handles collection. */
-    if (strcmp((char *)p->content->ptr, ".") == 0) {
+    if (strcmp((char *)exp_text(p->content), ".") == 0) {
       c.failed = 1;
       break;
     }
-    c.slot_names[c.nparams++] = (char *)p->content->ptr;
+    c.slot_names[c.nparams++] = (char *)exp_text(p->content);
   }
   c.nslots = c.nparams;
 
@@ -17252,13 +17301,13 @@ l_tail_call: {
       return _tc_err;
     }
     if (env->n_inline < ENV_INLINE_SLOTS) {
-      env->inline_keys[env->n_inline] = (char *)p->content->ptr;
+      env->inline_keys[env->n_inline] = (char *)exp_text(p->content);
       env->inline_vals[env->n_inline] = args_buf[i];
       env->n_inline++;
     } else {
       if (!env->d)
         env->d = create_dict();
-      set_get_keyval_dict(env->d, p->content->ptr, args_buf[i]);
+      set_get_keyval_dict(env->d, exp_text(p->content), args_buf[i]);
       unrefexp(args_buf[i]);
     }
     p = p->next;
@@ -17493,7 +17542,7 @@ l_length: {
   if (xs == NULL || xs == nil_singleton) {
     n = 0;
   } else if (isstring(xs)) {
-    n = xs->ptr ? (int64_t)strlen((char *)xs->ptr) : 0;
+    { const char *_t = exp_text(xs); n = _t ? (int64_t)strlen((char *)_t) : 0; }
   } else if (ispair(xs)) {
     exp_t *cur = xs;
     while (is_ptr(cur) && cur->type == EXP_PAIR) {
@@ -17552,14 +17601,14 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
                    "string-index: arg must be a fixnum");
     }
     int64_t i64 = FIX_VAL(idx);
-    int64_t len = (int64_t)strlen(fn->ptr);
+    int64_t len = (int64_t)strlen(exp_text(fn));
     unrefexp(idx);
     if (i64 < 0 || i64 >= len) {
       return error(ERROR_INDEX_OUT_OF_RANGE, fn, env,
                    "string-index: %lld out of range [0, %lld)", (long long)i64,
                    (long long)len);
     }
-    return make_char(*((char *)fn->ptr + i64));
+    return make_char(*((char *)exp_text(fn) + i64));
   }
   if (!islambda(fn)) {
     int i;
@@ -17610,7 +17659,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
         return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: bad param");
       }
       /* Rest param — collect remaining argv into a list and bind. */
-      if (strcmp((char *)p->content->ptr, ".") == 0) {
+      if (strcmp((char *)exp_text(p->content), ".") == 0) {
         if (!p->next || !p->next->content || !issymbol(p->next->content)) {
           int j;
           for (j = i; j < nargs; j++) unrefexp(argv[j]);
@@ -17621,7 +17670,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
         exp_t *rest_head = NIL_EXP, *rest_tail = NULL;
         for (; i < nargs; i++)
           list_append_owned(&rest_head, &rest_tail, argv[i]);
-        var2env_bind((char *)p->next->content->ptr, rest_head, newenv);
+        var2env_bind((char *)exp_text(p->next->content), rest_head, newenv);
         p = NULL; /* done */
         break;
       }
@@ -17632,7 +17681,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
         return error(ERROR_MISSING_PARAMETER, fn, env,
                      "wrong number of args");
       }
-      var2env_bind((char *)p->content->ptr, argv[i], newenv);
+      var2env_bind((char *)exp_text(p->content), argv[i], newenv);
       p = p->next;
       i++;
     }
@@ -17785,13 +17834,13 @@ tailrec: {
           exp_t *v = curval->content;
           if (issymbol(curvar->content)) {
             if (newenv->n_inline < ENV_INLINE_SLOTS) {
-              newenv->inline_keys[newenv->n_inline] = curvar->content->ptr;
+              newenv->inline_keys[newenv->n_inline] = exp_text(curvar->content);
               newenv->inline_vals[newenv->n_inline] = refexp(v);
               newenv->n_inline++;
             } else {
               if (!newenv->d)
                 newenv->d = create_dict();
-              set_get_keyval_dict(newenv->d, curvar->content->ptr, v);
+              set_get_keyval_dict(newenv->d, exp_text(curvar->content), v);
             }
           }
           curvar = curvar->next;
@@ -17891,14 +17940,14 @@ exp_t *evaluate(exp_t *e, env_t *env) {
     return NULL;
   if isatom (e) {
     if issymbol (e) {
-      if (((char *)e->ptr)[0] == ':')
+      if (((char *)exp_text(e))[0] == ':')
         return e; // e is a keyword
       if ((tmpexp = lookup(e, env))) {
         unrefexp(e);
         return tmpexp;
       } else {
         ret = error(ERROR_UNBOUND_VARIABLE, e, env, "Error unbound variable %s",
-                    e->ptr);
+                    exp_text(e));
         unrefexp(e);
         return ret;
       }
@@ -17920,10 +17969,10 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         goto finisht;
       }
       if (issymbol(tmpexp)) {
-        if (((char *)tmpexp->ptr)[0] == ':') {
+        if (((char *)exp_text(tmpexp))[0] == ':') {
           ret = error(ERROR_ILLEGAL_VALUE, e, env,
                       "Error keyword %s can not be used as function",
-                      tmpexp->ptr);
+                      exp_text(tmpexp));
           goto finish;
         } // e is a keyword
         if ((tmpexp2 = lookup(tmpexp, env))) {
@@ -18006,8 +18055,8 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             }
             if (isnumber(idx)) {
               int64_t i = FIX_VAL(idx);
-              if ((i >= 0) && (i < (int64_t)strlen(tmpexp2->ptr))) {
-                ret = make_char(*((char *)tmpexp2->ptr + i));
+              if ((i >= 0) && (i < (int64_t)strlen(exp_text(tmpexp2)))) {
+                ret = make_char(*((char *)exp_text(tmpexp2) + i));
               } else {
                 ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
                             "Error index out of range");
@@ -18028,7 +18077,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
           }
         } else {
           ret = error(ERROR_UNBOUND_VARIABLE, e, env,
-                      "Error unbound variable %s", tmpexp->ptr);
+                      "Error unbound variable %s", exp_text(tmpexp));
           goto finish;
         }
         ret = e; // what is happening here?
@@ -18042,8 +18091,8 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         in_tail_position = outer_tail;
         if (isnumber(tmpexp2)) {
           int64_t idx = FIX_VAL(tmpexp2);
-          if ((idx >= 0) && (idx < (int64_t)strlen(tmpexp->ptr))) {
-            ret = make_char(*((char *)tmpexp->ptr + idx));
+          if ((idx >= 0) && (idx < (int64_t)strlen(exp_text(tmpexp)))) {
+            ret = make_char(*((char *)exp_text(tmpexp) + idx));
           } else
             ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
                         "Error index out of range");
@@ -18627,9 +18676,9 @@ static const char *doc_resolve_name(exp_t *arg, env_t *env, exp_t **eval_owned,
   *eval_owned = NULL;
   *err = NULL;
   if (issymbol(arg))
-    return (const char *)arg->ptr;
+    return (const char *)exp_text(arg);
   if (isstring(arg))
-    return (const char *)arg->ptr;
+    return (const char *)exp_text(arg);
   /* Anything else: evaluate and look again. */
   exp_t *v = EVAL(arg, env);
   if (iserror(v)) {
@@ -18638,7 +18687,7 @@ static const char *doc_resolve_name(exp_t *arg, env_t *env, exp_t **eval_owned,
   }
   if (is_ptr(v) && (issymbol(v) || isstring(v))) {
     *eval_owned = v;
-    return (const char *)v->ptr;
+    return (const char *)exp_text(v);
   }
   unrefexp(v);
   *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
@@ -18715,7 +18764,7 @@ static char *alc_key_to_cstr(exp_t *k, char *tmpbuf) {
   if (k == NULL)
     return NULL;
   if (issymbol(k) || isstring(k))
-    return (char *)k->ptr;
+    return (char *)exp_text(k);
   if (isnumber(k)) {
     snprintf(tmpbuf, 32, "%lld", (long long)FIX_VAL(k));
     return tmpbuf;
@@ -18877,7 +18926,7 @@ exp_t *countcmd(exp_t *e, env_t *env) {
   else if (is_ptr(x) && x->type == EXP_VECTOR && x->ptr)
     n = vec_len(x);
   else if (isstring(x))
-    n = (int64_t)strlen((char *)x->ptr);
+    n = (int64_t)strlen((char *)exp_text(x));
   else if (ispair(x)) {
     exp_t *p = x;
     while (p && istrue(p)) {
@@ -18951,8 +19000,11 @@ static char *set_key_for_value(exp_t *v) {
   }
   if (isstring(v) || issymbol(v)) {
     set_key_put(&buf, &len, &cap, isstring(v) ? "S:" : "Y:");
-    set_key_hex_append(&buf, &len, &cap, (const unsigned char *)v->ptr,
-                       strlen((char *)v->ptr));
+    {
+      const char *_t = exp_text(v);
+      set_key_hex_append(&buf, &len, &cap, (const unsigned char *)_t,
+                         strlen(_t));
+    }
     return buf;
   }
   if (isblob(v)) {
@@ -18978,9 +19030,9 @@ static exp_t *set_value_clone(exp_t *v) {
   if (isfloat(v))
     return make_floatf(v->f);
   if (isstring(v))
-    return make_string((char *)v->ptr, strlen((char *)v->ptr));
+    { const char *_t = exp_text(v); return make_string((char *)_t, strlen((char *)_t)); }
   if (issymbol(v))
-    return make_symbol((char *)v->ptr, strlen((char *)v->ptr));
+    { const char *_t = exp_text(v); return make_symbol((char *)_t, strlen((char *)_t)); }
   if (isblob(v)) {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
     return make_blob((b && b->len) ? b->bytes : "", b ? b->len : 0);
@@ -19344,7 +19396,7 @@ exp_t *makeblobcmd(exp_t *e, env_t *env) {
     }
     ret = make_blob(NULL, (size_t)n);
   } else if (isstring(a)) {
-    ret = make_blob((const char *)a->ptr, strlen((char *)a->ptr));
+    { const char *_t = exp_text(a); ret = make_blob((const char *)_t, strlen((char *)_t)); }
   } else {
     unrefexp(a);
     unrefexp(e);
@@ -19418,7 +19470,7 @@ exp_t *readbytescmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "read-bytes: path must be a string");
   }
-  FILE *fp = fopen((const char *)a->ptr, "rb");
+  FILE *fp = fopen((const char *)exp_text(a), "rb");
   unrefexp(a);
   unrefexp(e);
   if (!fp)
@@ -20061,15 +20113,15 @@ int main(int argc, char *argv[]) {
           unrefexp(stre);
           break;
         }
-        if (issymbol(stre) && (strcmp((char *)stre->ptr, "quit") == 0 ||
-                               strcmp((char *)stre->ptr, "exit") == 0)) {
+        if (issymbol(stre) && (strcmp((char *)exp_text(stre), "quit") == 0 ||
+                               strcmp((char *)exp_text(stre), "exit") == 0)) {
           unrefexp(stre);
           fclose(ls);
           free(line_nl);
           free(line);
           goto endcleanly;
         }
-        if (issymbol(stre) && strcmp((char *)stre->ptr, "toeval") == 0) {
+        if (issymbol(stre) && strcmp((char *)exp_text(stre), "toeval") == 0) {
           toeval = 1 - toeval;
           printf("%d\n", toeval);
           unrefexp(stre);
@@ -20119,12 +20171,12 @@ int main(int argc, char *argv[]) {
         printf("\n");
       goto endcleanly;
     }
-    if (issymbol(stre) &&
-        (strcmp(stre->ptr, "quit") == 0 || strcmp(stre->ptr, "exit") == 0)) {
+    const char *_sv = issymbol(stre) ? exp_text(stre) : NULL;
+    if (_sv && (strcmp(_sv, "quit") == 0 || strcmp(_sv, "exit") == 0)) {
       unrefexp(stre);
       break;
     }
-    if (issymbol(stre) && (strcmp(stre->ptr, "toeval") == 0)) {
+    if (_sv && strcmp(_sv, "toeval") == 0) {
       toeval = 1 - toeval;
       printf("%d\n", toeval);
     }
@@ -20181,7 +20233,7 @@ endcleanly:
      malloc), but the strdup'd ptr field for the "t" symbol can be
      released. The chunks themselves are reclaimed by the OS at exit. */
   if (true_singleton) {
-    if (true_singleton->ptr)
+    if (true_singleton->ptr && !(true_singleton->flags & FLAG_INLINE_TXT))
       free(true_singleton->ptr);
     true_singleton = NULL;
   }

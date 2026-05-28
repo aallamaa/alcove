@@ -577,6 +577,34 @@ def sget (s n):
 
 assert "string read inside def body" (sget "hello" 1) #\e
 
+assert "inline str 7 chars eq" "abcdefg" "abcdefg"
+
+assert "heap str 8 chars eq" "abcdefgh" "abcdefgh"
+
+assert "inline str length" (length "abcdefg") 7
+
+assert "heap str length" (length "abcdefgh") 8
+
+assert "inline/heap concat" (string-append "abcdefg" "h") "abcdefgh"
+
+assert "inline str index mutate" (let s "hello" (setf (s 0) #\J) s) "Jello"
+
+assert "inline sym eq self" (is 'abcdefg 'abcdefg) t
+
+assert "heap sym eq self" (is 'abcdefgh 'abcdefgh) t
+
+assert "inline vs heap sym differ" (is 'abcdefg 'abcdefgh) nil
+
+assert "inline keyword self-eval" :short :short
+
+assert "inline str as set key" (set-has? (set "k" "kk") "k") t
+
+assert "inline keyword as set key" (set-has? (set :a :bb) :a) t
+
+assert "empty inline string length" (length "") 0
+
+assert "empty inline string eq" "" ""
+
 assert "str concatenates values" (str "a" 12 'b #\c) "a12bc"
 
 assert "string-append" (string-append "ab" "cd" "") "abcd"

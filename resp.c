@@ -630,7 +630,7 @@ static int resp_blob_to_ll(exp_t *v, long long *out) {
    Caller must have verified isstring(kx) || isblob(kx). */
 static void resp_key_bytes(exp_t *kx, const char **ks, size_t *klen) {
   if (isstring(kx)) {
-    *ks = (const char *)kx->ptr;
+    *ks = (const char *)exp_text(kx);
     *klen = strlen(*ks);
   } else {
     alc_blob_t *bl = (alc_blob_t *)kx->ptr;
@@ -2364,13 +2364,13 @@ static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
   }
   /* Mirror the file-mode loop: handle quit/exit/toeval, then evaluate. */
   if (issymbol(form) &&
-      (strcmp((char *)form->ptr, "quit") == 0 ||
-       strcmp((char *)form->ptr, "exit") == 0)) {
+      (strcmp((char *)exp_text(form), "quit") == 0 ||
+       strcmp((char *)exp_text(form), "exit") == 0)) {
     unrefexp(form);
     resp_stop = 1;
     return;
   }
-  if (issymbol(form) && strcmp((char *)form->ptr, "toeval") == 0) {
+  if (issymbol(form) && strcmp((char *)exp_text(form), "toeval") == 0) {
     toeval = 1 - toeval;
     printf("%d\n", toeval);
     unrefexp(form);
@@ -2572,8 +2572,10 @@ static exp_t *resp_exp_clone_for_lisp(exp_t *v, int depth) {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
     return make_blob(b->bytes, b->len);
   }
-  if (isstring(v))
-    return make_string((char *)v->ptr, (int)strlen((char *)v->ptr));
+  if (isstring(v)) {
+    const char *_t = exp_text(v);
+    return make_string((char *)_t, (int)strlen(_t));
+  }
   if (isfloat(v))
     return make_floatf(v->f);
   if (isvector(v)) {
@@ -2671,8 +2673,10 @@ exp_t *redisvalcmd(exp_t *e, env_t *env) {
 static exp_t *resp_lisp_to_blob(exp_t *v) {
   if (isblob(v))
     return refexp(v);
-  if (isstring(v))
-    return make_blob((const char *)v->ptr, strlen((const char *)v->ptr));
+  if (isstring(v)) {
+    const char *_t = exp_text(v);
+    return make_blob((const char *)_t, strlen(_t));
+  }
   if (isnumber(v)) {
     char buf[32];
     int n = resp_i64_to_ascii(buf, (int64_t)FIX_VAL(v));
@@ -2853,7 +2857,7 @@ static void resp_user_encode(resp_client_t *c, exp_t *v) {
     return;
   }
   if (isstring(v)) {
-    const char *s = (const char *)v->ptr;
+    const char *s = (const char *)exp_text(v);
     resp_write_bulk(c, s, strlen(s));
     return;
   }
@@ -2962,7 +2966,7 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-defcmd: second arg must be a lambda");
   }
-  const char *raw = isstring(nx) ? (char *)nx->ptr
+  const char *raw = isstring(nx) ? (char *)exp_text(nx)
                                  : ((alc_blob_t *)nx->ptr)->bytes;
   long rawlen = (long)(isstring(nx) ? strlen(raw)
                                     : ((alc_blob_t *)nx->ptr)->len);
@@ -2985,7 +2989,7 @@ exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-undefcmd: command name must be a string or blob");
   }
-  const char *raw = isstring(nx) ? (char *)nx->ptr
+  const char *raw = isstring(nx) ? (char *)exp_text(nx)
                                  : ((alc_blob_t *)nx->ptr)->bytes;
   long rawlen = (long)(isstring(nx) ? strlen(raw)
                                     : ((alc_blob_t *)nx->ptr)->len);

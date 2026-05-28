@@ -263,7 +263,7 @@ exp_t *name(exp_t *e, env_t *env) { \
   if (iserror(obj)) { unrefexp(e); return obj; } \
   if (!(TYPE_CHECK(obj))) { unrefexp(obj); unrefexp(e); \
     return error(ERROR_ILLEGAL_VALUE, NULL, env, err_str); } \
-  PTR_TYPE *val_ptr = (PTR_TYPE *)obj->ptr; \
+  PTR_TYPE *val_ptr = (PTR_TYPE *)exp_text(obj); \
   exp_t *ret = (RET_EXPR); \
   unrefexp(obj); unrefexp(e); \
   return ret; \
