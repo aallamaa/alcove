@@ -882,6 +882,57 @@ int destroy_dict(dict_t *d) {
   return 1;
 }
 
+/* Recursively verify e and EVERY nested element has a registered dump fn.
+   __DUMPABLE__ alone is shallow: a vector or set IS dumpable, but a dict /
+   deque element inside it is not, and __DUMP__ would then fail mid-record —
+   after the type tag + count are already written — aborting the whole
+   savedb and truncating the file (every persisted variable silently lost).
+   The top-level dump paths use this to skip a non-round-trippable variable
+   cleanly (with a warning) before writing any bytes. Depth-limited so a
+   pathological / cyclic structure is treated as not-dumpable (skipped)
+   rather than overflowing the stack. */
+#define ALCOVE_DUMPABLE_MAX_DEPTH 512
+static int is_fully_dumpable(exp_t *e, int depth) {
+  if (depth > ALCOVE_DUMPABLE_MAX_DEPTH)
+    return 0;
+  if (!e || e == NIL_EXP || is_imm(e))
+    return 1; /* nil + tagged fixnum/char always round-trip */
+  if (!__DUMPABLE__(e))
+    return 0;
+  if (isvector(e)) {
+    if (vec_kind(e) != VEC_KIND_GEN)
+      return 1; /* I64/F64 cells are raw scalars */
+    int64_t n = vec_len(e);
+    for (int64_t i = 0; i < n; i++)
+      if (!is_fully_dumpable(vec_gen_at(e, i), depth + 1))
+        return 0;
+    return 1;
+  }
+  if (isset(e)) {
+    dict_t *sd = (dict_t *)e->ptr;
+    if (sd)
+      for (unsigned int i = 0; i < sd->ht[0].size; i++)
+        for (keyval_t *k = sd->ht[0].table[i]; k; k = k->next)
+          if (!is_fully_dumpable(k->val, depth + 1))
+            return 0;
+    return 1;
+  }
+  if (ispair(e)) {
+    exp_t *p = e;
+    while (p && ispair(p) && istrue(p)) {
+      if (!is_fully_dumpable(p->content, depth + 1))
+        return 0;
+      p = p->next;
+    }
+    if (p && !ispair(p) && !is_fully_dumpable(p, depth + 1))
+      return 0; /* improper tail */
+    return 1;
+  }
+  /* Remaining dumpable scalars (string/symbol/float/blob) and lambda/macro,
+     whose bodies are always code (dumpable) — already passed __DUMPABLE__. */
+  return 1;
+}
+
 int dump_dict(dict_t *d, FILE *stream) {
   // check if in use
   keyval_t *ckv;
@@ -1345,9 +1396,14 @@ void print_node(exp_t *node) {
       }
     }
     printf(")");
+  } else if (node->type == EXP_INTERNAL) {
+    printf("\x1B[92m#<builtin>\x1B[39m");
+  } else if (node->type == EXO_MACROINTERNAL) {
+    printf("\x1B[92m#<macro-builtin>\x1B[39m");
+  } else if (node->type == EXP_FFI) {
+    printf("\x1B[92m#<ffi>\x1B[39m");
   } else {
-    printf("\x1B[92mtype: %d ptr: %08lx\x1B[39m", node->type,
-           (unsigned long)node->ptr);
+    printf("\x1B[92m#<type %d>\x1B[39m", node->type);
   }
   return;
 }
@@ -1951,9 +2007,14 @@ exp_t *dump_vec(exp_t *e, FILE *stream) {
   if (fwrite(&n, sizeof(n), 1, stream) != 1)
     return NULL;
   if (k == VEC_KIND_GEN) {
-    for (uint32_t i = 0; i < n; i++)
-      if (!__DUMP__(vec_gen_at(e, i), stream))
+    for (uint32_t i = 0; i < n; i++) {
+      exp_t *cell = vec_gen_at(e, i);
+      /* Defense in depth: the top-level dump pre-checks dumpability
+         recursively (is_fully_dumpable), so a non-dumpable cell shouldn't
+         reach here — but guard anyway to match dump_set and fail cleanly. */
+      if (!__DUMPABLE__(cell) || !__DUMP__(cell, stream))
         return NULL;
+    }
   } else if (k == VEC_KIND_I64) {
     int64_t *cells = (int64_t *)((char *)e->ptr + sizeof(alc_vec_t)) +
                      e->vec_win.start;
@@ -3331,13 +3392,13 @@ static int resp_dump_iter(const char *k, size_t klen, exp_t *val,
   resp_dump_ctx_t *c = (resp_dump_ctx_t *)ctx;
   if (c->failed)
     return 1; /* short-circuit on prior I/O failure */
-  if (!__DUMPABLE__(val)) {
-    /* Skip with a warning — callers can tighten by registering more
-       dump fns (currently EXP_BLOB is the only RESP-side type with
-       full round-trip support). */
+  if (!is_fully_dumpable(val, 0)) {
+    /* Skip with a warning — shallow-dumpable containers (e.g. a vector
+       holding a dict) would otherwise fail __DUMP__ mid-record and corrupt
+       the file. Callers can tighten by registering more dump fns. */
     fprintf(stderr,
-            "savedb: skipping resp key (%zu bytes) — type %d has no "
-            "dump fn registered\n",
+            "savedb: skipping resp key (%zu bytes) — type %d (or a nested "
+            "element) has no dump fn registered\n",
             klen, TYPEOF_E(val));
     return 0; /* continue */
   }
@@ -3375,8 +3436,10 @@ static int dump_lisp_section(dict_t *d, FILE *stream) {
         ckv = pkv->next;
         if (pkv->timestamp <= 0)
           continue;
-        if (!__DUMPABLE__(pkv->val)) {
-          fprintf(stderr, "savedb: skipping %s — type %d has no dump fn\n",
+        if (!is_fully_dumpable(pkv->val, 0)) {
+          fprintf(stderr,
+                  "savedb: skipping %s — type %d (or a nested element) has "
+                  "no dump fn\n",
                   (char *)pkv->key, TYPEOF_E(pkv->val));
           continue;
         }
@@ -5178,11 +5241,83 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
       exp_to_string_buf(n->content, buf, len, cap);
       n = n->next;
     }
+    /* improper tail: (a . b) */
+    if (n && !ispair(n) && istrue(n)) {
+      str_buf_put(buf, len, cap, " . ", 3);
+      exp_to_string_buf(n, buf, len, cap);
+    }
     str_buf_put(buf, len, cap, ")", 1);
+  } else if (isvector(v)) {
+    /* Structural, deterministic — mirrors prn's #[...] so (str vec) and
+       (prn vec) agree. The old fallback emitted #<vector@PTR>, a
+       non-deterministic address. */
+    str_buf_put(buf, len, cap, "#[", 2);
+    int64_t vn = vec_len(v);
+    for (int64_t i = 0; i < vn; i++) {
+      if (i) str_buf_put(buf, len, cap, " ", 1);
+      exp_t *cell = vec_get_boxed(v, i);
+      exp_to_string_buf(cell, buf, len, cap);
+      unrefexp(cell);
+    }
+    str_buf_put(buf, len, cap, "]", 1);
+  } else if (isdict(v)) {
+    str_buf_put(buf, len, cap, "{", 1);
+    dict_t *d = (dict_t *)v->ptr;
+    int first = 1;
+    if (d)
+      for (unsigned int i = 0; i < d->ht[0].size; i++)
+        for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
+          if (!first) str_buf_put(buf, len, cap, ", ", 2);
+          first = 0;
+          /* keys raw, like every other nested string in str output */
+          str_buf_put(buf, len, cap, k->key, strlen(k->key));
+          str_buf_put(buf, len, cap, " ", 1);
+          exp_to_string_buf(k->val, buf, len, cap);
+        }
+    str_buf_put(buf, len, cap, "}", 1);
+  } else if (isset(v)) {
+    str_buf_put(buf, len, cap, "#{", 2);
+    dict_t *d = (dict_t *)v->ptr;
+    int first = 1;
+    if (d)
+      for (unsigned int i = 0; i < d->ht[0].size; i++)
+        for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
+          if (!first) str_buf_put(buf, len, cap, " ", 1);
+          first = 0;
+          exp_to_string_buf(k->val, buf, len, cap);
+        }
+    str_buf_put(buf, len, cap, "}", 1);
+  } else if (islist(v)) {
+    str_buf_put(buf, len, cap, "(", 1);
+    alc_list_t *l = (alc_list_t *)v->ptr;
+    if (l) {
+      int first = 1;
+      for (alc_listnode_t *ln = l->head; ln; ln = ln->next) {
+        if (!first) str_buf_put(buf, len, cap, " ", 1);
+        first = 0;
+        exp_to_string_buf(ln->val, buf, len, cap);
+      }
+    }
+    str_buf_put(buf, len, cap, ")", 1);
+  } else if (islambda(v)) {
+    if (v->meta) {
+      str_buf_put(buf, len, cap, "#<procedure:", 12);
+      str_buf_put(buf, len, cap, (char *)v->meta, strlen((char *)v->meta));
+      str_buf_put(buf, len, cap, ">", 1);
+    } else
+      str_buf_put(buf, len, cap, "#<procedure>", 12);
+  } else if (ismacro(v)) {
+    if (v->meta) {
+      str_buf_put(buf, len, cap, "#<macro:", 8);
+      str_buf_put(buf, len, cap, (char *)v->meta, strlen((char *)v->meta));
+      str_buf_put(buf, len, cap, ">", 1);
+    } else
+      str_buf_put(buf, len, cap, "#<macro>", 8);
   } else {
-    int n = snprintf(tmp, sizeof tmp, "#<%s@%p>",
-                     is_ptr(v) ? inspect_type_name(v->type) : "value",
-                     (void *)v);
+    /* builtins / ffi / anything else — deterministic type name, no
+       pointer (str output must be reproducible). */
+    int n = snprintf(tmp, sizeof tmp, "#<%s>",
+                     is_ptr(v) ? inspect_type_name(v->type) : "value");
     str_buf_put(buf, len, cap, tmp, (size_t)n);
   }
 }
@@ -5365,6 +5500,10 @@ exp_t *substrcmd(exp_t *e, env_t *env) {
   int64_t a = FIX_VAL(start), b = FIX_VAL(end);
   if (a < 0)
     a = 0;
+  if (a > n) /* clamp start to the top too: without this, start > len left
+                a large while b dropped to n, so (b - a) went negative and
+                flowed into make_string as a huge size → heap OOB. */
+    a = n;
   if (b < a)
     b = a;
   if (b > n)
@@ -7544,6 +7683,22 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
         cur2n = cur2n->next;
       } while (ret && cur1n && cur2n);
       ret *= (cur1n == cur2n);
+    } else if (isvector(cur1)) {
+      /* Element-wise deep equality — doc_iso promises vector recursion.
+         vec_get_boxed returns an owned ref, so release each after compare. */
+      int64_t n1 = vec_len(cur1), n2 = vec_len(cur2);
+      if (n1 != n2)
+        ret = 0;
+      else {
+        ret = 1;
+        for (int64_t i = 0; i < n1 && ret; i++) {
+          exp_t *a = vec_get_boxed(cur1, i);
+          exp_t *b = vec_get_boxed(cur2, i);
+          ret = isoequal(a, b);
+          unrefexp(a);
+          unrefexp(b);
+        }
+      }
     } else
       ret = isequal(cur1, cur2);
   }
@@ -7824,6 +7979,14 @@ static const char *inspect_type_name(int t) {
     return "deque";
   case EXP_SET:
     return "set";
+  case EXO_MACROINTERNAL:
+    return "macro-builtin";
+  case EXP_FFI:
+    return "ffi";
+  case EXP_TREE:
+    return "tree";
+  case EXP_PAIR_CIRCULAR:
+    return "pair-circular";
   default:
     return "?";
   }
@@ -8497,11 +8660,15 @@ const char doc_cons[] = "(cons x ys) — pair with car=x, cdr=ys. To prepend "
 exp_t *conscmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(a, b);
   exp_t *ret = make_node(a);
-  if (istrue(b))
+  /* Keep ANY non-nil cdr, including falsey-but-non-nil values like 0, "",
+     an empty vec, or a function — only a literal nil terminates the list.
+     The old test was istrue(b), which dropped a 0/"" cdr: (cons 1 0) gave
+     (1) instead of the improper pair (1 . 0). */
+  if (b && b != NIL_EXP)
     ret->next = b;
   else {
     if (b)
-      unrefexp(b);
+      unrefexp(b); /* b == NIL_EXP — immortal, unref is a no-op */
     ret->next = NULL;
   }
   unrefexp(e);

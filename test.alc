@@ -1994,3 +1994,93 @@
 (def restfn-dot (a . rest) rest)
 (assert "rest: dotted after fixed"    (iso (restfn-dot 1 2 3) (list 2 3))        t)
 (assert "rest: anon fn bare-symbol"   (iso ((fn xs xs) 7 8) (list 7 8))          t)
+
+;; ====================================================================
+;; Regression tests for the memory-safety + type-dispatch audit.
+;; Each block guards a specific bug fixed after the vec-push! OOB.
+;; ====================================================================
+
+;; --- vec-push! growth at small-cap / full boundaries (heap OOB) ---
+;; A full vector at start==0 must REALLOC, not take the no-op slide path.
+(= _vp (vec 3 0))
+(vec-push! _vp 9) (vec-push! _vp 8) (vec-push! _vp 7)
+(assert "vec-push! small-cap grows (len)"   (vec-len _vp)        6)
+(assert "vec-push! small-cap value @3"      (vec-ref _vp 3)      9)
+(assert "vec-push! small-cap value last"    (vec-ref _vp 5)      7)
+(assert "vec-ref oob returns error"         (error? (vec-ref _vp 99)) t)
+(= _vp1 (vec 1 0)) (vec-push! _vp1 1)
+(assert "vec-push! cap1 boundary"           (vec-len _vp1)       2)
+(= _vp2 (vec 2 0)) (vec-push! _vp2 1) (vec-push! _vp2 2)
+(assert "vec-push! cap2 boundary"           (vec-len _vp2)       4)
+;; many pushes (exercise repeated growth)
+(= _vpm (vec 1 0)) (for i 1 50 (vec-push! _vpm i))
+(assert "vec-push! many: length"            (vec-len _vpm)       51)
+(assert "vec-push! many: last value"        (vec-ref _vpm 50)    50)
+;; shift then push: exercises the slide-left branch (start>0)
+(= _vs (vec 1 5)) (vec-push! _vs 6) (vec-push! _vs 7)
+(vec-shift! _vs) (vec-shift! _vs)              ; start now > 0
+(vec-push! _vs 8) (vec-push! _vs 9)
+(assert "vec-push! after shifts"            (vec-ref _vs (- (vec-len _vs) 1)) 9)
+
+;; --- vec-unshift! growth at front boundary ---
+(= _vu (vec 2 0)) (for i 1 30 (vec-unshift! _vu i))
+(assert "vec-unshift! grows (len)"          (vec-len _vu)        32)
+(assert "vec-unshift! front value"          (vec-ref _vu 0)      30)
+
+;; --- substr bounds: start > len must not OOB (clamp), no crash ---
+(assert "substr start>len -> empty"         (substr "ab" 5 9)    "")
+(assert "substr start==len boundary"        (substr "abc" 3 5)   "")
+(assert "substr empty-range"                (substr "abc" 4 4)   "")
+(assert "substr negative start clamps"      (substr "abc" -5 2)  "ab")
+(assert "substr normal interior"            (substr "hello" 1 3) "el")
+(assert "substr end>len clamps"             (substr "ab" 1 99)   "b")
+
+;; --- cons must keep a falsey-but-non-nil cdr (nil-conflation) ---
+(assert "cons keeps 0 cdr"                  (cdr (cons 1 0))     0)
+(assert "cons keeps empty-str cdr"          (cdr (cons 1 ""))    "")
+(assert "cons nil cdr -> proper list"       (iso (cons 1 nil) (list 1))   t)
+(assert "cons list cdr -> prepend"          (iso (cons 1 (list 2 3)) (list 1 2 3)) t)
+(assert "cons improper pair car"            (car (cons 4 5))     4)
+
+;; --- iso recurses into vectors (documented contract) ---
+(assert "iso equal vectors"                 (iso (vector 1 2 3) (vector 1 2 3))   t)
+(assert "iso vectors differ"                (iso (vector 1 2 3) (vector 1 2 4))   nil)
+(assert "iso vectors length differ"         (iso (vector 1 2) (vector 1 2 3))     nil)
+(assert "iso nested vectors"                (iso (vector (vector 1) (vector 2))
+                                                 (vector (vector 1) (vector 2)))  t)
+(assert "iso vector inside list"            (iso (list (vector 1 2)) (list (vector 1 2))) t)
+(assert "is (identity) on vectors is nil"   (is (vector 1 2) (vector 1 2))        nil)
+
+;; --- truthiness of function values (istrue completeness) ---
+(assert "lambda is truthy"                  (if (fn (x) x) 'y 'n) 'y)
+(assert "builtin is truthy"                 (if car 'y 'n)        'y)
+(assert "no of a lambda is nil"             (no (fn (x) x))       nil)
+
+;; --- str/fmt of containers: structural + deterministic (not #<addr>) ---
+(assert "str of vector"                     (str (vector 1 2 3))  "#[1 2 3]")
+(assert "str of deque"                      (str (deque 1 2 3))   "(1 2 3)")
+(assert "str of improper pair"              (str (cons 1 2))      "(1 . 2)")
+(assert "str of nested vector"              (str (vector (list 2 3))) "#[(2 3)]")
+;; deterministic: two calls produce the identical string
+(assert "str of vector is deterministic"    (iso (str (vector 9 8)) (str (vector 9 8))) t)
+
+;; --- savedb: a non-dumpable nested element must NOT lose other vars ---
+;; dump_vec returning NULL mid-record used to truncate the whole dump file
+;; (header-only stub) and silently drop every persisted variable on reload.
+;; A vector holding a dict is not round-trippable; it must be skipped, while
+;; everything else survives.
+(= _sd_good 777)
+(= _sd_vecdict (vector (hash-map "a" 1)))
+(persist '_sd_good) (persist '_sd_vecdict)
+(savedb "/tmp/alcove-dumploss-test.db")     ; skips _sd_vecdict (warns on stderr)
+(forget '_sd_good)
+(loaddb "/tmp/alcove-dumploss-test.db")
+(assert "savedb keeps good var despite bad nested" _sd_good 777)
+
+;; --- try: a real lambda handler actually runs on error ---
+(assert "try handler computes from error"
+        (string-contains? (try (/ 1 0) (fn (e) (str "E:" (error-message e)))) "E:")
+        t)
+(assert "try finally runs, returns body"    (try (+ 2 3) (fn (e) -1) 0)   5)
+(assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0)   42)
+(assert "try nil handler propagates error"  (error? (try (/ 1 0) nil))    t)
