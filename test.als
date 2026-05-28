@@ -1,12 +1,30 @@
+setf _test_pass 0
+
+setf _test_fail 0
+
 def assert (txt a b):
   pr txt
   if (iso a b):
-    prn "\t: \x1B[92mPassed\x1B[39m"
-    prn "\t: \x1B[91mFailed\x1B[39m"
+    do:
+      setf _test_pass (+ _test_pass 1)
+      prn "\t: \x1B[92mPassed\x1B[39m"
+    do:
+      setf _test_fail (+ _test_fail 1)
+      prn "\t: \x1B[91mFailed\x1B[39m"
+
+def refute (txt a b):
+  pr txt
+  if (iso a b):
+    do:
+      setf _test_fail (+ _test_fail 1)
+      prn "\t: \x1B[91mFailed\x1B[39m"
+    do:
+      setf _test_pass (+ _test_pass 1)
+      prn "\t: \x1B[92mPassed\x1B[39m"
 
 assert "This will Pass" 1 1
 
-assert "This will Fail" 1 0
+refute "assert detects inequality" 1 0
 
 assert "addition" 3 (+ 1 2)
 
@@ -14,7 +32,7 @@ assert " (+) is 0" 0 (+)
 
 assert "cons test " (cons 'f '(a b)) '(f a b)
 
-= x '(a b)
+setf x '(a b)
 
 assert "(cons 'f x) -> (f a b)" '(f a b) (cons 'f x)
 
@@ -30,9 +48,9 @@ assert "(list 'a 1 " foo " '(b))  -> (a 1 " foo " (b))" (list 'a 1 "foo" '(b)):
 assert "(cons 'a (cons 1 (cons " foo " (cons '(b) nil)))) -> (a 1 " foo " (b))" (cons 'a (cons 1 (cons "foo" (cons '(b) nil)))):
   '(a 1 "foo" (b))
 
-= x '(a b)
+setf x '(a b)
 
-assert "(= (car x) 'z) -> z" (= (car x) 'z) 'z
+assert "(= (car x) 'z) -> z" (setf (car x) 'z) 'z
 
 assert "and x -> (z b)" x '(z b)
 
@@ -45,9 +63,9 @@ assert "((fn (x y) (/ (+ x y) 2)) 2 4) -> 3" ((fn (x y) (/ (+ x y) 2)) 2 4) 3
 
 assert "(\"foo\" 0) -> #\\f" ("foo" 0) #\f
 
-= s "foo"
+setf s "foo"
 
-assert "(= (s 0) #\m) ->#\m " (= (s 0) #\m) #\m
+assert "(= (s 0) #\m) ->#\m " (setf (s 0) #\m) #\m
 
 assert " s -> moo" s "moo"
 
@@ -84,7 +102,7 @@ assert "(let x 'a (in x 'a 'b 'c)) -> t" (let x 'a (in x 'a 'b 'c)) t
 def runforsum (n):
   let s 0:
     for i 1 n:
-      = s (+ s 1)
+      setf s (+ s 1)
 
 assert "first  (runforsum 5) -> 5" (runforsum 5) 5
 
@@ -119,7 +137,7 @@ vmerr 5
 assert "recovery after VM error" 42 42
 
 def inc (n):
-  = n (+ n 1)
+  setf n (+ n 1)
 
 assert "(= param val) returns val" (inc 5) 6
 
@@ -129,11 +147,84 @@ assert "let uses caller scope" ((fn (y) (let x 10 (+ x y))) 5) 15
 
 assert "nested let shadows" (let x 1 (let x 2 x)) 2
 
+assert "let multi-body" (let x 5 (+ x 1) (+ x 10)) 15
+
+assert "let destructuring" (let (a b) (list 1 2) (+ a b)) 3
+
+assert "let* sequential" (let* (a 1 b (* a 10)) (+ a b)) 11
+
+assert "let* multi-body" (let* (x 5) (+ x 1) (+ x 10)) 15
+
+assert "let* flat legacy" (let* x 1 y 2 (+ x y)) 3
+
+assert "when multi-body" (when t 1 2 3) 3
+
+assert "when false -> nil" (when nil 99) nil
+
+assert "unless multi-body" (unless nil 1 2 3) 3
+
+assert "unless true -> nil" (unless t 99) nil
+
+def tco-let (n):
+  if (is n 0):
+    'ok
+    let m (- n 1):
+      tco-let m
+
+def tco-lets (n):
+  if (is n 0):
+    'ok
+    let* (m (- n 1)) (tco-lets m)
+
+def tco-with (n):
+  if (is n 0):
+    'ok
+    with (m (- n 1)):
+      tco-with m
+
+def tco-when (n):
+  if (is n 0):
+    'ok
+    when t:
+      tco-when (- n 1)
+
+def tco-unless (n):
+  unless (is n 0):
+    tco-unless (- n 1)
+
+assert "tco through let" (tco-let 1000000) 'ok
+
+assert "tco through let*" (tco-lets 1000000) 'ok
+
+assert "tco through with" (tco-with 1000000) 'ok
+
+assert "tco through when" (tco-when 1000000) 'ok
+
+assert "tco through unless" (tco-unless 1000000) nil
+
 assert "with 2 bindings" (with (a 3 b 4) (+ a b)) 7
 
 assert "with shadows" (let a 1 (with (a 9) a)) 9
 
-assert "= into let slot" (let c 10 (= c 20) c) 20
+assert "with multi-body" (with (a 3 b 4) (+ a 1) (+ a b)) 7
+
+assert "= into let slot" (let c 10 (setf c 20) c) 20
+
+assert "setf symbol" (do (setf sf1 7) sf1) 7
+
+assert "setf place car" (do (setf sf2 (list 1 2)) (setf (car sf2) 9) sf2):
+  list 9 2
+
+assert "setf into let slot" (let c 10 (setf c 20) c) 20
+
+def setf-acc (n a):
+  if (is n 0):
+    a
+    do:
+      setf a (+ a n)
+      setf-acc (- n 1) a
+
+assert "setf compiled accumulator" (setf-acc 100 0) 5050
 
 def lastsq (n):
   for i 1 n:
@@ -150,7 +241,7 @@ assert "for empty range nil" (forempty 7) nil
 def fsum (n):
   let s 0:
     for i 1 n:
-      = s (+ s i)
+      setf s (+ s i)
 
 assert "compiled fsum 10 -> 55" (fsum 10) 55
 
@@ -300,9 +391,9 @@ def make-adder (n):
   fn (x):
     + x n
 
-= add5 (make-adder 5)
+setf add5 (make-adder 5)
 
-= add10 (make-adder 10)
+setf add10 (make-adder 10)
 
 assert "closure: add5 100" (add5 100) 105
 
@@ -311,11 +402,11 @@ assert "closure: add10 100" (add10 100) 110
 def make-counter (dummy):
   let n 0:
     fn (d):
-      = n (+ n 1)
+      setf n (+ n 1)
 
-= ca (make-counter 0)
+setf ca (make-counter 0)
 
-= cb (make-counter 0)
+setf cb (make-counter 0)
 
 ca 0
 
@@ -425,21 +516,21 @@ assert "compiled if cond-style: 2nd clause" (compiled-if-ladder 2) 'two
 
 assert "compiled if cond-style: fallback" (compiled-if-ladder 3) 'other
 
-= sbuf "abcdef"
+setf sbuf "abcdef"
 
-= i 2
+setf i 2
 
-= (sbuf i) #\Z
+setf (sbuf i) #\Z
 
 assert "string-set with var index" sbuf "abZdef"
 
 assert "nth on non-list -> nil-ish" (no (no (nth 0 5))) nil
 
-= sread "abcdef"
+setf sread "abcdef"
 
 assert "string read by var, literal idx" (sread 2) #\c
 
-= ridx 4
+setf ridx 4
 
 assert "string read by var, computed idx" (sread ridx) #\e
 
@@ -500,7 +591,7 @@ assert "load defines var" loaded-var 77
 
 assert "load defines fn" (loaded-add 3) 80
 
-= s1 (set 1 2 2 "a" :kw)
+setf s1 (set 1 2 2 "a" :kw)
 
 assert "set? populated" (set? s1) t
 
@@ -520,21 +611,21 @@ set-del! s1 2
 
 assert "set-del! mutates" (set-has? s1 2) nil
 
-= s2 (set 3 4 :kw)
+setf s2 (set 3 4 :kw)
 
-= sunion (set-union s1 s2)
+setf sunion (set-union s1 s2)
 
 assert "set-union count" (count sunion) 5
 
 assert "set-union contains" (and (set-has? sunion 1) (set-has? sunion 4)) t
 
-= sint (set-intersection s1 s2)
+setf sint (set-intersection s1 s2)
 
 assert "set-intersection count" (count sint) 2
 
 assert "set-intersection elem" (and (set-has? sint 3) (set-has? sint :kw)) t
 
-= sdiff (set-difference s1 s2)
+setf sdiff (set-difference s1 s2)
 
 assert "set-difference count" (count sdiff) 2
 
@@ -542,7 +633,7 @@ assert "set-difference elem" (and (set-has? sdiff 1) (set-has? sdiff "a")) t
 
 assert "set->list count" (length (set->list s1)) (count s1)
 
-= styped (set 1 "1" 'foo "foo" 10 "10")
+setf styped (set 1 "1" 'foo "foo" 10 "10")
 
 assert "set typed identity count" (count styped) 6
 
@@ -551,12 +642,12 @@ assert "set typed identity members" (and (set-has? styped 1) (set-has? styped "1
 
 assert "set->list preserves string" (string? (car (set->list (set "123")))) t
 
-= smore (set 3.14 #\a nil t (string->blob "abc"))
+setf smore (set 3.14 #\a nil t (string->blob "abc"))
 
 assert "set supports scalar types" (and (set-has? smore 3.14) (set-has? smore #\a) (set-has? smore nil) (set-has? smore t) (set-has? smore (string->blob "abc"))):
   t
 
-= sbig (set)
+setf sbig (set)
 
 for i 0 255:
   set-add! sbig i
@@ -567,7 +658,7 @@ assert "set rehash membership" (and (set-has? sbig 0) (set-has? sbig 255)) t
 
 assert "set rehash list count" (length (set->list sbig)) 256
 
-= sbig2 (set)
+setf sbig2 (set)
 
 for i 128 383:
   set-add! sbig2 i
@@ -578,7 +669,7 @@ assert "set rehash intersection" (count (set-intersection sbig sbig2)) 128
 
 assert "set rehash difference" (count (set-difference sbig sbig2)) 128
 
-= persisted-set (set 9 "x" :z "123" 123 3.14 #\a nil (string->blob "bb"))
+setf persisted-set (set 9 "x" :z "123" 123 3.14 #\a nil (string->blob "bb"))
 
 persist 'persisted-set
 
@@ -909,7 +1000,7 @@ assert "all? one fails" (all? odd (list 1 3 4)) nil
 
 assert "all? empty -> t" (all? odd nil) t
 
-= v (vec 5 0)
+setf v (vec 5 0)
 
 assert "vec len" (vec-len v) 5
 
@@ -959,29 +1050,29 @@ assert "string read literal idx" ("abcdef" 0) #\a
 
 assert "string read idx 5" ("abcdef" 5) #\f
 
-= sread2 "qwerty"
+setf sread2 "qwerty"
 
 assert "string read by var" (sread2 3) #\r
 
-= ridx2 4
+setf ridx2 4
 
 assert "string read by computed idx" (sread2 ridx2) #\t
 
-= sw "hello"
+setf sw "hello"
 
-= (sw 0) #\J
+setf (sw 0) #\J
 
 assert "string-set literal idx" sw "Jello"
 
-= si 4
+setf si 4
 
-= (sw si) #\Y
+setf (sw si) #\Y
 
 assert "string-set computed idx" sw "JellY"
 
-= sx "abc"
+setf sx "abc"
 
-assert "string-set OOB -> error" (caught (= (sx 99) #\Z)) t
+assert "string-set OOB -> error" (caught (setf (sx 99) #\Z)) t
 
 def need3 (a b c):
   + a b c
@@ -1065,7 +1156,7 @@ assert "JIT shape match w/ other callee 10" (myfib2 10) 15
 
 assert "JIT shape match w/ other callee 5" (myfib2 5) 5
 
-= zforget 99
+setf zforget 99
 
 assert "z bound" zforget 99
 
@@ -1073,7 +1164,7 @@ forget 'zforget
 
 assert "forget unbinds" (caught zforget) t
 
-= zkeep 7
+setf zkeep 7
 
 persist 'zkeep
 
@@ -1087,20 +1178,20 @@ assert "unpersist doesn't unbind" zkeep 7
 
 forget 'zkeep
 
-= xs1 (list 1 2 3)
+setf xs1 (list 1 2 3)
 
-= (car xs1) 'A
+setf (car xs1) 'A
 
 assert "= (car x) replaces head" (iso xs1 '(A 2 3)) t
 
-= xs2 (list 1 2 3)
+setf xs2 (list 1 2 3)
 
-= (cdr xs2) (list 99)
+setf (cdr xs2) (list 99)
 
 assert "= (cdr x) replaces tail" (iso xs2 '(1 99)) t
 
-defmacro my-when (cond body):
-  quasiquote (if (unquote cond) (unquote body) nil)
+defmacro my-when (c body):
+  quasiquote (if (unquote c) (unquote body) nil)
 
 assert "macro my-when t" (my-when t 42) 42
 
@@ -1113,7 +1204,7 @@ assert "apply +" (apply + (list 1 2 3 4)) 10
 assert "apply list" (iso (apply list (list 1 2 3)) (list 1 2 3)) t
 
 def noleak-local (x):
-  = noleak-y x
+  setf noleak-y x
 
 assert "function-local assignment returns value" (noleak-local 10) 10
 
@@ -1135,7 +1226,7 @@ setq-update 20
 
 assert "setq updates existing top-level" setq-top 20
 
-= setq-shadow 1
+setf setq-shadow 1
 
 assert "setq updates local shadow" (let setq-shadow 2 (do (setq setq-shadow 3) setq-shadow)):
   3
@@ -1164,9 +1255,9 @@ forget 'setq-a
 forget 'setq-b
 
 def counter-mk ():
-  = cnt 0
+  setf cnt 0
   def counter-inc ():
-    = cnt (+ cnt 1)
+    setf cnt (+ cnt 1)
     cnt
 
 counter-mk()
@@ -1187,7 +1278,7 @@ assert "doc on string" (doc "vec") nil
 
 assert "doc on unknown" (doc never-existed) nil
 
-= rt 1234
+setf rt 1234
 
 persist 'rt
 
@@ -1203,7 +1294,7 @@ assert "loaddb restores rt" rt 1234
 
 forget 'rt
 
-= persist_scope 42
+setf persist_scope 42
 
 let persist_scope 99:
   persist 'persist_scope
@@ -1264,10 +1355,10 @@ assert "(or) is nil" (or) nil
 
 assert "(do)" (do) nil
 
-= mutbuf "hello"
+setf mutbuf "hello"
 
 def upcase-first (s):
-  = (s 0) #\H
+  setf (s 0) #\H
   s
 
 upcase-first mutbuf
@@ -1278,7 +1369,7 @@ assert "1<<59 fits" (<< 1 59) 576460752303423488
 
 assert "end-of-suite sentinel" 'reached 'reached
 
-= sread6 "abcdef"
+setf sread6 "abcdef"
 
 def t6_sget1 (n):
   sread6 n
@@ -1308,67 +1399,67 @@ def t6_mix (n):
 
 assert "ticket6: mixed reads in def" (t6_mix 0) #\a
 
-= acc7 0
+setf acc7 0
 
 for y 0 2:
   for x 0 1:
-    = acc7 (+ acc7 1)
-  = acc7 (+ acc7 100)
+    setf acc7 (+ acc7 1)
+  setf acc7 (+ acc7 100)
 
 assert "ticket7: nested for, multi-form outer body" acc7 (+ (* 3 2) (* 3 100))
 
-= log7 (list)
+setf log7 (list)
 
 for i 1 3:
-  = log7 (cons (list 'in i) log7)
+  setf log7 (cons (list 'in i) log7)
   for j 1 2:
-    = log7 (cons (list 'inner i j) log7)
-  = log7 (cons (list 'out i) log7)
+    setf log7 (cons (list 'inner i j) log7)
+  setf log7 (cons (list 'out i) log7)
 
 assert "ticket7: outer body forms after nested for run" (length log7) 12
 
-= n7 0
+setf n7 0
 
 for k 1 5:
   prn ""
-  = n7 (+ n7 1)
+  setf n7 (+ n7 1)
 
 assert "ticket7: for after a NIL-returning builtin" n7 5
 
-= s8a 0
+setf s8a 0
 
 do:
-  = s8a (+ s8a 1)
-  = s8a (+ s8a 10)
-  = s8a (+ s8a 100)
+  setf s8a (+ s8a 1)
+  setf s8a (+ s8a 10)
+  setf s8a (+ s8a 100)
 
 assert "ticket8: do with mid-list comment" s8a 111
 
-= s8b 0
+setf s8b 0
 
 def f8 ():
-  = s8b (+ s8b 1)
-  = s8b (+ s8b 10)
-  = s8b (+ s8b 100)
+  setf s8b (+ s8b 1)
+  setf s8b (+ s8b 10)
+  setf s8b (+ s8b 100)
 
 f8()
 
 assert "ticket8: def body with comment" s8b 111
 
-= s8c 0
+setf s8c 0
 
 def f8c ():
-  = s8c (+ s8c 1)
+  setf s8c (+ s8c 1)
 
 f8c()
 
 assert "ticket8: leading comment in def body" s8c 1
 
-= s8d 0
+setf s8d 0
 
 def f8d ():
   let _ 1:
-    = s8d (+ s8d 1)
+    setf s8d (+ s8d 1)
 
 f8d()
 
@@ -1423,7 +1514,7 @@ assert "alcove-001 A: with after pollution" (alc001a-with) 60
 def alc001a-for ():
   let s 0:
     for i 1 5:
-      = s (+ s i)
+      setf s (+ s i)
     s
 
 assert "alcove-001 A: for-body after pollution" (alc001a-for) 15
@@ -1470,10 +1561,10 @@ def vec->list (v):
   let xs (list):
     do:
       for i 0 (- (vec-len v) 1):
-        = xs (cons (vec-ref v i) xs)
+        setf xs (cons (vec-ref v i) xs)
       reverse xs
 
-= vd-a (vec 4 0)
+setf vd-a (vec 4 0)
 
 vec-set! vd-a 0 1
 
@@ -1483,7 +1574,7 @@ vec-set! vd-a 2 3
 
 vec-set! vd-a 3 4
 
-= vd-b (vec 4 0)
+setf vd-b (vec 4 0)
 
 vec-set! vd-b 0 5
 
@@ -1495,7 +1586,7 @@ vec-set! vd-b 3 8
 
 assert "vec-dot: integer elements" (vec-dot vd-a vd-b) 70.0
 
-= vd-c (vec 4 0.0)
+setf vd-c (vec 4 0.0)
 
 vec-set! vd-c 0 1.0
 
@@ -1505,7 +1596,7 @@ vec-set! vd-c 2 3.0
 
 vec-set! vd-c 3 4.0
 
-= vd-d (vec 4 0.0)
+setf vd-d (vec 4 0.0)
 
 vec-set! vd-d 0 0.5
 
@@ -1519,22 +1610,22 @@ assert "vec-dot: float elements, exact sum" (vec-dot vd-c vd-d) 8.5
 
 assert "vec-dot: empty vec is 0" (vec-dot (vec 0 0) (vec 0 0)) 0.0
 
-= e1 (vec 3 0)
+setf e1 (vec 3 0)
 
 vec-set! e1 0 1
 
-= e2 (vec 3 0)
+setf e2 (vec 3 0)
 
 vec-set! e2 1 1
 
 assert "vec-dot: orthogonal vecs" (vec-dot e1 e2) 0.0
 
-= ax-y (vec 4 0)
+setf ax-y (vec 4 0)
 
 for i 0 3:
   vec-set! ax-y i 10
 
-= ax-x (vec 4 0)
+setf ax-x (vec 4 0)
 
 for i 0 3:
   vec-set! ax-x i (+ i 1)
@@ -1544,15 +1635,15 @@ vec-axpy! ax-y 3 ax-x
 assert "vec-axpy!: integer scale + integer vecs" (vec->list ax-y):
   list 13.0 16.0 19.0 22.0
 
-= ax-y2 (vec 3 7)
+setf ax-y2 (vec 3 7)
 
-= ax-x2 (vec 3 99)
+setf ax-x2 (vec 3 99)
 
 vec-axpy! ax-y2 0 ax-x2
 
 assert "vec-axpy!: a=0 preserves y" (vec->list ax-y2) (list 7.0 7.0 7.0)
 
-= ax-y3 (vec 3 0)
+setf ax-y3 (vec 3 0)
 
 vec-set! ax-y3 0 10
 
@@ -1560,7 +1651,7 @@ vec-set! ax-y3 1 20
 
 vec-set! ax-y3 2 30
 
-= ax-x3 (vec 3 0)
+setf ax-x3 (vec 3 0)
 
 vec-set! ax-x3 0 1
 
@@ -1572,13 +1663,13 @@ vec-axpy! ax-y3 -2 ax-x3
 
 assert "vec-axpy!: negative scalar" (vec->list ax-y3) (list 8.0 16.0 24.0)
 
-= ax-y4 (vec 2 1)
+setf ax-y4 (vec 2 1)
 
-= ax-x4 (vec 2 1)
+setf ax-x4 (vec 2 1)
 
 assert "vec-axpy!: returns y" (iso (vec-axpy! ax-y4 1 ax-x4) ax-y4) t
 
-= sc-v (vec 4 0)
+setf sc-v (vec 4 0)
 
 vec-set! sc-v 0 1
 
@@ -1592,7 +1683,7 @@ vec-scale! sc-v 5
 
 assert "vec-scale!: integer scale" (vec->list sc-v) (list 5.0 10.0 15.0 20.0)
 
-= sc-v2 (vec 3 0)
+setf sc-v2 (vec 3 0)
 
 vec-set! sc-v2 0 2.0
 
@@ -1604,12 +1695,12 @@ vec-scale! sc-v2 0.5
 
 assert "vec-scale!: halving" (vec->list sc-v2) (list 1.0 2.0 4.0)
 
-= ad-y (vec 4 0)
+setf ad-y (vec 4 0)
 
 for i 0 3:
   vec-set! ad-y i (+ i 1)
 
-= ad-x (vec 4 0)
+setf ad-x (vec 4 0)
 
 for i 0 3:
   vec-set! ad-x i (* i 10)
@@ -1618,14 +1709,14 @@ vec-add! ad-y ad-x
 
 assert "vec-add!: element-wise sum" (vec->list ad-y) (list 1.0 12.0 23.0 34.0)
 
-= fl-v (vec 5 99)
+setf fl-v (vec 5 99)
 
 vec-fill! fl-v -1.5
 
 assert "vec-fill!: float fill" (vec->list fl-v):
   list -1.5 -1.5 -1.5 -1.5 -1.5
 
-= rl-v (vec 5 0)
+setf rl-v (vec 5 0)
 
 vec-set! rl-v 0 -3
 
@@ -1642,7 +1733,7 @@ vec-relu! rl-v
 assert "vec-relu!: zeros negatives, preserves non-negatives" (vec->list rl-v):
   list 0.0 0 4 0.0 2.5
 
-= rl-v2 (vec 3 0)
+setf rl-v2 (vec 3 0)
 
 vec-set! rl-v2 0 -1
 
@@ -1655,7 +1746,7 @@ vec-relu! rl-v2
 assert "vec-relu!: all-negative → all-zero" (vec->list rl-v2):
   list 0.0 0.0 0.0
 
-= am-v (vec 5 0)
+setf am-v (vec 5 0)
 
 vec-set! am-v 0 1
 
@@ -1669,7 +1760,7 @@ vec-set! am-v 4 2
 
 assert "vec-argmax: basic" (vec-argmax am-v) 2
 
-= am-v2 (vec 4 0)
+setf am-v2 (vec 4 0)
 
 vec-set! am-v2 0 5
 
@@ -1681,7 +1772,7 @@ vec-set! am-v2 3 5
 
 assert "vec-argmax: ties favor lowest index" (vec-argmax am-v2) 0
 
-= mx-v (vec 5 0)
+setf mx-v (vec 5 0)
 
 vec-set! mx-v 0 1.0
 
@@ -1695,7 +1786,7 @@ vec-set! mx-v 4 2.0
 
 assert "vec-max: float elements" (vec-max mx-v) 9.0
 
-= mx-v2 (vec 3 0)
+setf mx-v2 (vec 3 0)
 
 vec-set! mx-v2 0 1
 
@@ -1705,9 +1796,9 @@ vec-set! mx-v2 2 2
 
 assert "vec-max: mixed int/float picks the float" (vec-max mx-v2) 2.5
 
-= cp-dst (vec 4 0)
+setf cp-dst (vec 4 0)
 
-= cp-src (vec 4 0)
+setf cp-src (vec 4 0)
 
 vec-set! cp-src 0 10
 
@@ -1726,7 +1817,7 @@ vec-set! cp-src 0 999
 
 assert "vec-copy!: no aliasing" (vec-ref cp-dst 0) 10
 
-= grad-probs (vec 3 0)
+setf grad-probs (vec 3 0)
 
 vec-set! grad-probs 0 0.25
 
@@ -1734,7 +1825,7 @@ vec-set! grad-probs 1 0.5
 
 vec-set! grad-probs 2 0.25
 
-= grad-d (vec 3 0)
+setf grad-d (vec 3 0)
 
 vec-copy! grad-d grad-probs
 
@@ -1743,31 +1834,31 @@ vec-set! grad-d 1 (- (vec-ref grad-d 1) 1.0)
 assert "tensor combo: softmax-CE gradient" (vec->list grad-d):
   list 0.25 -0.5 0.25
 
-= W-row0 (vec 2 0)
+setf W-row0 (vec 2 0)
 
 vec-set! W-row0 0 1
 
 vec-set! W-row0 1 2
 
-= W-row1 (vec 2 0)
+setf W-row1 (vec 2 0)
 
 vec-set! W-row1 0 3
 
 vec-set! W-row1 1 4
 
-= W-row2 (vec 2 0)
+setf W-row2 (vec 2 0)
 
 vec-set! W-row2 0 5
 
 vec-set! W-row2 1 6
 
-= mv-x (vec 2 0)
+setf mv-x (vec 2 0)
 
 vec-set! mv-x 0 10
 
 vec-set! mv-x 1 20
 
-= mv-out (vec 3 0)
+setf mv-out (vec 3 0)
 
 vec-set! mv-out 0 (vec-dot W-row0 mv-x)
 
@@ -1778,9 +1869,9 @@ vec-set! mv-out 2 (vec-dot W-row2 mv-x)
 assert "tensor combo: 3x2 matvec via per-row vec-dot" (vec->list mv-out):
   list 50.0 110.0 170.0
 
-= cs-y (vec 2 0.0)
+setf cs-y (vec 2 0.0)
 
-= cs-c (vec 3 0)
+setf cs-c (vec 3 0)
 
 vec-set! cs-c 0 1
 
@@ -1797,7 +1888,7 @@ vec-axpy! cs-y (vec-ref cs-c 2) W-row2
 assert "tensor combo: column-weighted sum via axpy" (vec->list cs-y):
   list -4.0 -4.0
 
-= dq (vec 0 nil)
+setf dq (vec 0 nil)
 
 vec-push! dq 1
 
@@ -1823,7 +1914,7 @@ assert "vec-shift!: returns first" (vec-shift! dq) 0
 
 assert "vec-shift!: contents after shift" (vec->list dq) (list 1 2)
 
-= dq2 (vec 0 nil)
+setf dq2 (vec 0 nil)
 
 vec-push! dq2 10
 
@@ -1847,7 +1938,7 @@ vec-shift! never-bound-for-shift
 
 assert "vec-shift!: recovers after arg error" 42 42
 
-= vec-err (vector 1 'x 3)
+setf vec-err (vector 1 'x 3)
 
 vec-dot vec-err vec-err
 
@@ -1873,7 +1964,7 @@ sqrt-int 'not-a-number
 
 assert "sqrt-int: recovers after type error" 42 42
 
-= dq4 (vec 0 nil)
+setf dq4 (vec 0 nil)
 
 for i 0 99:
   vec-push! dq4 i
@@ -1884,7 +1975,7 @@ assert "vec-push!: first cell" (vec-ref dq4 0) 0
 
 assert "vec-push!: last cell" (vec-ref dq4 99) 99
 
-= dq5 (vec 0 nil)
+setf dq5 (vec 0 nil)
 
 for i 0 49:
   do:
@@ -1894,7 +1985,7 @@ for i 0 49:
 
 assert "vec-push!/shift! alternation" (vec-len dq5) 50
 
-= dqi (vec 0 0)
+setf dqi (vec 0 0)
 
 vec-push! dqi 1
 
@@ -2035,7 +2126,7 @@ assert "bench ackermann 3 7" (bm-ack 3 7) 1021
 def bm-forsum (n):
   let s 0:
     for i 1 n:
-      = s (+ s 1)
+      setf s (+ s 1)
 
 assert "bench forsum 1000000" (bm-forsum 1000000) 1000000
 
@@ -2138,9 +2229,9 @@ def sf-count-primes (i n marks acc):
     acc
     sf-count-primes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc)
 
-= sf-n 100000
+setf sf-n 100000
 
-= sf-marks (vec (+ sf-n 1) t)
+setf sf-marks (vec (+ sf-n 1) t)
 
 sf-mark-composites 2 sf-n sf-marks
 
@@ -2154,58 +2245,58 @@ def bm-tak (x y z):
 
 assert "bench tak 24 16 8" (bm-tak 24 16 8) 9
 
-= wh-n 0
+setf wh-n 0
 
 while (< wh-n 5):
-  = wh-n (+ wh-n 1)
+  setf wh-n (+ wh-n 1)
 
 assert "while counts to 5" wh-n 5
 
-= wh-x 10
+setf wh-x 10
 
 while nil:
-  = wh-x 0
+  setf wh-x 0
 
 assert "while nil-cond never runs" wh-x 10
 
-= wh-last 0
+setf wh-last 0
 
 while (< wh-last 3):
-  = wh-last (+ wh-last 1)
+  setf wh-last (+ wh-last 1)
 
 assert "while final value" wh-last 3
 
-= rep-n 0
+setf rep-n 0
 
-repeat 4 (= rep-n (+ rep-n 1))
+repeat 4 (setf rep-n (+ rep-n 1))
 
 assert "repeat 4 increments" rep-n 4
 
-repeat 0 (= rep-n 99)
+repeat 0 (setf rep-n 99)
 
 assert "repeat 0 is no-op" rep-n 4
 
-= each-sum 0
+setf each-sum 0
 
 each x:
   list 10 20 30
-  = each-sum (+ each-sum x)
+  setf each-sum (+ each-sum x)
 
 assert "each list sum" each-sum 60
 
-= each-acc (list)
+setf each-acc (list)
 
 each x:
   list 1 2 3
-  = each-acc (cons x each-acc)
+  setf each-acc (cons x each-acc)
 
 assert "each list collect" (length each-acc) 3
 
-= each-empty 0
+setf each-empty 0
 
 each x:
   nil
-  = each-empty 99
+  setf each-empty 99
 
 assert "each nil runs once" each-empty 99
 
@@ -2245,7 +2336,7 @@ assert "bit-not inverts all bits" (bit-not (bit-not 1234)) 1234
 
 assert "double-not identity" (~ (~ -5)) -5
 
-= rnd (random 100)
+setf rnd (random 100)
 
 assert "random in [0,100)" (and (>= rnd 0) (< rnd 100)) t
 
@@ -2261,7 +2352,7 @@ defmacro mx-double (x):
 defmacro mx-swap (a b):
   list 'list b a
 
-= mx-res (macroexpand-1 '(mx-double 7))
+setf mx-res (macroexpand-1 '(mx-double 7))
 
 assert "macroexpand-1 head" (car mx-res) '*
 
@@ -2275,7 +2366,7 @@ assert "macroexpand-1 gives form" (pair? (macroexpand-1 '(mx-swap a b))) t
 
 assert "println returns nil" (no (println)) t
 
-= hm (hash-map "x" 10 "y" 20 "z" 30)
+setf hm (hash-map "x" 10 "y" 20 "z" 30)
 
 assert "hash-map get x" (get hm "x") 10
 
@@ -2313,15 +2404,15 @@ assert "dissoc! removes key" (get hm "y" "gone") "gone"
 
 assert "dissoc! shrinks map" (length (keys hm)) 3
 
-= hm2 (hash-map "k" 7)
+setf hm2 (hash-map "k" 7)
 
-= ks2 (keys hm2)
+setf ks2 (keys hm2)
 
-= vs2 (vals hm2)
+setf vs2 (vals hm2)
 
 assert "keys/vals aligned" (is (get hm2 (car ks2)) (car vs2)) t
 
-= hs (hash-set 1 2 3 2 1)
+setf hs (hash-set 1 2 3 2 1)
 
 assert "hash-set alias for set" (set? hs) t
 
@@ -2329,7 +2420,7 @@ assert "hash-set deduplicates" (count hs) 3
 
 assert "hash-set has member" (set-has? hs 2) t
 
-= bl (string->blob "Hello")
+setf bl (string->blob "Hello")
 
 assert "blob-len of Hello" (blob-len bl) 5
 
@@ -2341,11 +2432,11 @@ assert "blob-len empty blob" (blob-len (make-blob 0)) 0
 
 assert "blob-len make-blob 3" (blob-len (make-blob 3)) 3
 
-= bl2 (string->blob "world")
+setf bl2 (string->blob "world")
 
 assert "blob->string roundtrip" (blob->string bl2) "world"
 
-= dq (deque)
+setf dq (deque)
 
 push-right! dq 10
 
@@ -2359,7 +2450,7 @@ assert "peek-right last pushed" (peek-right dq) 30
 
 assert "peek-left first pushed" (peek-left dq) 10
 
-= prv (pop-right! dq)
+setf prv (pop-right! dq)
 
 assert "pop-right returns last" prv 30
 
@@ -2371,13 +2462,13 @@ assert "deque count after push-l" (count dq) 3
 
 assert "peek-left after push-left" (peek-left dq) 5
 
-= plv (pop-left! dq)
+setf plv (pop-left! dq)
 
 assert "pop-left returns first" plv 5
 
 assert "deque count after pop-l" (count dq) 2
 
-= dq2 (deque 1 2 3)
+setf dq2 (deque 1 2 3)
 
 assert "deque constructor count" (count dq2) 3
 
@@ -2436,9 +2527,9 @@ assert "setq multi b" sq-b 2
 
 assert "setq multi c" sq-c 3
 
-= do-side 0
+setf do-side 0
 
-= do-ret (do (= do-side 1) (= do-side 2) 42)
+setf do-ret (do (setf do-side 1) (setf do-side 2) 42)
 
 assert "do side effects ran" do-side 2
 
@@ -2618,7 +2709,7 @@ assert ">> 16 2 = 4" (>> 16 2) 4
 
 assert ">> neg / sign-ext" (>> -8 1) -4
 
-= tv (vec 5 0)
+setf tv (vec 5 0)
 
 for i 0 4:
   vec-set! tv i (* i i)
@@ -2631,7 +2722,7 @@ assert "vec-ref tv 2" (vec-ref tv 2) 4
 
 assert "vec-len 5" (vec-len tv) 5
 
-= tv2 (vec 3 0)
+setf tv2 (vec 3 0)
 
 vec-set! tv2 0 10
 
@@ -2645,7 +2736,7 @@ assert "vec-push grows" (vec-len tv2) 4
 
 assert "vec-push end value" (vec-ref tv2 3) 40
 
-= pv (vec-pop! tv2)
+setf pv (vec-pop! tv2)
 
 assert "vec-pop returns last" pv 40
 
@@ -2695,7 +2786,7 @@ assert "(-) recovery" 1 1
 
 assert "(/) recovery" 1 1
 
-= fixmin -1152921504606846976
+setf fixmin -1152921504606846976
 
 assert "abs FIXMIN promoted float" (> (abs fixmin) 0) t
 
@@ -2711,7 +2802,7 @@ assert "(- -5) still works" (- -5) 5
 
 assert "deeply nested parse ok" (+ (+ (+ 1 2) (+ 3 4)) (+ (+ 5 6) (+ 7 8))) 36
 
-= _ushift_v (vec 3 0)
+setf _ushift_v (vec 3 0)
 
 vec-set! _ushift_v 0 10
 
@@ -2728,3 +2819,334 @@ assert "vec-unshift! length" (vec-len _ushift_v) 4
 assert "load_pair happy path" (car '(1 2 3)) 1
 
 assert "nested pairs parse ok" (car (cdr '(a b c))) 'b
+
+setf _saved_str "hello"
+
+setf _saved_num 42
+
+setf _saved_float 3.14
+
+persist '_saved_str
+
+persist '_saved_num
+
+persist '_saved_float
+
+savedb "/tmp/alcove-bug12-test.db"
+
+forget '_saved_str
+
+forget '_saved_num
+
+forget '_saved_float
+
+loaddb "/tmp/alcove-bug12-test.db"
+
+assert "load string roundtrip" _saved_str "hello"
+
+assert "load number roundtrip" _saved_num 42
+
+assert "load float roundtrip" (iso _saved_float 3.14) t
+
+assert "sqrt-int large fixnum" (sqrt-int 1152921504606846975) 1073741823
+
+assert "sqrt-int perfect square" (sqrt-int 1073741824) 32768
+
+assert "sqrt-int near max correct" (* (sqrt-int 1152921504606846975) (sqrt-int 1152921504606846975)):
+  1152921502459363329
+
+assert "normal refcount still works" (+ 1 2) 3
+
+setf _tmp_str "guard test"
+
+setf _tmp_str nil
+
+assert "string unrefexp ok" 1 1
+
+assert "round" (iso (round 2.6) 3.0) t
+
+assert "floor" (iso (floor 2.9) 2.0) t
+
+assert "ceil" (iso (ceil 2.1) 3.0) t
+
+assert "truncate toward zero" (iso (truncate -2.7) -2.0) t
+
+assert "log 1 = 0" (iso (log 1.0) 0.0) t
+
+assert "sin 0 = 0" (iso (sin 0.0) 0.0) t
+
+assert "cos 0 = 1" (iso (cos 0.0) 1.0) t
+
+assert "float coerces int" (iso (float 5) 5.0) t
+
+assert "int truncates float" (int 3.9) 3
+
+assert "fmt default + float spec" (fmt "{} + {} = {:.1f}" 1 2 3.0):
+  "1 + 2 = 3.0"
+
+assert "fmt hex spec" (fmt "{:x}" 255) "ff"
+
+assert "fmt zero-pad width" (fmt "{:05d}" 42) "00042"
+
+assert "fmt rejects '*' (no UB)" (fmt "{:*d}" 5) "{:*d}"
+
+assert "fmt rejects embedded %" (fmt "{:d%d}" 5) "{:d%d}"
+
+assert "quasiquote unquote" (iso (quasiquote (1 (unquote (+ 1 1)) 3)) (list 1 2 3)):
+  t
+
+setf _qsplice (list 2 3)
+
+assert "quasiquote splice" (iso (quasiquote (1 (unquote-splicing _qsplice) 4)) (list 1 2 3 4)):
+  t
+
+assert "sort default" (iso (sort (list 3 1 2)) (list 1 2 3)) t
+
+assert "sort-by key-fn" (iso (sort-by (fn (x) (- 0 x)) (list 1 2 3)) (list 3 2 1)):
+  t
+
+assert "take n" (iso (take 2 (list 1 2 3 4)) (list 1 2)) t
+
+assert "drop n" (iso (drop 2 (list 1 2 3 4)) (list 3 4)) t
+
+assert "range start end" (iso (range 0 4) (list 0 1 2 3)) t
+
+assert "range with step" (iso (range 0 6 2) (list 0 2 4)) t
+
+assert "zip stops at shorter" (iso (zip (list 1 2) (list 3 4)) (list (list 1 3) (list 2 4))):
+  t
+
+assert "flatten nested" (iso (flatten (list 1 (list 2 (list 3)))) (list 1 2 3)):
+  t
+
+assert "list? proper list" (list? (list 1 2)) t
+
+assert "null? nil" (null? nil) t
+
+assert "gensym is a symbol" (symbol? (gensym)) t
+
+assert "with-gensyms binds symbols" (with-gensyms (a b) (symbol? a)) t
+
+assert "with-gensyms names distinct" (with-gensyms (a b) (is a b)) nil
+
+assert "string-contains? hit" (string-contains? "hello world" "world") t
+
+assert "string-contains? miss" (string-contains? "abc" "xyz") nil
+
+assert "string-index" (string-index "hello" "ll") 2
+
+assert "string-replace all" (string-replace "a-b-c" "-" "+") "a+b+c"
+
+assert "error? on error value" (error? (/ 1 0)) t
+
+assert "error? on non-error" (error? 5) nil
+
+assert "error-message is a string" (string? (error-message (/ 1 0))) t
+
+assert "try passes value through" (try (+ 1 2) (fn (e) 99)) 3
+
+assert "try catches + runs handler" (try (/ 1 0) (fn (e) 'caught)) 'caught
+
+def restfn-all args:
+  args
+
+assert "rest: bare-symbol collects" (iso (restfn-all 1 2 3) (list 1 2 3)) t
+
+def restfn-dot (a . rest):
+  rest
+
+assert "rest: dotted after fixed" (iso (restfn-dot 1 2 3) (list 2 3)) t
+
+assert "rest: anon fn bare-symbol" (iso ((fn xs xs) 7 8) (list 7 8)) t
+
+setf _vp (vec 3 0)
+
+vec-push! _vp 9
+
+vec-push! _vp 8
+
+vec-push! _vp 7
+
+assert "vec-push! small-cap grows (len)" (vec-len _vp) 6
+
+assert "vec-push! small-cap value @3" (vec-ref _vp 3) 9
+
+assert "vec-push! small-cap value last" (vec-ref _vp 5) 7
+
+assert "vec-ref oob returns error" (error? (vec-ref _vp 99)) t
+
+setf _vp1 (vec 1 0)
+
+vec-push! _vp1 1
+
+assert "vec-push! cap1 boundary" (vec-len _vp1) 2
+
+setf _vp2 (vec 2 0)
+
+vec-push! _vp2 1
+
+vec-push! _vp2 2
+
+assert "vec-push! cap2 boundary" (vec-len _vp2) 4
+
+setf _vpm (vec 1 0)
+
+for i 1 50:
+  vec-push! _vpm i
+
+assert "vec-push! many: length" (vec-len _vpm) 51
+
+assert "vec-push! many: last value" (vec-ref _vpm 50) 50
+
+setf _vs (vec 1 5)
+
+vec-push! _vs 6
+
+vec-push! _vs 7
+
+vec-shift! _vs
+
+vec-shift! _vs
+
+vec-push! _vs 8
+
+vec-push! _vs 9
+
+assert "vec-push! after shifts" (vec-ref _vs (- (vec-len _vs) 1)) 9
+
+setf _vu (vec 2 0)
+
+for i 1 30:
+  vec-unshift! _vu i
+
+assert "vec-unshift! grows (len)" (vec-len _vu) 32
+
+assert "vec-unshift! front value" (vec-ref _vu 0) 30
+
+assert "substr start>len -> empty" (substr "ab" 5 9) ""
+
+assert "substr start==len boundary" (substr "abc" 3 5) ""
+
+assert "substr empty-range" (substr "abc" 4 4) ""
+
+assert "substr negative start clamps" (substr "abc" -5 2) "ab"
+
+assert "substr normal interior" (substr "hello" 1 3) "el"
+
+assert "substr end>len clamps" (substr "ab" 1 99) "b"
+
+assert "cons keeps 0 cdr" (cdr (cons 1 0)) 0
+
+assert "cons keeps empty-str cdr" (cdr (cons 1 "")) ""
+
+assert "cons nil cdr -> proper list" (iso (cons 1 nil) (list 1)) t
+
+assert "cons list cdr -> prepend" (iso (cons 1 (list 2 3)) (list 1 2 3)) t
+
+assert "cons improper pair car" (car (cons 4 5)) 4
+
+assert "iso equal vectors" (iso (vector 1 2 3) (vector 1 2 3)) t
+
+assert "iso vectors differ" (iso (vector 1 2 3) (vector 1 2 4)) nil
+
+assert "iso vectors length differ" (iso (vector 1 2) (vector 1 2 3)) nil
+
+assert "iso nested vectors" (iso (vector (vector 1) (vector 2)) (vector (vector 1) (vector 2))):
+  t
+
+assert "iso vector inside list" (iso (list (vector 1 2)) (list (vector 1 2))):
+  t
+
+assert "is (identity) on vectors is nil" (is (vector 1 2) (vector 1 2)) nil
+
+assert "lambda is truthy" (if (fn (x) x) 'y 'n) 'y
+
+assert "builtin is truthy" (if car 'y 'n) 'y
+
+assert "no of a lambda is nil" (no (fn (x) x)) nil
+
+assert "str of vector" (str (vector 1 2 3)) "#[1 2 3]"
+
+assert "str of deque" (str (deque 1 2 3)) "(1 2 3)"
+
+assert "str of improper pair" (str (cons 1 2)) "(1 . 2)"
+
+assert "str of nested vector" (str (vector (list 2 3))) "#[(2 3)]"
+
+assert "str of vector is deterministic" (iso (str (vector 9 8)) (str (vector 9 8))):
+  t
+
+setf _rt_dict (hash-map "a" 1 "b" 2 :kw 3)
+
+setf _rt_deque (deque 10 20 30)
+
+setf _rt_nested (hash-map "q" (deque 1 2) "v" (vector 5 6))
+
+persist '_rt_dict
+
+persist '_rt_deque
+
+persist '_rt_nested
+
+savedb "/tmp/alcove-dictdeque-test.db"
+
+forget '_rt_dict
+
+forget '_rt_deque
+
+forget '_rt_nested
+
+loaddb "/tmp/alcove-dictdeque-test.db"
+
+assert "dict roundtrip value a" (get _rt_dict "a") 1
+
+assert "dict roundtrip keyword key" (get _rt_dict :kw) 3
+
+assert "dict roundtrip count" (count _rt_dict) 3
+
+assert "deque roundtrip contents" (str _rt_deque) "(10 20 30)"
+
+assert "deque roundtrip count" (count _rt_deque) 3
+
+assert "nested dict->deque roundtrip" (str (get _rt_nested "q")) "(1 2)"
+
+assert "nested dict->vec roundtrip" (iso (get _rt_nested "v") (vector 5 6)) t
+
+setf _rt_vd (vector (hash-map "x" 9))
+
+persist '_rt_vd
+
+savedb "/tmp/alcove-vecdict-test.db"
+
+forget '_rt_vd
+
+loaddb "/tmp/alcove-vecdict-test.db"
+
+assert "vec-of-dict roundtrips" (get (vec-ref _rt_vd 0) "x") 9
+
+setf _sd_good 777
+
+setf _sd_bad (vector car)
+
+persist '_sd_good
+
+persist '_sd_bad
+
+savedb "/tmp/alcove-dumploss-test.db"
+
+forget '_sd_good
+
+loaddb "/tmp/alcove-dumploss-test.db"
+
+assert "savedb keeps good var despite bad nested" _sd_good 777
+
+assert "try handler computes from error" (string-contains? (try (/ 1 0) (fn (e) (str "E:" (error-message e)))) "E:"):
+  t
+
+assert "try finally runs, returns body" (try (+ 2 3) (fn (e) -1) 0) 5
+
+assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0) 42
+
+assert "try nil handler propagates error" (error? (try (/ 1 0) nil)) t
+
+prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")

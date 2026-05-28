@@ -96,6 +96,10 @@ class Reader:
             return [Sym("quasiquote"), self.form()]
         if c == ",":
             self.i += 1
+            if self.s[self.i:self.i + 1] == "@":   # ,@x unquote-splicing
+                self.i += 1
+                self.skip()
+                return [Sym("unquote-splicing"), self.form()]
             self.skip()
             return [Sym("unquote"), self.form()]
         if c == "#":
@@ -216,6 +220,8 @@ def expr(f):
     (quote x) collapses to 'x."""
     if not isinstance(f, list):
         return tok(f)
+    if len(f) == 0:
+        return "()"            # empty list / empty param list — () reads as nil
     if is_quote(f):
         return "'" + expr(f[1])
     return "(" + joined(f, len(f)) + ")"

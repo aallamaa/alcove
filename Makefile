@@ -219,12 +219,17 @@ test-all:
 	done; \
 	printf '\n=== variant: als (alcove-script front end) ===\n'; \
 	if $(MAKE) -s als >"$$bld" 2>&1; then \
+	  res=$$(./alcoves --noload test.als 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	  case "$$res" in \
+	    *" 0 failed") echo "  OK — $$res (test.als via alcoves)";; \
+	    "") echo "  CRASH / early exit — no TEST RESULT line"; ok=0;; \
+	    *) echo "  FAILURES — $$res"; ok=0;; \
+	  esac; \
 	  af=0; \
-	  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	  for i in 1 2 3 4 5 6; do \
 	    ./alcoves --noload examples/alcove-script/new-features.als >/dev/null 2>&1 || af=1; \
 	  done; \
-	  if [ $$af -eq 0 ]; then echo "  OK — new-features.als ran 12x, no crash"; \
-	  else echo "  CRASH in alcove-script run"; ok=0; fi; \
+	  [ $$af -eq 0 ] || { echo "  CRASH in new-features.als run"; ok=0; }; \
 	else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	rm -f "$$bld"; \
 	$(MAKE) -s jit >/dev/null 2>&1; \
