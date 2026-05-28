@@ -7189,14 +7189,19 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   if (!result || !iserror(result)) {
     ret = result ? result : NIL_EXP;
   } else {
-    /* Error path: evaluate handler then call it. nil handler = no catch. */
+    /* Error path: evaluate handler then call it. nil handler = no catch.
+       Check iserror(handler) BEFORE !istrue: EXP_ERROR fails isatom and
+       ispair so !istrue fires for errors too, making the iserror branch
+       unreachable if the two checks are in the wrong order. */
     exp_t *handler = EVAL(e->next->next->content, env);
-    if (!handler || !istrue(handler)) {
-      unrefexp(handler);
-      ret = result; /* propagate */
+    if (!handler) {
+      ret = result; /* propagate (null return from EVAL) */
     } else if (iserror(handler)) {
-      unrefexp(result);
+      unrefexp(result); /* handler eval itself failed — surface that error */
       ret = handler;
+    } else if (!istrue(handler)) {
+      unrefexp(handler); /* nil/false handler = no catch */
+      ret = result;
     } else {
       ret = alc_apply1(handler, result, env);
       unrefexp(handler);
@@ -8842,10 +8847,6 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
   if (pat == TRUE_EXP)
     return (val == TRUE_EXP) ? 1 : 0;
 
-  /* gen-done sentinel */
-  if (isgen_done(pat))
-    return isgen_done(val) ? 1 : 0;
-
   /* Fixnum literal */
   if (isnumber(pat))
     return (isnumber(val) && FIX_VAL(pat) == FIX_VAL(val)) ? 1 : 0;
@@ -8859,11 +8860,9 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
     return (isstring(val) && strcmp((char *)pat->ptr, (char *)val->ptr) == 0)
            ? 1 : 0;
 
-  /* Plain symbol: capture binding */
+  /* Plain symbol: capture binding — var2env_bind is forward-declared static
+     at file scope above; the in-body extern was UB (C11 §6.2.2p7). */
   if (issymbol(pat)) {
-    /* pre-allocate a binding node in newenv: this borrows the name ptr (safe,
-       the pattern lives for the duration of the match call). */
-    extern void var2env_bind(char *name, exp_t *val, env_t *env);
     var2env_bind((char *)pat->ptr, refexp(val ? val : NIL_EXP), newenv);
     return 1;
   }
@@ -8935,17 +8934,10 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv,
       int64_t pi = 0;
       while (p && p->content) {
         if (pi >= vlen) return 0;
-        exp_t *cell;
-        int cell_owned = 0;
-        if (vec_kind(val) == VEC_KIND_GEN) {
-          cell = vec_gen_at(val, pi);
-        } else if (vec_kind(val) == VEC_KIND_I64) {
-          cell = make_integeri(vec_i64_at(val, pi)); cell_owned = 1;
-        } else {
-          cell = make_floatf((expfloat)vec_f64_at(val, pi)); cell_owned = 1;
-        }
+        /* vec_get_boxed returns an owned ref for all three vec kinds. */
+        exp_t *cell = vec_get_boxed(val, pi);
         int r = alc_match_pat(p->content, cell, newenv, e_err, eval_env, err);
-        if (cell_owned) unrefexp(cell);
+        unrefexp(cell);
         if (r <= 0) return r;
         p = p->next; pi++;
       }
@@ -9073,9 +9065,13 @@ static exp_t *alc_gen_step(exp_t *g, env_t *env) {
     exp_t *inner = gen_dict_get(g, GK_IN);
     exp_t *fn    = gen_dict_get(g, GK_FN);
     if (!inner || !fn) return GEN_DONE;
+    /* refexp fn before the recursive step: user code inside alc_gen_step
+       could drop the last external ref to g, freeing the dict and fn. */
+    refexp(fn);
     exp_t *v = alc_gen_step(inner, env);
-    if (!v || isgen_done(v)) return GEN_DONE;
+    if (!v || isgen_done(v)) { unrefexp(fn); return GEN_DONE; }
     exp_t *r = alc_apply1(fn, v, env);
+    unrefexp(fn);
     unrefexp(v);
     return r ? r : NIL_EXP;
   }
@@ -9084,14 +9080,16 @@ static exp_t *alc_gen_step(exp_t *g, env_t *env) {
     exp_t *inner = gen_dict_get(g, GK_IN);
     exp_t *pred  = gen_dict_get(g, GK_FN);
     if (!inner || !pred) return GEN_DONE;
+    /* refexp pred across the loop: inner step may drop the last ref to g. */
+    refexp(pred);
     for (;;) {
       exp_t *v = alc_gen_step(inner, env);
-      if (!v || isgen_done(v)) return GEN_DONE;
+      if (!v || isgen_done(v)) { unrefexp(pred); return GEN_DONE; }
       exp_t *ok = alc_apply1(pred, v, env);
-      if (iserror(ok)) { unrefexp(v); return ok; }
+      if (iserror(ok)) { unrefexp(pred); unrefexp(v); return ok; }
       int pass = istrue(ok);
       unrefexp(ok);
-      if (pass) return v;
+      if (pass) { unrefexp(pred); return v; }
       unrefexp(v);
     }
   }
@@ -9150,16 +9148,12 @@ exp_t *genrange_cmd(exp_t *e, env_t *env) {
   exp_t *b = NULL, *c = NULL;
   if (cdr(cur)) {
     b = EVAL(car(cdr(cur)), env);
-    if (!b || iserror(b)) {
-      unrefexp(a); unrefexp(e);
-      return b ? b : NIL_EXP;
-    }
+    if (!b) { unrefexp(a); unrefexp(e); return NIL_EXP; }
+    if (iserror(b)) { unrefexp(a); unrefexp(e); return b; }
     if (cdr(cdr(cur))) {
       c = EVAL(car(cdr(cdr(cur))), env);
-      if (!c || iserror(c)) {
-        unrefexp(a); unrefexp(b); unrefexp(e);
-        return c ? c : NIL_EXP;
-      }
+      if (!c) { unrefexp(a); unrefexp(b); unrefexp(e); return NIL_EXP; }
+      if (iserror(c)) { unrefexp(a); unrefexp(b); unrefexp(e); return c; }
     }
   }
   if (!b) {
@@ -9218,7 +9212,7 @@ exp_t *gencollect_cmd(exp_t *e, env_t *env) {
     exp_t *v = alc_gen_step(g, env);
     if (!v || isgen_done(v)) break;
     if (iserror(v)) {
-      unrefexp(head == NIL_EXP ? NULL : head);
+      unrefexp(head); /* NIL_EXP is immortal — unrefexp handles it safely */
       unrefexp(g); unrefexp(e);
       return v;
     }
