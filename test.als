@@ -2167,6 +2167,41 @@ assert "redis-del missing" (redis-del "alcove:test:string") 0
 
 redis-flush()
 
+redis-flush()
+
+redis-set "wd:k" "zero"
+
+with-db 1 (redis-flush) (redis-set "wd:k" "one")
+
+assert "with-db: db0 unaffected" (blob->string (redis-val "wd:k")) "zero"
+
+assert "with-db: db1 isolated value" (blob->string (with-db 1 (redis-val "wd:k"))):
+  "one"
+
+assert "with-db: empty db is nil" (with-db 5 (redis-val "wd:k")) nil
+
+assert "with-db: returns body value" (with-db 1 (blob->string (redis-val "wd:k"))):
+  "one"
+
+assert "with-db: nesting restores" (with-db 1 (with-db 2 (redis-set "wd:k" "two")) (blob->string (redis-val "wd:k"))):
+  "one"
+
+assert "with-db: error then error?" (error? (with-db 1 (car 5) (no-such-binding-xyz))):
+  t
+
+assert "with-db: db restored after err" (blob->string (redis-val "wd:k")):
+  "zero"
+
+assert "with-db: db1 count" (with-db 1 (redis-count)) 1
+
+assert "with-db: range error" (error? (with-db 99 (redis-count))) t
+
+redis-flush()
+
+with-db 1 (redis-flush)
+
+with-db 2 (redis-flush)
+
 assert "dict?: empty hash-map" (dict? (hash-map)) t
 
 assert "dict?: populated hash-map" (dict? (hash-map "k" 1)) t

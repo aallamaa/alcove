@@ -63,6 +63,14 @@ dict_t *reserved_symbol = NULL;
 /* name → docstring for user (def f (args) "doc" body...) functions, queried
    by the `doc` builtin after the builtin table misses. Lazily created. */
 dict_t *user_doc = NULL;
+/* Numbered keyspace databases (redis-style). Selected per-thread by
+   (with-db n ...); db 0 is the shared main keyspace the RESP server uses,
+   dbs 1..ALC_NDB-1 are separate keyspaces. The selector is thread-local so
+   a REPL thread's (with-db ...) never perturbs server reactor threads
+   (which always see db 0). resp.c (included below) reads this in the single
+   db-aware chokepoint resp_kv_current(). */
+#define ALC_NDB 16
+ALCOVE_TLS int alcove_kv_db = 0;
 exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
 
 /* Canonical singletons — pointer set at main() startup. */
@@ -376,6 +384,7 @@ lispProc lispProcList[] = {
     LISPCMD("redis-val", redisvalcmd, doc_redis_val),
     LISPCMD("redis-set", redissetcmd, doc_redis_set),
     LISPCMD("redis-del", redisdelcmd, doc_redis_del),
+    LISPCMD("with-db", withdbcmd, doc_withdb),
     LISPCMD("redis-flush", redisflushcmd, doc_redis_flush),
     LISPCMD("redis-port", redisportcmd, doc_redis_port),
     LISPCMD("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
@@ -18834,6 +18843,49 @@ exp_t *docstringcmd(exp_t *e, env_t *env) {
   }
   unrefexp(e);
   return ret;
+}
+
+const char doc_withdb[] =
+    "(with-db n body...) — evaluate body with keyspace database n (0..15) "
+    "selected for the dynamic extent: redis-set / redis-val / redis-del and "
+    "the rest of the keyspace bridge target db n inside the body (and in any "
+    "function it calls). The previous db is restored afterward, even on "
+    "error. db 0 is the shared keyspace the RESP server uses; 1..15 are "
+    "separate. Returns the last body value.";
+exp_t *withdbcmd(exp_t *e, env_t *env) {
+  exp_t *nx = EVAL(cadr(e), env);
+  if (iserror(nx)) {
+    unrefexp(e);
+    return nx;
+  }
+  if (!isnumber(nx)) {
+    unrefexp(nx);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "with-db: db index must be a number");
+  }
+  int64_t db = FIX_VAL(nx);
+  unrefexp(nx);
+  if (db < 0 || db >= ALC_NDB) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "with-db: db index out of range (0..%d)", ALC_NDB - 1);
+  }
+  /* Dynamic-scope the thread-local selector; restore on the way out so
+     nested (with-db ...) and the error path both unwind correctly. */
+  int saved = alcove_kv_db;
+  alcove_kv_db = (int)db;
+  exp_t *ret = NIL_EXP;
+  for (exp_t *b = cddr(e); b; b = b->next) {
+    if (ret != NIL_EXP)
+      unrefexp(ret);
+    ret = EVAL(b->content, env);
+    if (ret && iserror(ret))
+      break;
+  }
+  alcove_kv_db = saved;
+  unrefexp(e);
+  return ret ? ret : NIL_EXP;
 }
 
 exp_t *helpcmd(exp_t *e, env_t *env) {

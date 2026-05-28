@@ -213,13 +213,40 @@ lfkv_t *resp_kv_init(void) {
   return fresh;
 }
 
+/* Extra keyspaces for dbs 1..ALC_NDB-1 (db 0 is g_resp_kv). Lazily created
+   on first use under (with-db n ...). Only the Lisp side reaches these —
+   the RESP server's SELECT stays db-0-only — but creation uses the same CAS
+   as g_resp_kv so a future per-connection SELECT is race-safe. */
+static lfkv_t *g_resp_db_extra[ALC_NDB];
+
+/* The keyspace for the calling thread's currently-selected db (alcove_kv_db,
+   thread-local). db 0 (and any out-of-range value, defensively) is the
+   shared main keyspace; higher dbs get their own lazily-created lfkv. */
 static inline lfkv_t *resp_kv_current(void) {
-  lfkv_t *kv = resp_kv;
+  int db = alcove_kv_db;
+  if (db <= 0 || db >= ALC_NDB) {
+    lfkv_t *kv = resp_kv;
+    if (!kv) {
+      kv = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                                memory_order_acquire);
+      if (kv)
+        current_shard->kv = kv;
+    }
+    return kv;
+  }
+  lfkv_t *kv = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_db_extra[db],
+                                    memory_order_acquire);
   if (!kv) {
-    kv = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+    lfkv_t *fresh = lfkv_new(RESP_KV_DEFAULT_SLOTS);
+    if (!fresh)
+      return NULL;
+    lfkv_t *expected = NULL;
+    if (!atomic_compare_exchange_strong_explicit(
+            (_Atomic(lfkv_t *) *)&g_resp_db_extra[db], &expected, fresh,
+            memory_order_release, memory_order_acquire))
+      lfkv_destroy(fresh); /* lost race */
+    kv = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_db_extra[db],
                               memory_order_acquire);
-    if (kv)
-      current_shard->kv = kv;
   }
   return kv;
 }
@@ -241,11 +268,15 @@ static inline exp_t *resp_kv_peek(const char *key, size_t klen) {
   return kv ? lfkv_peek(kv, key, klen) : NULL;
 }
 
-/* SET-style write: consumes the caller's `val` ref, clears prior TTL. */
+/* SET-style write: consumes the caller's `val` ref, clears prior TTL.
+   db-aware via resp_kv_current() so (with-db n ...) writes land in db n;
+   db 0 still needs resp_kv_ensure() to create the shared keyspace. */
 static inline void resp_kv_set(const char *key, size_t klen, exp_t *val) {
-  resp_kv_ensure();
-  if (lfkv_set(resp_kv, key, klen, val) < 0) {
-    /* Table full — best-effort: drop the value. */
+  if (alcove_kv_db <= 0 || alcove_kv_db >= ALC_NDB)
+    resp_kv_ensure();
+  lfkv_t *kv = resp_kv_current();
+  if (!kv || lfkv_set(kv, key, klen, val) < 0) {
+    /* No keyspace or table full — best-effort: drop the value. */
     unrefexp(val);
   }
 }
