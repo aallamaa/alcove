@@ -186,7 +186,71 @@ and lambda (re-compiled on load).
 Inspect with `(disasm f)` — it prints the bytecode plus the JIT
 install status.
 
-### 7. Alcove Script — a Pythonic Lisp
+### 7. Pattern matching, generators, and structured error handling
+
+Recent additions to the language:
+
+**`match`** — structural pattern matching. Patterns include literals,
+capture bindings, `(list …)`, `(cons h t)`, `(vec …)`, `(quote sym)`,
+and `(? pred)` guards:
+
+```lisp
+(match shape
+  (list 0 0)       "origin"
+  (list x 0)       (str "x-axis x=" x)
+  (list x y)       (str "point " x "," y)
+  _                "not a 2d point")
+
+(match (/ 10 x)
+  (? number?)      "ok"
+  _                "error")
+```
+
+**`cond`** — flat multi-arm conditional (like `case` but evaluates each
+test instead of matching a key):
+
+```lisp
+(cond (< n 0) "neg"  (is n 0) "zero"  "pos")
+```
+
+**`try`/`finally`** — catch errors and guarantee cleanup:
+
+```lisp
+(try (risky-call)
+     (fn (e) (str "caught: " (error-message e)))
+     (cleanup))          ; always runs, even on success
+```
+
+**Destructuring params** — any parameter slot may be a list pattern:
+
+```lisp
+(def add-vec2 ((ax ay) (bx by)) (list (+ ax bx) (+ ay by)))
+(add-vec2 (list 1 2) (list 3 4))   ; → (4 6)
+```
+
+**Generators** — lazy sequences with `!`-suffix operators. Unlike
+`map`/`filter` which materialise full lists, these compute on demand:
+
+```lisp
+; all squares of odd numbers up to 100, without intermediate list
+(collect!
+  (filter! odd
+    (map! (fn (x) (* x x))
+      (range! 10))))                 ; → (1 9 25 49 81)
+
+; for-each! iterates a generator
+(for-each! x (range! 1 6) (pr (* x x)) (pr " "))  ; 1 4 9 16 25
+
+; manual stepping
+(= g (iter! (list "a" "b" "c")))
+(next! g)                           ; "a"
+(done? (next! (range! 0 0)))        ; t
+```
+
+See [`examples/alcove-script/new-features.als`](examples/alcove-script/new-features.als)
+for comprehensive examples of all five features.
+
+### 9. Alcove Script — a Pythonic Lisp
 
 **Alcove Script is an attempt to make a Pythonic Lisp** — Lisp's
 homoiconic core dressed in Python's indentation-based, paren-light

@@ -123,17 +123,23 @@ Container types follow the same emptiness rule: an empty `vec`,
 (let var val body...)                  ; one binding; (let (a b) xs ...) destructures
 (let* (v1 e1 v2 e2 ...) body...)       ; sequential bindings; each ei sees earlier vars
 (with (v1 e1 v2 e2 ...) body...)       ; multiple bindings, evaluated in parallel
-(if c1 t1 c2 t2 ... else)              ; cond-style ladder; no `cond` keyword
-(case key v1 r1 v2 r2 ... default)     ; flat pairs, Arc-style
+(if c1 t1 c2 t2 ... else)             ; multi-arm conditional (see below)
+(cond t1 e1 t2 e2 ... default)        ; flat multi-arm: eval tests left-to-right
+(case key v1 r1 v2 r2 ... default)    ; flat pairs, Arc-style; match via iso
+(match expr pat1 r1 pat2 r2 ... dflt) ; structural pattern matching (see below)
 (when c body...)                       ; (if c (do body...) nil)
 (unless c body...)                     ; runs body when c is falsey; else nil
 (and ...) (or ...)                     ; short-circuit; both tail-aware
 (do body...)                           ; sequence; value of last form
 (for v start end body...)              ; inclusive range, integer counter
 (while cond body...)                   ; loop while cond truthy
+(for-each! var gen body...)            ; iterate a generator binding each value
 (quote x)                              ; same as 'x
 (= place val)                          ; assignment — see below
 (setf place val)                       ; exact synonym of = (readable head)
+(try body handler)                     ; catch errors; nil handler propagates
+(try body handler finally-expr)        ; catch + always run finally-expr
+(try body nil finally-expr)            ; no catch; always run finally-expr
 ```
 
 ### `(= place val)` / `(setf place val)` and `(setq sym val)` — assignment
@@ -165,19 +171,153 @@ setq x 10
 Use `=`/`set` when you want function-local unbound assignment; use
 `setq` when you explicitly want top-level fallback.
 
-### `if` is cond-style
+### `if` and `cond`
 
-`(if c1 t1 c2 t2 ... else)`. The two-arg form `(if c t)` returns `nil`
-when `c` is false. There is **no separate `cond`**.
+`(if c1 t1 c2 t2 ... else)` — multi-arm conditional; the two-arg form
+`(if c t)` returns `nil` when `c` is false.
 
-### `case` is flat-pairs
+`cond` is the same flat-pair walk but evaluates each test freshly
+instead of matching against a discriminant. The lone trailing element is
+the default:
+
+```
+(cond
+  (> x 100) "big"
+  (> x 10)  "medium"
+  "small")
+```
+
+Unlike `if`, all tests are independent expressions — useful when each
+branch checks a different condition. Both `if` and `cond` are
+tail-call aware.
+
+### `case` is flat-pairs (value dispatch)
 
 ```
 (case (mod n 2) 0 'even 1 'odd 'unknown)
 ```
 
-The default is the last bare expression — there is no `else` keyword.
-Comparison is `iso` (structural equality).
+Comparison is `iso` (structural equality). The trailing odd element is
+the default. Use `cond` for predicate-based dispatch, `case` for
+value dispatch.
+
+### `match` — structural pattern matching
+
+`match` evaluates `expr` once, then tries each pattern left-to-right
+until one matches. The first matching arm's result is returned; a lone
+trailing element is the unconditional default.
+
+```
+(match expr
+  pattern1 result1
+  pattern2 result2
+  default)
+```
+
+**Pattern language:**
+
+| Pattern | Matches | Binds? |
+|---|---|---|
+| `_` | anything | no |
+| `nil` / `t` | literal nil or t | no |
+| `42`, `"hi"`, `3.14` | exact value | no |
+| `x` (any other symbol) | anything | yes — x gets the value |
+| `(quote foo)` | the symbol `foo` specifically | no |
+| `(? pred)` | if `(pred val)` is truthy | no |
+| `(list p1 p2 ...)` | list of exactly that length | sub-patterns bind |
+| `(cons ph pt)` | any non-empty pair | head and tail |
+| `(vec p1 p2 ...)` | vector of exactly that length | sub-patterns bind |
+
+```
+; literal match
+(match x  42 "forty-two"  "other")
+
+; capture binding
+(match (list 1 2 3)
+  (list h . _) (str "head=" h)   ; use (cons h t) for pair
+  _            "not a list")
+
+; structural — nested
+(match point
+  (list 0 0)   "origin"
+  (list 0 y)   (str "y-axis y=" y)
+  (list x 0)   (str "x-axis x=" x)
+  (list x y)   (str "general (" x "," y ")")
+  _            "not a point")
+
+; guard predicate
+(match n
+  (? even?)  "even"
+  (? odd?)   "odd"
+  _          "non-integer")
+
+; mixed nesting
+(match expr
+  (list 'if _ _ _)  "if-form"
+  (list 'def name _ . _) (str "def of " name)
+  (cons h _)        "other call"
+  _                 "atom")
+```
+
+Variables bound by a pattern are in scope only inside that arm's result
+expression. Unmatched arms whose patterns partially bound variables
+silently discard those bindings.
+
+### Destructuring in function parameters
+
+A parameter slot may be a list pattern — it destructures the
+corresponding argument:
+
+```
+(def swap ((x y)) (list y x))
+(swap (list 10 20))             ; (20 10)
+
+(def add-pair ((a b) (c d)) (list (+ a c) (+ b d)))
+(add-pair (list 1 2) (list 3 4)) ; (4 6)
+```
+
+Missing elements get `nil`. Works with rest params:
+
+```
+(def first-two ((a b) . rest) (list a b rest))
+(first-two (list 10 20) 30 40) ; (10 20 (30 40))
+```
+
+### Error handling with `try` / `finally`
+
+```
+; catch an error
+(try (/ 1 0) (fn (e) (str "caught: " (error-message e))))
+; → "caught: Illegal Division by 0"
+
+; body succeeds — handler not called
+(try (+ 1 2) (fn (e) "err"))   ; → 3
+
+; nil handler = no catch; propagate the error
+(try (/ 1 0) nil)              ; → error value
+
+; finally — always runs; value discarded
+(try (/ 1 0)
+     (fn (e) (str "caught: " (error-message e)))
+     (prn "cleanup"))          ; prints "cleanup", returns "caught: …"
+
+; finally-only (no catch)
+(try (open-file "f")
+     nil
+     (close-resources))       ; cleanup always runs; error propagates
+
+; nesting for type dispatch via match
+(try risky-call
+     (fn (e)
+       (match (error-message e)
+         (? (fn (s) (string-contains? s "not found")))  'missing
+         (? (fn (s) (string-contains? s "timeout")))    'retry
+         e)))                  ; re-raise unknown errors
+```
+
+When the handler evaluation itself raises an error, the handler's error
+surfaces (not the original body error). This lets you distinguish "body
+failed" from "cleanup failed".
 
 ### `for` is integer-only and inclusive
 
@@ -649,7 +789,7 @@ relevant when alcove is used as an embedded server.
 
 ---
 
-## 8. Patterns used by the example games
+## 11. Patterns used by the example games
 
 ### Mutable string as a 2D framebuffer (arkanoid, mario)
 
@@ -699,12 +839,116 @@ There is no built-in. Either:
 
 ---
 
-## 9. Things alcove does **not** have
+## 9. Generators — lazy sequences
+
+Generators are stateful iterators. Unlike `map`/`filter` which
+materialise a full list, generator operations are lazy: each element is
+computed only when requested. The convention: `!`-suffixed names operate
+on generators; `?`-suffixed names are predicates; no suffix = eager list
+operations.
+
+### The sentinel
+
+`*done*` is the exhaustion sentinel — a unique immortal object. Test
+with `done?`:
+
+```
+(done? (*done*))                ; t
+(done? 42)                      ; nil
+```
+
+### Constructors
+
+```
+(iter! list)               ; generator over an existing list
+(range! end)               ; 0..end-1
+(range! start end)         ; start..end-1
+(range! start end step)    ; step may be negative: (range! 10 0 -1)
+(map! fn gen)              ; lazy map — wraps gen, applies fn on each next!
+(filter! pred gen)         ; lazy filter — skips elements where pred returns nil
+```
+
+### Consuming
+
+```
+(next! gen)         ; advance gen, return next value or *done*
+(collect! gen)      ; drain gen to a list
+(for-each! x gen body...)  ; iterate, binding each value to x; returns nil
+```
+
+### Examples
+
+```
+; basic range
+(collect! (range! 5))             ; (0 1 2 3 4)
+(collect! (range! 2 8 2))         ; (2 4 6)
+(collect! (range! 10 0 -3))       ; (10 7 4 1)
+
+; manual stepping
+(= g (iter! (list "a" "b" "c")))
+(next! g)                         ; "a"
+(next! g)                         ; "b"
+(done? (next! (range! 0 0)))      ; t — empty range immediately done
+
+; lazy pipeline — no intermediate list allocated
+(collect!
+  (filter! odd
+    (map! (fn (x) (* x x))
+      (range! 10))))               ; (1 9 25 49 81)
+
+; for-each! with side effects
+(for-each! x (range! 1 4)
+  (pr x) (pr " "))                 ; prints "1 2 3 "
+
+; generators compose lazily
+(= positives (filter! (fn (x) (> x 0))
+               (iter! (list -3 1 -1 4 -2 5 0 9))))
+(collect! positives)               ; (1 4 5 9)
+
+; manual iteration loop
+(= g (range! 100))
+(= found nil)
+(while (no found)
+  (let v (next! g)
+    (if (done? v) (= found 'none)
+        (iso v 42) (= found v))))
+found                              ; 42
+
+; generator as infinite stream (use next! manually, don't collect!)
+(def naturals () (range! 0 9999999999))
+(= n (naturals))
+(next! n)   ; 0
+(next! n)   ; 1
+(next! n)   ; 2 ...
+```
+
+### `map!` vs `map`
+
+| | `map` | `map!` |
+|---|---|---|
+| Input | a list | a generator |
+| Output | a fully materialised list | a new generator |
+| When computed | immediately, all elements | on demand, one at a time |
+| Memory | O(n) | O(1) for the pipeline |
+| Use when | you need a list result | chaining transformations |
+
+```
+(map (fn (x) (* x x)) (list 1 2 3))        ; (1 4 9)  — full list now
+(collect! (map! (fn (x) (* x x)) (range! 3))) ; (0 1 4) — same result, lazy
+```
+
+The `gen-` prefixed forms (`gen-list`, `gen-range`, `gen-map`,
+`gen-filter`, `gen-next!`, `gen-collect`, `gen-done?`, `*gen-done*`)
+are kept as aliases for backwards compatibility.
+
+---
+
+## 10. Things alcove does **not** have
 
 So you do not waste time looking:
 
-- No `cond`, `progn` (use `do`), `setf`. (`let*` and list
-  destructuring in `let` now exist — see [§3](#3-special-forms).)
+- No `progn` (use `do`). No `setf` as mutation (use `=` or the `setf`
+  alias for `=`). `cond`, `match`, `try/finally`, and generators now exist.
 - No multiple return values, no continuations. Errors are reified as
   values and can be caught with `(try body handler)` rather than via
   unwinding exceptions.
