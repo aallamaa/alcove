@@ -297,6 +297,28 @@
 (def zhello () (+ 1 2))
 (assert "0-arg def returns 3"        (zhello)                      3)
 
+; 20b. Mutating-free-var closures compile to bytecode (OP_STORE_FREE).
+;      The canonical zero-arg make-counter: the inner (fn () (= n ...) n)
+;      mutates a CAPTURED free var via `=`. This used to fall back to AST
+;      (compile_assign failed on a non-slot target, and the empty-params
+;      loop refused to compile 0-arg bodies at all). Now both compile.
+(def mk-counter () (let n 0 (fn () (= n (+ n 1)) n)))
+(= zc1 (mk-counter))
+(= zc2 (mk-counter))
+(zc1) (zc1)
+(assert "0-arg closure counter zc1"  (zc1)                         3)
+(assert "0-arg closure indep zc2"    (zc2)                         1)
+; `=` to a global from inside a compiled fn (STORE_FREE walks to root).
+(= gctr 0)
+(def bump-g () (= gctr (+ gctr 1)) gctr)
+(bump-g)
+(assert "compiled = mutates global"  (bump-g)                      2)
+(assert "global reflects mutation"   gctr                          2)
+; setf alias takes the same compiled path.
+(= gsf 10)
+(def bump-sf () (setf gsf (+ gsf 5)) gsf)
+(assert "compiled setf mutates global" (bump-sf)                   15)
+
 ; 21. Stdlib additions: math, seq, predicates, HOFs.
 (assert "mod 17 5"                   (mod 17 5)                    2)
 (assert "abs -42"                    (abs -42)                     42)

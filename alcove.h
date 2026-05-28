@@ -311,6 +311,11 @@ typedef enum {
   OP_SETQ_DYN, /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
                   env, v) — nearest existing binding else top-level;
                   push v back (setq returns the assigned value) */
+  OP_STORE_FREE, /* u8 idx (symbol) → pop v; assign_store_symbol(consts[idx],
+                    env, v) — `=`/`setf` to a non-slot (captured free var or
+                    global): nearest existing binding else CURRENT env (this
+                    is how it differs from SETQ_DYN, matching updatebang);
+                    push v back (`=` returns the assigned value) */
 
   OP_MAX
 } alc_op;

@@ -430,6 +430,44 @@ def zhello ():
 
 assert "0-arg def returns 3" (zhello) 3
 
+def mk-counter ():
+  let n 0:
+    fn ():
+      setf n (+ n 1)
+      n
+
+setf zc1 (mk-counter)
+
+setf zc2 (mk-counter)
+
+zc1()
+
+zc1()
+
+assert "0-arg closure counter zc1" (zc1) 3
+
+assert "0-arg closure indep zc2" (zc2) 1
+
+setf gctr 0
+
+def bump-g ():
+  setf gctr (+ gctr 1)
+  gctr
+
+bump-g()
+
+assert "compiled = mutates global" (bump-g) 2
+
+assert "global reflects mutation" gctr 2
+
+setf gsf 10
+
+def bump-sf ():
+  setf gsf (+ gsf 5)
+  gsf
+
+assert "compiled setf mutates global" (bump-sf) 15
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

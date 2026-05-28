@@ -102,8 +102,20 @@
        to bytecode with bc->no_gcache set, so OP_LOAD_GLOBAL/CALL_GLOBAL
        do a fresh env-chain lookup each time instead of a per-bc gcache
        hit (which would serve stale values for a captured var). Closures
-       that MUTATE a free var can't slot-resolve it and still fall back
-       to AST; closures are not JIT'd (the JIT global-call helpers cache).
+       are not JIT'd (the JIT global-call helpers cache).
+
+[DONE] Compile mutating-free-var closures (OP_STORE_FREE). `=`/`setf` to
+       a non-slot target (a captured free var or a global) used to fail
+       compilation and fall back to AST. New OP_STORE_FREE op +
+       assign_store_symbol() walk the env chain at runtime, mutating the
+       nearest existing binding (else creating in the CURRENT env — the
+       only difference from setq_store_symbol, which creates in root),
+       so make-counter and friends now compile fully. Also fixed: the
+       compile_lambda param loop refused 0-arg bodies (empty params `()`
+       = nil_singleton with NULL content, misread as a malformed param);
+       now matches var2env's `p->content` guard, so 0-arg fns compile.
+       Reserved-name assignment is rejected at runtime by OP_STORE_FREE,
+       same as OP_SETQ_DYN.
 
 [DONE] OP_MOD bytecode op + JIT shape for (fn (a b) (is (mod a b) K))
        — divides? was running as AST because mod was an unrecognized

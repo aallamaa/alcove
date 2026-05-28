@@ -3346,6 +3346,44 @@ static exp_t *setq_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
   return val;
 }
 
+/* Store VAL into the binding for SYM for a compiled `=`/`setf` whose target
+   is NOT a local slot (a captured free var or a global). Mirrors the symbol
+   path of updatebang EXACTLY so compiling `=` is a behavior-preserving
+   substitute for the AST path: walk the env chain inner→outer and mutate the
+   nearest existing binding in place; if none exists anywhere, create it in
+   the CURRENT env. (This last point is the only difference from
+   setq_store_symbol, which creates in the root env instead.) Borrows SYM and
+   VAL — consumes neither; the caller keeps VAL on the VM stack as the result.
+   This is what lets mutable closures like make-counter compile to bytecode
+   instead of falling back to AST. */
+static void assign_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
+  env_t *cur = env;
+  while (cur) {
+    for (int i = 0; i < cur->n_inline; i++) {
+      const char *k = cur->inline_keys[i];
+      if (k && strcmp(k, sym->ptr) == 0) {
+        unrefexp(cur->inline_vals[i]);
+        cur->inline_vals[i] = refexp(val);
+        return;
+      }
+    }
+    if (cur->d) {
+      keyval_t *kv = set_get_keyval_dict(cur->d, sym->ptr, NULL);
+      if (kv) {
+        GEN_BUMP();
+        unrefexp(kv->val);
+        kv->val = refexp(val);
+        return;
+      }
+    }
+    cur = cur->root;
+  }
+  if (!(env->d))
+    env->d = create_dict();
+  set_get_keyval_dict(env->d, sym->ptr, val);
+  GEN_BUMP();
+}
+
 const char doc_setq[] =
     "(setq sym val [sym val ...]) — Emacs-style variable assignment: update "
     "the nearest existing binding, or create a top-level session binding if "
@@ -9823,6 +9861,8 @@ static const char *bc_opname(uint8_t op) {
     return "LOAD_GLOBAL";
   case OP_SETQ_DYN:
     return "SETQ_DYN";
+  case OP_STORE_FREE:
+    return "STORE_FREE";
   case OP_STORE_SLOT:
     return "STORE_SLOT";
   case OP_BIND_SLOT:
@@ -9950,6 +9990,7 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
   case OP_LOAD_SLOT:
   case OP_LOAD_GLOBAL:
   case OP_SETQ_DYN:
+  case OP_STORE_FREE:
   case OP_STORE_SLOT:
   case OP_BIND_SLOT:
   case OP_UNBIND_SLOT:
@@ -15851,16 +15892,26 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
     return;
   }
   int slot = find_slot(c, key->ptr);
-  if (slot < 0) {
-    c->failed = 1;
-    return;
-  }
   compile_expr(c, val, 0);
   if (c->failed)
     return;
-  emit_u8(c, OP_STORE_SLOT);
-  emit_u8(c, (uint8_t)slot);
-  /* STORE_SLOT re-pushes the stored value so (= x v) returns v. */
+  if (slot >= 0) {
+    emit_u8(c, OP_STORE_SLOT);
+    emit_u8(c, (uint8_t)slot);
+    /* STORE_SLOT re-pushes the stored value so (= x v) returns v. */
+    return;
+  }
+  /* Not a local slot: a captured free var (mutable closure) or a global.
+     Store via a runtime env-chain walk that matches updatebang's `=`
+     semantics. This is what lets mutable closures compile to bytecode
+     instead of failing here and falling back to AST. A reserved-name
+     target is rejected at runtime by OP_STORE_FREE (slot < 0 always,
+     since reserved names can't bind to a slot), same as OP_SETQ_DYN. */
+  int k = add_const(c, key);
+  if (c->failed)
+    return;
+  emit_u8(c, OP_STORE_FREE);
+  emit_u8(c, (uint8_t)k);
 }
 
 /* (let var val body ...) — single binding, evaluates body in extended
@@ -16523,9 +16574,13 @@ int compile_lambda(exp_t *fn, int is_closure) {
   c.self_name = (const char *)fn->meta; /* may be NULL for anon fn */
 
   /* Register params into slots 0..N-1 matching env->inline_slots.
-     Rest params (dot notation or bare-symbol wrap) fall back to AST. */
+     Rest params (dot notation or bare-symbol wrap) fall back to AST.
+     Empty params `()` are the nil_singleton sentinel — a pair with NULL
+     content — so the `p->content` guard (matching var2env) terminates
+     the loop with nparams == 0 instead of misreading it as a malformed
+     param and failing. Without it, no 0-arg function would ever compile. */
   exp_t *p;
-  for (p = params; p; p = p->next) {
+  for (p = params; p && p->content; p = p->next) {
     if (c.nparams >= ENV_INLINE_SLOTS) {
       c.failed = 1;
       break;
@@ -16692,6 +16747,7 @@ tail_reentry:
       [OP_SQRT_INT] = &&l_sqrt_int,
       [OP_LENGTH] = &&l_length,
       [OP_SETQ_DYN] = &&l_setq_dyn,
+      [OP_STORE_FREE] = &&l_store_free,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -16797,6 +16853,29 @@ l_setq_dyn: {
      and does not consume ours — same contract setqcmd relies on — so
      our popped ref becomes the on-stack result. */
   setq_store_symbol(consts[idx], env, v);
+  PUSH(v);
+  NEXT;
+}
+l_store_free: {
+  /* (= sym val) / (setf sym val) for a non-slot target: a captured free
+     var (mutable closure) or a global. Same shape as SETQ_DYN but uses
+     assign_store_symbol, which creates in the CURRENT env on not-found
+     (matching updatebang) rather than the root env. */
+  uint8_t idx = READ_U8;
+  exp_t *v = POP();
+  {
+    exp_t *_rerr = NULL;
+    REJECT_RESERVED_ASSIGN(consts[idx], _rerr, {
+      unrefexp(v);
+      for (int _i = 0; _i < sp; _i++)
+        unrefexp(stack[_i]);
+      if (fn_owned)
+        unrefexp(fn);
+      return _rerr;
+    });
+  }
+  /* Borrows v (refexp into the binding); our popped ref is the result. */
+  assign_store_symbol(consts[idx], env, v);
   PUSH(v);
   NEXT;
 }
