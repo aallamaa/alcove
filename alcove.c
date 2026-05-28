@@ -2543,6 +2543,14 @@ inline int istrue(exp_t *e) {
     dict_t *d = (dict_t *)e->ptr;
     return (d && d->ht[0].used > 0);
   }
+  /* Function-like values are always truthy. A lambda / builtin / macro /
+     ffi callable is a real value, not "empty" — without this, (if some-fn
+     ...) and every istrue-based check (e.g. try's handler dispatch) wrongly
+     treat callables as false. */
+  if (e->type == EXP_LAMBDA || e->type == EXP_INTERNAL ||
+      e->type == EXP_MACRO || e->type == EXO_MACROINTERNAL ||
+      e->type == EXP_FFI)
+    return 1;
   if isatom (e) {
     if isstring (e)
       ret = ((e->ptr) ? strlen(e->ptr) : 0);
@@ -4779,7 +4787,13 @@ static int vec_realloc(exp_t *vexp, int32_t new_cap, int32_t front_pad) {
 static int vec_grow_back(exp_t *vexp) {
   alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int32_t cap = v->cap;
-  if (cap > 0 && vexp->vec_win.start >= cap / 4) {
+  /* Slide left only when it actually reclaims back-room — that requires
+     start > 0. The `>= cap/4` part is a heuristic to avoid sliding for
+     trivial gains, but for small caps cap/4 truncates to 0; combined with
+     start == 0 (a full vector with no front headroom) the slide is a
+     no-op, so we'd return "grew" without room and the caller would write
+     past the buffer. Guarding on start > 0 forces a realloc in that case. */
+  if (vexp->vec_win.start > 0 && vexp->vec_win.start >= cap / 4) {
     vec_slide_left(vexp);
     return 1;
   }
@@ -7189,19 +7203,16 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   if (!result || !iserror(result)) {
     ret = result ? result : NIL_EXP;
   } else {
-    /* Error path: evaluate handler then call it. nil handler = no catch.
-       Check iserror(handler) BEFORE !istrue: EXP_ERROR fails isatom and
-       ispair so !istrue fires for errors too, making the iserror branch
-       unreachable if the two checks are in the wrong order. */
+    /* Error path: evaluate the handler, then apply it to the error value.
+       Only a literal nil handler means "no catch" — NOT any falsey value.
+       (A lambda is the normal handler; istrue(lambda) is false, so a
+       truthiness test here would reject every real handler.) */
     exp_t *handler = EVAL(e->next->next->content, env);
-    if (!handler) {
-      ret = result; /* propagate (null return from EVAL) */
+    if (!handler || handler == NIL_EXP) {
+      ret = result; /* nil handler = no catch; propagate the body error */
     } else if (iserror(handler)) {
       unrefexp(result); /* handler eval itself failed — surface that error */
       ret = handler;
-    } else if (!istrue(handler)) {
-      unrefexp(handler); /* nil/false handler = no catch */
-      ret = result;
     } else {
       ret = alc_apply1(handler, result, env);
       unrefexp(handler);
@@ -9033,6 +9044,14 @@ static int isgen(exp_t *g) {
 /* Advance generator g by one step. Returns next value (owned ref) or GEN_DONE.
    Mutates g's internal state in-place. */
 static exp_t *alc_gen_step(exp_t *g, env_t *env) {
+  /* A plain closure is a generator: each step calls it with no args, and
+     it returns the next value (or *done* to signal exhaustion). This lets
+     users write custom generators as ordinary 0-arg closures — counters,
+     fib, zip, etc. — that compose with map!/filter!/for-each!/collect!. */
+  if (islambda(g)) {
+    exp_t *v = alc_apply_n(g, 0, NULL, env); /* borrows g, no argv to own */
+    return v ? v : GEN_DONE;
+  }
   if (!isgen(g)) return GEN_DONE;
   switch (gen_kind(g)) {
 

@@ -774,7 +774,9 @@
 (assert "= (cdr x) replaces tail"     (iso xs2 '(1 99))              t)
 
 ;; ---------- macros ----------
-(defmacro my-when (cond body) `(if ,cond ,body nil))
+;; param is `c` not `cond`: `cond` is a builtin special form, and lookup
+;; resolves reserved symbols before env, so a `cond` param can't shadow it.
+(defmacro my-when (c body) `(if ,c ,body nil))
 (assert "macro my-when t"             (my-when t 42)                 42)
 (assert "macro my-when nil"           (my-when nil 42)               nil)
 
