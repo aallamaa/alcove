@@ -110,18 +110,26 @@ lispProc lispProcList[] = {
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
     LISPCMD_TAIL("for-gen", forgencmd, doc_forgen),
+    LISPCMD_TAIL("for!", forgencmd, doc_forgen), /* suffix alias */
     LISPCMD_TAIL("let", letcmd, doc_let),
     LISPCMD_TAIL("let*", letstar_cmd, doc_letstar),
     LISPCMD_TAIL("with", withcmd, doc_with),
-    /* Generators */
+    /* Generators — gen-* canonical names + !-suffix aliases */
     LISPCMD("*gen-done*", gendone_cmd, doc_gendone),
     LISPCMD("gen-done?", gendonep_cmd, doc_gendonep),
+    LISPCMD("done?", gendonep_cmd, doc_gendonep),
     LISPCMD("gen-list", genlist_cmd, doc_genlist),
+    LISPCMD("iter!", genlist_cmd, doc_genlist),
     LISPCMD("gen-range", genrange_cmd, doc_genrange),
+    LISPCMD("range!", genrange_cmd, doc_genrange),
     LISPCMD("gen-next!", gennext_cmd, doc_gennext),
+    LISPCMD("next!", gennext_cmd, doc_gennext),
     LISPCMD("gen-collect", gencollect_cmd, doc_gencollect),
+    LISPCMD("collect!", gencollect_cmd, doc_gencollect),
     LISPCMD("gen-map", genmap_cmd, doc_genmap),
+    LISPCMD("map!", genmap_cmd, doc_genmap),
     LISPCMD("gen-filter", genfilter_cmd, doc_genfilter),
+    LISPCMD("filter!", genfilter_cmd, doc_genfilter),
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
     LISPCMD("setf", equalcmd, doc_setf), /* exact synonym of = (readable head) */
