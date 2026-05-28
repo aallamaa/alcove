@@ -16712,7 +16712,10 @@ l_load_global: {
      result + the generation it was cached at. If alcove_global_gen
      still matches, we skip the env walk + strcmp entirely. fib spends
      ~78% of its time here without this cache. */
-  if (!bc->no_gcache && bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
+  /* Hit-path is unchanged from the no-closure original (zero added cost):
+     closures never allocate gcache (the store below is gated on
+     !no_gcache), so bc->gcache stays NULL for them and this never hits. */
+  if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
     PUSH(refexp(bc->gcache[idx].val));
   } else {
     exp_t *v = lookup(consts[idx], env);
@@ -16996,13 +16999,15 @@ l_call_global: {
   uint8_t idx = READ_U8;
   uint8_t n = READ_U8;
   exp_t *callee;
-  if (!bc->no_gcache && bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
+  /* Hit-path unchanged from the original (see OP_LOAD_GLOBAL): closures
+     never allocate gcache, so this never hits for them. */
+  if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[idx].val);
   } else {
     callee = lookup(consts[idx], env);
     if (!callee)
       RUNTIME_ERR("Unbound variable");
-    if (!bc->no_gcache) { /* see OP_LOAD_GLOBAL — closures never cache */
+    if (!bc->no_gcache) { /* closures never cache — free vars are captured */
       if (!bc->gcache)
         bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
       bc->gcache[idx].val = callee;
