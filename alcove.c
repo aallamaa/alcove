@@ -2903,6 +2903,55 @@ finish:
   return val;
 }
 
+/* True if `name` is a reserved builtin / special-form name. Binding a
+   variable with such a name is rejected: lookup() resolves reserved
+   symbols BEFORE the lexical env, so the binding would be silently
+   shadowed by the builtin (the classic make_counter-with-`count` footgun).
+   Fail fast at definition/eval time with a clear message instead. */
+static int is_reserved_name(const char *name) {
+  return name && reserved_symbol &&
+         set_get_keyval_dict(reserved_symbol, (char *)name, NULL) != NULL;
+}
+
+/* Return the first reserved name used in a param spec, or NULL. Handles a
+   flat list (a b c), a bare rest-only symbol (fn xs ...), the dotted rest
+   marker (a . rest), and nested destructuring patterns ((x y) z). */
+static const char *reserved_param_name(exp_t *params) {
+  if (issymbol(params)) {
+    const char *nm = (const char *)params->ptr;
+    return (strcmp(nm, ".") != 0 && is_reserved_name(nm)) ? nm : NULL;
+  }
+  for (exp_t *p = params; p && ispair(p) && istrue(p); p = p->next) {
+    exp_t *el = p->content;
+    if (issymbol(el)) {
+      const char *nm = (const char *)el->ptr;
+      if (strcmp(nm, ".") != 0 && is_reserved_name(nm))
+        return nm;
+    } else if (ispair(el) && istrue(el)) {
+      const char *r = reserved_param_name(el); /* nested destructuring */
+      if (r)
+        return r;
+    }
+  }
+  return NULL;
+}
+
+/* Reject binding a reserved name. PARAMS is a param spec (a bare symbol or
+   a [possibly destructuring] list). On violation, build the error into the
+   lvalue ERRLV, then run FAIL (e.g. `goto finish` or
+   `{ unrefexp(e); return ERRLV; }`). CTX is appended to the message.
+   Used across def, fn, let, let*, with, and for so the check is in one
+   place. */
+#define CHECK_RESERVED_BIND(PARAMS, ERRLV, CTX, FAIL)                          \
+  do {                                                                        \
+    const char *_rsv = reserved_param_name(PARAMS);                           \
+    if (_rsv) {                                                               \
+      (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                         \
+                      "cannot bind reserved name '%s' " CTX, _rsv);           \
+      FAIL;                                                                    \
+    }                                                                         \
+  } while (0)
+
 /* Lambdas here are NOT closures: the returned EXP_LAMBDA stores only
    params + body, with no reference to the defining env. Free variables
    are resolved dynamically against the CALLER's env chain at invoke
@@ -2920,6 +2969,8 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   if (cur && (ispair(cur->content) || issymbol(cur->content))) {
     header = car(cur);
     cur = cdr(cur);
+    CHECK_RESERVED_BIND(header, val, "as a parameter",
+                        { unrefexp(e); return val; });
     if (cur) {
       /* Body is the remaining list; first form may be nil/literal/symbol
          as well as a pair — all are legal body expressions. */
@@ -2974,6 +3025,8 @@ exp_t *defcmd(exp_t *e, env_t *env) {
     if (cur && (ispair(cur->content) || issymbol(cur->content))) {
       header = car(cur);
       cur = cdr(cur);
+      CHECK_RESERVED_BIND(header, val, "as a parameter",
+                          { unrefexp(e); return val; });
       if (cur) {
         /* Body is the remaining list; first form may be nil/literal/symbol
            as well as a pair — all are legal body expressions. */
@@ -7897,6 +7950,8 @@ exp_t *forcmd(exp_t *e, env_t *env) {
 
   if ((curvar = e->next)) {
     if ((curval = curvar->next)) {
+      CHECK_RESERVED_BIND(curvar->content, ret, "in for",
+                          { destroy_env(newenv); unrefexp(e); return ret; });
       if (!(newenv->d))
         newenv->d = create_dict();
 
@@ -7984,6 +8039,8 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
 
   if ((curvar = e->next)) {
     if ((curval = curvar->next)) {
+      CHECK_RESERVED_BIND(curvar->content, ret, "in each",
+                          { destroy_env(newenv); unrefexp(e); return ret; });
       if (!(newenv->d))
         newenv->d = create_dict();
 
@@ -8837,6 +8894,7 @@ exp_t *letcmd(exp_t *e, env_t *env) {
 
   if ((curvar = e->next)) {
     if ((curval = curvar->next)) {
+      CHECK_RESERVED_BIND(curvar->content, ret, "in let", goto finish);
       in_tail_position = 0;
       if (issymbol(curvar->content)) {
         if ((ret = EVAL(curval->content, env)) == NULL)
@@ -8920,6 +8978,7 @@ exp_t *withcmd(exp_t *e, env_t *env) {
         in_tail_position = 0;
         while (curvar && curval) {
           if (issymbol(curvar->content)) {
+            CHECK_RESERVED_BIND(curvar->content, ret, "in with", goto finish);
             ret = EVAL(curval->content, env);
             if iserror (ret)
               goto finish;
@@ -8992,6 +9051,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
                     "let*: binding name must be a symbol");
         goto finish;
       }
+      CHECK_RESERVED_BIND(var, ret, "in let*", goto finish);
       exp_t *val_node = bcur->next;
       if (!val_node) {
         ret = error(ERROR_MISSING_PARAMETER, NULL, newenv,
@@ -9032,6 +9092,7 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
                   "let*: binding name must be a symbol");
       goto finish;
     }
+    CHECK_RESERVED_BIND(var, ret, "in let*", goto finish);
     ret = EVAL(val_node->content, newenv);
     if (iserror(ret)) goto finish;
     var2env_bind(var->ptr, ret, newenv);

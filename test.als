@@ -2176,14 +2176,14 @@ def nqv-safe? (col qs row offset):
           nil
           nqv-safe? col qs row (+ offset 1)
 
-def nqv-try-cols (n row col qs count):
+def nqv-try-cols (n row col qs acc):
   if (>= col n):
-    count
+    acc
     if (nqv-safe? col qs row 0):
       do:
         vec-set! qs row col
-        nqv-try-cols n row (+ col 1) qs (+ count (nqv-solve n (+ row 1) qs))
-      nqv-try-cols n row (+ col 1) qs count
+        nqv-try-cols n row (+ col 1) qs (+ acc (nqv-solve n (+ row 1) qs))
+      nqv-try-cols n row (+ col 1) qs acc
 
 def nqv-solve (n row qs):
   if (>= row n):
@@ -3148,5 +3148,28 @@ assert "try finally runs, returns body" (try (+ 2 3) (fn (e) -1) 0) 5
 assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0) 42
 
 assert "try nil handler propagates error" (error? (try (/ 1 0) nil)) t
+
+assert "fn reserved param errors" (error? (fn (count) count)) t
+
+assert "fn reserved param message" (string-contains? (error-message (fn (list) 1)) "reserved"):
+  t
+
+assert "let reserved var errors" (error? (let list 5 list)) t
+
+assert "let* reserved var errors" (error? (let* (map 1) map)) t
+
+assert "with reserved var errors" (error? (with (count 1) count)) t
+
+assert "for reserved var errors" (error? (for time 1 3 time)) t
+
+assert "destructuring reserved errors" (error? (fn ((str x)) x)) t
+
+assert "non-reserved fn param ok" ((fn (cnt) (+ cnt 1)) 41) 42
+
+assert "non-reserved let ok" (let lst 5 (+ lst 1)) 6
+
+assert "non-reserved with ok" (with (a 2 b 3) (+ a b)) 5
+
+assert "non-reserved for ok" (let s 0 (for i 1 4 (setf s (+ s i))) s) 10
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
