@@ -397,6 +397,12 @@ typedef struct bytecode_t {
   exp_t *(*jit)(struct env_t *env);
   void *jit_mem; /* mmap'd page; freed via munmap on bytecode_free */
   size_t jit_size;
+  /* Set for closures (lambdas compiled with a captured env). A closure's
+     free variables live in the captured env chain, not the global env, so
+     the gcache (keyed on alcove_global_gen, which only tracks GLOBAL
+     mutations) would serve stale values. With this set, OP_LOAD_GLOBAL /
+     OP_CALL_GLOBAL always do a fresh lookup and never cache. */
+  uint8_t no_gcache;
 } bytecode_t;
 
 /* Resolve a lambda's params list, accounting for the union overload
@@ -414,7 +420,7 @@ extern uint64_t alcove_global_gen;
 
 void bytecode_free(bytecode_t *bc);
 void disasm_bytecode(bytecode_t *bc); /* opcode-by-opcode dump for debugging */
-int compile_lambda(exp_t *fn);        /* 1 on success, 0 on fallback */
+int compile_lambda(exp_t *fn, int is_closure); /* 1 on success, 0 on fallback */
 exp_t *vm_run(exp_t *fn, struct env_t *env); /* runs bytecode; returns owned */
 #ifdef ALCOVE_JIT
 int jit_compile(bytecode_t *bc); /* 1 if JIT'd, 0 otherwise */

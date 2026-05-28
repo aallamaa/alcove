@@ -104,10 +104,12 @@
        comparator). Each needs a libffi closure setup but no fundamental
        blocker.
 
-[TODO] Compile lambda for closures (currently AST-only). Bytecode VM's
-       gcache caches global resolutions per-bc; for closures the cache
-       would be wrong if a captured var mutates. Either disable gcache
-       for closures or change OP_LOAD_GLOBAL semantics for that case.
+[DONE] Compile lambda for closures (was AST-only). Closures now compile
+       to bytecode with bc->no_gcache set, so OP_LOAD_GLOBAL/CALL_GLOBAL
+       do a fresh env-chain lookup each time instead of a per-bc gcache
+       hit (which would serve stale values for a captured var). Closures
+       that MUTATE a free var can't slot-resolve it and still fall back
+       to AST; closures are not JIT'd (the JIT global-call helpers cache).
 
 [DONE] OP_MOD bytecode op + JIT shape for (fn (a b) (is (mod a b) K))
        — divides? was running as AST because mod was an unrecognized

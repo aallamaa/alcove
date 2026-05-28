@@ -3149,6 +3149,71 @@ assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0) 42
 
 assert "try nil handler propagates error" (error? (try (/ 1 0) nil)) t
 
+def cl-adder (n):
+  fn (x):
+    + x n
+
+setf cl-add5 (cl-adder 5)
+
+setf cl-add9 (cl-adder 9)
+
+assert "closure: captures n=5" (cl-add5 7) 12
+
+assert "closure: captures n=9" (cl-add9 7) 16
+
+assert "closure: instances independent" (cl-add5 100) 105
+
+def cl-late ():
+  let n 1:
+    let f (fn () n):
+      do:
+        setf n 99
+        f
+
+assert "closure: free var post-capture mutation" ((cl-late)) 99
+
+def cl-cell ():
+  let n 10:
+    list (fn () n) (fn (v) (setf n v))
+
+setf cl-pair (cl-cell)
+
+setf cl-get (car cl-pair)
+
+setf cl-set (car (cdr cl-pair))
+
+assert "closure: shared cell initial" (cl-get) 10
+
+cl-set 77
+
+assert "closure: shared cell after set" (cl-get) 77
+
+def cl-mk3 (a):
+  fn (b):
+    fn (c2):
+      + a b c2
+
+assert "closure: triple-nested" (((cl-mk3 1) 2) 3) 6
+
+def cl-counter ():
+  let k 0:
+    fn ():
+      do:
+        setf k (+ k 1)
+        k
+
+setf cl-c1 (cl-counter)
+
+setf cl-c2 (cl-counter)
+
+assert "closure: counter c1 step1" (cl-c1) 1
+
+assert "closure: counter c1 step2" (cl-c1) 2
+
+assert "closure: counter c2 independent" (cl-c2) 1
+
+assert "closure: counter c1 unaffected" (cl-c1) 3
+
 assert "fn reserved param errors" (error? (fn (count) count)) t
 
 assert "fn reserved param message" (string-contains? (error-message (fn (list) 1)) "reserved"):

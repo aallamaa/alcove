@@ -2015,8 +2015,9 @@ exp_t *load_lambda(exp_t *e, FILE *stream) {
     e->meta = NULL;
   }
   /* Silent fallback to AST eval if compile_lambda can't compile (e.g.,
-     body uses an unsupported form). The lambda still works either way. */
-  compile_lambda(e);
+     body uses an unsupported form). The lambda still works either way.
+     Persisted lambdas are top-level (no captured env survives a dump). */
+  compile_lambda(e, 0);
   return e;
 }
 
@@ -2993,13 +2994,11 @@ exp_t *fncmd(exp_t *e, env_t *env) {
          (cheap). */
       if (env)
         val->next->meta = (struct keyval_t *)ref_env(env);
-      /* Compile only when there's no real captured scope — the bytecode
-         VM's gcache caches global resolutions per-bc, which is wrong if
-         a captured `n` from a let later mutates. Closures (env != global,
-         i.e. env->root != NULL) run as AST. Top-level fns still compile
-         and JIT as before. */
-      if (!env || !env->root)
-        compile_lambda(val);
+      /* Compile both top-level fns and closures. Closures (a real captured
+         scope, env->root != NULL) compile with no_gcache so free-var reads
+         always re-resolve against the captured env (a closure that *mutates*
+         a free var can't slot-resolve it and safely falls back to AST). */
+      compile_lambda(val, env && env->root);
     } else
       val = error(EXP_ERROR_BODY_NOT_LIST, e, env, "Error body is not a list");
   } else
@@ -3053,11 +3052,9 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         /* Closure: capture defining env (see fncmd for rationale). */
         if (env)
           val->next->meta = (struct keyval_t *)ref_env(env);
-        /* Compile only when defined at top level (env->root == NULL).
-           A nested (def ...) inside a let captures the let env and
-           runs as AST so name lookups walk the captured chain. */
-        if (!env || !env->root)
-          compile_lambda(val); /* silent fallback to AST if body unsupported */
+        /* Compile top-level defs and nested (closure) defs alike; closures
+           get no_gcache (fresh free-var lookups against the captured env). */
+        compile_lambda(val, env && env->root);
         if (!(env->d))
           env->d = create_dict();
         set_get_keyval_dict(env->d, name->ptr,
@@ -16483,7 +16480,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   c->failed = 1;
 }
 
-int compile_lambda(exp_t *fn) {
+int compile_lambda(exp_t *fn, int is_closure) {
   if (!fn || !islambda(fn))
     return 0;
   if (fn->flags & FLAG_COMPILED)
@@ -16556,10 +16553,15 @@ int compile_lambda(exp_t *fn) {
   for (int pi = 0; pi < c.nparams; pi++)
     bc->param_keys[pi] = c.slot_names[pi];
   bc->self_name = (const char *)fn->meta; /* borrowed; NULL for anon */
+  bc->no_gcache = (uint8_t)(is_closure != 0);
   fn->bc = bc;
   fn->flags |= FLAG_COMPILED;
 #ifdef ALCOVE_JIT
-  jit_compile(bc); /* opportunistic; no-op for shapes we don't recognize */
+  /* Don't JIT closures: the JIT's global-call helpers cache via gcache,
+     which is unsafe for a closure's captured free vars. Bytecode (with
+     no_gcache fresh lookups) is still far faster than AST eval. */
+  if (!is_closure)
+    jit_compile(bc); /* opportunistic; no-op for shapes we don't recognize */
 #endif
   return 1;
 }
@@ -16710,16 +16712,19 @@ l_load_global: {
      result + the generation it was cached at. If alcove_global_gen
      still matches, we skip the env walk + strcmp entirely. fib spends
      ~78% of its time here without this cache. */
-  if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
+  if (!bc->no_gcache && bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
     PUSH(refexp(bc->gcache[idx].val));
   } else {
     exp_t *v = lookup(consts[idx], env);
     if (!v)
       RUNTIME_ERR("Unbound variable");
-    if (!bc->gcache)
-      bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
-    bc->gcache[idx].val = v; /* not refcounted by us; bound globally */
-    bc->gcache[idx].gen = alcove_global_gen;
+    if (!bc->no_gcache) { /* closures: never cache — free vars live in the
+                             captured env, which gcache can't track. */
+      if (!bc->gcache)
+        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[idx].val = v; /* not refcounted by us; bound globally */
+      bc->gcache[idx].gen = alcove_global_gen;
+    }
     PUSH(v);
   }
   NEXT;
@@ -16991,16 +16996,18 @@ l_call_global: {
   uint8_t idx = READ_U8;
   uint8_t n = READ_U8;
   exp_t *callee;
-  if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
+  if (!bc->no_gcache && bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[idx].val);
   } else {
     callee = lookup(consts[idx], env);
     if (!callee)
       RUNTIME_ERR("Unbound variable");
-    if (!bc->gcache)
-      bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
-    bc->gcache[idx].val = callee;
-    bc->gcache[idx].gen = alcove_global_gen;
+    if (!bc->no_gcache) { /* see OP_LOAD_GLOBAL — closures never cache */
+      if (!bc->gcache)
+        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[idx].val = callee;
+      bc->gcache[idx].gen = alcove_global_gen;
+    }
   }
   int base = sp - n;
   exp_t *ret = vm_invoke_values(callee, n, &stack[base], env);

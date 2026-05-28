@@ -2119,6 +2119,40 @@
 (assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0)   42)
 (assert "try nil handler propagates error"  (error? (try (/ 1 0) nil))    t)
 
+;; --- closures compile to bytecode; free vars stay correct (no_gcache) ---
+;; Read-only-free closures now compile (LOAD_GLOBAL does a fresh lookup
+;; against the captured env each time, never a stale gcache hit). Closures
+;; that MUTATE a free var can't slot-resolve it and fall back to AST.
+(def cl-adder (n) (fn (x) (+ x n)))
+(= cl-add5 (cl-adder 5))
+(= cl-add9 (cl-adder 9))
+(assert "closure: captures n=5"          (cl-add5 7)                  12)
+(assert "closure: captures n=9"          (cl-add9 7)                  16)
+(assert "closure: instances independent" (cl-add5 100)                105)
+;; a read closure must see a free var mutated AFTER it was captured
+(def cl-late () (let n 1 (let f (fn () n) (do (= n 99) f))))
+(assert "closure: free var post-capture mutation" ((cl-late))         99)
+;; two closures sharing one captured cell: a (compiled) reader sees writes
+;; made through a sibling (AST) mutator — proves no_gcache re-resolution
+(def cl-cell () (let n 10 (list (fn () n) (fn (v) (= n v)))))
+(= cl-pair (cl-cell))
+(= cl-get (car cl-pair))
+(= cl-set (car (cdr cl-pair)))
+(assert "closure: shared cell initial"   (cl-get)                     10)
+(cl-set 77)
+(assert "closure: shared cell after set" (cl-get)                     77)
+;; nested closures
+(def cl-mk3 (a) (fn (b) (fn (c2) (+ a b c2))))
+(assert "closure: triple-nested"         (((cl-mk3 1) 2) 3)           6)
+;; mutating closure (make_counter) — independent, monotonic
+(def cl-counter () (let k 0 (fn () (do (= k (+ k 1)) k))))
+(= cl-c1 (cl-counter))
+(= cl-c2 (cl-counter))
+(assert "closure: counter c1 step1"      (cl-c1)                      1)
+(assert "closure: counter c1 step2"      (cl-c1)                      2)
+(assert "closure: counter c2 independent" (cl-c2)                     1)
+(assert "closure: counter c1 unaffected" (cl-c1)                      3)
+
 ;; --- reserved-name bindings are rejected (fail-fast, not silent shadow) ---
 ;; lookup() resolves reserved symbols before the lexical env, so binding a
 ;; variable named after a builtin used to silently shadow it. Now it errors.
