@@ -69,6 +69,21 @@ exp_t *gen_done_singleton = NULL;
 static exp_t *alc_cstr_to_key(const char *k);
 static int set_insert_value(dict_t *d, exp_t *v);
 static void alc_list_push_right(alc_list_t *l, exp_t *val); /* defined far below; used by load_deque_value */
+static int is_reserved_name(const char *name);            /* defined below; used by updatebang/setq */
+
+/* Reject assigning to a bare reserved-name symbol (= / setf / setq). Only a
+   symbol LHS triggers it — place forms ((vec i), (s i), (car x)) and string
+   keys pass through. On a hit, build the error into ERRLV and run FAIL
+   (cleanup + return/propagate). `env` must be in scope at the use site. */
+#define REJECT_RESERVED_ASSIGN(SYM, ERRLV, FAIL)                              \
+  do {                                                                        \
+    if (issymbol(SYM) && is_reserved_name((char *)(SYM)->ptr)) {              \
+      (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                         \
+                      "cannot assign to reserved name '%s'",                  \
+                      (char *)(SYM)->ptr);                                    \
+      FAIL;                                                                    \
+    }                                                                         \
+  } while (0)
 
 /* Global env handle for the readline tab-completion callback (which
    takes no user-data param). Set in main() before the REPL loop. */
@@ -2767,6 +2782,11 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
   exp_t *key = NULL;
   if (val == NULL)
     val = NIL_EXP;
+  /* (= count 5) where count is a builtin: lookup would never return this
+     binding (reserved symbols resolve first), so reject it like let/param. */
+  exp_t *_rerr = NULL;
+  REJECT_RESERVED_ASSIGN(keyv, _rerr,
+                         { unrefexp(keyv); unrefexp(val); return _rerr; });
   if (issymbol(keyv) || isstring(keyv)) { // form (= "qweqwe" 10) (= weq 10)
     if (islambda(val) && val->meta == NULL)
       val->meta = (keyval_t *)strdup(keyv->ptr);
@@ -3345,6 +3365,10 @@ exp_t *setqcmd(exp_t *e, env_t *env) {
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "setq: variable name must be a symbol");
     }
+    exp_t *_rerr = NULL;
+    REJECT_RESERVED_ASSIGN(sym, _rerr,
+                           { if (ret != NIL_EXP) unrefexp(ret);
+                             unrefexp(e); return _rerr; });
     if (!cdr(a)) {
       unrefexp(e);
       return error(ERROR_MISSING_PARAMETER, NULL, env,
@@ -16757,6 +16781,18 @@ l_setq_dyn: {
      runtime (nearest existing binding, else create top-level). */
   uint8_t idx = READ_U8;
   exp_t *v = POP();
+  /* Reject (setq <reserved> v) — consistent with the AST setqcmd path. */
+  {
+    exp_t *_rerr = NULL;
+    REJECT_RESERVED_ASSIGN(consts[idx], _rerr, {
+      unrefexp(v);
+      for (int _i = 0; _i < sp; _i++)
+        unrefexp(stack[_i]);
+      if (fn_owned)
+        unrefexp(fn);
+      return _rerr;
+    });
+  }
   /* setq_store_symbol takes its own ref on v (refexp into the binding)
      and does not consume ours — same contract setqcmd relies on — so
      our popped ref becomes the on-stack result. */

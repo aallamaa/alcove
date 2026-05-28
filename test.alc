@@ -2199,6 +2199,20 @@
 (assert "non-reserved with ok"         (with (a 2 b 3) (+ a b))               5)
 (assert "non-reserved for ok"          (let s 0 (for i 1 4 (= s (+ s i))) s)  10)
 
+;; --- assigning to a reserved name is rejected too (=/setf/setq) ---
+;; Same footgun on the write side: (= count 5) could never take effect
+;; (lookup resolves the builtin first), so it now fails fast.
+(assert "= reserved errors"            (error? (= count 5))                   t)
+(assert "= reserved message"
+        (string-contains? (error-message (= list 5)) "reserved")              t)
+(assert "setf reserved errors"         (error? (setf map 5))                  t)
+(assert "setq reserved errors"         (error? (setq time 5))                 t)
+;; bare non-reserved + place forms + string keys all still assign fine
+(assert "= non-reserved ok"            (do (= rnz 5) rnz)                     5)
+(assert "= string place ok"            (let s "hello" (= (s 0) #\J) s)        "Jello")
+(assert "= cons place ok"              (let x (list 1 2) (= (car x) 'z) x)    (list 'z 2))
+(assert "= string-key ok"              (do (= "carwash" 7) carwash)           7)
+
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).

@@ -3290,4 +3290,21 @@ assert "non-reserved with ok" (with (a 2 b 3) (+ a b)) 5
 
 assert "non-reserved for ok" (let s 0 (for i 1 4 (setf s (+ s i))) s) 10
 
+assert "= reserved errors" (error? (setf count 5)) t
+
+assert "= reserved message" (string-contains? (error-message (setf list 5)) "reserved"):
+  t
+
+assert "setf reserved errors" (error? (setf map 5)) t
+
+assert "setq reserved errors" (error? (setq time 5)) t
+
+assert "= non-reserved ok" (do (setf rnz 5) rnz) 5
+
+assert "= string place ok" (let s "hello" (setf (s 0) #\J) s) "Jello"
+
+assert "= cons place ok" (let x (list 1 2) (setf (car x) 'z) x) (list 'z 2)
+
+assert "= string-key ok" (do (setf "carwash" 7) carwash) 7
+
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
