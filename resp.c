@@ -2343,7 +2343,10 @@ extern int toeval;
 
 /* Drain a single complete top-level form from `acc`/`*plen`. Returns
    the byte count consumed (incl. trailing whitespace) or 0 if no
-   complete form is buffered yet. The caller slides the remainder. */
+   complete form is buffered yet. The caller slides the remainder.
+   Plain (s-expression) build only — the alcoves build uses the
+   indentation-aware resp_repl_consume_als instead. */
+#ifndef ALCOVE_ALS
 static size_t resp_repl_consume_form(const char *acc, size_t len) {
   /* Walk char-by-char tracking paren depth + string state, identical
      to rl_paren_depth's scanner. Form-end is: depth back to 0 after
@@ -2380,20 +2383,75 @@ static size_t resp_repl_consume_form(const char *acc, size_t len) {
   }
   return 0; /* incomplete */
 }
+#endif /* !ALCOVE_ALS */
 
-static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
-                                 int idx) {
-  /* fmemopen so the existing reader walks the form unchanged. */
-  FILE *fs = fmemopen((void *)src, n, "r");
-  if (!fs) return;
-  exp_t *form = reader(fs, 0, 0);
-  fclose(fs);
-  if (!form) return;
-  if (iserror(form) && form->flags == EXP_ERROR_PARSING_EOF) {
-    unrefexp(form);
-    return;
+#ifdef ALCOVE_ALS
+/* alcove-script is indentation-based, not paren-balanced, so the s-expr
+   form scanner above can't find unit boundaries in the alcoves build.
+   A complete top-level unit is either a single balanced line that does
+   NOT open a block (no trailing ':'), or a multi-line block terminated by
+   a blank line with parens balanced — mirroring the readline als reader
+   (als_rl_read_form). Returns the byte count of one unit (incl. the
+   terminating newline) or 0 if more input is needed. */
+static size_t resp_repl_consume_als(const char *acc, size_t len) {
+  int depth = 0, in_string = 0, line_no = 0;
+  size_t ls = 0; /* current line start */
+  for (size_t i = 0; i < len; i++) {
+    char c = acc[i];
+    if (in_string) {
+      if (c == '\\' && i + 1 < len)
+        i++;
+      else if (c == '"')
+        in_string = 0;
+      continue;
+    }
+    if (c == '"') {
+      in_string = 1;
+      continue;
+    }
+    /* '#' opens an als comment to end-of-line — except '#[' (vector literal). */
+    if (c == '#' && !(i + 1 < len && acc[i + 1] == '[')) {
+      while (i + 1 < len && acc[i + 1] != '\n')
+        i++;
+      continue;
+    }
+    if (c == '(') {
+      depth++;
+      continue;
+    }
+    if (c == ')') {
+      if (depth > 0)
+        depth--;
+      continue;
+    }
+    if (c == '\n') {
+      line_no++;
+      int blank = 1;
+      for (size_t j = ls; j < i; j++)
+        if (acc[j] != ' ' && acc[j] != '\t' && acc[j] != '\r') {
+          blank = 0;
+          break;
+        }
+      size_t k = i; /* last non-whitespace char of this line */
+      while (k > ls && (acc[k - 1] == ' ' || acc[k - 1] == '\t' ||
+                        acc[k - 1] == '\r'))
+        k--;
+      int opens = (k > ls && acc[k - 1] == ':');
+      if (depth == 0) {
+        if (blank)
+          return i + 1; /* blank line submits the accumulated block */
+        if (line_no == 1 && !opens)
+          return i + 1; /* single balanced line, no block -> submit now */
+      }
+      ls = i + 1;
+    }
   }
-  /* Mirror the file-mode loop: handle quit/exit/toeval, then evaluate. */
+  return 0; /* incomplete */
+}
+#endif /* ALCOVE_ALS */
+
+/* Evaluate one already-read form: handle quit/exit/toeval, else eval+print. */
+static void resp_repl_eval_one_form(env_t *global, exp_t *form, int idx) {
   if (issymbol(form) &&
       (strcmp((char *)exp_text(form), "quit") == 0 ||
        strcmp((char *)exp_text(form), "exit") == 0)) {
@@ -2420,6 +2478,55 @@ static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
     printf("nil");
   printf("\n\n");
   fflush(stdout);
+}
+
+static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
+                                 int idx) {
+#ifdef ALCOVE_ALS
+  /* alcoves build: the -R REPL surface is alcove-script, just like every
+     other input chokepoint. Transpile the consumed block to s-expression
+     source, then read + evaluate each resulting top-level form. */
+  char *tmp = (char *)malloc(n + 1);
+  if (!tmp)
+    return;
+  memcpy(tmp, src, n);
+  tmp[n] = 0;
+  char *sx = als_to_sexpr(tmp);
+  free(tmp);
+  if (!sx)
+    return;
+  FILE *fs = fmemopen(sx, strlen(sx), "r");
+  if (fs) {
+    for (;;) {
+      exp_t *form = reader(fs, 0, 0);
+      if (!form)
+        break;
+      if (iserror(form) && form->flags == EXP_ERROR_PARSING_EOF) {
+        unrefexp(form);
+        break;
+      }
+      resp_repl_eval_one_form(global, form, idx);
+      if (resp_stop)
+        break;
+    }
+    fclose(fs);
+  }
+  free(sx);
+#else
+  /* Plain alcove build: the input is already s-expressions. */
+  FILE *fs = fmemopen((void *)src, n, "r");
+  if (!fs)
+    return;
+  exp_t *form = reader(fs, 0, 0);
+  fclose(fs);
+  if (!form)
+    return;
+  if (iserror(form) && form->flags == EXP_ERROR_PARSING_EOF) {
+    unrefexp(form);
+    return;
+  }
+  resp_repl_eval_one_form(global, form, idx);
+#endif
 }
 
 int resp_repl_serve(int port, env_t *global) {
@@ -2478,7 +2585,11 @@ int resp_repl_serve(int port, env_t *global) {
         acc[acc_len] = 0;
         /* Drain every complete form currently buffered. */
         for (;;) {
+#ifdef ALCOVE_ALS
+          size_t consumed = resp_repl_consume_als(acc, acc_len);
+#else
           size_t consumed = resp_repl_consume_form(acc, acc_len);
+#endif
           if (!consumed) break;
           idx++;
           resp_repl_eval_print(global, acc, consumed, idx);
