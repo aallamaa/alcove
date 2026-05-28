@@ -2119,6 +2119,35 @@
 (assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0)   42)
 (assert "try nil handler propagates error"  (error? (try (/ 1 0) nil))    t)
 
+;; --- higher-order builtins: a NULL list arg = empty list, not an error ---
+;; (cdr <1-elem>) yields C NULL (not NIL_EXP); filter/map/reduce/any?/all?/
+;; sort-by used to reject it as "(... pred list)" missing-param and error,
+;; which broke any recursion that fed a filtered/mapped tail back in.
+(assert "filter on (cdr 1-elem) = empty"  (filter (fn (x) (> x 3)) (cdr (list 6)))   nil)
+(assert "map on (cdr 1-elem) = empty"     (map (fn (x) x) (cdr (list 6)))            nil)
+(assert "reduce on (cdr 1-elem) = init"   (reduce (fn (a x) (+ a x)) 7 (cdr (list 6))) 7)
+(assert "any? on (cdr 1-elem) = nil"      (any? (fn (x) (> x 3)) (cdr (list 6)))     nil)
+(assert "all? on (cdr 1-elem) = t"        (all? (fn (x) (> x 3)) (cdr (list 6)))     t)
+(assert "sort-by on (cdr 1-elem) = empty" (sort-by (fn (x) x) (cdr (list 6)))        nil)
+;; the actual TODO repro: filter inside a recursive fn (vanished mid-recursion)
+(def rec-filt (xs)
+  (if (no xs) (list)
+      (cons (car xs) (rec-filt (filter (fn (x) (> x 3)) (cdr xs))))))
+(assert "filter inside recursion"         (iso (rec-filt (list 5 1 6 2 7)) (list 5 6 7)) t)
+;; arity is still enforced — a genuinely missing list arg errors
+(assert "filter missing list errors"      (error? (filter (fn (x) x)))               t)
+(assert "reduce missing list errors"      (error? (reduce (fn (a x) a) 0))           t)
+
+;; --- (do (call) other) / recursion after a call (TODO bugs 1 + 3) ---
+(def hb-id (x) x)
+(assert "do: value after identity call"   (do (hb-id 1) 42)                          42)
+(def hb-g (x) x)
+(def hb-rec (i) (if (> i 3) i (do (hb-g 5) (hb-rec (+ i 1)))))
+(assert "do: call then tail recurse"      (hb-rec 1)                                 4)
+(def hb-rec2 (i)
+  (if (> i 3) i (do (any? (fn (d) (is d 0)) (list 1)) (hb-rec2 (+ i 1)))))
+(assert "do: any? then tail recurse"      (hb-rec2 1)                                4)
+
 ;; --- closures compile to bytecode; free vars stay correct (no_gcache) ---
 ;; Read-only-free closures now compile (LOAD_GLOBAL does a fresh lookup
 ;; against the captured env each time, never a stale gcache hit). Closures

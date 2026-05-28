@@ -6787,7 +6787,10 @@ const char doc_map[] = "(map fn xs ...) — apply fn to corresponding elements "
 exp_t *mapcmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   EVAL_ARG_2(fn, xs);
-  if (!fn || !xs)
+  /* Require the list-arg FORM (arity), but a NULL VALUE is the empty list,
+     not a missing arg: (cdr <1-elem>) yields C NULL, which must filter/map
+     as () — not error. (!fn short-circuits if e->next is missing.) */
+  if (!fn || !e->next->next)
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
@@ -6823,7 +6826,7 @@ const char doc_filter[] = "(filter pred xs) — list of elements of xs for which
 exp_t *filtercmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   EVAL_ARG_2(fn, xs);
-  if (!fn || !xs)
+  if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(
         fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
@@ -6861,10 +6864,15 @@ const char doc_reduce[] = "(reduce fn init xs) — left fold: (fn (fn (fn init "
                           "x0) x1) x2)... Returns init for empty xs.";
 exp_t *reducecmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(fn, acc, xs);
-  if (!fn || !acc || !xs)
+  /* Require all three arg FORMS (arity), but NULL VALUES are nil/empty —
+     a NULL init or a NULL list (e.g. from (cdr <1-elem>)) must fold as
+     init/() rather than error. (!fn short-circuits the form derefs.) */
+  if (!fn || !e->next->next || !e->next->next->next)
     CLEAN_RETURN_3(
         fn, acc, xs,
         error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)"));
+  if (!acc)
+    acc = NIL_EXP; /* NULL init seed → nil */
   if (xs && xs != NIL_EXP && !ispair(xs))
     CLEAN_RETURN_3(fn, acc, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
@@ -6932,7 +6940,7 @@ const char doc_any[] = "(any? pred xs) — t if pred is truthy for at least one 
 exp_t *anypcmd(exp_t *e, env_t *env) {
   exp_t *ret = NIL_EXP;
   EVAL_ARG_2(fn, xs);
-  if (!fn || !xs)
+  if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(any? pred list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
@@ -6963,7 +6971,7 @@ const char doc_all[] = "(all? pred xs) — t if pred is truthy for every element
 exp_t *allpcmd(exp_t *e, env_t *env) {
   exp_t *ret = TRUE_EXP;
   EVAL_ARG_2(fn, xs);
-  if (!fn || !xs)
+  if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(all? pred list)"));
   if (xs && xs != NIL_EXP && !ispair(xs))
@@ -7335,7 +7343,7 @@ static int sort_cmp_by(const void *a, const void *b) {
 
 exp_t *sortbycmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(fn, xs);
-  if (!fn || !xs)
+  if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env,
                                  "(sort-by key-fn xs)"));
   if (xs == NIL_EXP) CLEAN_RETURN_2(fn, xs, NIL_EXP);

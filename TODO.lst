@@ -8,14 +8,10 @@
        across runs and re-install JIT on the new arch
 [DONE] savedb warns on stderr when an entry's type isn't __DUMPABLE__
        (was silently dropping; now surfaces at save time)
-[TODO] BUG: (do (id-fn arg) other) returns nil when id-fn is the literal
-       identity (def f (x) x). Reproduces under bytecode-only build (no
-       JIT involvement). Repro: (def f (x) x); (prn (do (f 1) 42))
-       prints blank instead of 42. Workaround in test.alc uses (+ x 1)
-       in the JIT loop+call test. Suspect interaction between identity
-       lambda's bytecode (LOAD_SLOT 0; RET) and the OP_POP that compile_do
-       inserts after the call. Discovered while wiring (do ...) into the
-       compiler — pre-existing issue surfaced once that path went live.
+[DONE] BUG: (do (id-fn arg) other) returned nil for an identity id-fn.
+       No longer reproduces (verified (do (f 1) 42) => 42 on parser/jit).
+       Resolved once closures/do-bodies compile cleanly; regression test
+       "do: value after identity call" in test.alc.
 
 [DONE] add amd64 JIT backend alongside existing arm64 (auto-detected via
        uname -m; fib went 1.5x slower → 2.3x faster than python on x86_64)
@@ -84,16 +80,14 @@
        examples + README in ffi-examples/
 [DONE] documented test 95/1 on amd64 + arm64 (qemu)
 
-[TODO] BUG: (filter pred (cdr xs)) inside a recursive fn evaluates to
-       blank/error after one or more iterations. Repro:
-         (def f (xs)
-           (if (no xs) (list)
-               (cons (car xs) (f (filter (fn (x) (> x 3)) (cdr xs))))))
-         (prn (f (list 5 1 6 2 7)))   ; prints nothing
-       Same fn without filter (just (cdr xs)) works. Workaround in
-       benchmark/sieve.alc uses iterative has-divisor? walk instead.
-       Suspect refcount issue in filter or in the recursion+filter
-       interaction.
+[DONE] BUG: (filter pred (cdr xs)) inside a recursive fn evaluated to
+       blank. ROOT CAUSE (not refcount): (cdr <1-element list>) returns
+       C NULL (lists terminate with NULL, not NIL_EXP), and filter/map/
+       reduce/any?/all?/sort-by guarded `if (!fn || !xs)` — rejecting the
+       NULL list as a missing parameter and erroring. Fix: require the
+       list-arg FORM (arity) but treat a NULL VALUE as the empty list.
+       Regression tests "filter inside recursion" + per-builtin
+       "(cdr 1-elem)" cases in test.alc.
 
 [TODO] Reserved-name shadowing: lookup() checks reserved_symbol BEFORE
        env, so `(= time (ffi-fn ...))` doesn't take effect at top level
@@ -121,29 +115,16 @@
        outside recursive contexts; see TODO below for the bug that
        limits use inside.
 
-[TODO] BUG: (do (fn-call) other) loses `other` in AST-eval mode when
-       fn-call is anything but prn — the second expression silently
-       doesn't run. Repro:
-         (def f (i) (if (> i 3) i (do (any? (fn (d) (is d 0)) (list 1)) (f (+ i 1)))))
-         (f 1)         ; → only iter 1, no recursion
-       Or even simpler:
-         (def g (x) x) (def f (i) (if (> i 3) i (do (g 5) (f (+ i 1)))))
-         (f 1)         ; → also stops after iter 1
-       NOT a do-only bug — same shape via (if cond (do ...) ...) or
-       (if (some-call-with-inline-closure ...) X Y) where the inline
-       closure captures the recursive fn's env. With a top-level helper
-       wrapping the call, recursion proceeds. Suspect refcount issue
-       in the AST evaluator's flow when an internal cmd creates a
-       closure that captures the calling env. Workaround: extract the
-       closure-creation into a top-level def. Documented impact: the
-       sieve benchmark uses an explicit recursive is-prime-given
-       instead of (any? (fn (d) ...) acc) for this reason.
+[DONE] BUG: (do (fn-call) other) lost `other`, breaking recursion.
+       No longer reproduces — both the (g 5) and (any? ...) repros now
+       recurse fully (verified => 4). Resolved by the closure/do-body
+       compilation work (these fns now compile to bytecode instead of
+       hitting the AST flow bug). Regression tests "do: call then tail
+       recurse" and "do: any? then tail recurse" in test.alc.
 
-[TODO] WATCH: possible (def f () ...) body-form drop when body is a
-       (case ...) over multi-form (do ...) arms, called from a tight
-       (while ... (do ... (f) ...)) loop. Symptom: f's first body form
-       (e.g. (prn "step1")) silently skipped while later forms run.
-       Could not minimize on 2026-04-26 — current test cases all pass.
-       Next sighting: capture (disasm f) output and the surrounding
-       while/do AST. Suspect related to the existing identity-lambda
-       OP_POP-after-do TODO above.
+[WATCH] possible (def f () ...) body-form drop when body is a (case ...)
+       over multi-form (do ...) arms, in a tight (while ... (do ... (f)
+       ...)) loop. Never minimized; suspected related to the identity-
+       lambda OP_POP-after-do bug, which is now fixed — so this is likely
+       resolved too. Left as a watch item; reopen with a concrete repro
+       if it resurfaces.

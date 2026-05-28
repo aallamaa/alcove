@@ -3149,6 +3149,59 @@ assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0) 42
 
 assert "try nil handler propagates error" (error? (try (/ 1 0) nil)) t
 
+assert "filter on (cdr 1-elem) = empty" (filter (fn (x) (> x 3)) (cdr (list 6))):
+  nil
+
+assert "map on (cdr 1-elem) = empty" (map (fn (x) x) (cdr (list 6))) nil
+
+assert "reduce on (cdr 1-elem) = init" (reduce (fn (a x) (+ a x)) 7 (cdr (list 6))):
+  7
+
+assert "any? on (cdr 1-elem) = nil" (any? (fn (x) (> x 3)) (cdr (list 6))) nil
+
+assert "all? on (cdr 1-elem) = t" (all? (fn (x) (> x 3)) (cdr (list 6))) t
+
+assert "sort-by on (cdr 1-elem) = empty" (sort-by (fn (x) x) (cdr (list 6))):
+  nil
+
+def rec-filt (xs):
+  if (no xs):
+    list()
+    cons (car xs) (rec-filt (filter (fn (x) (> x 3)) (cdr xs)))
+
+assert "filter inside recursion" (iso (rec-filt (list 5 1 6 2 7)) (list 5 6 7)):
+  t
+
+assert "filter missing list errors" (error? (filter (fn (x) x))) t
+
+assert "reduce missing list errors" (error? (reduce (fn (a x) a) 0)) t
+
+def hb-id (x):
+  x
+
+assert "do: value after identity call" (do (hb-id 1) 42) 42
+
+def hb-g (x):
+  x
+
+def hb-rec (i):
+  if (> i 3):
+    i
+    do:
+      hb-g 5
+      hb-rec (+ i 1)
+
+assert "do: call then tail recurse" (hb-rec 1) 4
+
+def hb-rec2 (i):
+  if (> i 3):
+    i
+    do:
+      any? (fn (d) (is d 0)) (list 1)
+      hb-rec2 (+ i 1)
+
+assert "do: any? then tail recurse" (hb-rec2 1) 4
+
 def cl-adder (n):
   fn (x):
     + x n
