@@ -3400,6 +3400,32 @@ assert "non-reserved with ok" (with (a 2 b 3) (+ a b)) 5
 
 assert "non-reserved for ok" (let s 0 (for i 1 4 (setf s (+ s i))) s) 10
 
+def dp-add (x (y 10)):
+  + x y
+
+assert "default used when omitted" (dp-add 1) 11
+
+assert "default overridden by arg" (dp-add 1 2) 3
+
+def dp-chain (a (b (+ a 1)) (c 0)):
+  list a b c
+
+assert "default refs earlier param" (dp-chain 5) (list 5 6 0)
+
+assert "defaults partially supplied" (dp-chain 5 100) (list 5 100 0)
+
+assert "all args supplied" (dp-chain 5 100 200) (list 5 100 200)
+
+assert "anon fn default" ((fn (x (y 5)) (* x y)) 3) 15
+
+assert "default string value" ((fn ((s "hi")) s)) "hi"
+
+assert "destructuring still works" ((fn ((a b)) (+ a b)) (list 3 4)) 7
+
+assert "default param fn not compiled" (compiled? (fn (x (y 1)) (+ x y))) nil
+
+assert "reserved default-name errors" (error? (fn (a (list 5)) a)) t
+
 assert "= reserved errors" (error? (setf count 5)) t
 
 assert "= reserved message" (string-contains? (error-message (setf list 5)) "reserved"):

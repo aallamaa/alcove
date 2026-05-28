@@ -3003,9 +3003,17 @@ static const char *reserved_param_name(exp_t *params) {
       if (strcmp(nm, ".") != 0 && is_reserved_name(nm))
         return nm;
     } else if (ispair(el) && istrue(el)) {
-      const char *r = reserved_param_name(el); /* nested destructuring */
-      if (r)
-        return r;
+      if (issymbol(car(el)) && cadr(el) && !issymbol(cadr(el))) {
+        /* (name default-expr) optional param: only the name binds; the
+           default is an expression, so don't scan it for reserved names. */
+        const char *nm = (const char *)exp_text(car(el));
+        if (strcmp(nm, ".") != 0 && is_reserved_name(nm))
+          return nm;
+      } else {
+        const char *r = reserved_param_name(el); /* nested destructuring */
+        if (r)
+          return r;
+      }
     }
   }
   return NULL;
@@ -9854,6 +9862,14 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
       return NULL;
     }
 
+    /* Default/optional param: (name default-expr) where the 2nd element is
+       NOT a symbol — e.g. (y 10), (y (+ a 1)). Distinguished from a
+       destructuring pattern (a b), whose elements are all symbols. The
+       default is evaluated in `env` (the frame being built), so it can
+       reference params bound earlier in this same list. */
+    int is_default = ispair(curvar->content) &&
+                     issymbol(car(curvar->content)) &&
+                     cadr(curvar->content) && !issymbol(cadr(curvar->content));
     if ((curval)) {
       if ((retvar = (evalexp ? EVAL(curval->content, env->root)
                              : refexp(curval->content)))) {
@@ -9862,7 +9878,10 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
         }
       } else
         retvar = NIL_EXP;
-      if (issymbol(curvar->content)) {
+      if (is_default) {
+        /* Arg supplied — bind the name to it; the default is unused. */
+        var2env_bind((char *)exp_text(car(curvar->content)), retvar, env);
+      } else if (issymbol(curvar->content)) {
         var2env_bind((char *)exp_text(curvar->content), retvar, env);
       } else if (ispair(curvar->content) && istrue(curvar->content)) {
         /* Destructuring param: (def f ((x y) z) body) binds the first arg
@@ -9888,10 +9907,18 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
         unrefexp(retvar);
         return NULL;
       }
+      curval = curval->next;
+    } else if (is_default) {
+      /* Arg omitted — evaluate the default in the frame being built. */
+      exp_t *dv = EVAL(cadr(curvar->content), env);
+      if (!dv)
+        dv = NIL_EXP;
+      if (iserror(dv))
+        return dv;
+      var2env_bind((char *)exp_text(car(curvar->content)), dv, env);
     } else
       return error(ERROR_MISSING_PARAMETER, e, env,
                    "Missing parameter in macro or function invoke");
-    curval = curval->next;
     curvar = curvar->next;
   }
   return NULL;

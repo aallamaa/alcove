@@ -2267,6 +2267,26 @@
 (assert "non-reserved with ok"         (with (a 2 b 3) (+ a b))               5)
 (assert "non-reserved for ok"          (let s 0 (for i 1 4 (= s (+ s i))) s)  10)
 
+;; --- default / optional parameters: (def f (x (y 10)) ...) ---
+;; A pair param whose 2nd element is NOT a symbol is a default; (a b) with
+;; symbol elements stays destructuring. Defaults eval in the new frame, so
+;; they can reference earlier params. Functions with defaults run as AST.
+(def dp-add (x (y 10)) (+ x y))
+(assert "default used when omitted"    (dp-add 1)                    11)
+(assert "default overridden by arg"    (dp-add 1 2)                  3)
+(def dp-chain (a (b (+ a 1)) (c 0)) (list a b c))
+(assert "default refs earlier param"   (dp-chain 5)                  (list 5 6 0))
+(assert "defaults partially supplied"  (dp-chain 5 100)              (list 5 100 0))
+(assert "all args supplied"            (dp-chain 5 100 200)          (list 5 100 200))
+(assert "anon fn default"              ((fn (x (y 5)) (* x y)) 3)    15)
+(assert "default string value"         ((fn ((s "hi")) s))           "hi")
+;; destructuring still works alongside defaults (2nd element is a symbol)
+(assert "destructuring still works"    ((fn ((a b)) (+ a b)) (list 3 4)) 7)
+;; a default param forces AST compilation (pair param), and a reserved
+;; name as the default's bind-name is still rejected.
+(assert "default param fn not compiled" (compiled? (fn (x (y 1)) (+ x y))) nil)
+(assert "reserved default-name errors" (error? (fn (a (list 5)) a))   t)
+
 ;; --- assigning to a reserved name is rejected too (=/setf/setq) ---
 ;; Same footgun on the write side: (= count 5) could never take effect
 ;; (lookup resolves the builtin first), so it now fails fast.
