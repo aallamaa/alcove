@@ -60,6 +60,9 @@
 
 int toeval = 1;
 dict_t *reserved_symbol = NULL;
+/* name → docstring for user (def f (args) "doc" body...) functions, queried
+   by the `doc` builtin after the builtin table misses. Lazily created. */
+dict_t *user_doc = NULL;
 exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
 
 /* Canonical singletons — pointer set at main() startup. */
@@ -320,6 +323,7 @@ lispProc lispProcList[] = {
     LISPCMD("quit", exitcmd, doc_exit),
     /* Help / discovery */
     LISPCMD("doc", doccmd, doc_doc),
+    LISPCMD("docstring", docstringcmd, doc_docstring),
     LISPCMD("help", helpcmd, doc_help),
     /* FFI */
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
@@ -3109,6 +3113,16 @@ exp_t *defcmd(exp_t *e, env_t *env) {
       CHECK_RESERVED_BIND(header, val, "as a parameter",
                           { unrefexp(e); return val; });
       if (cur) {
+        /* Docstring: (def f (args) "..." body...) — a leading string that
+           is FOLLOWED by more forms is documentation, not the body. A lone
+           string body (def f () "hi") stays the return value. Stored by
+           name for the `doc` builtin. */
+        if (isstring(car(cur)) && cdr(cur)) {
+          if (!user_doc)
+            user_doc = create_dict();
+          set_get_keyval_dict(user_doc, (char *)exp_text(name), car(cur));
+          cur = cdr(cur);
+        }
         /* Body is the remaining list; first form may be nil/literal/symbol
            as well as a pair — all are legal body expressions. */
         body = cur;
@@ -18785,12 +18799,41 @@ exp_t *doccmd(exp_t *e, env_t *env) {
       break;
     }
   }
+  if (!found && user_doc) {
+    keyval_t *kv = set_get_keyval_dict(user_doc, (char *)name, NULL);
+    if (kv && kv->val && isstring(kv->val)) {
+      printf("%s\n", exp_text(kv->val));
+      found = 1;
+    }
+  }
   if (!found)
-    printf("(no builtin named '%s'; try (help) to list them)\n", name);
+    printf("(no documentation for '%s'; try (help) to list builtins)\n", name);
   if (owned)
     unrefexp(owned);
   unrefexp(e);
   return NIL_EXP;
+}
+
+const char doc_docstring[] =
+    "(docstring name) — return a user function's docstring as a string (or "
+    "nil if none). The value-returning companion to (doc name), which prints.";
+exp_t *docstringcmd(exp_t *e, env_t *env) {
+  exp_t *arg = cadr(e);
+  exp_t *owned = NULL, *err = NULL, *ret = NIL_EXP;
+  if (arg) {
+    const char *name = doc_resolve_name(arg, env, &owned, &err);
+    if (name && user_doc) {
+      keyval_t *kv = set_get_keyval_dict(user_doc, (char *)name, NULL);
+      if (kv && kv->val && isstring(kv->val))
+        ret = refexp(kv->val);
+    }
+    if (owned)
+      unrefexp(owned);
+    if (err)
+      unrefexp(err);
+  }
+  unrefexp(e);
+  return ret;
 }
 
 exp_t *helpcmd(exp_t *e, env_t *env) {

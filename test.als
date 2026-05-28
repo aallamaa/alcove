@@ -3426,6 +3426,33 @@ assert "default param fn not compiled" (compiled? (fn (x (y 1)) (+ x y))) nil
 
 assert "reserved default-name errors" (error? (fn (a (list 5)) a)) t
 
+def ds-greet (who):
+  "Greets WHO."
+  str "hi " who
+
+assert "docstring stored" (docstring 'ds-greet) "Greets WHO."
+
+assert "docstring body intact" (ds-greet "x") "hi x"
+
+def ds-lone ():
+  "i-am-the-return"
+
+assert "lone string is body not doc" (ds-lone) "i-am-the-return"
+
+assert "lone string has no docstring" (docstring 'ds-lone) nil
+
+assert "docstring of undocumented" (docstring 'ds-lone) nil
+
+def ds-def (x (y 2)):
+  "doc + defaults"
+  + x y
+
+assert "docstring with defaults" (docstring 'ds-def) "doc + defaults"
+
+assert "doc+default body works" (ds-def 5) 7
+
+assert "docstring of unknown is nil" (docstring 'no-such-fn-xyz) nil
+
 assert "= reserved errors" (error? (setf count 5)) t
 
 assert "= reserved message" (string-contains? (error-message (setf list 5)) "reserved"):

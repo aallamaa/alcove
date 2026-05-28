@@ -2287,6 +2287,21 @@
 (assert "default param fn not compiled" (compiled? (fn (x (y 1)) (+ x y))) nil)
 (assert "reserved default-name errors" (error? (fn (a (list 5)) a))   t)
 
+;; --- docstrings: (def f (args) "doc" body...) ---
+;; A leading string FOLLOWED by more forms is documentation; a lone string
+;; body stays the return value. (docstring name) returns it (or nil).
+(def ds-greet (who) "Greets WHO." (str "hi " who))
+(assert "docstring stored"             (docstring (quote ds-greet))  "Greets WHO.")
+(assert "docstring body intact"        (ds-greet "x")                "hi x")
+(def ds-lone () "i-am-the-return")
+(assert "lone string is body not doc"  (ds-lone)                     "i-am-the-return")
+(assert "lone string has no docstring" (docstring (quote ds-lone))   nil)
+(assert "docstring of undocumented"    (docstring (quote ds-lone))   nil)
+(def ds-def (x (y 2)) "doc + defaults" (+ x y))
+(assert "docstring with defaults"      (docstring (quote ds-def))    "doc + defaults")
+(assert "doc+default body works"       (ds-def 5)                    7)
+(assert "docstring of unknown is nil"  (docstring (quote no-such-fn-xyz)) nil)
+
 ;; --- assigning to a reserved name is rejected too (=/setf/setq) ---
 ;; Same footgun on the write side: (= count 5) could never take effect
 ;; (lookup resolves the builtin first), so it now fails fast.
