@@ -1,11 +1,21 @@
-(def assert (txt a b) 
-  (pr txt) 
-  (if (iso a b) 
-      (prn "\t: \x1B[92mPassed\x1B[39m") 
-      (prn "\t: \x1B[91mFailed\x1B[39m")))
+;; Pass/fail counters so `make test` can machine-check the run: the file
+;; prints "TEST RESULT: N passed, M failed" at the end; M must be 0.
+(= _test_pass 0)
+(= _test_fail 0)
+(def assert (txt a b)
+  (pr txt)
+  (if (iso a b)
+      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))
+      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))))
+;; refute: passes when a and b are NOT equal (exercises assert's negative path).
+(def refute (txt a b)
+  (pr txt)
+  (if (iso a b)
+      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
+      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))))
 
 (assert "This will Pass" 1 1)
-(assert "This will Fail" 1 0)
+(refute "assert detects inequality" 1 0)
 (assert "addition" 3 (+ 1 2))
 (assert " (+) is 0" 0 (+ ))
 (assert "cons test " 
@@ -2084,3 +2094,9 @@
 (assert "try finally runs, returns body"    (try (+ 2 3) (fn (e) -1) 0)   5)
 (assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0)   42)
 (assert "try nil handler propagates error"  (error? (try (/ 1 0) nil))    t)
+
+;; ====================================================================
+;; Machine-readable summary — `make test` greps this line and requires
+;; "0 failed". Built with str so the digits are plain (no ANSI codes).
+;; ====================================================================
+(prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed"))

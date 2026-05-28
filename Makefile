@@ -174,8 +174,21 @@ deps:
 	@echo "  libreadline     : $(if $(filter yes,$(RL_OK)),enabled,DISABLED — install with: $(PKG_RL))"
 	@echo "  libffi          : $(if $(filter yes,$(FFI_OK)),enabled,DISABLED — install with: $(PKG_FFI))"
 
+# Quick check: debug build, run the full suite, and HARD-FAIL on any test
+# failure or crash (test.alc prints "TEST RESULT: N passed, M failed";
+# M must be 0). Then the ffi examples. For the cross-variant matrix use
+# `make test-all`.
 test: parser
-	./alcove test.alc
+	@tmp=/tmp/alcove-test.$$$$.out; \
+	./alcove --noload test.alc 2>&1 | tee "$$tmp"; \
+	res=$$(sed 's/\x1b\[[0-9;]*m//g' "$$tmp" | grep 'TEST RESULT'); \
+	rm -f "$$tmp"; \
+	echo ""; \
+	case "$$res" in \
+	  *" 0 failed") echo ">>> $$res — OK";; \
+	  "") echo ">>> test.alc produced no TEST RESULT line (crash/early exit)"; exit 1;; \
+	  *) echo ">>> $$res — FAILURES"; exit 1;; \
+	esac
 ifeq ($(FFI_OK),yes)
 	@echo
 	@echo "=== ffi examples ==="
@@ -183,6 +196,41 @@ ifeq ($(FFI_OK),yes)
 	 && echo "ffi-examples: ok" \
 	 || (echo "ffi-examples: FAILED" && exit 1)
 endif
+
+# Cross-variant matrix: build and run the full suite against every core
+# build variant (parser/speed/mono/jit/jit-mono) — this is what catches
+# JIT- and threading-specific regressions — then smoke- and crash-test the
+# alcove-script front end (alcoves). Prints one line per variant and exits
+# non-zero if ANY variant fails to build, crashes, or reports a non-zero
+# failed count. Leaves ./alcove as the default jit build.
+TEST_VARIANTS := parser speed mono jit jit-mono
+test-all:
+	@ok=1; bld=/tmp/alcove-bld.$$$$; \
+	for V in $(TEST_VARIANTS); do \
+	  printf '\n=== variant: %s ===\n' "$$V"; \
+	  if $(MAKE) -s $$V >"$$bld" 2>&1; then :; \
+	  else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; continue; fi; \
+	  res=$$(./alcove --noload test.alc 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	  case "$$res" in \
+	    *" 0 failed") echo "  OK — $$res";; \
+	    "") echo "  CRASH / early exit — no TEST RESULT line"; ok=0;; \
+	    *) echo "  FAILURES — $$res"; ok=0;; \
+	  esac; \
+	done; \
+	printf '\n=== variant: als (alcove-script front end) ===\n'; \
+	if $(MAKE) -s als >"$$bld" 2>&1; then \
+	  af=0; \
+	  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	    ./alcoves --noload examples/alcove-script/new-features.als >/dev/null 2>&1 || af=1; \
+	  done; \
+	  if [ $$af -eq 0 ]; then echo "  OK — new-features.als ran 12x, no crash"; \
+	  else echo "  CRASH in alcove-script run"; ok=0; fi; \
+	else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
+	rm -f "$$bld"; \
+	$(MAKE) -s jit >/dev/null 2>&1; \
+	printf '\n'; \
+	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
+	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi
 benchmark: speed
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.
@@ -253,4 +301,4 @@ clean:
 	rm -f alcove alcoves mpsc_test mpsc_test_tsan
 	rm -f web/alcove-core.js web/alcove-core.wasm web/alcoves-core.js web/alcoves-core.wasm
 
-.PHONY: parser speed nojit mono jit jit-mono als install uninstall deps test benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
+.PHONY: parser speed nojit mono jit jit-mono als install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
