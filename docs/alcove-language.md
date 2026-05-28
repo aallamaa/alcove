@@ -696,9 +696,12 @@ described below.
   "path"` writes them; auto-loads on startup. `forget 'sym` unbinds.
   `unpersist 'sym` clears the flag without unbinding. Round-trip
   works for fixnum, float, char, string, symbol, pair, lambda
-  (source-form), blob, and vec (including nested vec-of-vec with
-  heterogeneous element types). Dict and deque do not yet round-
-  trip — `savedb` prints `skipping <name> — type X has no dump fn`.
+  (source-form), blob, vec, hash-map, set, and deque — arbitrarily
+  nested (a vec of dicts, a dict of deques, etc.). A value whose type
+  (or any nested element, e.g. a builtin or ffi handle) has no
+  serializer is skipped with a warning — `savedb` prints
+  `skipping <name> — type X (or a nested element) has no dump fn` —
+  and the rest of the dump is written intact.
 - `(eval form)` evaluates a quoted form in the current evaluator
   environment.
 

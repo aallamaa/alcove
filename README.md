@@ -170,8 +170,10 @@ Mark any top-level binding as durable:
 
 Restart `alcove --db game.dump` and `board` is back. The savedb
 format round-trips fixnum, float, char, string, symbol, pair, blob,
-vec (including nested vec-of-vec with heterogeneous element types),
-and lambda (re-compiled on load).
+vec, hash-map, set, deque (arbitrarily nested — a vec of dicts, a dict
+of deques, etc.), and lambda (re-compiled on load). A value whose type
+(or any nested element) has no serializer is skipped with a warning,
+never corrupting the rest of the dump.
 
 ### 6. Three execution layers, picked automatically
 

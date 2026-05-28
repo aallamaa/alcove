@@ -2074,15 +2074,39 @@
 ;; deterministic: two calls produce the identical string
 (assert "str of vector is deterministic"    (iso (str (vector 9 8)) (str (vector 9 8))) t)
 
-;; --- savedb: a non-dumpable nested element must NOT lose other vars ---
-;; dump_vec returning NULL mid-record used to truncate the whole dump file
-;; (header-only stub) and silently drop every persisted variable on reload.
-;; A vector holding a dict is not round-trippable; it must be skipped, while
-;; everything else survives.
+;; --- dict / deque round-trip through savedb (EXP_DICT / EXP_LIST) ---
+(= _rt_dict (hash-map "a" 1 "b" 2 :kw 3))
+(= _rt_deque (deque 10 20 30))
+(= _rt_nested (hash-map "q" (deque 1 2) "v" (vector 5 6)))
+(persist '_rt_dict) (persist '_rt_deque) (persist '_rt_nested)
+(savedb "/tmp/alcove-dictdeque-test.db")
+(forget '_rt_dict) (forget '_rt_deque) (forget '_rt_nested)
+(loaddb "/tmp/alcove-dictdeque-test.db")
+(assert "dict roundtrip value a"            (get _rt_dict "a")        1)
+(assert "dict roundtrip keyword key"        (get _rt_dict :kw)        3)
+(assert "dict roundtrip count"              (count _rt_dict)          3)
+;; iso doesn't do deep deque equality (doc only claims pairs/strings/vectors),
+;; so compare deque contents via their deterministic str form.
+(assert "deque roundtrip contents"          (str _rt_deque)           "(10 20 30)")
+(assert "deque roundtrip count"             (count _rt_deque)         3)
+(assert "nested dict->deque roundtrip"      (str (get _rt_nested "q")) "(1 2)")
+(assert "nested dict->vec roundtrip"        (iso (get _rt_nested "v") (vector 5 6)) t)
+;; vec-of-dicts (the old catastrophic case) now persists instead of aborting
+(= _rt_vd (vector (hash-map "x" 9)))
+(persist '_rt_vd)
+(savedb "/tmp/alcove-vecdict-test.db")
+(forget '_rt_vd)
+(loaddb "/tmp/alcove-vecdict-test.db")
+(assert "vec-of-dict roundtrips"            (get (vec-ref _rt_vd 0) "x") 9)
+
+;; --- savedb: a still-non-dumpable nested element must NOT lose other vars ---
+;; A builtin (EXP_INTERNAL) has no dump fn. A vector holding one is skipped
+;; with a warning; dump_vec returning NULL mid-record used to instead
+;; truncate the whole file and drop every persisted variable on reload.
 (= _sd_good 777)
-(= _sd_vecdict (vector (hash-map "a" 1)))
-(persist '_sd_good) (persist '_sd_vecdict)
-(savedb "/tmp/alcove-dumploss-test.db")     ; skips _sd_vecdict (warns on stderr)
+(= _sd_bad (vector car))                     ; vec holding a builtin = not dumpable
+(persist '_sd_good) (persist '_sd_bad)
+(savedb "/tmp/alcove-dumploss-test.db")      ; skips _sd_bad (warns on stderr)
 (forget '_sd_good)
 (loaddb "/tmp/alcove-dumploss-test.db")
 (assert "savedb keeps good var despite bad nested" _sd_good 777)

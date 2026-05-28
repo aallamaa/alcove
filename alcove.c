@@ -68,6 +68,7 @@ exp_t *true_singleton = NULL;
 exp_t *gen_done_singleton = NULL;
 static exp_t *alc_cstr_to_key(const char *k);
 static int set_insert_value(dict_t *d, exp_t *v);
+static void alc_list_push_right(alc_list_t *l, exp_t *val); /* defined far below; used by load_deque_value */
 
 /* Global env handle for the readline tab-completion callback (which
    takes no user-data param). Set in main() before the REPL loop. */
@@ -908,13 +909,21 @@ static int is_fully_dumpable(exp_t *e, int depth) {
         return 0;
     return 1;
   }
-  if (isset(e)) {
+  if (isset(e) || isdict(e)) {
     dict_t *sd = (dict_t *)e->ptr;
     if (sd)
       for (unsigned int i = 0; i < sd->ht[0].size; i++)
         for (keyval_t *k = sd->ht[0].table[i]; k; k = k->next)
           if (!is_fully_dumpable(k->val, depth + 1))
             return 0;
+    return 1;
+  }
+  if (islist(e)) {
+    alc_list_t *l = (alc_list_t *)e->ptr;
+    if (l)
+      for (alc_listnode_t *node = l->head; node; node = node->next)
+        if (!is_fully_dumpable(node->val, depth + 1))
+          return 0;
     return 1;
   }
   if (ispair(e)) {
@@ -1718,6 +1727,98 @@ exp_t *load_set(exp_t *e, FILE *stream) {
       return NULL;
     }
     unrefexp(val);
+  }
+  return ret;
+}
+
+/* EXP_DICT serializer. Format: type tag + entry count + per entry a
+   bare string key (dump_str, no type tag — dict keys are always the
+   canonicalized C-string from alc_key_to_cstr) followed by the value
+   (__DUMP__, self-describing). Walks ht[0] only — dict_rehash is
+   one-shot into ht[0], so used == entry count. The top-level dump path
+   pre-checks dumpability recursively, so values here are dumpable; the
+   per-value __DUMPABLE__ guard is defense in depth (matches dump_set). */
+exp_t *dump_dict_value(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  dict_t *d = (dict_t *)e->ptr;
+  size_t n = d ? (size_t)d->ht[0].used : 0;
+  if (dumpsize_t(stream, &n) <= 0)
+    return NULL;
+  if (!d)
+    return e;
+  for (unsigned int i = 0; i < d->ht[0].size; i++)
+    for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
+      if (!dump_str(k->key, stream))
+        return NULL;
+      if (!k->val || !__DUMPABLE__(k->val) || !__DUMP__(k->val, stream))
+        return NULL;
+    }
+  return e;
+}
+
+exp_t *load_dict_value(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  size_t n = 0;
+  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
+    return NULL;
+  exp_t *ret = make_dict_exp();
+  dict_t *d = (dict_t *)ret->ptr;
+  for (size_t i = 0; i < n; i++) {
+    char *key = NULL;
+    if (!load_str(&key, stream)) {
+      unrefexp(ret);
+      return NULL;
+    }
+    exp_t *val = load_exp_t(stream);
+    if (!val) {
+      free(key);
+      unrefexp(ret);
+      return NULL;
+    }
+    /* set_get_keyval_dict strdup's the key and refexp's the value, so we
+       still own both: free our key copy and drop our load ref. */
+    set_get_keyval_dict(d, key, val);
+    free(key);
+    unrefexp(val);
+  }
+  return ret;
+}
+
+/* EXP_LIST (deque) serializer. Format: type tag + element count + each
+   element (__DUMP__) in head->tail order. Load rebuilds with
+   alc_list_push_right (appends to tail), preserving order. */
+exp_t *dump_deque_value(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  alc_list_t *l = (alc_list_t *)e->ptr;
+  size_t n = l ? (size_t)l->len : 0;
+  if (dumpsize_t(stream, &n) <= 0)
+    return NULL;
+  if (!l)
+    return e;
+  for (alc_listnode_t *node = l->head; node; node = node->next)
+    if (!node->val || !__DUMPABLE__(node->val) || !__DUMP__(node->val, stream))
+      return NULL;
+  return e;
+}
+
+exp_t *load_deque_value(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  size_t n = 0;
+  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
+    return NULL;
+  exp_t *ret = make_list_exp();
+  alc_list_t *l = (alc_list_t *)ret->ptr;
+  for (size_t i = 0; i < n; i++) {
+    exp_t *val = load_exp_t(stream);
+    if (!val) {
+      unrefexp(ret);
+      return NULL;
+    }
+    alc_list_push_right(l, val); /* takes ownership of val */
   }
   return ret;
 }
@@ -19454,6 +19555,14 @@ int main(int argc, char *argv[]) {
   exp_tfuncList[EXP_SET] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_SET]->load = load_set;
   exp_tfuncList[EXP_SET]->dump = dump_set;
+  /* EXP_DICT (hash-map) and EXP_LIST (deque) — round-trip through savedb
+     so persisted dicts/deques (and vecs/sets containing them) survive. */
+  exp_tfuncList[EXP_DICT] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_DICT]->load = load_dict_value;
+  exp_tfuncList[EXP_DICT]->dump = dump_dict_value;
+  exp_tfuncList[EXP_LIST] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_LIST]->load = load_deque_value;
+  exp_tfuncList[EXP_LIST]->dump = dump_deque_value;
 
   reserved_symbol = create_dict();
   /* Allocate immortal singletons before any other code references them. */
@@ -19867,6 +19976,8 @@ endcleanly:
   free(exp_tfuncList[EXP_BLOB]);
   free(exp_tfuncList[EXP_VECTOR]);
   free(exp_tfuncList[EXP_SET]);
+  free(exp_tfuncList[EXP_DICT]);
+  free(exp_tfuncList[EXP_LIST]);
   unrefexp(t);
   unrefexp(nil);
   /* Immortal singletons. We can't free() the exp_t pointer itself
