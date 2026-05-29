@@ -783,6 +783,7 @@ exp_t *reducecmd(exp_t *e, env_t *env);
 exp_t *anypcmd(exp_t *e, env_t *env);
 exp_t *allpcmd(exp_t *e, env_t *env);
 exp_t *ffifncmd(exp_t *e, env_t *env);
+exp_t *fficallbackcmd(exp_t *e, env_t *env);
 exp_t *sourcecmd(exp_t *e, env_t *env);
 exp_t *veccmd(exp_t *e, env_t *env);
 exp_t *vecrefcmd(exp_t *e, env_t *env);

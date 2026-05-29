@@ -1,0 +1,33 @@
+; FFI example: callbacks — pass an alcove function to C as a function pointer.
+;
+; Build the lib first (same one as example 04):
+;   cc -shared -fPIC -O2 -o libmylib.so 04-custom-mylib.c
+; Then:
+;   alcove 05-callbacks.alc
+;
+; (ffi-callback RET-TYPE (ARG-TYPES...) FN) wraps an alcove fn in a libffi
+; closure and returns a value you pass wherever a "ptr" argument is expected.
+; Supported types: void int long double ptr (string return is not allowed —
+; the buffer's lifetime can't outlive the call). Works identically on Linux
+; and macOS; libffi owns the executable-trampoline + ABI details.
+
+(= apply2  (ffi-fn "./libmylib.so" "mylib_apply2"  "long"   "ptr" "long" "long"))
+(= sum-map (ffi-fn "./libmylib.so" "mylib_sum_map" "long"   "ptr" "long"))
+(= apply-d (ffi-fn "./libmylib.so" "mylib_apply_d" "double" "ptr" "double"))
+
+; long(long, long): C calls our adder once.
+(= add-cb (ffi-callback "long" (list "long" "long") (fn (a b) (+ a b))))
+(prn "apply2 add 17 25      => " (apply2 add-cb 17 25))         ; 42
+
+; long(long): C calls it in a loop (i = 0..9), summing squares → 285.
+(= sq-cb (ffi-callback "long" (list "long") (fn (x) (* x x))))
+(prn "sum-map square 0..9   => " (sum-map sq-cb 10))           ; 285
+
+; double(double): C adds 1.0 to whatever our callback returns.
+(= half-cb (ffi-callback "double" (list "double") (fn (x) (/ x 2.0))))
+(prn "apply-d (half 40)+1   => " (apply-d half-cb 40.0))      ; 21.0
+
+; Closures work as callbacks too — the lambda keeps its captured free vars.
+(= scale 100)
+(= scale-cb (ffi-callback "long" (list "long") (fn (x) (* x scale))))
+(prn "sum-map (x*100) 0..4  => " (sum-map scale-cb 5))        ; 1000

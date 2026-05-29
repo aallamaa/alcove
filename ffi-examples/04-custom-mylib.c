@@ -30,3 +30,21 @@ void mylib_reset(void){ mylib_counter = 0; }
 
 /* Returns a static string — owned by the lib, alcove will copy it. */
 const char *mylib_greet(void) { return "hello from C!"; }
+
+/* ---- Callback demos: take a C function pointer the caller supplies via
+   alcove's (ffi-callback ...). These let C code call back into an alcove
+   lambda. See 05-callbacks.alc. ---- */
+
+/* Call fn(a, b) once and return the result. */
+long mylib_apply2(long (*fn)(long, long), long a, long b) { return fn(a, b); }
+
+/* Call fn(i) for i in 0..n-1 in a C loop, summing — the shape of any C API
+   that drives a user callback (qsort, map, event loops). */
+long mylib_sum_map(long (*fn)(long), long n) {
+  long s = 0;
+  for (long i = 0; i < n; i++) s += fn(i);
+  return s;
+}
+
+/* Floating-point callback: returns fn(x) + 1.0. */
+double mylib_apply_d(double (*fn)(double), double x) { return fn(x) + 1.0; }

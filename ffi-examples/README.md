@@ -1,9 +1,10 @@
 # alcove FFI
 
 alcove can call C functions from any shared library via libffi.
-The integration is one builtin: `(ffi-fn LIB FN-NAME RETURN-TYPE ARG-TYPES…)`
+The core builtin is `(ffi-fn LIB FN-NAME RETURN-TYPE ARG-TYPES…)`, which
 returns a callable; you store it like any value and call it like any
-alcove function.
+alcove function. `(ffi-callback RET (ARG-TYPES…) FN)` goes the other way —
+it hands an alcove function to C as a function pointer (see 05-callbacks.alc).
 
 > **Security:** FFI runs C code with the full privileges of the alcove
 > process. A user script can `(ffi-fn "libc.so.6" "system" "int" "string")`
@@ -61,6 +62,9 @@ install on `LD_LIBRARY_PATH` / standard search paths.
 - **03-time-syscalls.alc** — time(2), usleep(3).
 - **04-custom-mylib.c / .alc** — build your own .so and call into it
   (add, fib, strlen, stateful counter, returned C string).
+- **05-callbacks.alc** — pass an alcove function to C as a function
+  pointer via `(ffi-callback …)` (C calling back into alcove, incl. in a
+  loop, with `double` and closures).
 
 Run them all (auto-builds `libmylib.so`):
 
@@ -90,8 +94,11 @@ handle for the lifetime of the process.
 ## Limitations and gotchas
 
 - **Max 8 args per FFI fn** (compile-time constant, easy to bump).
-- **No struct-by-value, varargs, or callbacks.** Pointer args + a C
-  shim are the workaround.
+- **Callbacks are supported** via `(ffi-callback RET (ARG-TYPES…) FN)` —
+  see 05-callbacks.alc. Pass the result where a `ptr` arg is expected.
+  Callback ret/arg types: void int long double ptr (no string return).
+- **No struct-by-value or varargs yet.** Pointer args + a C shim are the
+  workaround for those.
 - **Returned `char*` is copied** into a fresh alcove string. If your
   function returns a pointer the caller is supposed to `free()`,
   alcove leaks it (no `free` builtin yet — wrap it via FFI:

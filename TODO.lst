@@ -99,9 +99,17 @@
        (alcove's builtin time wins). Either flip lookup order or
        provide an explicit "shadow" form.
 
-[TODO] FFI: support struct-by-value, varargs (printf), callbacks (qsort
-       comparator). Each needs a libffi closure setup but no fundamental
-       blocker.
+[DONE] FFI callbacks: (ffi-callback RET (ARG-TYPES...) fn) wraps an alcove
+       lambda in a libffi closure (ffi_closure_alloc/ffi_prep_closure_loc)
+       and returns a value passable where a ptr arg is expected. C can call
+       back into alcove — incl. in a loop, with double args, and closures
+       that capture free vars. Ret/arg types: void int long double ptr (no
+       string return — buffer lifetime). Portable (libffi owns the
+       executable trampoline; no arch code). Example ffi-examples/05.
+[TODO] FFI: support struct-by-value and varargs (printf). Varargs is parked
+       on the Apple-arm64 ABI wall (branch wip-ffi-varargs). Struct-by-value
+       needs an ffi_type struct-layout registry + a value representation
+       (pack/unpack to a blob) — larger; no fundamental blocker.
 
 [DONE] MEMORY LEAK: closure↔captured-env refcount cycle. A def/let closure
        created INSIDE a function body leaked, scaling with closures created

@@ -108,6 +108,7 @@ extern const char doc_time[], doc_exit[], doc_webp[], doc_sleepms[];
 exp_t *webpcmd(exp_t *e, env_t *env);
 exp_t *sleepmscmd(exp_t *e, env_t *env);
 extern const char doc_ffifn[];
+extern const char doc_fficallback[];
 extern const char doc_doc[], doc_help[];
 /* Clojure-style containers (EXP_DICT / EXP_LIST / EXP_BLOB). */
 extern const char doc_hashmap[], doc_assocbang[], doc_dissocbang[], doc_get[],

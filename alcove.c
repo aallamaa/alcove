@@ -336,6 +336,7 @@ lispProc lispProcList[] = {
     LISPCMD("help", helpcmd, doc_help),
     /* FFI */
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
+    LISPCMD("ffi-callback", fficallbackcmd, doc_fficallback),
     /* Clojure-style hash-maps (EXP_DICT) */
     LISPCMD("hash-map", hashmapcmd, doc_hashmap),
     LISPCMD("assoc!", assocbangcmd, doc_assocbang),
@@ -6482,6 +6483,11 @@ const char doc_ffifn[] =
     "(ffi-fn lib name ret arg-types ...) — bind a C function from a shared "
     "library. Types: void int long uint ulong ptr cstr double float. "
     "ALCOVE_FFI build only.";
+const char doc_fficallback[] =
+    "(ffi-callback ret (arg-types...) fn) — expose an alcove fn to C as a "
+    "function pointer (e.g. a qsort comparator). Pass the result where a ptr "
+    "arg is expected. ret/args: void int long double ptr (no string return). "
+    "ALCOVE_FFI build only.";
 #ifdef ALCOVE_FFI
 #include <dlfcn.h>
 #include <ffi.h>
@@ -6496,15 +6502,26 @@ typedef enum {
   AFFI_PTR
 } alc_ffi_tag_t;
 
+/* An EXP_FFI value is either a bound C function (FN — ffi-fn) or an alcove
+   lambda exposed to C as a function pointer (CB — ffi-callback). memalloc
+   zeroes the struct, so AFFI_KIND_FN == 0 keeps existing ffi-fn paths intact. */
+typedef enum { AFFI_KIND_FN = 0, AFFI_KIND_CB } alc_ffi_kind_t;
+
 typedef struct alc_ffi_t {
-  void *fn; /* dlsym result */
+  void *fn; /* dlsym result (FN kind) */
   ffi_cif cif;
   ffi_type *rtype;
   unsigned int nargs;
   ffi_type *atypes[ALC_FFI_MAX_ARGS];
   uint8_t ret_tag;
   uint8_t arg_tags[ALC_FFI_MAX_ARGS];
-  char *display_name; /* "lib:fn" for error messages */
+  uint8_t kind;       /* AFFI_KIND_FN | AFFI_KIND_CB */
+  char *display_name; /* "lib:fn" (FN) / "<callback>" (CB) for errors */
+  /* CB kind only — the libffi closure trampoline and the alcove fn it calls.
+     `code` is the C-callable entry point; pass it where a ptr arg is wanted. */
+  ffi_closure *closure;
+  void *code;
+  exp_t *cb_lambda; /* owned ref so the lambda outlives any C-side calls */
 } alc_ffi_t;
 
 /* Map a type-name string to (tag, ffi_type*). Returns 0 on success, -1
@@ -6722,10 +6739,198 @@ cleanup:
   return ret;
 }
 
+/* libffi closure trampoline: C code calls this with the native args; we
+   marshal them to alcove values, invoke the bound lambda, and marshal the
+   result back into `ret`. user_data is the owning alc_ffi_t (kind CB).
+   Registered via ffi_prep_closure_loc in fficallbackcmd. Portable across
+   every libffi target — no arch-specific code here (libffi owns the
+   executable-memory + ABI details, including macOS hardened-runtime). */
+static void alc_ffi_closure_dispatch(ffi_cif *cif, void *ret, void **args,
+                                     void *user) {
+  (void)cif;
+  alc_ffi_t *cb = (alc_ffi_t *)user;
+  exp_t *argv[ALC_FFI_MAX_ARGS];
+  unsigned int i;
+  for (i = 0; i < cb->nargs; i++) {
+    switch (cb->arg_tags[i]) {
+    case AFFI_INT:
+      argv[i] = MAKE_FIX((int64_t)*(int32_t *)args[i]);
+      break;
+    case AFFI_LONG:
+      argv[i] = MAKE_FIX(*(int64_t *)args[i]);
+      break;
+    case AFFI_DOUBLE:
+      argv[i] = make_floatf(*(double *)args[i]);
+      break;
+    case AFFI_STRING: {
+      const char *s = *(const char **)args[i];
+      argv[i] = s ? make_string((char *)s, (int)strnlen(s, 1u << 24)) : NIL_EXP;
+      break;
+    }
+    case AFFI_PTR:
+      argv[i] = MAKE_FIX((int64_t)(uintptr_t)*(void **)args[i]);
+      break;
+    default:
+      argv[i] = NIL_EXP;
+      break;
+    }
+  }
+  /* Re-enter the evaluator from C. vm_invoke_values borrows fn and consumes
+     the argv refs. Use the global env as the resolution root — the lambda
+     carries its own captured env (next->meta) for its free vars. Save and
+     restore the tail-position flag around the nested invocation. */
+  int saved_tail = in_tail_position;
+  in_tail_position = 0;
+  exp_t *r = vm_invoke_values(cb->cb_lambda, (int)cb->nargs, argv, g_global_env);
+  in_tail_position = saved_tail;
+
+  /* Integral/pointer returns go through ffi_arg (the closure return slot is
+     register-width); double has its own slot. String return is rejected at
+     bind time (the buffer's lifetime can't outlive this call). */
+  switch (cb->ret_tag) {
+  case AFFI_VOID:
+    break;
+  case AFFI_INT:
+  case AFFI_LONG:
+    *(ffi_arg *)ret =
+        (ffi_arg)(r ? (isfloat(r) ? (int64_t)r->f
+                                  : (isnumber(r) || ischar(r) ? FIX_VAL(r) : 0))
+                    : 0);
+    break;
+  case AFFI_DOUBLE:
+    *(double *)ret = (r && (isfloat(r) || isnumber(r))) ? TO_DOUBLE(r) : 0.0;
+    break;
+  case AFFI_PTR:
+    *(ffi_arg *)ret =
+        (ffi_arg)(uintptr_t)((r && isnumber(r)) ? (void *)(uintptr_t)FIX_VAL(r)
+                                                 : NULL);
+    break;
+  default:
+    *(ffi_arg *)ret = 0;
+    break;
+  }
+  if (r)
+    unrefexp(r);
+}
+
+/* (ffi-callback ret-type (arg-types...) fn) — wrap an alcove lambda in a
+   libffi closure so it can be passed to C as a function pointer. */
+exp_t *fficallbackcmd(exp_t *e, env_t *env) {
+  exp_t *cur = e->next;
+  exp_t *rtype = NULL, *atlist = NULL, *fn = NULL, *err = NULL, *ret = NULL;
+  if (!cur || !cur->next || !cur->next->next) {
+    err = error(ERROR_MISSING_PARAMETER, e, env,
+                "(ffi-callback ret-type (arg-types...) fn)");
+    goto cleanup;
+  }
+  rtype = EVAL(cur->content, env);
+  if (iserror(rtype)) { err = rtype; rtype = NULL; goto cleanup; }
+  cur = cur->next;
+  atlist = EVAL(cur->content, env);
+  if (iserror(atlist)) { err = atlist; atlist = NULL; goto cleanup; }
+  cur = cur->next;
+  fn = EVAL(cur->content, env);
+  if (iserror(fn)) { err = fn; fn = NULL; goto cleanup; }
+
+  if (!isstring(rtype)) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: ret-type must be a string");
+    goto cleanup;
+  }
+  if (!islambda(fn)) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: third arg must be a function");
+    goto cleanup;
+  }
+  if (atlist && atlist != NIL_EXP && !ispair(atlist)) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env,
+                "ffi-callback: arg-types must be a list of type strings");
+    goto cleanup;
+  }
+  alc_ffi_tag_t rt;
+  ffi_type *rt_ffi;
+  if (alc_ffi_typeof((char *)exp_text(rtype), &rt, &rt_ffi) < 0) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: unknown return type %s",
+                (char *)exp_text(rtype));
+    goto cleanup;
+  }
+  if (rt == AFFI_STRING) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env,
+                "ffi-callback: string return not supported (buffer lifetime)");
+    goto cleanup;
+  }
+  alc_ffi_t *f = (alc_ffi_t *)memalloc(1, sizeof(alc_ffi_t));
+  f->kind = AFFI_KIND_CB;
+  f->ret_tag = rt;
+  f->rtype = rt_ffi;
+  int n = 0;
+  for (exp_t *p = atlist; p && ispair(p); p = p->next) {
+    if (n >= ALC_FFI_MAX_ARGS) {
+      free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env,
+                  "ffi-callback: too many arg types (max %d)", ALC_FFI_MAX_ARGS);
+      goto cleanup;
+    }
+    exp_t *tn = p->content;
+    alc_ffi_tag_t at;
+    ffi_type *at_ffi;
+    if (!isstring(tn)) {
+      free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: arg-type must be a string");
+      goto cleanup;
+    }
+    if (alc_ffi_typeof((char *)exp_text(tn), &at, &at_ffi) < 0) {
+      free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: unknown arg type %s",
+                  (char *)exp_text(tn));
+      goto cleanup;
+    }
+    f->arg_tags[n] = at;
+    f->atypes[n] = at_ffi;
+    n++;
+  }
+  f->nargs = (unsigned int)n;
+  if (ffi_prep_cif(&f->cif, FFI_DEFAULT_ABI, f->nargs, f->rtype, f->atypes) !=
+      FFI_OK) {
+    free(f);
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: ffi_prep_cif failed");
+    goto cleanup;
+  }
+  /* ffi_closure_alloc returns executable memory + writes the callable entry
+     into f->code; ffi_prep_closure_loc binds the cif + dispatcher to it. */
+  f->closure = ffi_closure_alloc(sizeof(ffi_closure), &f->code);
+  if (!f->closure) {
+    free(f);
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: closure alloc failed");
+    goto cleanup;
+  }
+  if (ffi_prep_closure_loc(f->closure, &f->cif, alc_ffi_closure_dispatch, f,
+                           f->code) != FFI_OK) {
+    ffi_closure_free(f->closure);
+    free(f);
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-callback: ffi_prep_closure_loc failed");
+    goto cleanup;
+  }
+  f->cb_lambda = refexp(fn);
+  f->display_name = strdup("<callback>");
+  INIT_TYPED(ret, EXP_FFI, f);
+
+cleanup:
+  unrefexp(rtype);
+  unrefexp(atlist);
+  unrefexp(fn);
+  unrefexp(e);
+  return err ? err : ret;
+}
+
 void alc_ffi_free(void *ptr) {
   alc_ffi_t *f = (alc_ffi_t *)ptr;
   if (!f)
     return;
+  if (f->kind == AFFI_KIND_CB) {
+    if (f->closure)
+      ffi_closure_free(f->closure);
+    if (f->cb_lambda)
+      unrefexp(f->cb_lambda);
+  }
   if (f->display_name)
     free(f->display_name);
   free(f);
@@ -6773,7 +6978,10 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
       ok = isstring(a);
       break;
     case AFFI_PTR:
-      ok = isnumber(a) || a == NIL_EXP;
+      /* A raw address (fixnum), nil (NULL), or an ffi-callback value whose
+         executable code pointer we pass as the function pointer. */
+      ok = isnumber(a) || a == NIL_EXP ||
+           (isffi(a) && ((alc_ffi_t *)a->ptr)->kind == AFFI_KIND_CB);
       break;
     default:
       ok = 1;
@@ -6815,7 +7023,12 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
       avalues[i] = &slots[i].s;
       break;
     case AFFI_PTR:
-      slots[i].p = (a == NIL_EXP) ? NULL : (void *)(uintptr_t)FIX_VAL(a);
+      if (a == NIL_EXP)
+        slots[i].p = NULL;
+      else if (isffi(a))
+        slots[i].p = ((alc_ffi_t *)a->ptr)->code; /* callback fn pointer */
+      else
+        slots[i].p = (void *)(uintptr_t)FIX_VAL(a);
       avalues[i] = &slots[i].p;
       break;
     default:
@@ -6872,6 +7085,12 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   return error(ERROR_ILLEGAL_VALUE, NULL, env,
                "ffi-fn: alcove built without libffi (install libffi-dev "
                "and rebuild).");
+}
+exp_t *fficallbackcmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "ffi-callback: alcove built without libffi (install "
+               "libffi-dev and rebuild).");
 }
 void alc_ffi_free(void *ptr) {
   (void)ptr;

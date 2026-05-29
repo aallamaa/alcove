@@ -14,6 +14,8 @@ run: libmylib.so
 	@../alcove --noload 03-time-syscalls.alc
 	@echo "=== 04-custom-mylib.alc ==="
 	@../alcove --noload 04-custom-mylib.alc
+	@echo "=== 05-callbacks.alc ==="
+	@../alcove --noload 05-callbacks.alc
 
 clean:
 	rm -f libmylib.so
