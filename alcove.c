@@ -1518,7 +1518,11 @@ int alcove_arg_int(exp_t *e, env_t *env, int n) {
   exp_t *val = EVAL(cur->content, env);
   if (!val)
     return 0;
-  int rv = (int)FIX_VAL(val);
+  /* Accept a fixnum or a float (truncate). Never call FIX_VAL on a float —
+     that would shift its heap pointer and return garbage (this is what broke
+     web Mario's (gfx-music-play-file -1) when (- 1) momentarily evaluated to
+     the float -1.0). Non-numbers yield 0. */
+  int rv = isnumber(val) ? (int)FIX_VAL(val) : (isfloat(val) ? (int)val->f : 0);
   unrefexp(val);
   return rv;
 }
