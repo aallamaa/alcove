@@ -566,6 +566,80 @@ if (ffi?):
       'caught
     nil
 
+setf hm (hamt "a" 1 "b" 2 "c" 3)
+
+assert "hamt count" (hamt-count hm) 3
+
+assert "hamt get present" (hamt-get hm "b") 2
+
+assert "hamt get absent nil" (hamt-get hm "z") nil
+
+assert "hamt get default" (hamt-get hm "z" 99) 99
+
+assert "hamt contains? yes" (hamt-contains? hm "a") t
+
+refute "hamt contains? no" (hamt-contains? hm "z") t
+
+assert "hamt? yes" (hamt? hm) t
+
+refute "hamt? no" (hamt? 5) t
+
+assert "hamt? empty map" (hamt? (hamt)) t
+
+assert "hamt empty count" (hamt-count (hamt)) 0
+
+setf hm2 (hamt-assoc hm "d" 4)
+
+assert "hamt assoc new count" (hamt-count hm2) 4
+
+assert "hamt orig count unchanged" (hamt-count hm) 3
+
+assert "hamt assoc get new" (hamt-get hm2 "d") 4
+
+assert "hamt orig lacks new key" (hamt-get hm "d") nil
+
+assert "hamt overwrite value" (hamt-get (hamt-assoc hm "a" 100) "a") 100
+
+assert "hamt orig after overwrite" (hamt-get hm "a") 1
+
+setf hm3 (hamt-dissoc hm "b")
+
+assert "hamt dissoc count" (hamt-count hm3) 2
+
+assert "hamt dissoc removed" (hamt-get hm3 "b") nil
+
+assert "hamt orig after dissoc" (hamt-get hm "b") 2
+
+assert "hamt dissoc absent noop" (hamt-count (hamt-dissoc hm "zzz")) 3
+
+setf hmix (hamt 1 'one 'two 2 "s" 3)
+
+assert "hamt int key" (hamt-get hmix 1) 'one
+
+assert "hamt symbol key" (hamt-get hmix 'two) 2
+
+assert "hamt string key" (hamt-get hmix "s") 3
+
+setf hbig (hamt)
+
+setf _hi 0
+
+while (< _hi 300):
+  do:
+    setf hbig (hamt-assoc hbig _hi (* _hi _hi))
+    setf _hi (+ _hi 1)
+
+assert "hamt big count" (hamt-count hbig) 300
+
+assert "hamt big lookup mid" (hamt-get hbig 250) 62500
+
+assert "hamt big lookup absent" (hamt-get hbig 999) nil
+
+assert "hamt keys length" (length (hamt-keys hm)) 3
+
+assert "hamt-get non-hamt errors" (try (hamt-get 5 "x") (fn (e) 'caught)):
+  'caught
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

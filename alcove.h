@@ -34,6 +34,7 @@ enum {
   EXP_DICT, /* hash-map; ptr → dict_t* (alcove's own dict) */
   EXP_LIST, /* doubly-linked deque; ptr → alc_list_t (O(1) head & tail) */
   EXP_SET,  /* hash set; ptr → dict_t* with canonical keys and t values */
+  EXP_HAMT, /* persistent/immutable map; ptr → hamt_t* (structural sharing) */
 
   /* should always be the last */
   EXP_MAXSIZE
@@ -149,6 +150,7 @@ enum {
 #define isdict(e) (is_ptr(e) && (e)->type == EXP_DICT)
 #define islist(e) (is_ptr(e) && (e)->type == EXP_LIST)
 #define isset(e) (is_ptr(e) && (e)->type == EXP_SET)
+#define ishamt(e) (is_ptr(e) && (e)->type == EXP_HAMT)
 #define isvector(e) (is_ptr(e) && (e)->type == EXP_VECTOR)
 /* Self-evaluating: tagged immediates, scalar atoms (≤ EXP_VECTOR), and
    the appended Clojure-style containers (blob/dict/list). The container
@@ -157,7 +159,7 @@ enum {
 #define isatom(e)                                                              \
   (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
                                ((e)->type >= EXP_BLOB &&                       \
-                                (e)->type <= EXP_SET))))
+                                (e)->type <= EXP_HAMT))))
 
 /* Helper for fast-path refcounting */
 #define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton || (e) == gen_done_singleton)
@@ -789,6 +791,15 @@ exp_t *fficallbackcmd(exp_t *e, env_t *env);
 exp_t *ffistructcmd(exp_t *e, env_t *env);
 exp_t *ffipackcmd(exp_t *e, env_t *env);
 exp_t *ffiunpackcmd(exp_t *e, env_t *env);
+/* Persistent/immutable map (HAMT) */
+exp_t *hamtcmd(exp_t *e, env_t *env);
+exp_t *hamtassoccmd(exp_t *e, env_t *env);
+exp_t *hamtgetcmd(exp_t *e, env_t *env);
+exp_t *hamtdissoccmd(exp_t *e, env_t *env);
+exp_t *hamtcountcmd(exp_t *e, env_t *env);
+exp_t *hamtcontainspcmd(exp_t *e, env_t *env);
+exp_t *hamtkeyscmd(exp_t *e, env_t *env);
+exp_t *hamtpcmd(exp_t *e, env_t *env);
 exp_t *sourcecmd(exp_t *e, env_t *env);
 exp_t *veccmd(exp_t *e, env_t *env);
 exp_t *vecrefcmd(exp_t *e, env_t *env);
@@ -840,6 +851,30 @@ typedef struct {
   alc_listnode_t *head, *tail;
   long len;
 } alc_list_t;
+
+/* EXP_HAMT — persistent/immutable map (Hash Array Mapped Trie). Nodes are
+   reference-counted and shared across map versions (structural sharing); the
+   trie is an acyclic DAG so refcounting reclaims it without cycles. A node
+   with bitmap==0 is a hash-collision bucket; otherwise each present slot
+   holds a key/value entry (slot.key != NULL) or a child node. */
+typedef struct hamt_node hamt_node;
+typedef struct {
+  struct exp_t *key; /* entry key; NULL ⇒ this slot holds a child node */
+  union {
+    struct exp_t *val;
+    hamt_node *child;
+  };
+} hamt_slot;
+struct hamt_node {
+  int nref;
+  uint32_t bitmap; /* present slots; 0 ⇒ collision bucket */
+  int n;           /* slot count */
+  hamt_slot slots[];
+};
+typedef struct {
+  hamt_node *root; /* owned; NULL ⇒ empty map */
+  int64_t count;
+} hamt_t;
 
 exp_t *make_blob(const char *bytes, size_t len);
 exp_t *make_vector(int64_t n, exp_t *fill);

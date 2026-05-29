@@ -369,6 +369,15 @@ lispProc lispProcList[] = {
     LISPCMD("set-intersection", setintersectioncmd, doc_setintersection),
     LISPCMD("set-difference", setdifferencecmd, doc_setdifference),
     LISPCMD("set->list", setlistcmd, doc_setlist),
+    /* Persistent/immutable map (EXP_HAMT) */
+    LISPCMD("hamt", hamtcmd, doc_hamt),
+    LISPCMD("hamt-assoc", hamtassoccmd, doc_hamtassoc),
+    LISPCMD("hamt-get", hamtgetcmd, doc_hamtget),
+    LISPCMD("hamt-dissoc", hamtdissoccmd, doc_hamtdissoc),
+    LISPCMD("hamt-count", hamtcountcmd, doc_hamtcount),
+    LISPCMD("hamt-contains?", hamtcontainspcmd, doc_hamtcontainsp),
+    LISPCMD("hamt-keys", hamtkeyscmd, doc_hamtkeys),
+    LISPCMD("hamt?", hamtpcmd, doc_hamtp),
     /* Binary-safe blobs (EXP_BLOB) */
     LISPCMD("make-blob", makeblobcmd, doc_makeblob),
     LISPCMD("blob-len", bloblencmd, doc_bloblen),
@@ -651,6 +660,9 @@ static inline int unrefexp(exp_t *e) {
       free(e->ptr); /* alc_blob_t is a single flex-array alloc */
     } else if ((e->type == EXP_DICT || e->type == EXP_SET) && e->ptr) {
       destroy_dict((dict_t *)e->ptr); /* unrefs every value internally */
+    } else if (e->type == EXP_HAMT && e->ptr) {
+      extern void hamt_free(void *ptr); /* defined alongside the HAMT ops */
+      hamt_free(e->ptr);                /* unrefs the shared trie (refcounted) */
     } else if (e->type == EXP_LIST && e->ptr) {
       alc_list_t *l = (alc_list_t *)e->ptr;
       alc_listnode_t *n = l->head;
@@ -1753,6 +1765,9 @@ void print_node(exp_t *node) {
       }
     }
     printf("}");
+  } else if (node->type == EXP_HAMT) {
+    void hamt_print(exp_t * m); /* defined with the HAMT ops */
+    hamt_print(node);
   } else if (node->type == EXP_LIST) {
     alc_list_t *l = (alc_list_t *)node->ptr;
     printf("(");
@@ -3136,6 +3151,8 @@ inline int istrue(exp_t *e) {
     dict_t *d = (dict_t *)e->ptr;
     return (d && d->ht[0].used > 0);
   }
+  if (e->type == EXP_HAMT)
+    return (e->ptr && ((hamt_t *)e->ptr)->count > 0);
   /* Function-like values are always truthy. A lambda / builtin / macro /
      ffi callable is a real value, not "empty" — without this, (if some-fn
      ...) and every istrue-based check (e.g. try's handler dispatch) wrongly
@@ -20520,6 +20537,458 @@ exp_t *setlistcmd(exp_t *e, env_t *env) {
       for (keyval_t *k = d->ht[0].table[i]; k; k = k->next)
         list_append_owned(&ret, &tail, set_value_clone(k->val));
   CLEAN_RETURN_1(s, ret);
+}
+
+/* ---------- persistent map (HAMT) / EXP_HAMT ops ----------
+   A Hash Array Mapped Trie: an immutable map where assoc/dissoc return a NEW
+   map that shares unchanged subtrees with the old one (structural sharing),
+   so updates are O(log32 n) time AND space. 5 hash bits per level (32-way
+   fan-out), bitmap-compressed nodes. Nodes are reference-counted C structs
+   (not exp_t) shared across map versions; the trie is an acyclic DAG so
+   refcounting reclaims it precisely (no cycles). A node with bitmap==0 is a
+   hash-collision bucket (linear list of entries that share a full 32-bit
+   hash); otherwise each present slot holds either a key/value entry
+   (slot.key != NULL) or a child node (slot.key == NULL). */
+#define HAMT_BITS 5
+#define HAMT_MASK 31u
+/* hamt_node / hamt_slot / hamt_t are declared in alcove.h (so istrue and
+   print_node, which precede this section, can see the layout). */
+
+/* Hash consistent with isequal: equal values must hash equal. Mirrors the
+   types isequal compares by value (number/char/float/string/symbol/blob);
+   anything else falls back to pointer identity (matching isequal's default). */
+static uint32_t hamt_hashkey(exp_t *k) {
+  if (isnumber(k)) { int64_t v = FIX_VAL(k); return bernstein_hash((unsigned char *)&v, sizeof v); }
+  if (ischar(k))   { uint32_t v = CHAR_VAL(k); return bernstein_hash((unsigned char *)&v, sizeof v); }
+  if (isfloat(k))  { double v = k->f; return bernstein_hash((unsigned char *)&v, sizeof v); }
+  if (isstring(k) || issymbol(k)) { const char *s = exp_text(k); return bernstein_hash((unsigned char *)s, strlen(s)); }
+  if (isblob(k))   { return bernstein_hash((unsigned char *)blob_bytes(k), blob_len(k)); }
+  return bernstein_hash((unsigned char *)&k, sizeof(void *)); /* identity hash */
+}
+
+static hamt_node *hamt_node_ref(hamt_node *n) { if (n) n->nref++; return n; }
+static void hamt_node_unref(hamt_node *n) {
+  if (!n || --n->nref > 0)
+    return;
+  for (int i = 0; i < n->n; i++) {
+    if (n->bitmap == 0 || n->slots[i].key) { /* entry */
+      unrefexp(n->slots[i].key);
+      unrefexp(n->slots[i].val);
+    } else {
+      hamt_node_unref(n->slots[i].child);
+    }
+  }
+  free(n);
+}
+
+static hamt_node *hamt_node_alloc(int n, uint32_t bitmap) {
+  hamt_node *node =
+      (hamt_node *)memalloc(1, sizeof(hamt_node) + (size_t)n * sizeof(hamt_slot));
+  node->nref = 1;
+  node->bitmap = bitmap;
+  node->n = n;
+  return node;
+}
+
+/* Deep copy: new node owning fresh refs to every key/val/child. */
+static hamt_node *hamt_node_copy(hamt_node *node) {
+  hamt_node *c = hamt_node_alloc(node->n, node->bitmap);
+  for (int i = 0; i < node->n; i++) {
+    c->slots[i] = node->slots[i];
+    if (node->bitmap == 0 || node->slots[i].key) {
+      refexp(c->slots[i].key);
+      refexp(c->slots[i].val);
+    } else {
+      hamt_node_ref(c->slots[i].child);
+    }
+  }
+  return c;
+}
+
+/* Build a node holding two distinct entries that collide at `shift`. */
+static hamt_node *hamt_merge(exp_t *k1, exp_t *v1, uint32_t h1, exp_t *k2,
+                             exp_t *v2, uint32_t h2, int shift) {
+  if (shift >= 32) { /* out of hash bits → collision bucket */
+    hamt_node *b = hamt_node_alloc(2, 0);
+    b->slots[0].key = refexp(k1); b->slots[0].val = refexp(v1);
+    b->slots[1].key = refexp(k2); b->slots[1].val = refexp(v2);
+    return b;
+  }
+  uint32_t i1 = (h1 >> shift) & HAMT_MASK, i2 = (h2 >> shift) & HAMT_MASK;
+  if (i1 == i2) {
+    hamt_node *child = hamt_merge(k1, v1, h1, k2, v2, h2, shift + HAMT_BITS);
+    hamt_node *node = hamt_node_alloc(1, 1u << i1);
+    node->slots[0].key = NULL;
+    node->slots[0].child = child;
+    return node;
+  }
+  hamt_node *node = hamt_node_alloc(2, (1u << i1) | (1u << i2));
+  int p1 = (i1 < i2) ? 0 : 1, p2 = 1 - p1;
+  node->slots[p1].key = refexp(k1); node->slots[p1].val = refexp(v1);
+  node->slots[p2].key = refexp(k2); node->slots[p2].val = refexp(v2);
+  return node;
+}
+
+/* Lookup: returns the borrowed value for key, or NULL if absent. */
+static exp_t *hamt_node_get(hamt_node *node, exp_t *key, uint32_t hash, int shift) {
+  if (!node)
+    return NULL;
+  if (node->bitmap == 0) { /* collision bucket */
+    for (int i = 0; i < node->n; i++)
+      if (isequal(node->slots[i].key, key))
+        return node->slots[i].val;
+    return NULL;
+  }
+  uint32_t bit = 1u << ((hash >> shift) & HAMT_MASK);
+  if (!(node->bitmap & bit))
+    return NULL;
+  int pos = __builtin_popcount(node->bitmap & (bit - 1));
+  if (node->slots[pos].key)
+    return isequal(node->slots[pos].key, key) ? node->slots[pos].val : NULL;
+  return hamt_node_get(node->slots[pos].child, key, hash, shift + HAMT_BITS);
+}
+
+/* assoc — returns an OWNED node (always a fresh path; the result owns one
+   ref). *added set to 1 when key was not already present. node may be NULL
+   (empty), producing a single-entry node. */
+static hamt_node *hamt_node_assoc(hamt_node *node, exp_t *key, exp_t *val,
+                                  uint32_t hash, int shift, int *added) {
+  if (!node) {
+    uint32_t idx = (hash >> shift) & HAMT_MASK;
+    hamt_node *nn = hamt_node_alloc(1, 1u << idx);
+    nn->slots[0].key = refexp(key);
+    nn->slots[0].val = refexp(val);
+    *added = 1;
+    return nn;
+  }
+  if (node->bitmap == 0) { /* collision bucket */
+    for (int i = 0; i < node->n; i++)
+      if (isequal(node->slots[i].key, key)) {
+        hamt_node *c = hamt_node_copy(node);
+        unrefexp(c->slots[i].val);
+        c->slots[i].val = refexp(val);
+        *added = 0;
+        return c;
+      }
+    hamt_node *c = hamt_node_alloc(node->n + 1, 0);
+    for (int i = 0; i < node->n; i++) {
+      c->slots[i].key = refexp(node->slots[i].key);
+      c->slots[i].val = refexp(node->slots[i].val);
+    }
+    c->slots[node->n].key = refexp(key);
+    c->slots[node->n].val = refexp(val);
+    *added = 1;
+    return c;
+  }
+  uint32_t bit = 1u << ((hash >> shift) & HAMT_MASK);
+  int pos = __builtin_popcount(node->bitmap & (bit - 1));
+  if (!(node->bitmap & bit)) { /* empty slot → insert entry, keeping order */
+    hamt_node *c = hamt_node_alloc(node->n + 1, node->bitmap | bit);
+    for (int i = 0; i < pos; i++) {
+      c->slots[i] = node->slots[i];
+      if (node->slots[i].key) { refexp(c->slots[i].key); refexp(c->slots[i].val); }
+      else hamt_node_ref(c->slots[i].child);
+    }
+    c->slots[pos].key = refexp(key);
+    c->slots[pos].val = refexp(val);
+    for (int i = pos; i < node->n; i++) {
+      c->slots[i + 1] = node->slots[i];
+      if (node->slots[i].key) { refexp(c->slots[i + 1].key); refexp(c->slots[i + 1].val); }
+      else hamt_node_ref(c->slots[i + 1].child);
+    }
+    *added = 1;
+    return c;
+  }
+  if (node->slots[pos].key) { /* present entry */
+    if (isequal(node->slots[pos].key, key)) { /* replace value */
+      hamt_node *c = hamt_node_copy(node);
+      unrefexp(c->slots[pos].val);
+      c->slots[pos].val = refexp(val);
+      *added = 0;
+      return c;
+    }
+    /* different key, same slot → split into a child node */
+    exp_t *ek = node->slots[pos].key, *ev = node->slots[pos].val;
+    hamt_node *child = hamt_merge(ek, ev, hamt_hashkey(ek), key, val, hash,
+                                  shift + HAMT_BITS);
+    hamt_node *c = hamt_node_copy(node);
+    unrefexp(c->slots[pos].key);
+    unrefexp(c->slots[pos].val);
+    c->slots[pos].key = NULL;
+    c->slots[pos].child = child;
+    *added = 1;
+    return c;
+  }
+  /* present child → recurse */
+  hamt_node *newchild =
+      hamt_node_assoc(node->slots[pos].child, key, val, hash, shift + HAMT_BITS,
+                      added);
+  hamt_node *c = hamt_node_copy(node);
+  hamt_node_unref(c->slots[pos].child);
+  c->slots[pos].child = newchild;
+  return c;
+}
+
+/* dissoc — returns an OWNED node (or NULL if the node becomes empty). When
+   the key is absent, returns hamt_node_ref(node) and leaves *removed 0. */
+static hamt_node *hamt_node_dissoc(hamt_node *node, exp_t *key, uint32_t hash,
+                                   int shift, int *removed) {
+  if (!node) { *removed = 0; return NULL; }
+  if (node->bitmap == 0) { /* collision bucket */
+    for (int i = 0; i < node->n; i++)
+      if (isequal(node->slots[i].key, key)) {
+        *removed = 1;
+        if (node->n == 1)
+          return NULL;
+        hamt_node *c = hamt_node_alloc(node->n - 1, 0);
+        int j = 0;
+        for (int k = 0; k < node->n; k++)
+          if (k != i) {
+            c->slots[j].key = refexp(node->slots[k].key);
+            c->slots[j].val = refexp(node->slots[k].val);
+            j++;
+          }
+        return c;
+      }
+    *removed = 0;
+    return hamt_node_ref(node);
+  }
+  uint32_t bit = 1u << ((hash >> shift) & HAMT_MASK);
+  if (!(node->bitmap & bit)) { *removed = 0; return hamt_node_ref(node); }
+  int pos = __builtin_popcount(node->bitmap & (bit - 1));
+  if (node->slots[pos].key) { /* entry */
+    if (!isequal(node->slots[pos].key, key)) { *removed = 0; return hamt_node_ref(node); }
+    *removed = 1;
+    if (node->n == 1)
+      return NULL;
+    hamt_node *c = hamt_node_alloc(node->n - 1, node->bitmap & ~bit);
+    int j = 0;
+    for (int i = 0; i < node->n; i++)
+      if (i != pos) {
+        c->slots[j] = node->slots[i];
+        if (node->slots[i].key) { refexp(c->slots[j].key); refexp(c->slots[j].val); }
+        else hamt_node_ref(c->slots[j].child);
+        j++;
+      }
+    return c;
+  }
+  /* child → recurse */
+  hamt_node *newchild =
+      hamt_node_dissoc(node->slots[pos].child, key, hash, shift + HAMT_BITS,
+                       removed);
+  if (!*removed) { hamt_node_unref(newchild); return hamt_node_ref(node); }
+  if (newchild == NULL) { /* child emptied → drop the slot */
+    if (node->n == 1)
+      return NULL;
+    hamt_node *c = hamt_node_alloc(node->n - 1, node->bitmap & ~bit);
+    int j = 0;
+    for (int i = 0; i < node->n; i++)
+      if (i != pos) {
+        c->slots[j] = node->slots[i];
+        if (node->slots[i].key) { refexp(c->slots[j].key); refexp(c->slots[j].val); }
+        else hamt_node_ref(c->slots[j].child);
+        j++;
+      }
+    return c;
+  }
+  hamt_node *c = hamt_node_copy(node);
+  hamt_node_unref(c->slots[pos].child);
+  c->slots[pos].child = newchild;
+  return c;
+}
+
+/* Visit every entry (depth-first). Returns 0 to stop early. */
+typedef int (*hamt_visit_fn)(exp_t *key, exp_t *val, void *ctx);
+static int hamt_node_foreach(hamt_node *node, hamt_visit_fn fn, void *ctx) {
+  if (!node)
+    return 1;
+  for (int i = 0; i < node->n; i++) {
+    if (node->bitmap == 0 || node->slots[i].key) {
+      if (!fn(node->slots[i].key, node->slots[i].val, ctx))
+        return 0;
+    } else if (!hamt_node_foreach(node->slots[i].child, fn, ctx)) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* Wrap a (root,count) into a fresh EXP_HAMT value. Takes ownership of root. */
+static exp_t *hamt_wrap(hamt_node *root, int64_t count) {
+  hamt_t *h = (hamt_t *)memalloc(1, sizeof(hamt_t));
+  h->root = root;
+  h->count = count;
+  MAKE_TYPED(m, EXP_HAMT, h);
+  return m;
+}
+
+void hamt_free(void *ptr) {
+  hamt_t *h = (hamt_t *)ptr;
+  if (!h)
+    return;
+  hamt_node_unref(h->root);
+  free(h);
+}
+
+static int hamt_print_one(exp_t *k, exp_t *v, void *ctx) {
+  int *first = (int *)ctx;
+  if (!*first)
+    printf(", ");
+  *first = 0;
+  print_node(k);
+  printf(" ");
+  print_node(v);
+  return 1;
+}
+/* Rendered like a map literal: {k v, k v}. Called from print_node. */
+void hamt_print(exp_t *m) {
+  hamt_t *h = (hamt_t *)m->ptr;
+  int first = 1;
+  printf("{");
+  if (h)
+    hamt_node_foreach(h->root, hamt_print_one, &first);
+  printf("}");
+}
+
+const char doc_hamt[] =
+    "(hamt k v ...) — build a persistent (immutable) map from key/value "
+    "pairs. assoc/dissoc return new maps sharing structure with the old.";
+exp_t *hamtcmd(exp_t *e, env_t *env) {
+  /* Evaluate alternating key/value args into a fresh persistent map. */
+  hamt_node *root = NULL;
+  int64_t count = 0;
+  exp_t *cur = e->next;
+  exp_t *err = NULL;
+  while (cur) {
+    if (!cur->next) {
+      err = error(ERROR_MISSING_PARAMETER, e, env,
+                  "hamt: odd number of args (need key/value pairs)");
+      break;
+    }
+    exp_t *k = EVAL(cur->content, env);
+    if (iserror(k)) { err = k; break; }
+    exp_t *v = EVAL(cur->next->content, env);
+    if (iserror(v)) { unrefexp(k); err = v; break; }
+    int added = 0;
+    hamt_node *nr = hamt_node_assoc(root, k, v, hamt_hashkey(k), 0, &added);
+    hamt_node_unref(root);
+    root = nr;
+    count += added;
+    unrefexp(k);
+    unrefexp(v);
+    cur = cur->next->next;
+  }
+  unrefexp(e);
+  if (err) {
+    hamt_node_unref(root);
+    return err;
+  }
+  return hamt_wrap(root, count);
+}
+
+const char doc_hamtassoc[] =
+    "(hamt-assoc m k v) — new map with k→v added/updated; m is unchanged.";
+exp_t *hamtassoccmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(m, k, v);
+  if (!ishamt(m))
+    CLEAN_RETURN_3(m, k, v,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "hamt-assoc: not a hamt"));
+  hamt_t *h = (hamt_t *)m->ptr;
+  int added = 0;
+  hamt_node *nr = hamt_node_assoc(h->root, k, v, hamt_hashkey(k), 0, &added);
+  exp_t *ret = hamt_wrap(nr, h->count + added);
+  CLEAN_RETURN_3(m, k, v, ret);
+}
+
+const char doc_hamtget[] =
+    "(hamt-get m k [default]) — value for k, or default (nil) if absent.";
+exp_t *hamtgetcmd(exp_t *e, env_t *env) {
+  exp_t *m = NULL, *k = NULL, *dflt = NULL, *err = NULL, *ret = NULL;
+  if (!e->next || !e->next->next) {
+    err = error(ERROR_MISSING_PARAMETER, e, env, "(hamt-get m k [default])");
+    goto done;
+  }
+  m = EVAL(e->next->content, env);
+  if (iserror(m)) { err = m; m = NULL; goto done; }
+  k = EVAL(e->next->next->content, env);
+  if (iserror(k)) { err = k; k = NULL; goto done; }
+  if (e->next->next->next) {
+    dflt = EVAL(e->next->next->next->content, env);
+    if (iserror(dflt)) { err = dflt; dflt = NULL; goto done; }
+  }
+  if (!ishamt(m)) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "hamt-get: not a hamt");
+    goto done;
+  }
+  {
+    hamt_t *h = (hamt_t *)m->ptr;
+    exp_t *v = hamt_node_get(h->root, k, hamt_hashkey(k), 0);
+    ret = v ? refexp(v) : refexp(dflt ? dflt : NIL_EXP);
+  }
+done:
+  unrefexp(m);
+  unrefexp(k);
+  unrefexp(dflt);
+  unrefexp(e);
+  return err ? err : ret;
+}
+
+const char doc_hamtdissoc[] =
+    "(hamt-dissoc m k) — new map without k; m is unchanged.";
+exp_t *hamtdissoccmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(m, k);
+  if (!ishamt(m))
+    CLEAN_RETURN_2(m, k,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "hamt-dissoc: not a hamt"));
+  hamt_t *h = (hamt_t *)m->ptr;
+  int removed = 0;
+  hamt_node *nr = hamt_node_dissoc(h->root, k, hamt_hashkey(k), 0, &removed);
+  exp_t *ret = hamt_wrap(nr, h->count - removed);
+  CLEAN_RETURN_2(m, k, ret);
+}
+
+const char doc_hamtcount[] = "(hamt-count m) — number of entries in the map.";
+exp_t *hamtcountcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(m);
+  if (!ishamt(m))
+    CLEAN_RETURN_1(m, error(ERROR_ILLEGAL_VALUE, e, env, "hamt-count: not a hamt"));
+  int64_t c = ((hamt_t *)m->ptr)->count;
+  CLEAN_RETURN_1(m, MAKE_FIX(c));
+}
+
+const char doc_hamtcontainsp[] = "(hamt-contains? m k) — t if k is present, else nil.";
+exp_t *hamtcontainspcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(m, k);
+  if (!ishamt(m))
+    CLEAN_RETURN_2(m, k,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "hamt-contains?: not a hamt"));
+  hamt_t *h = (hamt_t *)m->ptr;
+  exp_t *v = hamt_node_get(h->root, k, hamt_hashkey(k), 0);
+  CLEAN_RETURN_2(m, k, refexp(v ? TRUE_EXP : NIL_EXP));
+}
+
+static int hamt_collect_keys(exp_t *key, exp_t *val, void *ctx) {
+  (void)val;
+  exp_t **acc = (exp_t **)ctx; /* acc[0]=head, acc[1]=tail */
+  exp_t *node = make_node(refexp(key));
+  if (!acc[0]) { acc[0] = node; acc[1] = node; }
+  else { acc[1]->next = node; acc[1] = node; }
+  return 1;
+}
+const char doc_hamtkeys[] = "(hamt-keys m) — list of the map's keys (unordered).";
+exp_t *hamtkeyscmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(m);
+  if (!ishamt(m))
+    CLEAN_RETURN_1(m, error(ERROR_ILLEGAL_VALUE, e, env, "hamt-keys: not a hamt"));
+  exp_t *acc[2] = {NULL, NULL};
+  hamt_node_foreach(((hamt_t *)m->ptr)->root, hamt_collect_keys, acc);
+  CLEAN_RETURN_1(m, acc[0] ? acc[0] : NIL_EXP);
+}
+
+const char doc_hamtp[] = "(hamt? x) — t if x is a persistent map, else nil.";
+exp_t *hamtpcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(x);
+  CLEAN_RETURN_1(x, refexp(ishamt(x) ? TRUE_EXP : NIL_EXP));
 }
 
 /* ---------- deque / EXP_LIST ops ---------- */
