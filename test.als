@@ -668,6 +668,54 @@ assert "hamt-merge a unchanged" (hamt-get hma "y") 2
 
 assert "hamt-merge empty rhs" (hamt-count (hamt-merge hma (hamt))) 2
 
+assert "call/cc no escape" (call/cc (fn (k) (+ 1 2))) 3
+
+assert "call/cc escape value" (call/cc (fn (k) (k 42) 999)) 42
+
+assert "call/cc escape skips" (call/cc (fn (k) (+ 1 (k 100) 2))) 100
+
+assert "call/cc escape 0" (call/cc (fn (k) (k 0))) 0
+
+assert "call/cc escape nil" (call/cc (fn (k) (k nil))) nil
+
+assert "call/cc escape in tail" (call/cc (fn (k) (k 7))) 7
+
+assert "call/cc loop early-exit" (call/cc (fn (return) (do (setf _cci 0) (while (< _cci 100) (do (if (> (* _cci _cci) 50) (return _cci)) (setf _cci (+ _cci 1)))) -1))):
+  8
+
+def _ccprod (xs f):
+  if (no xs):
+    1
+    if (is (car xs) 0):
+      f 0
+      * (car xs) (_ccprod (cdr xs) f)
+
+assert "call/cc escape recursion" (call/cc (fn (k) (_ccprod '(1 2 0 4 5) k))):
+  0
+
+assert "call/cc product no escape" (call/cc (fn (k) (_ccprod '(1 2 3 4) k))):
+  24
+
+assert "call/cc escape from map" (call/cc (fn (k) (map (fn (x) (k x)) '(5 6 7)))):
+  5
+
+assert "call/cc closure escape" (call/cc (fn (k) (_ccprod '(1 0 9) (fn (v) (k 77))))):
+  77
+
+assert "call/cc nested outer" (call/cc (fn (k) (+ 1 (call/cc (fn (j) (k 99)))))):
+  99
+
+assert "call/cc bad arg errors" (try (call/cc 5) (fn (e) 'caught)) 'caught
+
+def _mkadd (n):
+  fn (x):
+    + x n
+
+def _applyit (g):
+  g 5
+
+assert "closure tail-call captures" (_applyit (_mkadd 100)) 105
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

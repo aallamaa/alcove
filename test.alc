@@ -468,6 +468,40 @@
 (assert "hamt-merge a unchanged"   (hamt-get hma "y")                    2)
 (assert "hamt-merge empty rhs"     (hamt-count (hamt-merge hma (hamt)))  2)
 
+; 20g. Escape continuations (call/cc) — one-shot, upward (escape-only).
+(assert "call/cc no escape"        (call/cc (fn (k) (+ 1 2)))            3)
+(assert "call/cc escape value"     (call/cc (fn (k) (k 42) 999))         42)
+(assert "call/cc escape skips"     (call/cc (fn (k) (+ 1 (k 100) 2)))    100)
+(assert "call/cc escape 0"         (call/cc (fn (k) (k 0)))              0)
+(assert "call/cc escape nil"       (call/cc (fn (k) (k nil)))            nil)
+(assert "call/cc escape in tail"   (call/cc (fn (k) (k 7)))              7)
+; early return from a while loop (exercises while error/escape propagation)
+(assert "call/cc loop early-exit"
+  (call/cc (fn (return)
+    (do (= _cci 0)
+        (while (< _cci 100)
+          (do (if (> (* _cci _cci) 50) (return _cci)) (= _cci (+ _cci 1)))) -1)))
+  8)
+; escape out of recursion
+(def _ccprod (xs f)
+  (if (no xs) 1 (if (is (car xs) 0) (f 0) (* (car xs) (_ccprod (cdr xs) f)))))
+(assert "call/cc escape recursion" (call/cc (fn (k) (_ccprod '(1 2 0 4 5) k)))  0)
+(assert "call/cc product no escape"(call/cc (fn (k) (_ccprod '(1 2 3 4) k)))    24)
+; escape from inside a HOF (map)
+(assert "call/cc escape from map"  (call/cc (fn (k) (map (fn (x) (k x)) '(5 6 7))))  5)
+; escape via a closure that captures k and is invoked deep in
+(assert "call/cc closure escape"
+  (call/cc (fn (k) (_ccprod '(1 0 9) (fn (v) (k 77)))))  77)
+; double call/cc: invoking the OUTER k from inside the inner one
+(assert "call/cc nested outer"
+  (call/cc (fn (k) (+ 1 (call/cc (fn (j) (k 99))))))  99)
+(assert "call/cc bad arg errors"   (try (call/cc 5) (fn (e) 'caught))    'caught)
+; regression: a compiled fn tail-calling a CLOSURE must resolve the closure's
+; captured free vars from its captured env (not the caller's frame).
+(def _mkadd (n) (fn (x) (+ x n)))
+(def _applyit (g) (g 5))
+(assert "closure tail-call captures" (_applyit (_mkadd 100))             105)
+
 ; 21. Stdlib additions: math, seq, predicates, HOFs.
 (assert "mod 17 5"                   (mod 17 5)                    2)
 (assert "abs -42"                    (abs -42)                     42)

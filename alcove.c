@@ -270,6 +270,7 @@ lispProc lispProcList[] = {
     LISPCMD("error?", errorpcmd, doc_errorp),
     LISPCMD("error-message", errormessagecmd, doc_errormessage),
     LISPCMD("try", trycmd, doc_try),
+    LISPCMD("call/cc", callcccmd, doc_callcc),
     /* Predicates */
     LISPCMD("number?", numberpcmd, doc_numberp),
     LISPCMD("string?", stringpcmd, doc_stringp),
@@ -1771,6 +1772,8 @@ void print_node(exp_t *node) {
   } else if (node->type == EXP_HAMT) {
     void hamt_print(exp_t * m); /* defined with the HAMT ops */
     hamt_print(node);
+  } else if (node->type == EXP_CONT) {
+    printf("\x1B[92m#<continuation>\x1B[39m");
   } else if (node->type == EXP_LIST) {
     alc_list_t *l = (alc_list_t *)node->ptr;
     printf("(");
@@ -3162,7 +3165,7 @@ inline int istrue(exp_t *e) {
      treat callables as false. */
   if (e->type == EXP_LAMBDA || e->type == EXP_INTERNAL ||
       e->type == EXP_MACRO || e->type == EXO_MACROINTERNAL ||
-      e->type == EXP_FFI)
+      e->type == EXP_FFI || e->type == EXP_CONT)
     return 1;
   if isatom (e) {
     if isstring (e)
@@ -6493,6 +6496,7 @@ exp_t *loadcmd(exp_t *e, env_t *env) {
 /* Forward decls needed by HOFs and alc_apply helpers below. */
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env);
 static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env);
+static exp_t *make_cont_escape(int64_t id, exp_t *payload, env_t *env);
 static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env);
 static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env);
 
@@ -8364,6 +8368,11 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     in_tail_position = was_tail;
     return ret;
   }
+  if (iscont(fn)) { /* escape continuation invoked via apply/map/etc. */
+    exp_t *payload = nargs > 0 ? refexp(argv[0]) : refexp(NIL_EXP);
+    for (int i = 0; i < nargs; i++) unrefexp(argv[i]);
+    return make_cont_escape((int64_t)(intptr_t)fn->meta, payload, env);
+  }
   for (int i = 0; i < nargs; i++) unrefexp(argv[i]);
   return error(ERROR_ILLEGAL_VALUE, fn, env, "not a callable");
 }
@@ -8834,6 +8843,77 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   return ret ? ret : NIL_EXP;
 }
 
+/* ---------- escape continuations (call/cc) ----------
+   alcove's evaluator is a recursive C tree-walker (plus a bytecode VM), so a
+   FULL re-entrant continuation — resumable more than once, or downward —
+   would require capturing the C stack, which isn't portable here. We provide
+   the widely-useful subset: ONE-SHOT, UPWARD (escape) continuations.
+   (call/cc f) calls f with a continuation k; invoking (k v) abandons the
+   in-progress work and makes the call/cc form return v. k is valid only
+   during that call/cc's dynamic extent; invoking it afterward is an error.
+
+   Mechanism: invoking k yields an EXP_ERROR-tagged escape token (errnum
+   ERROR_CONT_ESCAPE) carrying the continuation id (in `meta`) and the payload
+   (in `next`). It propagates up exactly like an error — every iserror
+   short-circuit in evaluate/invoke/vm_run/builtins carries it — until the
+   matching call/cc frame catches it. No setjmp; rides the existing
+   error-propagation plumbing (same model as try/catch). */
+static int64_t g_cont_id = 0;
+
+static exp_t *make_cont(int64_t id) {
+  exp_t *k = make_nil(); /* content == next == NULL */
+  k->type = EXP_CONT;
+  k->meta = (struct keyval_t *)(intptr_t)id; /* id lives in the unused meta */
+  return k;
+}
+/* Build an escape token for continuation `id` carrying `payload`. Consumes
+   the caller's `payload` ref (error() takes its own via the id parameter). */
+static exp_t *make_cont_escape(int64_t id, exp_t *payload, env_t *env) {
+  exp_t *tok = error(ERROR_CONT_ESCAPE, payload, env,
+                     "call/cc continuation invoked outside its extent");
+  tok->meta = (struct keyval_t *)(intptr_t)id;
+  unrefexp(payload);
+  return tok;
+}
+#define is_cont_escape(e) (iserror(e) && (e)->flags == ERROR_CONT_ESCAPE)
+
+/* Invoke continuation `cont` with `arg` (consumed) → an escape token. */
+static exp_t *apply_cont(exp_t *cont, exp_t *arg, env_t *env) {
+  return make_cont_escape((int64_t)(intptr_t)cont->meta, arg, env);
+}
+/* Evaluate a (k arg) call form (arg optional, defaults nil). */
+static exp_t *eval_cont_call(exp_t *cont, exp_t *e, env_t *env) {
+  exp_t *arg = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  if (iserror(arg)) /* arg eval failed, or itself escaped — propagate */
+    return arg;
+  return apply_cont(cont, arg, env);
+}
+
+const char doc_callcc[] =
+    "(call/cc f) — call f with an escape continuation k; invoking (k v) makes "
+    "this call/cc return v, abandoning the work in between. ESCAPE-ONLY: k is "
+    "valid only during call/cc's dynamic extent (one-shot, upward) — calling "
+    "it later errors. Not a full re-entrant continuation.";
+exp_t *callcccmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(f);
+  if (!(islambda(f) || isinternal(f)))
+    CLEAN_RETURN_1(f, error(ERROR_ILLEGAL_VALUE, e, env,
+                            "call/cc: argument must be a function"));
+  int64_t id = ++g_cont_id;
+  exp_t *k = make_cont(id);
+  exp_t *r = alc_apply1(f, k, env); /* alc_apply1 takes its own ref to k */
+  exp_t *ret;
+  if (r && is_cont_escape(r) && (int64_t)(intptr_t)r->meta == id) {
+    ret = refexp(r->next ? r->next : NIL_EXP); /* payload = the escape value */
+    unrefexp(r);
+  } else {
+    ret = r ? r : NIL_EXP; /* normal return, or an escape/error bound for an
+                              OUTER frame — propagate unchanged */
+  }
+  unrefexp(k);
+  CLEAN_RETURN_1(f, ret);
+}
+
 /* ---- End new stdlib additions ---------------------------------------- */
 
 const char doc_odd[] = "(odd x) — t if integer x is odd, nil otherwise.";
@@ -8967,6 +9047,11 @@ exp_t *whilecmd(exp_t *e, env_t *env) {
       unrefexp(ret);
       ret = EVAL(car(cur), env);
     } while ((cur = cdr(cur)) && !(ret && iserror(ret)));
+    /* A body error / call-cc escape must propagate, not be discarded by the
+       next condition eval — otherwise the loop swallows it (and a persistent
+       error like a fired escape spins forever). */
+    if (ret && iserror(ret))
+      break;
   }
   if (ret && iserror(ret)) {
     unrefexp(e);
@@ -18443,9 +18528,12 @@ l_tail_call: {
   int base = sp - n;
   exp_t *new_fn = stack[base - 1];
 
-  /* String-as-callable: dispatch via vm_invoke_values, which has the
-     indexing arm. Same fallback shape as the !FLAG_COMPILED branch. */
-  if (isstring(new_fn)) {
+  /* String-as-callable and escape continuations: dispatch via
+     vm_invoke_values (it has the string-index arm and the EXP_CONT escape
+     arm). A continuation invoked in tail position must yield its escape
+     token, not be rejected as "not a lambda". Same fallback shape as the
+     !FLAG_COMPILED branch. */
+  if (isstring(new_fn) || iscont(new_fn)) {
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
@@ -18465,8 +18553,18 @@ l_tail_call: {
     RUNTIME_ERR("OP_TAIL_CALL: not a lambda");
   }
 
-  if (!(new_fn->flags & FLAG_COMPILED)) {
-    /* Non-compiled target — one C-stack frame, then return. */
+  if (!(new_fn->flags & FLAG_COMPILED) ||
+      (new_fn->next && new_fn->next->meta &&
+       (env_t *)new_fn->next->meta != g_global_env)) {
+    /* Non-compiled target, OR a real CLOSURE that captured a NON-global env:
+       the in-place TCO reuse below keeps the CURRENT env and only rebinds its
+       slots, so such a closure's free variables — which live in its captured
+       (local) env, not this frame's chain — would resolve wrong. Dispatch
+       through vm_invoke_values instead (one C-stack frame), which parents the
+       new env to the captured env. Top-level defs capture the GLOBAL env,
+       which the current frame's root chain already reaches, so they keep
+       full TCO; self-recursion keeps TCO via OP_TAIL_SELF. Only cross-function
+       tail calls into local closures pay this one-frame hop. */
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
@@ -18837,6 +18935,14 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
                    "string-index: %lld out of range", (long long)i64);
     }
     return make_char(cp);
+  }
+  if (iscont(fn)) {
+    /* (k v) reached from compiled code: produce the escape token. */
+    exp_t *payload = nargs > 0 ? refexp(argv[0]) : refexp(NIL_EXP);
+    int i;
+    for (i = 0; i < nargs; i++)
+      unrefexp(argv[i]);
+    return make_cont_escape((int64_t)(intptr_t)fn->meta, payload, env);
   }
   if (!islambda(fn)) {
     int i;
@@ -19268,6 +19374,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                closures, pinning the closure↔frame cycle alive. */
             unrefexp(tmpexp2);
             goto finisht;
+          } else if (iscont(tmpexp2)) {
+            /* (k v) — invoking an escape continuation: yields an escape token
+               that propagates up to the matching call/cc frame. */
+            ret = eval_cont_call(tmpexp2, e, env);
+            unrefexp(tmpexp2);
+            goto finish; /* eval_cont_call did not consume e */
           } else if ismacro (tmpexp2) {
             ret = invokemacro(e, tmpexp2, env);
             /* Same ownership as the lambda branch above: invokemacro borrows
@@ -19347,6 +19459,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         }
         ret = invoke(e, tmpexp, env);
         goto finisht;
+      } else if (iscont(tmpexp)) {
+        ret = eval_cont_call(tmpexp, e, env); /* tmpexp borrowed from e */
+        goto finish;
       } else if (ismacro(tmpexp)) {
         ret = invokemacro(e, tmpexp, env);
         goto finisht;

@@ -44,7 +44,20 @@
 [TODO] add support for documentation in function header
 [TODO] add support for default parameters
 [TODO] add support for polymorphism in lambda
-[TODO] add support for continuation call/cc
+[DONE] call/cc — ESCAPE continuations (one-shot, upward). (call/cc f) calls f
+       with k; (k v) makes call/cc return v, abandoning the work between. Full
+       re-entrant continuations aren't feasible in a recursive C tree-walker +
+       bytecode VM without a CPS/stack-copy rewrite, so this is the escape-only
+       subset (like Scheme call/ec); k is valid only in call/cc's dynamic
+       extent. Mechanism: (k v) yields an EXP_ERROR-tagged escape token
+       (ERROR_CONT_ESCAPE, id in meta, payload in next) that propagates up the
+       existing error plumbing to the matching call/cc frame. No setjmp.
+       Implementing it surfaced + fixed TWO pre-existing bugs: (1) whilecmd
+       swallowed body errors/escapes (re-eval'd the condition over them →
+       (while true (/1 0)) would spin); (2) OP_TAIL_CALL's in-place TCO reused
+       the caller's env for a CLOSURE tail-callee, resolving the closure's
+       captured free vars wrong — now real (non-global) closures route through
+       vm_invoke_values (top-level defs keep TCO). Tests "20g" in test.alc.
 [TODO] add support for http://wiki.msgpack.org/display/MSGPACK/Format+specification
 [TODO] check added value of http://www.canonware.com/jemalloc/ instead of malloc
 [TODO] see https://www.hackerschool.com/blog/13-list-comprehensions-in-eight-lines-of-clojure

@@ -35,6 +35,8 @@ enum {
   EXP_LIST, /* doubly-linked deque; ptr → alc_list_t (O(1) head & tail) */
   EXP_SET,  /* hash set; ptr → dict_t* with canonical keys and t values */
   EXP_HAMT, /* persistent/immutable map; ptr → hamt_t* (structural sharing) */
+  EXP_CONT, /* escape continuation (call/cc); id in `meta`. Callable, NOT a
+               container — kept after the isatom container range below. */
 
   /* should always be the last */
   EXP_MAXSIZE
@@ -131,6 +133,9 @@ enum {
   ERROR_UNBOUND_VARIABLE,
   ERROR_NUMBER_EXPECTED,
   ERROR_INDEX_OUT_OF_RANGE,
+  ERROR_CONT_ESCAPE, /* not a real error: a call/cc escape token in flight,
+                        carrying its continuation id in `meta` and the payload
+                        value in `next`; caught by the matching call/cc frame */
 } exp_error_t;
 
 /* Type predicates — all tag-aware. is_ptr() guards every heap deref so a
@@ -151,6 +156,7 @@ enum {
 #define islist(e) (is_ptr(e) && (e)->type == EXP_LIST)
 #define isset(e) (is_ptr(e) && (e)->type == EXP_SET)
 #define ishamt(e) (is_ptr(e) && (e)->type == EXP_HAMT)
+#define iscont(e) (is_ptr(e) && (e)->type == EXP_CONT)
 #define isvector(e) (is_ptr(e) && (e)->type == EXP_VECTOR)
 /* Self-evaluating: tagged immediates, scalar atoms (≤ EXP_VECTOR), and
    the appended Clojure-style containers (blob/dict/list). The container
@@ -803,6 +809,8 @@ exp_t *hamtvalscmd(exp_t *e, env_t *env);
 exp_t *hamtlistcmd(exp_t *e, env_t *env);
 exp_t *hamtmergecmd(exp_t *e, env_t *env);
 exp_t *hamtpcmd(exp_t *e, env_t *env);
+/* Escape continuations */
+exp_t *callcccmd(exp_t *e, env_t *env);
 exp_t *sourcecmd(exp_t *e, env_t *env);
 exp_t *veccmd(exp_t *e, env_t *env);
 exp_t *vecrefcmd(exp_t *e, env_t *env);
