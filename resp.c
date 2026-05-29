@@ -2460,6 +2460,110 @@ static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
     resp_stop = 1;
 }
 
+#if defined(ALCOVE_READLINE)
+/* ---- interactive (tty) -R REPL via readline's callback interface ------
+   The default REPL blocks in readline(); in -R that would freeze the RESP
+   server at an idle prompt. readline's callback API instead consumes input
+   incrementally from the select() loop, so the server stays responsive
+   between keystrokes while the user gets editing, history, and (in the als
+   build) auto-indent + continuation prompts. State is file-static because
+   the line callback takes no user-data pointer; -R is single-threaded. */
+static env_t *resp_rl_env = NULL;
+static char *resp_rl_acc = NULL;
+static size_t resp_rl_len = 0, resp_rl_cap = 0;
+static int resp_rl_idx = 0;
+static void resp_repl_on_line(char *line); /* mutually recursive w/ install */
+
+static void resp_rl_install(int continuation) {
+  if (continuation) {
+    rl_callback_handler_install("    ... ", resp_repl_on_line);
+  } else {
+    char prompt[64];
+    snprintf(prompt, sizeof prompt,
+             "\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", resp_rl_idx + 1);
+    rl_callback_handler_install(prompt, resp_repl_on_line);
+  }
+}
+
+/* readline calls this with a completed input line (NULL on Ctrl-D). Append
+   it to the block; once a complete unit is buffered, run it through the
+   shared transpile+eval+print core and re-prompt, else continue the block. */
+static void resp_repl_on_line(char *line) {
+  if (!line) { /* EOF / Ctrl-D */
+    resp_stop = 1;
+    rl_callback_handler_remove();
+    return;
+  }
+  const char *eff = line; /* text to append to the block */
+#ifdef ALCOVE_ALS
+  /* Readline's callback mode can't hold a pre-inserted auto-indent across
+     keystrokes, so a block body typed at the continuation prompt arrives
+     flush-left and would fall OUTSIDE its block. Normalize it: for a
+     non-blank line inside an open block, strip leading whitespace and
+     re-indent to the block's expected level (als_next_indent of what's
+     accumulated). Handles consecutive deepening blocks; a mid-entry dedent
+     can't be expressed — submit and start a new statement instead. */
+  char *reindented = NULL;
+  /* Only auto-indent a FLUSH-LEFT, non-blank continuation line (the user
+     typed no leading whitespace). If they did type leading spaces, respect
+     them — that's how a dedent is expressed, since callback mode shows no
+     live indent to backspace from. */
+  if (resp_rl_len > 0 && line[0] != ' ' && line[0] != '\t' && line[0] != '\0' &&
+      line[0] != '\r') {
+    int ind = als_next_indent(resp_rl_acc);
+    if (ind > 0) {
+      reindented = (char *)malloc((size_t)ind + strlen(line) + 1);
+      memset(reindented, ' ', (size_t)ind);
+      strcpy(reindented + (size_t)ind, line);
+      eff = reindented;
+    }
+  }
+#endif
+  size_t llen = strlen(eff);
+  if (resp_rl_len + llen + 2 > resp_rl_cap) {
+    resp_rl_cap = (resp_rl_len + llen + 2) * 2;
+    resp_rl_acc = realloc(resp_rl_acc, resp_rl_cap);
+  }
+  memcpy(resp_rl_acc + resp_rl_len, eff, llen);
+  resp_rl_len += llen;
+  resp_rl_acc[resp_rl_len++] = '\n';
+  resp_rl_acc[resp_rl_len] = 0;
+  free(line);
+#ifdef ALCOVE_ALS
+  free(reindented);
+#endif
+
+#ifdef ALCOVE_ALS
+  size_t consumed = resp_repl_consume_als(resp_rl_acc, resp_rl_len);
+#else
+  size_t consumed = resp_repl_consume_form(resp_rl_acc, resp_rl_len);
+#endif
+  if (!consumed) {
+    resp_rl_install(1); /* block still open — continuation prompt + indent */
+    return;
+  }
+  /* Trim trailing whitespace for a clean history entry, then record it. */
+  size_t hl = consumed;
+  while (hl && (resp_rl_acc[hl - 1] == '\n' || resp_rl_acc[hl - 1] == ' ' ||
+                resp_rl_acc[hl - 1] == '\t' || resp_rl_acc[hl - 1] == '\r'))
+    hl--;
+  if (hl) {
+    char saved = resp_rl_acc[hl];
+    resp_rl_acc[hl] = 0;
+    add_history(resp_rl_acc);
+    resp_rl_acc[hl] = saved;
+  }
+  resp_rl_idx++;
+  if (repl_eval_text(resp_rl_acc, consumed, resp_rl_env, resp_rl_idx))
+    resp_stop = 1;
+  memmove(resp_rl_acc, resp_rl_acc + consumed, resp_rl_len - consumed);
+  resp_rl_len -= consumed;
+  resp_rl_acc[resp_rl_len] = 0;
+  if (!resp_stop)
+    resp_rl_install(0); /* fresh In[n] prompt */
+}
+#endif /* ALCOVE_READLINE */
+
 int resp_repl_serve(int port, env_t *global) {
   int srv = resp_listen(port);
   if (srv < 0) return 1;
@@ -2473,19 +2577,41 @@ int resp_repl_serve(int port, env_t *global) {
          "(redis-type k), (redis-count), (redis-flush) from the REPL.)\n");
   fflush(stdout);
 
-  /* Stdin accumulation buffer for line-buffered form reading. */
+  /* Stdin accumulation buffer for the non-readline (piped / no-tty) path. */
   size_t acc_cap = 4096;
   size_t acc_len = 0;
   char *acc = malloc(acc_cap);
   int idx = 0;
   int prompted = 0;
 
+  /* On an interactive terminal, drive readline in callback mode from the
+     select loop: full line editing, history, and (als) auto-indent, while
+     the server stays responsive between keystrokes. Piped / redirected
+     stdin keeps the simple raw-accumulation path below. */
+  int use_rl = 0;
+#if defined(ALCOVE_READLINE)
+  if (isatty(0)) {
+    use_rl = 1;
+    resp_rl_env = global;
+    resp_rl_cap = 4096;
+    resp_rl_acc = malloc(resp_rl_cap);
+    resp_rl_len = 0;
+    resp_rl_idx = 0;
+    g_global_env = global; /* completer walks env bindings */
+    rl_attempted_completion_function = alcove_rl_completer;
+#ifdef ALCOVE_ALS
+    rl_bind_key('\t', als_smart_tab);
+#endif
+    resp_rl_install(0); /* draws the first In[1] prompt */
+  }
+#endif
+
   epoch_register();
   while (!resp_stop) {
     epoch_tick();
     resp_kv_maybe_sweep();
     resp_bgsave_poll();
-    if (!prompted) {
+    if (!use_rl && !prompted) {
       printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx + 1);
       fflush(stdout);
       prompted = 1;
@@ -2503,37 +2629,49 @@ int resp_repl_serve(int port, env_t *global) {
 
     /* --- stdin: REPL --- */
     if (FD_ISSET(0, &rfds)) {
-      if (acc_len + 4096 > acc_cap) {
-        acc_cap *= 2;
-        acc = realloc(acc, acc_cap);
-      }
-      ssize_t got = read(0, acc + acc_len, acc_cap - acc_len - 1);
-      if (got == 0) { resp_stop = 1; break; } /* EOF on stdin */
-      else if (got < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) { resp_stop = 1; break; }
-      } else {
-        acc_len += (size_t)got;
-        acc[acc_len] = 0;
-        /* Drain every complete form currently buffered. */
-        for (;;) {
-#ifdef ALCOVE_ALS
-          size_t consumed = resp_repl_consume_als(acc, acc_len);
-#else
-          size_t consumed = resp_repl_consume_form(acc, acc_len);
+#if defined(ALCOVE_READLINE)
+      if (use_rl) {
+        rl_callback_read_char(); /* edits in-place; fires on_line on Enter */
+      } else
 #endif
-          if (!consumed) break;
-          idx++;
-          resp_repl_eval_print(global, acc, consumed, idx);
-          memmove(acc, acc + consumed, acc_len - consumed);
-          acc_len -= consumed;
-          acc[acc_len] = 0;
-          prompted = 0;
+      {
+        if (acc_len + 4096 > acc_cap) {
+          acc_cap *= 2;
+          acc = realloc(acc, acc_cap);
         }
-        if (!prompted) {
-          /* Reprompt for the next form. */
-          printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx + 1);
-          fflush(stdout);
-          prompted = 1;
+        ssize_t got = read(0, acc + acc_len, acc_cap - acc_len - 1);
+        if (got == 0) {
+          resp_stop = 1;
+          break;
+        } /* EOF on stdin */
+        else if (got < 0) {
+          if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            resp_stop = 1;
+            break;
+          }
+        } else {
+          acc_len += (size_t)got;
+          acc[acc_len] = 0;
+          /* Drain every complete form currently buffered. */
+          for (;;) {
+#ifdef ALCOVE_ALS
+            size_t consumed = resp_repl_consume_als(acc, acc_len);
+#else
+            size_t consumed = resp_repl_consume_form(acc, acc_len);
+#endif
+            if (!consumed) break;
+            idx++;
+            resp_repl_eval_print(global, acc, consumed, idx);
+            memmove(acc, acc + consumed, acc_len - consumed);
+            acc_len -= consumed;
+            acc[acc_len] = 0;
+            prompted = 0;
+          }
+          if (!prompted) {
+            printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m ", idx + 1);
+            fflush(stdout);
+            prompted = 1;
+          }
         }
       }
     }
@@ -2545,6 +2683,13 @@ int resp_repl_serve(int port, env_t *global) {
     resp_drive_clients(&rfds, &wfds);
   }
 
+#if defined(ALCOVE_READLINE)
+  if (use_rl) {
+    rl_callback_handler_remove();
+    free(resp_rl_acc);
+    resp_rl_acc = NULL;
+  }
+#endif
   printf("\nalcove: shutting down combined REPL + RESP\n");
   resp_reactor_teardown(srv);
   free(acc);
