@@ -3220,6 +3220,50 @@ inline exp_t *lookup(exp_t *e, env_t *env) {
   }
   return NULL;
 }
+
+/* Scope-aware lookup used by the OP_LOAD_GLOBAL / OP_CALL_GLOBAL gcache
+   sites. Identical resolution to lookup(), but reports via *global whether
+   the binding came from a truly global scope (reserved builtins or the root
+   env, *global=1) versus a local function/let env (*global=0).
+   Only global-scope resolutions are safe to memoize in the per-bytecode
+   gcache: that cache is keyed solely by alcove_global_gen and is invalidated
+   only on GLOBAL mutations, NOT on per-call local-env changes. A symbol that
+   is created/assigned in a local env via OP_STORE_FREE (e.g. `(= tmp ...)`
+   for a non-parameter inside a function body) compiles to OP_LOAD_GLOBAL on
+   read; caching that local value would serve a stale binding to a later call
+   with a different env at the same gen. Manifested as "vec-ref: bad args"
+   when the stale value fed a vec index (heap-layout dependent: benign on
+   x86-64, corrupting on wasm). */
+static exp_t *lookup_scoped(exp_t *e, env_t *env, int *global) {
+  keyval_t *ret;
+  env_t *curenv = env;
+  *global = 1; /* reserved + root hits are global; demoted below for locals */
+  if (e->meta)
+    return refexp((exp_t *)e->meta);
+  char *key = exp_text(e);
+  if ((ret = set_get_keyval_dict(reserved_symbol, key, NULL))) {
+    e->meta = (struct keyval_t *)ret->val;
+    return refexp(ret->val);
+  }
+  if (curenv)
+    do {
+      int is_root = (curenv->root == NULL);
+      int i;
+      for (i = 0; i < curenv->n_inline; i++) {
+        const char *k = curenv->inline_keys[i];
+        if (k && strcmp(k, key) == 0) {
+          *global = is_root;
+          return refexp(curenv->inline_vals[i]);
+        }
+      }
+      if ((curenv->d) && (ret = set_get_keyval_dict(curenv->d, key, NULL))) {
+        *global = is_root;
+        return refexp(ret->val);
+      }
+    } while ((curenv = curenv->root));
+  *global = 0;
+  return NULL;
+}
 exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
   keyval_t *ret = NULL;
   exp_t *fret = NULL;
@@ -4030,6 +4074,22 @@ exp_t *unpersistcmd(exp_t *e, env_t *env) {
    AND by the startup auto-loader. So `alcove --db foo.db` uniformly
    makes foo.db "the" db file for the rest of the session. */
 const char *alcove_db_path = "db.dump";
+/* Tracks whether alcove_db_path points at heap memory we own (a strdup from
+   an explicit (savedb/loaddb "path")) vs. a string literal / argv pointer we
+   must not free. Lets the path-adoption sites release the previous owned
+   value instead of leaking it on every explicit save/load. */
+static int alcove_db_path_owned = 0;
+/* Adopt `path` as the session-default db path, freeing any previously-owned
+   copy. Idempotent if `p` already points at the current value. */
+static void alcove_set_db_path(const char *p) {
+  char *dup = strdup(p);
+  if (!dup)
+    return; /* keep the existing path on OOM rather than dropping it */
+  if (alcove_db_path_owned)
+    free((void *)alcove_db_path);
+  alcove_db_path = dup;
+  alcove_db_path_owned = 1;
+}
 
 /* Unified-dump format magic + version. Files starting with "ALCV"
    carry both the Lisp env and the RESP keyspace; files without the
@@ -4351,10 +4411,9 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   }
   free(path_snap);
   /* Successful explicit save → adopt this path as the session default,
-     so a follow-up (loaddb) or (savedb) targets the same file. The
-     strdup leaks across the run but session-default is set rarely. */
+     so a follow-up (loaddb) or (savedb) targets the same file. */
   if (path_arg) {
-    alcove_db_path = strdup(path);
+    alcove_set_db_path(path);
     unrefexp(path_arg);
   }
   return e;
@@ -4449,7 +4508,7 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
   /* Successful explicit load → adopt as session default. Same rule as
      savedb: the last filename you mentioned is the active one. */
   if (path_arg) {
-    alcove_db_path = strdup(path);
+    alcove_set_db_path(path);
     unrefexp(path_arg);
   }
   unrefexp(e);
@@ -11686,16 +11745,19 @@ __attribute__((unused)) static exp_t *jit_call_global1_value(bytecode_t *bc,
   if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[const_idx].val);
   } else {
-    callee = lookup(bc->consts[const_idx], env);
+    int is_global;
+    callee = lookup_scoped(bc->consts[const_idx], env, &is_global);
     if (!callee) {
       unrefexp(arg);
       return error(ERROR_ILLEGAL_VALUE, bc->consts[const_idx], env,
                    "Unbound variable");
     }
-    if (!bc->gcache)
-      bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
-    bc->gcache[const_idx].val = callee;
-    bc->gcache[const_idx].gen = alcove_global_gen;
+    if (is_global) { /* see OP_LOAD_GLOBAL: never cache a local resolution */
+      if (!bc->gcache)
+        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[const_idx].val = callee;
+      bc->gcache[const_idx].gen = alcove_global_gen;
+    }
   }
   exp_t *argv[1] = {arg};
   exp_t *ret = vm_invoke_values(callee, 1, argv, env);
@@ -11719,17 +11781,20 @@ __attribute__((unused)) static exp_t *jit_call_global2_value(bytecode_t *bc,
   if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[const_idx].val);
   } else {
-    callee = lookup(bc->consts[const_idx], env);
+    int is_global;
+    callee = lookup_scoped(bc->consts[const_idx], env, &is_global);
     if (!callee) {
       unrefexp(argv2[0]);
       unrefexp(argv2[1]);
       return error(ERROR_ILLEGAL_VALUE, bc->consts[const_idx], env,
                    "Unbound variable");
     }
-    if (!bc->gcache)
-      bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
-    bc->gcache[const_idx].val = callee;
-    bc->gcache[const_idx].gen = alcove_global_gen;
+    if (is_global) { /* see OP_LOAD_GLOBAL: never cache a local resolution */
+      if (!bc->gcache)
+        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[const_idx].val = callee;
+      bc->gcache[const_idx].gen = alcove_global_gen;
+    }
   }
   exp_t *ret = vm_invoke_values(callee, 2, argv2, env);
   unrefexp(callee);
@@ -11751,16 +11816,19 @@ __attribute__((unused)) static exp_t *jit_call_global1_drop(bytecode_t *bc,
   if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[const_idx].val);
   } else {
-    callee = lookup(bc->consts[const_idx], env);
+    int is_global;
+    callee = lookup_scoped(bc->consts[const_idx], env, &is_global);
     if (!callee) {
       unrefexp(arg);
       return error(ERROR_ILLEGAL_VALUE, bc->consts[const_idx], env,
                    "Unbound variable");
     }
-    if (!bc->gcache)
-      bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
-    bc->gcache[const_idx].val = callee;
-    bc->gcache[const_idx].gen = alcove_global_gen;
+    if (is_global) { /* see OP_LOAD_GLOBAL: never cache a local resolution */
+      if (!bc->gcache)
+        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[const_idx].val = callee;
+      bc->gcache[const_idx].gen = alcove_global_gen;
+    }
   }
   exp_t *argv[1] = {arg};
   exp_t *ret = vm_invoke_values(callee, 1, argv, env);
@@ -18176,11 +18244,14 @@ l_load_global: {
   if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
     PUSH(refexp(bc->gcache[idx].val));
   } else {
-    exp_t *v = lookup(consts[idx], env);
+    int is_global;
+    exp_t *v = lookup_scoped(consts[idx], env, &is_global);
     if (!v)
       RUNTIME_ERR("Unbound variable");
-    if (!bc->no_gcache) { /* closures: never cache — free vars live in the
-                             captured env, which gcache can't track. */
+    /* Only memoize truly-global resolutions. A local free var (OP_STORE_FREE
+       target read back via OP_LOAD_GLOBAL) must NOT be cached — the gcache is
+       keyed by global-gen and would serve it stale to a later call. */
+    if (!bc->no_gcache && is_global) {
       if (!bc->gcache)
         bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
       bc->gcache[idx].val = v; /* not refcounted by us; bound globally */
@@ -18497,10 +18568,13 @@ l_call_global: {
   if (bc->gcache && bc->gcache[idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[idx].val);
   } else {
-    callee = lookup(consts[idx], env);
+    int is_global;
+    callee = lookup_scoped(consts[idx], env, &is_global);
     if (!callee)
       RUNTIME_ERR("Unbound variable");
-    if (!bc->no_gcache) { /* closures never cache — free vars are captured */
+    /* Only cache global resolutions (see OP_LOAD_GLOBAL): a locally-bound
+       callee must not be memoized against the global generation. */
+    if (!bc->no_gcache && is_global) {
       if (!bc->gcache)
         bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
       bc->gcache[idx].val = callee;
@@ -18540,7 +18614,15 @@ l_tail_call: {
      arm). A continuation invoked in tail position must yield its escape
      token, not be rejected as "not a lambda". Same fallback shape as the
      !FLAG_COMPILED branch. */
-  if (isstring(new_fn) || iscont(new_fn)) {
+  int is_ffi_callee = 0;
+#ifdef ALCOVE_FFI
+  is_ffi_callee = isffi(new_fn);
+#endif
+  if (isstring(new_fn) || iscont(new_fn) || is_ffi_callee) {
+    /* String-index, escape continuation, or an ffi-fn value reached in
+       tail position: vm_invoke_values has the matching arms (the FFI arm
+       dispatches to alc_ffi_call). Without this an FFI call as the tail
+       expression of a compiled body would be rejected as "not a lambda". */
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
@@ -18951,6 +19033,16 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
       unrefexp(argv[i]);
     return make_cont_escape((int64_t)(intptr_t)fn->meta, payload, env);
   }
+#ifdef ALCOVE_FFI
+  if (isffi(fn)) {
+    /* An ffi-fn value called from compiled bytecode. The AST evaluator
+       dispatches FFI in evaluate(); the VM funnels (sym args...) through
+       OP_CALL_GLOBAL → here, so without this arm an FFI call inside any
+       compiled function body errors ("not a lambda") instead of running.
+       Args are already evaluated; alc_ffi_call consumes their refs. */
+    return alc_ffi_call((alc_ffi_t *)fn->ptr, nargs, argv);
+  }
+#endif
   if (!islambda(fn)) {
     int i;
     for (i = 0; i < nargs; i++)

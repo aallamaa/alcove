@@ -56,7 +56,7 @@ $(WEB_OUT): ../../alcove.c ../../alcove.h ../../builtins.h web/mario.html web/ma
 	@command -v $(EMCC) >/dev/null 2>&1 || \
 	  (echo "emcc not found. Install Emscripten from https://emscripten.org"; \
 	   exit 1)
-	$(EMCC) -O2 -Wall -W \
+	$(EMCC) -O2 -Wall -W -fno-strict-aliasing \
 	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
 	  -sASYNCIFY=1 \
 	  -sNO_EXIT_RUNTIME=1 \

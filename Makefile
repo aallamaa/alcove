@@ -4,6 +4,14 @@ ARCH         := $(shell uname -m)
 JIT_OK       := $(filter aarch64 arm64 x86_64 amd64,$(ARCH))
 PREFIX       ?= $(HOME)/.local
 BINDIR       ?= $(PREFIX)/bin
+# alcove relies on tagged-pointer / union type punning (exp_t values, the
+# fixnum tag, the content/bc union). That technically violates C's strict-
+# aliasing rule; at -O2/-O3 a type-based-alias-analysis pass can reorder or
+# elide those punned loads. It's latent on x86-64 but the clang/wasm backend
+# miscompiles it (symptom: "vec-ref: bad args" in the web Mario demo, an
+# inline call result read back as the wrong tag). -fno-strict-aliasing makes
+# the punning well-defined — the same flag CPython and most interpreters use.
+SAFE_FLAGS   := -fno-strict-aliasing
 ifneq ($(JIT_OK),)
   JIT_FLAGS  := -DALCOVE_JIT=1
 else
@@ -122,10 +130,10 @@ endef
 .DEFAULT_GOAL := jit
 
 parser:
-	$(CC) -Wall -W  -g3 -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -g3 -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 speed:
-	$(CC) -Wall -W  -O3 -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 # Explicit non-JIT release build — alias of `speed`. Use this when you
 # want to opt out of the JIT path (e.g. for A/B comparison).
@@ -133,7 +141,7 @@ nojit: speed
 # Single-threaded build: plain ++/-- refcounts instead of __sync atomics.
 # Correctness is identical as long as nothing threads the interpreter.
 mono:
-	$(CC) -Wall -W  -O3 -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 # JIT build. Auto-picks the arm64 or amd64 backend based on `uname -m`.
 # On unsupported architectures, JIT_FLAGS is empty and you get a plain
@@ -142,7 +150,7 @@ jit:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W  -O3 $(JIT_FLAGS) -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 # JIT + single-threaded refcount — the fastest build. Pair as long as
 # nothing threads the interpreter.
@@ -150,7 +158,7 @@ jit-mono:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W  -O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
 # alcove script build: the full JIT runtime + the .als front end, emitted
@@ -159,7 +167,7 @@ als:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W  -O3 $(JIT_FLAGS) -o alcoves  alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o alcoves  alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
 install: jit als
@@ -232,7 +240,7 @@ test-all:
 	for spec in $(ALS_SPECS); do \
 	  aname=$${spec%%:*}; aflags=$${spec#*:}; \
 	  printf '\n=== alcoves/%s (alcove-script front end) ===\n' "$$aname"; \
-	  if $(CC) -Wall -W $$aflags -o "$$abin" alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
+	  if $(CC) -Wall -W $(SAFE_FLAGS) $$aflags -o "$$abin" alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
 	    res=$$("$$abin" --noload test.als 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
 	    case "$$res" in \
 	      *" 0 failed") echo "  OK — $$res (test.als)";; \
@@ -293,7 +301,7 @@ web:
 	@command -v $(EMCC) >/dev/null 2>&1 || \
 	  (echo "emcc not found. Install Emscripten from https://emscripten.org"; \
 	   exit 1)
-	$(EMCC) -O2 -Wall -W \
+	$(EMCC) -O2 -Wall -W $(SAFE_FLAGS) \
 	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
 	  -sNO_EXIT_RUNTIME=1 \
 	  -sALLOW_MEMORY_GROWTH=1 \
@@ -303,7 +311,7 @@ web:
 	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
 	  -sALLOW_TABLE_GROWTH=1 \
 	  -o web/alcove-core.js alcove.c -lm
-	$(EMCC) -O2 -Wall -W \
+	$(EMCC) -O2 -Wall -W $(SAFE_FLAGS) \
 	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
 	  -sNO_EXIT_RUNTIME=1 \
 	  -sALLOW_MEMORY_GROWTH=1 \
