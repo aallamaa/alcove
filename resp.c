@@ -2450,83 +2450,14 @@ static size_t resp_repl_consume_als(const char *acc, size_t len) {
 }
 #endif /* ALCOVE_ALS */
 
-/* Evaluate one already-read form: handle quit/exit/toeval, else eval+print. */
-static void resp_repl_eval_one_form(env_t *global, exp_t *form, int idx) {
-  if (issymbol(form) &&
-      (strcmp((char *)exp_text(form), "quit") == 0 ||
-       strcmp((char *)exp_text(form), "exit") == 0)) {
-    unrefexp(form);
-    resp_stop = 1;
-    return;
-  }
-  if (issymbol(form) && strcmp((char *)exp_text(form), "toeval") == 0) {
-    toeval = 1 - toeval;
-    printf("%d\n", toeval);
-    unrefexp(form);
-    return;
-  }
-  exp_t *res = NULL;
-  if (toeval)
-    res = evaluate(form, global);
-  else
-    unrefexp(form);
-  if (res) {
-    printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
-    print_node(res);
-    unrefexp(res);
-  } else
-    printf("nil");
-  printf("\n\n");
-  fflush(stdout);
-}
-
+/* Evaluate one complete REPL unit. Delegates to the shared transpile +
+   eval + print core (repl_eval_text, in alcove.c) — the same path the
+   interactive readline REPL uses — so the two never diverge (this is what
+   the alcove-script-in-`-R` fix is built on). quit/exit -> stop reactor. */
 static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
                                  int idx) {
-#ifdef ALCOVE_ALS
-  /* alcoves build: the -R REPL surface is alcove-script, just like every
-     other input chokepoint. Transpile the consumed block to s-expression
-     source, then read + evaluate each resulting top-level form. */
-  char *tmp = (char *)malloc(n + 1);
-  if (!tmp)
-    return;
-  memcpy(tmp, src, n);
-  tmp[n] = 0;
-  char *sx = als_to_sexpr(tmp);
-  free(tmp);
-  if (!sx)
-    return;
-  FILE *fs = fmemopen(sx, strlen(sx), "r");
-  if (fs) {
-    for (;;) {
-      exp_t *form = reader(fs, 0, 0);
-      if (!form)
-        break;
-      if (iserror(form) && form->flags == EXP_ERROR_PARSING_EOF) {
-        unrefexp(form);
-        break;
-      }
-      resp_repl_eval_one_form(global, form, idx);
-      if (resp_stop)
-        break;
-    }
-    fclose(fs);
-  }
-  free(sx);
-#else
-  /* Plain alcove build: the input is already s-expressions. */
-  FILE *fs = fmemopen((void *)src, n, "r");
-  if (!fs)
-    return;
-  exp_t *form = reader(fs, 0, 0);
-  fclose(fs);
-  if (!form)
-    return;
-  if (iserror(form) && form->flags == EXP_ERROR_PARSING_EOF) {
-    unrefexp(form);
-    return;
-  }
-  resp_repl_eval_one_form(global, form, idx);
-#endif
+  if (repl_eval_text(src, n, global, idx))
+    resp_stop = 1;
 }
 
 int resp_repl_serve(int port, env_t *global) {

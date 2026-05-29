@@ -19710,6 +19710,105 @@ UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
    table of atomic exp_t * slots. Reclamation via epoch.h. */
 #include "lfkv.c"
 
+/* ---- shared REPL eval core --------------------------------------------
+   Defined here (before the resp.c include and main) so all three input
+   loops — the interactive readline REPL, the file/stdin loop, and the -R
+   combined REPL+RESP loop — run the SAME transpile + eval + print path.
+   Previously each loop reimplemented it, which is how `alcoves -R` ended
+   up reading raw s-expressions instead of alcove-script. */
+
+/* Eval one already-read top-level form with REPL semantics. `quiet` (file
+   load) suppresses the Out[] print. Handles the quit/exit and toeval REPL
+   words. Consumes `form`. Returns 1 iff quit/exit was seen. */
+static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
+  const char *sv = issymbol(form) ? (const char *)exp_text(form) : NULL;
+  if (sv && (strcmp(sv, "quit") == 0 || strcmp(sv, "exit") == 0)) {
+    unrefexp(form);
+    return 1;
+  }
+  if (sv && strcmp(sv, "toeval") == 0) {
+    toeval = 1 - toeval;
+    printf("%d\n", toeval);
+    unrefexp(form);
+    return 0;
+  }
+  exp_t *res = NULL;
+  if (toeval)
+    res = evaluate(form, env);
+  else
+    unrefexp(form);
+  if (!quiet) {
+    if (res) {
+      printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
+      print_node(res);
+    } else
+      printf("nil");
+    printf("\n\n");
+    fflush(stdout); /* keep interactive (-R reactor / piped) output prompt */
+  }
+  if (res)
+    unrefexp(res);
+  return 0;
+}
+
+/* Transpile a complete input chunk (alcove-script in the alcoves build,
+   s-expressions otherwise) and eval+print every top-level form it yields.
+   Returns 1 iff quit/exit was seen. The interactive readline REPL and the
+   -R combined REPL both feed it one complete unit at a time, so neither
+   has to know about transpilation or form iteration. */
+static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
+#ifdef ALCOVE_ALS
+  char *tmp = (char *)malloc(n + 1);
+  if (!tmp)
+    return 0;
+  memcpy(tmp, src, n);
+  tmp[n] = 0;
+  char *body = als_to_sexpr(tmp); /* malloc'd s-expression source */
+  free(tmp);
+  if (!body)
+    return 0;
+#else
+  char *body = (char *)malloc(n + 1); /* already s-expressions */
+  if (!body)
+    return 0;
+  memcpy(body, src, n);
+  body[n] = 0;
+#endif
+  /* Run the reader over the s-expr source with a trailing newline so a
+     bare final token (quit / a number) terminates instead of EOF-ing
+     mid-token. */
+  size_t blen = strlen(body);
+  char *buf = (char *)malloc(blen + 2);
+  if (!buf) {
+    free(body);
+    return 0;
+  }
+  memcpy(buf, body, blen);
+  buf[blen] = '\n';
+  buf[blen + 1] = 0;
+  free(body);
+  FILE *fs = fmemopen(buf, blen + 1, "r");
+  int quit = 0;
+  if (fs) {
+    for (;;) {
+      exp_t *form = reader(fs, 0, 0);
+      if (!form)
+        break;
+      if (iserror(form) && form->flags == EXP_ERROR_PARSING_EOF) {
+        unrefexp(form);
+        break;
+      }
+      if (repl_eval_print_form(form, env, idx, 0)) {
+        quit = 1;
+        break;
+      }
+    }
+    fclose(fs);
+  }
+  free(buf);
+  return quit;
+}
+
 /* RESP2 server prototype lives in its own file but is included as
    part of this single TU so it can use file-static helpers
    (make_string, set_get_keyval_dict, ...) without exporting them.
@@ -20228,7 +20327,6 @@ int main(int argc, char *argv[]) {
 #endif
 
   exp_t *stre = NULL;
-  exp_t *strf = NULL;
 
 #ifdef ALCOVE_READLINE
   if (rl_active) {
@@ -20239,14 +20337,9 @@ int main(int argc, char *argv[]) {
     while (1) {
       idx++;
 #ifdef ALCOVE_ALS
-      char *line = als_rl_read_form(idx);
-      if (line && line[0]) {
-        char *sx = als_to_sexpr(line);
-        free(line);
-        line = sx; /* feed transpiled s-expr to the reader below */
-      }
+      char *line = als_rl_read_form(idx); /* one alcove-script unit */
 #else
-      char *line = rl_read_form(idx);
+      char *line = rl_read_form(idx); /* one balanced s-expr form */
 #endif
       if (!line) {
         printf("\n");
@@ -20257,59 +20350,18 @@ int main(int argc, char *argv[]) {
         idx--;
         continue;
       }
-      /* Append a newline so reader sees a token terminator after the
-         last bare symbol/number on the line — without it,
-         fmemopen("quit",4,"r") would EOF mid-token and the reader
-         would return a parse error instead of the symbol. */
-      size_t llen = strlen(line);
-      char *line_nl = memalloc(llen + 2, 1);
-      memcpy(line_nl, line, llen);
-      line_nl[llen] = '\n';
-      line_nl[llen + 1] = 0;
-      FILE *ls = fmemopen(line_nl, llen + 1, "r");
-      while (1) {
-        stre = reader(ls, 0, 0);
-        if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF)) {
-          unrefexp(stre);
-          break;
-        }
-        if (issymbol(stre) && (strcmp((char *)exp_text(stre), "quit") == 0 ||
-                               strcmp((char *)exp_text(stre), "exit") == 0)) {
-          unrefexp(stre);
-          fclose(ls);
-          free(line_nl);
-          free(line);
-          goto endcleanly;
-        }
-        if (issymbol(stre) && strcmp((char *)exp_text(stre), "toeval") == 0) {
-          toeval = 1 - toeval;
-          printf("%d\n", toeval);
-          unrefexp(stre);
-          continue;
-        }
-        strf = NULL;
-        if (toeval)
-          strf = evaluate(stre, global);
-        else
-          unrefexp(stre);
-        if (strf) {
-          printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
-          print_node(strf);
-          unrefexp(strf);
-        } else
-          printf("nil");
-        printf("\n\n");
-      }
-      fclose(ls);
-      free(line_nl);
+      /* Shared transpile + eval + print core (als-aware in the alcoves
+         build). Returns 1 on quit/exit. */
+      int quit = repl_eval_text(line, strlen(line), global, idx);
       free(line);
+      if (quit)
+        goto endcleanly;
     }
   }
 #endif
 
   while (1) {
     idx++;
-    strf = NULL;
     if (!evaluatingfile)
       printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m", idx);
     stre = reader(stream, 0, 0);
@@ -20331,33 +20383,10 @@ int main(int argc, char *argv[]) {
         printf("\n");
       goto endcleanly;
     }
-    const char *_sv = issymbol(stre) ? exp_text(stre) : NULL;
-    if (_sv && (strcmp(_sv, "quit") == 0 || strcmp(_sv, "exit") == 0)) {
-      unrefexp(stre);
+    /* Shared eval + print core; quiet (no Out[] print) while loading a
+       file. Returns 1 on quit/exit. */
+    if (repl_eval_print_form(stre, global, idx, evaluatingfile))
       break;
-    }
-    if (_sv && strcmp(_sv, "toeval") == 0) {
-      toeval = 1 - toeval;
-      printf("%d\n", toeval);
-    }
-    //
-    if (toeval)
-      strf = evaluate(stre, global);
-    else
-      unrefexp(stre);
-    if (!evaluatingfile) {
-      if (strf) {
-        printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
-        print_node(strf);
-      } else
-        printf("nil");
-      printf("\n\n");
-    };
-
-    if (strf) {
-      unrefexp(strf);
-      strf = NULL;
-    }
   }
 endcleanly:
 #ifdef ALCOVE_READLINE
