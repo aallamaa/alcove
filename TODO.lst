@@ -35,7 +35,12 @@
 [DONE] fix macro / code expand-macro1 (fixed commit 90a7e69da94ebdd0e2781a22dd559484d216736b )
 [TODO] should we store 8 bytes values directly inside content pointer of pair instead of pointing to another object
 [TODO] fix error handling / freeing ressources with setjmp (gave up using setjmp too many side effects 1d339c702754297eb5b8c324f2713670da125dd2)
-[TODO] add support for utf-8 in string indexing and char
+[DONE] utf-8 in string indexing and char: length/indexing/substr/
+       string-index/split count by codepoint (not byte); chars hold a
+       full codepoint and read/print/persist (savedb) as UTF-8; index
+       assignment (= (s i) ch) rebuilds for variable width; als
+       transpiler reads multi-byte #\X literals. utf8_* helpers in
+       alcove.c. Tests: "utf8 *" block in test.alc.
 [TODO] add support for documentation in function header
 [TODO] add support for default parameters
 [TODO] add support for polymorphism in lambda

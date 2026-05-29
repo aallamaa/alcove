@@ -642,7 +642,7 @@ static exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builder
   (name) = make_nil(); \
   (name)->type = (t); \
   (name)->ptr = (void *)(p)
-exp_t *make_char(unsigned char c);
+exp_t *make_char(uint32_t c);
 exp_t *make_node(exp_t *node);
 exp_t *make_internal(lispCmd *cmd, int flags);
 /* Runtime registration of a name → C function as an alcove builtin.

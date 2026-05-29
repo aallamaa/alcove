@@ -199,10 +199,23 @@ static als_node *als_read_one(als_lr *r) {
     als_push(q, als_read_one(r));
     return q;
   }
-  /* alcove char literal #\X — take exactly the 3 bytes */
+  /* alcove char literal #\X — emit `#\` plus the full character that
+     follows. X may be a multi-byte UTF-8 codepoint (#\é, #\世, #\😀), so
+     take the whole sequence rather than a fixed 3 bytes; otherwise the
+     trailing continuation bytes leak out as stray tokens. */
   if (c == '#' && r->i + 2 < r->n && r->s[r->i + 1] == '\\') {
-    als_node *a = als_atom(r->s + r->i, 3);
-    r->i += 3;
+    unsigned char lead = (unsigned char)r->s[r->i + 2];
+    size_t clen = 1;
+    if (lead >= 0xF0)
+      clen = 4;
+    else if (lead >= 0xE0)
+      clen = 3;
+    else if (lead >= 0xC0)
+      clen = 2;
+    if (r->i + 2 + clen > r->n) /* clamp to available bytes */
+      clen = r->n - (r->i + 2);
+    als_node *a = als_atom(r->s + r->i, 2 + clen);
+    r->i += 2 + clen;
     return a;
   }
   /* vector literal #[a b c] -> (vector a b c). alcove's own reader expands

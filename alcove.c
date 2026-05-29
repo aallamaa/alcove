@@ -19,6 +19,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h> /* LLONG_MIN for hex literal overflow guard */
+#include <locale.h> /* setlocale: make readline UTF-8 / multibyte aware */
 #include <errno.h>
 #include <math.h>
 #include <stdarg.h>
@@ -1167,8 +1168,215 @@ static inline exp_t *make_nil() {
   return nil_exp;
 }
 
-inline exp_t *make_char(unsigned char c) {
-  /* Tagged immediate: no heap allocation. */
+/* ---- UTF-8 codepoint helpers ------------------------------------------
+   alcove strings are UTF-8 byte buffers; chars are tagged immediates that
+   hold a full 32-bit codepoint (see MAKE_CHAR/CHAR_VAL). These let the
+   length/indexing/substring builtins and char read/print operate on
+   Unicode codepoints rather than raw bytes. All are lenient on malformed
+   input — a stray/invalid byte is consumed as a single raw byte — so we
+   never loop forever or read past the NUL. */
+
+static int utf8_encode(uint32_t cp, char out[4]) {
+  if (cp < 0x80) {
+    out[0] = (char)cp;
+    return 1;
+  } else if (cp < 0x800) {
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  } else if (cp < 0x10000) {
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = (char)(0xF0 | (cp >> 18));
+  out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+/* Decode the codepoint at byte offset *off in NUL-terminated s, advancing
+   *off past it. A malformed byte is returned as-is (advance 1). */
+static uint32_t utf8_decode_at(const char *s, size_t *off) {
+  const unsigned char *p = (const unsigned char *)s + *off;
+  unsigned char c = p[0];
+  if (c < 0x80) {
+    *off += 1;
+    return c;
+  }
+  uint32_t cp;
+  int n;
+  if ((c & 0xE0) == 0xC0) {
+    cp = c & 0x1Fu;
+    n = 1;
+  } else if ((c & 0xF0) == 0xE0) {
+    cp = c & 0x0Fu;
+    n = 2;
+  } else if ((c & 0xF8) == 0xF0) {
+    cp = c & 0x07u;
+    n = 3;
+  } else {
+    *off += 1; /* stray continuation / invalid lead — raw byte */
+    return c;
+  }
+  for (int i = 1; i <= n; i++) {
+    unsigned char cc = p[i];
+    if ((cc & 0xC0) != 0x80) { /* truncated — treat lead as a raw byte */
+      *off += 1;
+      return c;
+    }
+    cp = (cp << 6) | (cc & 0x3Fu);
+  }
+  *off += (size_t)(n + 1);
+  return cp;
+}
+
+/* Decode one codepoint from a stream given its already-read first byte,
+   reading continuation bytes as needed. On a malformed sequence keeps the
+   raw lead byte (ungetc's any non-continuation byte it peeked). */
+static uint32_t utf8_decode_stream(int first, FILE *stream) {
+  if (first < 0x80)
+    return (uint32_t)(unsigned char)first;
+  uint32_t cp;
+  int n;
+  if ((first & 0xE0) == 0xC0) {
+    cp = (uint32_t)(first & 0x1F);
+    n = 1;
+  } else if ((first & 0xF0) == 0xE0) {
+    cp = (uint32_t)(first & 0x0F);
+    n = 2;
+  } else if ((first & 0xF8) == 0xF0) {
+    cp = (uint32_t)(first & 0x07);
+    n = 3;
+  } else {
+    return (uint32_t)(unsigned char)first; /* invalid lead — raw byte */
+  }
+  for (int i = 0; i < n; i++) {
+    int cc = getc(stream);
+    if (cc == EOF)
+      break;
+    if ((cc & 0xC0) != 0x80) {
+      ungetc(cc, stream);
+      break;
+    }
+    cp = (cp << 6) | (uint32_t)(cc & 0x3F);
+  }
+  return cp;
+}
+
+/* Number of codepoints in NUL-terminated UTF-8 s. */
+static int64_t utf8_strlen(const char *s) {
+  int64_t n = 0;
+  size_t off = 0;
+  while (s[off]) {
+    utf8_decode_at(s, &off);
+    n++;
+  }
+  return n;
+}
+
+/* Codepoint at codepoint-index i (>=0): returns 1 and sets *out, or 0 if
+   i is out of range. */
+static int utf8_index(const char *s, int64_t i, uint32_t *out) {
+  if (i < 0)
+    return 0;
+  size_t off = 0;
+  int64_t k = 0;
+  while (s[off]) {
+    uint32_t cp = utf8_decode_at(s, &off);
+    if (k == i) {
+      *out = cp;
+      return 1;
+    }
+    k++;
+  }
+  return 0;
+}
+
+/* Byte offset of codepoint-index i; if i is past the end, returns the byte
+   length (so substring math clamps naturally). */
+static size_t utf8_byte_offset(const char *s, int64_t i) {
+  size_t off = 0;
+  int64_t k = 0;
+  while (s[off] && k < i) {
+    utf8_decode_at(s, &off);
+    k++;
+  }
+  return off;
+}
+
+/* Codepoint count of the first nbytes bytes (byte-offset -> codepoint
+   index conversion for string-index). */
+static int64_t utf8_count_bytes(const char *s, size_t nbytes) {
+  int64_t n = 0;
+  size_t off = 0;
+  while (off < nbytes && s[off]) {
+    utf8_decode_at(s, &off);
+    n++;
+  }
+  return n;
+}
+
+/* Strict UTF-8 validity over n bytes: rejects stray/truncated continuation
+   bytes, overlong encodings, surrogates (U+D800..U+DFFF) and codepoints
+   past U+10FFFF. On the first invalid byte, sets *bad to its offset.
+   (NUL is valid UTF-8 here; callers that need NUL-free check separately.) */
+static int utf8_valid(const char *s, size_t n, size_t *bad) {
+  const unsigned char *p = (const unsigned char *)s;
+  size_t i = 0;
+  while (i < n) {
+    unsigned char c = p[i];
+    if (c < 0x80) {
+      i++;
+      continue;
+    }
+    int len;
+    uint32_t cp, min;
+    if ((c & 0xE0) == 0xC0) {
+      len = 2;
+      cp = c & 0x1Fu;
+      min = 0x80;
+    } else if ((c & 0xF0) == 0xE0) {
+      len = 3;
+      cp = c & 0x0Fu;
+      min = 0x800;
+    } else if ((c & 0xF8) == 0xF0) {
+      len = 4;
+      cp = c & 0x07u;
+      min = 0x10000;
+    } else {
+      if (bad)
+        *bad = i;
+      return 0; /* continuation byte as lead, or 0xF8+ */
+    }
+    if (i + (size_t)len > n) {
+      if (bad)
+        *bad = i;
+      return 0; /* truncated sequence */
+    }
+    for (int k = 1; k < len; k++) {
+      unsigned char cc = p[i + (size_t)k];
+      if ((cc & 0xC0) != 0x80) {
+        if (bad)
+          *bad = i;
+        return 0; /* bad continuation byte */
+      }
+      cp = (cp << 6) | (cc & 0x3Fu);
+    }
+    if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+      if (bad)
+        *bad = i; /* overlong, surrogate, or out of range */
+      return 0;
+    }
+    i += (size_t)len;
+  }
+  return 1;
+}
+
+inline exp_t *make_char(uint32_t c) {
+  /* Tagged immediate: no heap allocation. Holds a full Unicode codepoint. */
   return MAKE_CHAR(c);
 }
 
@@ -1308,10 +1516,16 @@ void print_node(exp_t *node) {
   }
   if (ischar(node)) {
     uint32_t c = CHAR_VAL(node);
-    if (c > 32)
+    if (c >= 0x80) {
+      char u[4];
+      int k = utf8_encode(c, u);
+      printf("#\\");
+      fwrite(u, 1, (size_t)k, stdout);
+    } else if (c > 32 && c < 127) {
       printf("#\\%c", (char)c);
-    else
+    } else {
       printf("#\\%u", c);
+    }
     return;
   }
   if (!is_ptr(node)) {
@@ -1566,6 +1780,26 @@ inline exp_t *make_symbol(char *str, int length) {
   return make_inline_txt(str, length, EXP_SYMBOL);
 }
 
+/* Replace the text bytes of an EXP_STRING/EXP_SYMBOL in place, picking
+   inline vs heap storage like make_inline_txt and freeing any prior heap
+   buffer. `bytes` must not alias e's storage. Used by codepoint-aware
+   string index assignment, where the new codepoint can differ in byte
+   width from the old one. */
+static void exp_set_text(exp_t *e, const char *bytes, size_t len) {
+  char *old = (e->flags & FLAG_INLINE_TXT) ? NULL : (char *)e->ptr;
+  if (len <= (size_t)INLINE_TXT_CAP) {
+    e->flags |= FLAG_INLINE_TXT;
+    memcpy(e->istr, bytes, len);
+    e->istr[len] = '\0';
+  } else {
+    char *nb = alloc_str((char *)bytes, (int)len);
+    e->flags &= ~FLAG_INLINE_TXT;
+    e->ptr = nb;
+  }
+  if (old)
+    free(old);
+}
+
 inline exp_t *make_quote(exp_t *node) {
   exp_t *cur = make_symbol("quote", strlen("quote"));
   cur = make_node(cur);
@@ -1710,14 +1944,16 @@ exp_t *load_char(exp_t *e, FILE *stream) {
     unrefexp(e);
   if (c == EOF)
     return NULL;
-  return MAKE_CHAR((unsigned char)c);
+  return MAKE_CHAR(utf8_decode_stream(c, stream));
 }
 
 exp_t *dump_char(exp_t *e, FILE *stream) {
   unsigned short int t = EXP_CHAR;
   if (dumptype(stream, &t) <= 0)
     return NULL;
-  if (fputc((int)CHAR_VAL(e), stream) == EOF)
+  char u[4];
+  int k = utf8_encode((uint32_t)CHAR_VAL(e), u);
+  if (fwrite(u, 1, (size_t)k, stream) != (size_t)k)
     return NULL;
   return e;
 }
@@ -2628,7 +2864,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         if ((y = getc(stream)) != EOF) {
           if (y == '\\') { // returning char
             if ((z = getc(stream)) != EOF) {
-              return make_char(z);
+              return make_char(utf8_decode_stream(z, stream));
             } else
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
                            "End of file reached while parsing");
@@ -2976,9 +3212,24 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
             return idx;
           }
           if (idx && isnumber(idx) && ischar(val)) {
-            if ((FIX_VAL(idx) >= 0) &&
-                (FIX_VAL(idx) < (int64_t)strlen(exp_text(key)))) {
-              *((char *)exp_text(key) + FIX_VAL(idx)) = (unsigned char)CHAR_VAL(val);
+            const char *cur = exp_text(key);
+            int64_t cpi = FIX_VAL(idx);
+            if ((cpi >= 0) && (cpi < utf8_strlen(cur))) {
+              /* Replace codepoint cpi with val, rebuilding the byte buffer
+                 since the new codepoint may differ in width from the old. */
+              size_t a = utf8_byte_offset(cur, cpi);
+              size_t aend = utf8_byte_offset(cur, cpi + 1);
+              size_t total = strlen(cur);
+              char enc[4];
+              int k = utf8_encode((uint32_t)CHAR_VAL(val), enc);
+              size_t newlen = a + (size_t)k + (total - aend);
+              char *nb = memalloc(newlen + 1, 1);
+              memcpy(nb, cur, a);
+              memcpy(nb + a, enc, (size_t)k);
+              memcpy(nb + a + (size_t)k, cur + aend, total - aend);
+              nb[newlen] = '\0';
+              exp_set_text(key, nb, newlen);
+              free(nb);
               if (idx)
                 unrefexp(idx);
               unrefexp(key);
@@ -5545,11 +5796,9 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     int n = snprintf(tmp, sizeof tmp, "%lld", (long long)FIX_VAL(v));
     str_buf_put(buf, len, cap, tmp, (size_t)n);
   } else if (ischar(v)) {
-    unsigned int c = (unsigned int)CHAR_VAL(v);
-    if (c <= 0x7f) {
-      char ch = (char)c;
-      str_buf_put(buf, len, cap, &ch, 1);
-    }
+    char u[4];
+    int k = utf8_encode((uint32_t)CHAR_VAL(v), u);
+    str_buf_put(buf, len, cap, u, (size_t)k);
   } else if (isstring(v) || issymbol(v)) {
     { const char *_t = exp_text(v); str_buf_put(buf, len, cap, (char *)_t, strlen((char *)_t)); }
   } else if (isfloat(v)) {
@@ -5824,7 +6073,8 @@ exp_t *substrcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_3(s, start, end,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "substr: expected string and numeric bounds"));
-  int64_t n = (int64_t)strlen((char *)exp_text(s));
+  const char *sp = (const char *)exp_text(s);
+  int64_t n = utf8_strlen(sp); /* codepoint count, not byte count */
   int64_t a = FIX_VAL(start), b = FIX_VAL(end);
   if (a < 0)
     a = 0;
@@ -5836,7 +6086,9 @@ exp_t *substrcmd(exp_t *e, env_t *env) {
     b = a;
   if (b > n)
     b = n;
-  exp_t *ret = make_string((char *)exp_text(s) + a, (int)(b - a));
+  size_t ba = utf8_byte_offset(sp, a); /* codepoint indices -> byte offsets */
+  size_t bb = utf8_byte_offset(sp, b);
+  exp_t *ret = make_string((char *)sp + ba, (int)(bb - ba));
   CLEAN_RETURN_3(s, start, end, ret);
 }
 
@@ -5862,8 +6114,14 @@ exp_t *stringsplitcmd(exp_t *e, env_t *env) {
   size_t nlen = strlen(needle);
   exp_t *ret = NIL_EXP, *tail = NULL;
   if (nlen == 0) {
-    for (size_t i = 0; str[i]; i++)
-      list_append_owned(&ret, &tail, make_string((char *)str + i, 1));
+    /* Empty separator: one element per codepoint, not per byte. */
+    size_t off = 0;
+    while (str[off]) {
+      size_t prev = off;
+      utf8_decode_at(str, &off);
+      list_append_owned(&ret, &tail,
+                        make_string((char *)str + prev, (int)(off - prev)));
+    }
   } else {
     const char *p = str;
     const char *hit;
@@ -6751,7 +7009,7 @@ exp_t *lengthcmd(exp_t *e, env_t *env) {
     }
     int64_t n = 0;
     if (isstring(a))
-      { const char *_t = exp_text(a); n = _t ? (int64_t)strlen((char *)_t) : 0; }
+      { const char *_t = exp_text(a); n = _t ? utf8_strlen(_t) : 0; }
     else if (a == nil_singleton)
       n = 0;
     else if (ispair(a)) {
@@ -7606,8 +7864,10 @@ exp_t *stringindexcmd(exp_t *e, env_t *env) {
   if (!isstring(s) || !isstring(sub))
     CLEAN_RETURN_2(s, sub, error(ERROR_ILLEGAL_VALUE, NULL, env,
                                  "string-index: args must be strings"));
-  char *found = strstr((char *)exp_text(s), (char *)exp_text(sub));
-  exp_t *ret = found ? MAKE_FIX((int64_t)(found - (char *)exp_text(s))) : NIL_EXP;
+  char *base = (char *)exp_text(s);
+  char *found = strstr(base, (char *)exp_text(sub));
+  exp_t *ret =
+      found ? MAKE_FIX(utf8_count_bytes(base, (size_t)(found - base))) : NIL_EXP;
   CLEAN_RETURN_2(s, sub, ret);
 }
 
@@ -17660,7 +17920,7 @@ l_length: {
   if (xs == NULL || xs == nil_singleton) {
     n = 0;
   } else if (isstring(xs)) {
-    { const char *_t = exp_text(xs); n = _t ? (int64_t)strlen((char *)_t) : 0; }
+    { const char *_t = exp_text(xs); n = _t ? utf8_strlen(_t) : 0; }
   } else if (ispair(xs)) {
     exp_t *cur = xs;
     while (is_ptr(cur) && cur->type == EXP_PAIR) {
@@ -17719,14 +17979,13 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
                    "string-index: arg must be a fixnum");
     }
     int64_t i64 = FIX_VAL(idx);
-    int64_t len = (int64_t)strlen(exp_text(fn));
     unrefexp(idx);
-    if (i64 < 0 || i64 >= len) {
+    uint32_t cp;
+    if (i64 < 0 || !utf8_index(exp_text(fn), i64, &cp)) {
       return error(ERROR_INDEX_OUT_OF_RANGE, fn, env,
-                   "string-index: %lld out of range [0, %lld)", (long long)i64,
-                   (long long)len);
+                   "string-index: %lld out of range", (long long)i64);
     }
-    return make_char(*((char *)exp_text(fn) + i64));
+    return make_char(cp);
   }
   if (!islambda(fn)) {
     int i;
@@ -18173,8 +18432,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             }
             if (isnumber(idx)) {
               int64_t i = FIX_VAL(idx);
-              if ((i >= 0) && (i < (int64_t)strlen(exp_text(tmpexp2)))) {
-                ret = make_char(*((char *)exp_text(tmpexp2) + i));
+              uint32_t cp;
+              if ((i >= 0) && utf8_index(exp_text(tmpexp2), i, &cp)) {
+                ret = make_char(cp);
               } else {
                 ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
                             "Error index out of range");
@@ -18209,8 +18469,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         in_tail_position = outer_tail;
         if (isnumber(tmpexp2)) {
           int64_t idx = FIX_VAL(tmpexp2);
-          if ((idx >= 0) && (idx < (int64_t)strlen(exp_text(tmpexp)))) {
-            ret = make_char(*((char *)exp_text(tmpexp) + idx));
+          uint32_t cp;
+          if ((idx >= 0) && utf8_index(exp_text(tmpexp), idx, &cp)) {
+            ret = make_char(cp);
           } else
             ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
                         "Error index out of range");
@@ -18513,6 +18774,35 @@ static int alc_prompt_vwidth(const char *p) {
    before every readline() call so the first paint starts clean. */
 static int g_rd_crow = 0;
 
+/* Approximate terminal column width of a codepoint: 0 for combining /
+   zero-width marks, 2 for the common East-Asian-wide and emoji ranges,
+   1 otherwise. Enough to place the REPL cursor correctly; not a full
+   Unicode width table. */
+static int alc_cp_width(uint32_t cp) {
+  if (cp == 0)
+    return 0;
+  if ((cp >= 0x0300 && cp <= 0x036F) || /* combining diacritics */
+      (cp >= 0x200B && cp <= 0x200F) || /* zero-width spaces / marks */
+      (cp >= 0xFE00 && cp <= 0xFE0F) || /* variation selectors */
+      cp == 0x00AD)                     /* soft hyphen */
+    return 0;
+  if ((cp >= 0x1100 && cp <= 0x115F) ||  /* Hangul Jamo */
+      (cp >= 0x2E80 && cp <= 0x303E) ||  /* CJK radicals, Kangxi */
+      (cp >= 0x3041 && cp <= 0x33FF) ||  /* Kana .. CJK symbols */
+      (cp >= 0x3400 && cp <= 0x4DBF) ||  /* CJK Ext A */
+      (cp >= 0x4E00 && cp <= 0x9FFF) ||  /* CJK Unified */
+      (cp >= 0xA000 && cp <= 0xA4CF) ||  /* Yi */
+      (cp >= 0xAC00 && cp <= 0xD7A3) ||  /* Hangul syllables */
+      (cp >= 0xF900 && cp <= 0xFAFF) ||  /* CJK compatibility */
+      (cp >= 0xFE30 && cp <= 0xFE4F) ||  /* CJK compatibility forms */
+      (cp >= 0xFF00 && cp <= 0xFF60) ||  /* fullwidth forms */
+      (cp >= 0xFFE0 && cp <= 0xFFE6) ||  /* fullwidth signs */
+      (cp >= 0x1F300 && cp <= 0x1FAFF) ||/* emoji & pictographs */
+      (cp >= 0x20000 && cp <= 0x3FFFD))  /* CJK Ext B+ */
+    return 2;
+  return 1;
+}
+
 /* Multi-line-aware colored redisplay. A recalled history entry (or any
    accumulated form) may contain '\n' and span several screen rows;
    instead of the old single-line "\r\x1B[K" (which reprinted row 0 on
@@ -18551,12 +18841,20 @@ static void alcove_colored_redisplay(void) {
 
   int pw = alc_prompt_vwidth(pr);
   int prow = 0, pcol = pw, erow = 0;
-  for (int i = 0; i < rl_point; i++) {
+  /* Advance the cursor column by each codepoint's display width, not by
+     byte count — a multi-byte char (é, ï, 世) is one (or two) columns,
+     not one column per byte. */
+  for (int i = 0; i < rl_point;) {
     if (rl_line_buffer[i] == '\n') {
       prow++;
       pcol = CONT_W; /* next row starts past the continuation prompt */
-    } else
-      pcol++;
+      i++;
+    } else {
+      size_t off = (size_t)i;
+      uint32_t cp = utf8_decode_at(rl_line_buffer, &off);
+      pcol += alc_cp_width(cp);
+      i = (int)off;
+    }
   }
   for (int i = 0; i < rl_end; i++)
     if (rl_line_buffer[i] == '\n')
@@ -19689,10 +19987,45 @@ exp_t *readbytescmd(exp_t *e, env_t *env) {
   return blob;
 }
 
-const char doc_blob2string[] = "(blob->string b) — copy blob bytes into a "
-                               "fresh string (truncates at first NUL).";
-UNARY_TYPE_CMD(blob2stringcmd, "blob->string: arg must be a blob", isblob,
-               alc_blob_t, make_string(val_ptr->bytes, (int)val_ptr->len))
+const char doc_blob2string[] =
+    "(blob->string b) — copy blob bytes into a fresh string. Errors unless "
+    "the bytes are valid UTF-8 and NUL-free (a string is NUL-terminated and "
+    "codepoint-oriented, so neither is representable).";
+exp_t *blob2stringcmd(exp_t *e, env_t *env) {
+  exp_t *obj = EVAL(cadr(e), env);
+  if (iserror(obj)) {
+    unrefexp(e);
+    return obj;
+  }
+  if (!isblob(obj)) {
+    unrefexp(obj);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "blob->string: arg must be a blob");
+  }
+  size_t n = blob_len(obj);
+  const char *bytes = blob_bytes(obj);
+  for (size_t i = 0; i < n; i++)
+    if (bytes[i] == '\0') {
+      unrefexp(obj);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "blob->string: blob has a NUL byte at offset %zu — not "
+                   "representable as a string",
+                   i);
+    }
+  size_t bad = 0;
+  if (!utf8_valid(bytes, n, &bad)) {
+    unrefexp(obj);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "blob->string: invalid UTF-8 at offset %zu", bad);
+  }
+  exp_t *ret = make_string((char *)bytes, (int)n);
+  unrefexp(obj);
+  unrefexp(e);
+  return ret;
+}
 
 const char doc_vector[] = "(vector x ...) — build an EXP_VECTOR populated with "
                           "the given elements. Same as #[x ...].";
@@ -19756,6 +20089,11 @@ UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
    without it -R doubled every line's newline. History FILE load/save stays
    with each caller (the standalone REPL gates it on --no-history). */
 static void repl_readline_setup(env_t *global) {
+  /* Honor the terminal's locale so readline treats UTF-8 input as whole
+     characters — cursor movement, deletion, and width math operate per
+     codepoint instead of per byte (otherwise typing é/ï/世 desyncs the
+     cursor). Only LC_CTYPE, to avoid changing number formatting etc. */
+  setlocale(LC_CTYPE, "");
   g_global_env = global; /* completer walks env bindings */
   rl_attempted_completion_function = alcove_rl_completer;
 #ifdef ALCOVE_ALS
