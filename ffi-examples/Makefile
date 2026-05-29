@@ -18,6 +18,8 @@ run: libmylib.so
 	@../alcove --noload 05-callbacks.alc
 	@echo "=== 06-structs.alc ==="
 	@../alcove --noload 06-structs.alc
+	@echo "=== 07-varargs.alc ==="
+	@../alcove --noload 07-varargs.alc
 
 clean:
 	rm -f libmylib.so

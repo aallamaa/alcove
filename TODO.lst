@@ -115,8 +115,15 @@
        struct returns wrap the bytes in a blob. Verified: struct arg, struct
        return, 2-in-1-out, mixed int/double fields, ASan-clean under churn.
        Example ffi-examples/06. NOT yet: nested structs, string fields.
-[TODO] FFI: support varargs (printf). Parked on the Apple-arm64 ABI wall
-       (branch wip-ffi-varargs) — needs ffi_prep_cif_var + per-call cif.
+[DONE] FFI varargs: (ffi-vfn lib name ret fixed-arg-types...) binds a
+       variadic C function (e.g. printf). The fixed prefix is declared; extra
+       call args have their type inferred (fixnum->long, float->double,
+       char->int, string/nil->pointer) and the cif is built per call via
+       ffi_prep_cif_var. The "Apple-arm64 wall" turned out STALE — verified
+       working on macOS arm64 with libffi 3.4 (a snprintf/printf smoke test
+       plus alc_ffi_selftest_vsum/vsumd in the suite). Tests in test.alc's
+       FFI block; example ffi-examples/07. NOT covered: struct/callback as a
+       variadic arg (variadic tail is scalar only).
 
 [DONE] MEMORY LEAK: closure↔captured-env refcount cycle. A def/let closure
        created INSIDE a function body leaked, scaling with closures created

@@ -337,6 +337,7 @@ lispProc lispProcList[] = {
     /* FFI */
     LISPCMD("ffi?", ffipcmd, doc_ffip),
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
+    LISPCMD("ffi-vfn", ffivfncmd, doc_ffivfn),
     LISPCMD("ffi-callback", fficallbackcmd, doc_fficallback),
     LISPCMD("ffi-struct", ffistructcmd, doc_ffistruct),
     LISPCMD("ffi-pack", ffipackcmd, doc_ffipack),
@@ -6504,6 +6505,11 @@ const char doc_ffifn[] =
     "library. Types: void int long uint ulong ptr cstr double float. "
     "An empty lib name (\"\") resolves symbols already linked into alcove "
     "(libc/libm). ALCOVE_FFI build only.";
+const char doc_ffivfn[] =
+    "(ffi-vfn lib name ret fixed-arg-types...) — bind a VARIADIC C function "
+    "(e.g. printf). The given arg types are the fixed prefix; extra call args "
+    "are passed with types inferred from their value (int->long use %ld, "
+    "float->double, char->int, string->%s). ALCOVE_FFI build only.";
 const char doc_fficallback[] =
     "(ffi-callback ret (arg-types...) fn) — expose an alcove fn to C as a "
     "function pointer (e.g. a qsort comparator). Pass the result where a ptr "
@@ -6550,6 +6556,9 @@ typedef struct alc_ffi_t {
   uint8_t ret_tag;
   uint8_t arg_tags[ALC_FFI_MAX_ARGS]; /* FN/CB arg tags; STRUCT field tags */
   uint8_t kind;       /* AFFI_KIND_FN | _CB | _STRUCT */
+  uint8_t variadic;   /* FN: bound via ffi-vfn — nargs is the FIXED count and
+                         the cif is prepped per call (ffi_prep_cif_var) since
+                         the variadic arg types vary by call site. */
   char *display_name; /* "lib:fn" (FN) / "<callback>" / "<struct>" for errors */
   /* CB kind only — the libffi closure trampoline and the alcove fn it calls.
      `code` is the C-callable entry point; pass it where a ptr arg is wanted. */
@@ -6707,9 +6716,31 @@ alc_ffi_selftest_point alc_ffi_selftest_pt_make(double x, double y) {
   alc_ffi_selftest_point p = {x, y};
   return p;
 }
+/* Variadic fixtures — sum `count` trailing args. Return a value (no stdout)
+   so the test suite can assert on them. */
+long alc_ffi_selftest_vsum(int count, ...) {
+  va_list ap;
+  va_start(ap, count);
+  long s = 0;
+  for (int i = 0; i < count; i++) s += va_arg(ap, long);
+  va_end(ap);
+  return s;
+}
+double alc_ffi_selftest_vsumd(int count, ...) {
+  va_list ap;
+  va_start(ap, count);
+  double s = 0;
+  for (int i = 0; i < count; i++) s += va_arg(ap, double);
+  va_end(ap);
+  return s;
+}
 
-/* (ffi-fn lib-name fn-name return-type arg-type ...) */
-exp_t *ffifncmd(exp_t *e, env_t *env) {
+/* Shared binder for (ffi-fn ...) and (ffi-vfn ...). When variadic, the given
+   arg types are the FIXED prefix (>=1 required, per C's named-param rule),
+   the cif is prepped per call in alc_ffi_call, and any extra call args have
+   their types inferred from their alcove runtime type. */
+static exp_t *ffi_bind_impl(exp_t *e, env_t *env, int variadic) {
+  const char *who = variadic ? "ffi-vfn" : "ffi-fn";
   exp_t *cur = e->next;
   exp_t *libname = NULL, *fnname = NULL, *rtype = NULL;
   exp_t *atypes[ALC_FFI_MAX_ARGS] = {0};
@@ -6720,7 +6751,7 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
 
   if (!cur || !cur->next || !cur->next->next) {
     err = error(ERROR_MISSING_PARAMETER, e, env,
-                "(ffi-fn lib name return-type arg-type ...)");
+                "(%s lib name return-type arg-type ...)", who);
     goto cleanup;
   }
   libname = EVAL(cur->content, env);
@@ -6760,38 +6791,45 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
      more than 8 args. */
   if (cur) {
     err = error(ERROR_ILLEGAL_VALUE, e, env,
-                "ffi-fn: too many arg types (max %d supported)",
+                "%s: too many arg types (max %d supported)", who,
                 ALC_FFI_MAX_ARGS);
+    goto cleanup;
+  }
+  if (variadic && n_a < 1) {
+    err = error(ERROR_MISSING_PARAMETER, e, env,
+                "ffi-vfn: need at least one fixed arg type before the "
+                "variadic part (e.g. the format string)");
     goto cleanup;
   }
 
   if (!isstring(libname) || !isstring(fnname)) {
-    err = error(ERROR_ILLEGAL_VALUE, e, env,
-                "ffi-fn: lib and name must be strings");
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "%s: lib and name must be strings",
+                who);
     goto cleanup;
   }
   void *h = alc_ffi_dlopen((char *)exp_text(libname));
   if (!h) {
-    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: dlopen failed (%s)",
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "%s: dlopen failed (%s)", who,
                 dlerror());
     goto cleanup;
   }
   void *sym = dlsym(h, (char *)exp_text(fnname));
   if (!sym) {
-    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: dlsym failed for %s",
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "%s: dlsym failed for %s", who,
                 (char *)exp_text(fnname));
     goto cleanup;
   }
 
   alc_ffi_t *f = (alc_ffi_t *)memalloc(1, sizeof(alc_ffi_t));
   f->fn = sym;
-  f->nargs = (unsigned int)n_a;
+  f->nargs = (unsigned int)n_a; /* variadic: this is the FIXED count */
+  f->variadic = (uint8_t)variadic;
   alc_ffi_tag_t rt;
   ffi_type *rt_ffi;
   exp_t *rdesc;
   if (alc_ffi_resolve_type(rtype, &rt, &rt_ffi, &rdesc) < 0) {
     free(f);
-    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown return type");
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "%s: unknown return type", who);
     goto cleanup;
   }
   f->ret_tag = rt;
@@ -6805,7 +6843,7 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     if (alc_ffi_resolve_type(atypes[i], &at, &at_ffi, &adesc) < 0) {
       alc_ffi_free(f);
       err = error(ERROR_ILLEGAL_VALUE, e, env,
-                  "ffi-fn: unknown/invalid arg type at slot %d", i);
+                  "%s: unknown/invalid arg type at slot %d", who, i);
       goto cleanup;
     }
     f->arg_tags[i] = at;
@@ -6813,10 +6851,13 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     if (adesc) /* struct-by-value arg: hold the descriptor for sizing */
       f->arg_structs[i] = refexp(adesc);
   }
-  if (ffi_prep_cif(&f->cif, FFI_DEFAULT_ABI, f->nargs, f->rtype, f->atypes) !=
-      FFI_OK) {
+  /* Non-variadic: prep the cif now (fixed signature). Variadic: the cif is
+     built per call in alc_ffi_call once the variadic arg types are known. */
+  if (!variadic &&
+      ffi_prep_cif(&f->cif, FFI_DEFAULT_ABI, f->nargs, f->rtype, f->atypes) !=
+          FFI_OK) {
     alc_ffi_free(f);
-    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: ffi_prep_cif failed");
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "%s: ffi_prep_cif failed", who);
     goto cleanup;
   }
   size_t dnlen = strlen((char *)exp_text(libname)) + strlen((char *)exp_text(fnname)) + 2;
@@ -6837,6 +6878,15 @@ cleanup:
     return err;
   return ret;
 }
+
+/* (ffi-fn lib name return-type arg-type ...) */
+exp_t *ffifncmd(exp_t *e, env_t *env) { return ffi_bind_impl(e, env, 0); }
+
+/* (ffi-vfn lib name return-type fixed-arg-type ...) — a variadic C function.
+   The given arg types are the FIXED prefix; extra args supplied at the call
+   are passed with types inferred from their alcove value (fixnum→long,
+   float→double, char→int, string/nil→pointer). */
+exp_t *ffivfncmd(exp_t *e, env_t *env) { return ffi_bind_impl(e, env, 1); }
 
 /* libffi closure trampoline: C code calls this with the native args; we
    marshal them to alcove values, invoke the bound lambda, and marshal the
@@ -7251,14 +7301,33 @@ void alc_ffi_free(void *ptr) {
 }
 
 /* Marshal alcove args → C, ffi_call, marshal return. */
+/* Infer the ffi type of a variadic call argument from its alcove runtime
+   type, applying C's default argument promotions. alcove integers are 64-bit,
+   so a fixnum is passed as a long — use %ld in format strings; floats become
+   double; chars become int; strings and nil become pointers. Returns -1 if
+   the value can't be passed as a vararg. */
+static int alc_ffi_infer(exp_t *a, alc_ffi_tag_t *tag, ffi_type **out) {
+  if (isnumber(a))  { *tag = AFFI_LONG;   *out = &ffi_type_sint64;  return 0; }
+  if (isfloat(a))   { *tag = AFFI_DOUBLE; *out = &ffi_type_double;  return 0; }
+  if (ischar(a))    { *tag = AFFI_INT;    *out = &ffi_type_sint32;  return 0; }
+  if (isstring(a))  { *tag = AFFI_STRING; *out = &ffi_type_pointer; return 0; }
+  if (a == NIL_EXP) { *tag = AFFI_PTR;    *out = &ffi_type_pointer; return 0; }
+  return -1;
+}
+
 static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
-  if ((unsigned int)nargs != f->nargs) {
+  /* Variadic: f->nargs is the FIXED count — require at least that many and at
+     most the slot cap. Non-variadic: exact arity. */
+  int bad_arity = f->variadic ? (nargs < (int)f->nargs || nargs > ALC_FFI_MAX_ARGS)
+                              : ((unsigned int)nargs != f->nargs);
+  if (bad_arity) {
     int i;
     for (i = 0; i < nargs; i++)
       unrefexp(args[i]);
     return error(ERROR_MISSING_PARAMETER, NULL, NULL,
-                 "ffi: wrong arg count for %s (expected %u, got %d)",
-                 f->display_name ? f->display_name : "?", f->nargs, nargs);
+                 "ffi: wrong arg count for %s (expected %s%u, got %d)",
+                 f->display_name ? f->display_name : "?",
+                 f->variadic ? ">=" : "", f->nargs, nargs);
   }
   /* Slot storage. Avoid stack discipline issues by using one union per arg. */
   union {
@@ -7269,6 +7338,28 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     void *p;
   } slots[ALC_FFI_MAX_ARGS];
   void *avalues[ALC_FFI_MAX_ARGS];
+  /* Per-call arg tags + ffi types. For non-variadic and the fixed prefix of a
+     variadic call these come from the binding; extra variadic args are
+     inferred from their value. */
+  uint8_t tags[ALC_FFI_MAX_ARGS];
+  ffi_type *atvec[ALC_FFI_MAX_ARGS];
+  for (int i = 0; i < nargs; i++) {
+    if (i < (int)f->nargs) {
+      tags[i] = f->arg_tags[i];
+      atvec[i] = f->atypes[i];
+    } else {
+      alc_ffi_tag_t t;
+      if (alc_ffi_infer(args[i], &t, &atvec[i]) < 0) {
+        for (int j = 0; j < nargs; j++)
+          unrefexp(args[j]);
+        return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
+                     "ffi: %s: variadic arg %d cannot be passed (need "
+                     "number/float/char/string/nil)",
+                     f->display_name ? f->display_name : "?", i);
+      }
+      tags[i] = (uint8_t)t;
+    }
+  }
   /* Type-mismatched args used to silently coerce to 0/NULL — calling
      a strlen-binding with a number then crashed in C. Now we refuse
      up front with a clear error so the caller knows which slot is
@@ -7276,7 +7367,7 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
   for (int i = 0; i < nargs; i++) {
     exp_t *a = args[i];
     int ok = 0;
-    switch (f->arg_tags[i]) {
+    switch (tags[i]) {
     case AFFI_INT:
     case AFFI_LONG:
       /* Chars (tagged immediates) are a natural fit for int args:
@@ -7313,13 +7404,12 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
         unrefexp(args[j]);
       return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
                    "ffi: %s: arg %d wrong type for tag %d",
-                   f->display_name ? f->display_name : "?", i,
-                   (int)f->arg_tags[i]);
+                   f->display_name ? f->display_name : "?", i, (int)tags[i]);
     }
   }
   for (int i = 0; i < nargs; i++) {
     exp_t *a = args[i];
-    switch (f->arg_tags[i]) {
+    switch (tags[i]) {
     case AFFI_INT:
       slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a)
                   : ischar(a)  ? (int32_t)CHAR_VAL(a)
@@ -7362,6 +7452,22 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
       break;
     }
   }
+  /* Variadic calls build their cif here, now that the per-call arg types are
+     known (ffi_prep_cif_var needs the full type vector and the fixed count).
+     Non-variadic calls reuse the cif prepped at bind time. */
+  ffi_cif vcif;
+  ffi_cif *cif = &f->cif;
+  if (f->variadic) {
+    if (ffi_prep_cif_var(&vcif, FFI_DEFAULT_ABI, f->nargs, (unsigned int)nargs,
+                         f->rtype, atvec) != FFI_OK) {
+      for (int j = 0; j < nargs; j++)
+        unrefexp(args[j]);
+      return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
+                   "ffi: %s: ffi_prep_cif_var failed",
+                   f->display_name ? f->display_name : "?");
+    }
+    cif = &vcif;
+  }
   union {
     int32_t i;
     int64_t l;
@@ -7380,7 +7486,7 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     struct_buf = (char *)memalloc(bufsz ? bufsz : 1, 1);
     rvalue = struct_buf;
   }
-  ffi_call(&f->cif, FFI_FN(f->fn), rvalue, avalues);
+  ffi_call(cif, FFI_FN(f->fn), rvalue, avalues);
   exp_t *ret = NIL_EXP;
   switch (f->ret_tag) {
   case AFFI_VOID:
@@ -7428,6 +7534,11 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   return error(ERROR_ILLEGAL_VALUE, NULL, env,
                "ffi-fn: alcove built without libffi (install libffi-dev "
                "and rebuild).");
+}
+exp_t *ffivfncmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "ffi-vfn: alcove built without libffi.");
 }
 exp_t *fficallbackcmd(exp_t *e, env_t *env) {
   unrefexp(e);

@@ -557,6 +557,13 @@ if (ffi?):
       'caught
     assert "ffi unknown type errors" (try (ffi-fn "" "alc_ffi_selftest_add" "frob" "long") (fn (e) 'caught)):
       'caught
+    setf ffi-vsum (ffi-vfn "" "alc_ffi_selftest_vsum" "long" "int")
+    assert "ffi varargs long sum" (ffi-vsum 3 10 20 12) 42
+    assert "ffi varargs zero tail" (ffi-vsum 0) 0
+    setf ffi-vsumd (ffi-vfn "" "alc_ffi_selftest_vsumd" "double" "int")
+    assert "ffi varargs double sum" (ffi-vsumd 3 1.5 2.5 4.0) 8.0
+    assert "ffi varargs too few errors" (try (ffi-vsum) (fn (e) 'caught)):
+      'caught
     nil
 
 assert "mod 17 5" (mod 17 5) 2

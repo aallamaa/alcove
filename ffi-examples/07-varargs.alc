@@ -1,0 +1,29 @@
+; FFI example: variadic C functions (printf-style) via (ffi-vfn ...).
+;
+;   alcove 07-varargs.alc
+;
+; (ffi-vfn lib name ret FIXED-ARG-TYPES...) binds a variadic function. The
+; arg types you give are the FIXED prefix; any extra arguments at the call
+; site are passed with types inferred from their alcove value:
+;   fixnum -> long (64-bit; use %ld in formats)   float  -> double
+;   char   -> int                                 string -> char* (%s)
+;   nil    -> NULL pointer
+; The cif is built per call (ffi_prep_cif_var), so each call site can pass a
+; different number/shape of variadic args. Works on Linux and macOS (incl.
+; Apple silicon) with libffi 3.3+.
+;
+; Uses libc printf via the "" (process-self) library — no external .so needed.
+
+(= printf (ffi-vfn "" "printf" "int" "string"))   ; 1 fixed arg: the format
+
+; integers are 64-bit in alcove → use %ld
+(prn "-- printf with mixed varargs --")
+(= n (printf "int=%ld  str=%s  float=%.2f\n" 42 "hello" 3.5))
+(prn "printf returned (chars written): " n)
+
+; a fixed-only call (no variadic args) still works
+(printf "no varargs here\n")
+
+; snprintf is also variadic; here we just show another binding shape.
+; (Reading the formatted bytes back would need a pointer to a buffer.)
+(prn "-- done --")

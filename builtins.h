@@ -109,6 +109,7 @@ exp_t *webpcmd(exp_t *e, env_t *env);
 exp_t *sleepmscmd(exp_t *e, env_t *env);
 extern const char doc_ffip[];
 extern const char doc_ffifn[];
+extern const char doc_ffivfn[];
 extern const char doc_fficallback[];
 extern const char doc_ffistruct[];
 extern const char doc_ffipack[];

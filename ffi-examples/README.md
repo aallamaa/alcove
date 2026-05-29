@@ -79,6 +79,9 @@ This is how the test suite exercises FFI with no external `.so`. Use
   loop, with `double` and closures).
 - **06-structs.alc** — by-value structs via `(ffi-struct …)` /
   `(ffi-pack …)` / `(ffi-unpack …)`: struct args, struct returns, and both.
+- **07-varargs.alc** — variadic C functions (printf-style) via
+  `(ffi-vfn …)`: a fixed-arg prefix plus a variadic tail whose types are
+  inferred from the values.
 
 Run them all (auto-builds `libmylib.so`):
 
@@ -115,7 +118,10 @@ handle for the lifetime of the process.
   `(ffi-unpack …)` — see 06-structs.alc. Struct fields: int long double ptr
   (scalar; no nested structs or string fields yet). Works as ffi-fn arg and
   return types.
-- **No varargs yet** (e.g. `printf`). Parked on the Apple-arm64 ABI wall.
+- **Variadic functions are supported** via `(ffi-vfn …)` — see
+  07-varargs.alc. The fixed args are declared; the variadic tail is inferred
+  per call (fixnum→long, float→double, char→int, string/nil→pointer). Works
+  on Linux and macOS incl. Apple silicon (libffi 3.3+).
 - **Returned `char*` is copied** into a fresh alcove string. If your
   function returns a pointer the caller is supposed to `free()`,
   alcove leaks it (no `free` builtin yet — wrap it via FFI:

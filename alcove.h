@@ -784,6 +784,7 @@ exp_t *anypcmd(exp_t *e, env_t *env);
 exp_t *allpcmd(exp_t *e, env_t *env);
 exp_t *ffipcmd(exp_t *e, env_t *env);
 exp_t *ffifncmd(exp_t *e, env_t *env);
+exp_t *ffivfncmd(exp_t *e, env_t *env);
 exp_t *fficallbackcmd(exp_t *e, env_t *env);
 exp_t *ffistructcmd(exp_t *e, env_t *env);
 exp_t *ffipackcmd(exp_t *e, env_t *env);

@@ -394,6 +394,14 @@
     (assert "ffi unknown type errors"
             (try (ffi-fn "" "alc_ffi_selftest_add" "frob" "long") (fn (e) 'caught))
             'caught)
+    ; variadic (ffi-vfn): fixed count arg + inferred variadic tail
+    (= ffi-vsum (ffi-vfn "" "alc_ffi_selftest_vsum" "long" "int"))
+    (assert "ffi varargs long sum"      (ffi-vsum 3 10 20 12)           42)
+    (assert "ffi varargs zero tail"     (ffi-vsum 0)                    0)
+    (= ffi-vsumd (ffi-vfn "" "alc_ffi_selftest_vsumd" "double" "int"))
+    (assert "ffi varargs double sum"    (ffi-vsumd 3 1.5 2.5 4.0)       8.0)
+    (assert "ffi varargs too few errors"
+            (try (ffi-vsum) (fn (e) 'caught))                           'caught)
     nil))
 
 ; 21. Stdlib additions: math, seq, predicates, HOFs.
