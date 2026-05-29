@@ -103,6 +103,22 @@
        comparator). Each needs a libffi closure setup but no fundamental
        blocker.
 
+[TODO] MEMORY LEAK: closure↔captured-env refcount cycle. A def/let closure
+       created INSIDE a function body forms a strong 2-cycle (lambda owns
+       its captured env via next->meta; env owns the lambda via its name
+       binding) that refcounting can't reclaim — leaks, scaling with
+       closures created. Top-level defs are immune (immortal global env).
+       Repro + 5 fix options (recommend B: targeted cycle-break in
+       destroy_env) in docs/closure_env_cycle_leak.md.
+
+[DONE] security/memory audit (2026-05): fixed FFI ->ptr crash (ffi-fn arg
+       type read raw union as a pointer → SIGSEGV; now exp_text), RESP
+       write-buffer DoS ceiling (RESP_WBUF_MAX + wfail drop), unchecked
+       reallocs → graceful_shutdown, KEYS* partial-OOM double-free,
+       make_inline_txt negative-length guard, non-Apple JIT W^X (mprotect
+       W→RX), and vec int32 capacity overflow/UB. deserializer + core
+       refcount model audited clean.
+
 [DONE] Compile lambda for closures (was AST-only). Closures now compile
        to bytecode with bc->no_gcache set, so OP_LOAD_GLOBAL/CALL_GLOBAL
        do a fresh env-chain lookup each time instead of a per-bc gcache

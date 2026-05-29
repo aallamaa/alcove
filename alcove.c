@@ -1760,6 +1760,13 @@ static inline char *alloc_str(char *str, int length) {
    overlap `ptr`, so readers must go through exp_text() — `meta` is left
    free for the symbol resolution cache. See FLAG_INLINE_TXT. */
 static inline exp_t *make_inline_txt(char *str, int length, int type) {
+  /* A negative length here means a caller truncated a size_t > INT_MAX into
+     this signed int (e.g. a multi-GB blob/string). Left unchecked it would
+     sign-extend in the memcpy below into a ~SIZE_MAX copy — a heap smash.
+     alcove can't represent text that long anyway, so treat it as a fatal
+     invariant violation, consistent with the out-of-memory convention. */
+  if (length < 0)
+    graceful_shutdown("Fatal error: text length overflow (size_t > INT_MAX)");
   exp_t *cur = make_nil();
   cur->type = (unsigned short)type;
   if (length <= INLINE_TXT_CAP) {
@@ -4599,7 +4606,9 @@ exp_t *sqrtcmd(exp_t *e, env_t *env) {
    on overflow or alloc failure. memalloc zero-initialises the payload,
    so cells outside the window read as zero (not garbage). */
 static alc_vec_t *vec_alloc_storage(int64_t cap) {
-  if (cap < 0 || cap > ((int64_t)1 << 31))
+  /* cap must fit a positive int32 (it is stored as v->cap). The bound is
+     exclusive: cap == 2^31 would cast to INT32_MIN. */
+  if (cap < 0 || cap >= ((int64_t)1 << 31))
     return NULL;
   size_t bytes = sizeof(alc_vec_t) + (size_t)cap * 8u;
   alc_vec_t *v = (alc_vec_t *)memalloc(1, bytes);
@@ -5439,8 +5448,12 @@ static int vec_grow_back(exp_t *vexp) {
     vec_slide_left(vexp);
     return 1;
   }
-  int32_t new_cap = cap < 4 ? 8 : cap + (cap >> 1);
-  return vec_realloc(vexp, new_cap, 0);
+  /* int64 to avoid signed-overflow UB when cap is near INT32_MAX; fail the
+     grow cleanly (vec-push then errors) if 1.5x would exceed the int32 cap. */
+  int64_t grown = cap < 4 ? 8 : (int64_t)cap + (cap >> 1);
+  if (grown >= ((int64_t)1 << 31))
+    return 0;
+  return vec_realloc(vexp, (int32_t)grown, 0);
 }
 
 /* Ensure there's room at the front for one more unshift. Always
@@ -5450,7 +5463,12 @@ static int vec_grow_front(exp_t *vexp) {
   alc_vec_t *v = (alc_vec_t *)vexp->ptr;
   int32_t cap = v->cap;
   int32_t live = vexp->vec_win.end - vexp->vec_win.start;
-  int32_t new_cap = cap < 4 ? 8 : cap + (cap >> 1);
+  /* int64 to avoid signed-overflow UB near INT32_MAX; fail cleanly if the
+     grown capacity would not fit a positive int32. */
+  int64_t grown = cap < 4 ? 8 : (int64_t)cap + (cap >> 1);
+  if (grown >= ((int64_t)1 << 31))
+    return 0;
+  int32_t new_cap = (int32_t)grown;
   int32_t front_pad = (new_cap - live) / 2;
   return vec_realloc(vexp, new_cap, front_pad);
 }
@@ -6598,7 +6616,7 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     }
     alc_ffi_tag_t at;
     ffi_type *at_ffi;
-    if (alc_ffi_typeof((char *)atypes[i]->ptr, &at, &at_ffi) < 0) {
+    if (alc_ffi_typeof((char *)exp_text(atypes[i]), &at, &at_ffi) < 0) {
       free(f);
       err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown arg type %s",
                   (char *)exp_text(atypes[i]));
@@ -10849,10 +10867,15 @@ __attribute__((unused)) static exp_t *jit_call_global1_drop(bytecode_t *bc,
 /* Page allocation + W^X dance — shared by both backends. */
 static void *jit_alloc(size_t sz) {
   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+  int prot = PROT_READ | PROT_WRITE;
 #ifdef __APPLE__
+  /* Apple hardened runtime: the page is mapped RWX-capable under MAP_JIT and
+     write-access is toggled per-thread via pthread_jit_write_protect_np; it
+     must carry PROT_EXEC from the start. */
   flags |= MAP_JIT;
+  prot |= PROT_EXEC;
 #endif
-  void *p = mmap(NULL, sz, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
+  void *p = mmap(NULL, sz, prot, flags, -1, 0);
   return (p == MAP_FAILED) ? NULL : p;
 }
 static void jit_write_begin(void) {
@@ -10863,6 +10886,14 @@ static void jit_write_begin(void) {
 static void jit_write_end(void *p, size_t sz) {
 #ifdef __APPLE__
   pthread_jit_write_protect_np(1);
+#else
+  /* Non-Apple: the page was mapped W (not X). Flip it to R+X before the
+     first execution — we never hold a simultaneously writable+executable
+     mapping (W^X), and hardened kernels that reject RWX won't refuse us.
+     mmap is page-aligned, so round the protected length up to a page. */
+  size_t pagesz = 4096;
+  size_t protlen = (sz + pagesz - 1) & ~(pagesz - 1);
+  mprotect(p, protlen, PROT_READ | PROT_EXEC);
 #endif
   __builtin___clear_cache((char *)p, (char *)p + sz);
 }
@@ -13219,9 +13250,13 @@ int jit_compile(bytecode_t *bc) {
     return 0; /* shape not recognized */
   }
 
-  /* Hard cap is the insns[128] declaration above; trip if anything
-     exceeds the buffer. The widest shape today is ackermann (~50). */
-  JIT_GUARD(128);
+  /* Hard cap tied to the insns[] declaration above (drift-proof: stays
+     correct if the buffer is ever resized), mirroring the amd64 backend's
+     `n > sizeof(buf)` catch-all. The widest shape today is ackermann (~50),
+     and every shape matcher is exact-ncode-gated, so emission is a
+     compile-time-constant count per shape — well under this bound. */
+  if (n > (int)(sizeof(insns) / sizeof(insns[0])))
+    return 0;
   size_t sz = (size_t)n * 4;
   size_t pagesz = 4096;
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);

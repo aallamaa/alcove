@@ -55,6 +55,11 @@
 #define RESP_DEFAULT_PORT 6379
 #define RESP_RBUF_INIT 4096
 #define RESP_RBUF_MAX (16 * 1024 * 1024)
+/* Output-buffer ceiling. The read side is bounded above; without a matching
+   bound on the reply side, a client that stops draining its socket (slow or
+   malicious) can make us buffer replies without limit and OOM the process.
+   When a client's pending output would exceed this, we flag it for drop. */
+#define RESP_WBUF_MAX (64 * 1024 * 1024)
 /* Max accept()s per reactor tick. Bounds the worst-case time spent
    on new-connection work so per-client I/O can't be starved by a
    SYN flood. Excess connections get the next select() iteration. */
@@ -97,6 +102,9 @@ typedef struct resp_client {
   /* wbuf is a window [whead, wlen) — appends advance wlen, drains
      advance whead. Invariant: whead <= wlen <= wcap. */
   size_t whead, wlen, wcap;
+  /* Set when pending output crossed RESP_WBUF_MAX (or a wbuf realloc could
+     not be satisfied): the reactor drops this client at the next event. */
+  int wfail;
   /* argv/argl pool — reused across every parsed command on this
      connection. Grows monotonically up to the largest argc the client
      has ever sent (cap stored in argv_cap). Pre-pool, every command
@@ -389,9 +397,18 @@ static char *resp_write_reserve(resp_client_t *c, size_t n) {
       c->whead = 0;
     }
     if (c->wlen + n > c->wcap) {
+      size_t need = c->wlen + n;
+      /* Output-buffer ceiling: flag the client for drop, but still satisfy
+         THIS reservation so the in-flight reply stays well-formed (a single
+         reply is itself bounded). The reactor drops it after the batch. */
+      if (need > RESP_WBUF_MAX)
+        c->wfail = 1;
       size_t cap = c->wcap ? c->wcap : 256;
-      while (cap < c->wlen + n) cap *= 2;
-      c->wbuf = realloc(c->wbuf, cap);
+      while (cap < need) cap *= 2;
+      char *nb = realloc(c->wbuf, cap);
+      if (!nb)
+        graceful_shutdown("Fatal error: out of memory (resp wbuf)");
+      c->wbuf = nb;
       c->wcap = cap;
     }
   }
@@ -758,10 +775,17 @@ static int resp_keys_snap_cb(const char *k, size_t klen, exp_t *v,
   resp_keys_snap_t *s = ctx;
   if (s->n == s->ncap) {
     size_t nc = s->ncap ? s->ncap * 2 : 64;
+    /* Reassign each on success before attempting the next: a realloc frees
+       its old block, so committing immediately keeps s->off/s->len always
+       pointing at live memory. The earlier "free(no); free(nl)" form
+       double-freed via resp_keys_snap_free when only one realloc failed. */
     size_t *no = realloc(s->off, nc * sizeof *no);
+    if (!no) return -1;
+    s->off = no;
     size_t *nl = realloc(s->len, nc * sizeof *nl);
-    if (!no || !nl) { free(no); free(nl); return -1; }
-    s->off = no; s->len = nl; s->ncap = nc;
+    if (!nl) return -1;
+    s->len = nl;
+    s->ncap = nc;
   }
   if (s->blen + klen > s->bcap) {
     size_t nc = s->bcap ? s->bcap * 2 : 4096;
@@ -1823,7 +1847,10 @@ static inline int resp_client_handle_events(resp_client_t *cur,
       else {
         size_t cap = cur->rcap * 2;
         if (cap > RESP_RBUF_MAX) cap = RESP_RBUF_MAX;
-        cur->rbuf = realloc(cur->rbuf, cap);
+        char *nb = realloc(cur->rbuf, cap);
+        if (!nb)
+          graceful_shutdown("Fatal error: out of memory (resp rbuf)");
+        cur->rbuf = nb;
         cur->rcap = cap;
       }
     }
@@ -1848,6 +1875,10 @@ static inline int resp_client_handle_events(resp_client_t *cur,
   }
   if (!drop && writable && cur->wlen > cur->whead)
     drop = resp_client_drain_write(cur);
+  /* Output-buffer ceiling tripped while building replies: drop the client
+     once we've flushed what we could above. */
+  if (cur->wfail)
+    drop = 1;
   return drop;
 }
 
