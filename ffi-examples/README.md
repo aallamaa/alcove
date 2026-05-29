@@ -115,9 +115,10 @@ handle for the lifetime of the process.
   see 05-callbacks.alc. Pass the result where a `ptr` arg is expected.
   Callback ret/arg types: void int long double ptr (no string return).
 - **Struct-by-value is supported** via `(ffi-struct …)` + `(ffi-pack …)` /
-  `(ffi-unpack …)` — see 06-structs.alc. Struct fields: int long double ptr
-  (scalar; no nested structs or string fields yet). Works as ffi-fn arg and
-  return types.
+  `(ffi-unpack …)` — see 06-structs.alc. Fields: int long double ptr, or a
+  nested struct descriptor (struct-in-struct; unpack yields the inner struct
+  as a blob). Works as ffi-fn arg and return types. (No string fields yet —
+  use ptr.)
 - **Variadic functions are supported** via `(ffi-vfn …)` — see
   07-varargs.alc. The fixed args are declared; the variadic tail is inferred
   per call (fixnum→long, float→double, char→int, string/nil→pointer). Works

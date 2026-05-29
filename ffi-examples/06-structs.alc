@@ -31,3 +31,11 @@
 ; pack/unpack also works standalone (no C call) — handy for building
 ; buffers to hand to ptr-taking C functions.
 (prn "pack/unpack 7.5,8.5 => " (ffi-unpack Point (ffi-pack Point 7.5 8.5))) ; (7.5 8.5)
+
+; nested struct: a struct field inside a struct. Pack the inner Points, then
+; the outer Seg; unpack yields the inner Points back as blobs.
+(= Seg (ffi-struct Point Point))            ; struct { Point a, b; }
+(= seg-len2 (ffi-fn "./libmylib.so" "mylib_seg_len2" "double" Seg))
+(= s (ffi-pack Seg (ffi-pack Point 0.0 0.0) (ffi-pack Point 3.0 4.0)))
+(prn "seg-len2 (0,0)-(3,4) => " (seg-len2 s))                         ; 25
+(prn "  inner b           => " (ffi-unpack Point (car (cdr (ffi-unpack Seg s)))))  ; (3 4)

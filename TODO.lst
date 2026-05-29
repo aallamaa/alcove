@@ -123,7 +123,13 @@
        dependency on ffi_get_struct_offsets). Struct args pass blob bytes;
        struct returns wrap the bytes in a blob. Verified: struct arg, struct
        return, 2-in-1-out, mixed int/double fields, ASan-clean under churn.
-       Example ffi-examples/06. NOT yet: nested structs, string fields.
+       Example ffi-examples/06.
+[DONE] FFI nested structs: a struct descriptor is a valid ffi-struct field
+       type (struct-in-struct). Parent layout uses the nested size/alignment;
+       pack memcpy's the nested blob into the field slot; unpack yields the
+       nested bytes as a blob (ffi-unpack again with the nested descriptor).
+       Tested via alc_ffi_selftest_seg + example 06. Still NOT done: string
+       struct fields (use ptr).
 [DONE] FFI varargs: (ffi-vfn lib name ret fixed-arg-types...) binds a
        variadic C function (e.g. printf). The fixed prefix is declared; extra
        call args have their type inferred (fixnum->long, float->double,

@@ -68,3 +68,10 @@ mylib_point mylib_pt_add(mylib_point a, mylib_point b) {
   mylib_point r = {a.x + b.x, a.y + b.y};
   return r;
 }
+
+/* Nested struct (a struct field inside a struct). */
+typedef struct { mylib_point a, b; } mylib_seg;
+double mylib_seg_len2(mylib_seg s) {
+  double dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
+  return dx * dx + dy * dy;
+}

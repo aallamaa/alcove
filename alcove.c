@@ -6596,6 +6596,9 @@ typedef struct alc_ffi_t {
   ffi_type *elements[ALC_FFI_MAX_ARGS + 1];
   size_t offsets[ALC_FFI_MAX_ARGS];
   size_t struct_size;
+  size_t struct_align; /* max field alignment — needed when nested in another
+                          struct's layout. arg_structs[i] holds the nested
+                          descriptor for a struct-typed field (else NULL). */
 } alc_ffi_t;
 
 /* Map a type-name string to (tag, ffi_type*). Returns 0 on success, -1
@@ -6735,6 +6738,12 @@ double alc_ffi_selftest_pt_norm2(alc_ffi_selftest_point p) {
 alc_ffi_selftest_point alc_ffi_selftest_pt_make(double x, double y) {
   alc_ffi_selftest_point p = {x, y};
   return p;
+}
+/* Nested-struct fixture: a segment of two points (struct-in-struct). */
+typedef struct { alc_ffi_selftest_point a, b; } alc_ffi_selftest_seg;
+double alc_ffi_selftest_seg_len2(alc_ffi_selftest_seg s) {
+  double dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
+  return dx * dx + dy * dy;
 }
 /* Variadic fixtures — sum `count` trailing args. Return a value (no stdout)
    so the test suite can assert on them. */
@@ -7120,34 +7129,49 @@ exp_t *ffistructcmd(exp_t *e, env_t *env) {
   f->kind = AFFI_KIND_STRUCT;
   size_t off = 0, align = 1;
   for (int i = 0; i < nf; i++) {
-    if (!isstring(fields[i])) {
-      alc_ffi_free(f);
-      err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-struct: field type must be a string");
-      goto cleanup;
-    }
     alc_ffi_tag_t t;
     ffi_type *ft;
-    if (alc_ffi_typeof((char *)exp_text(fields[i]), &t, &ft) < 0 ||
-        t == AFFI_VOID || t == AFFI_STRING) {
+    size_t fsize, falign;
+    if (ishamt(fields[i])) { /* defensive: not a valid field */
+      alc_ffi_free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-struct: invalid field type");
+      goto cleanup;
+    }
+    if (isffi(fields[i]) &&
+        ((alc_ffi_t *)fields[i]->ptr)->kind == AFFI_KIND_STRUCT) {
+      /* nested struct field: reuse its ffi_type + computed size/alignment,
+         and hold an owning ref to the nested descriptor for pack/unpack. */
+      alc_ffi_t *nd = (alc_ffi_t *)fields[i]->ptr;
+      t = AFFI_STRUCT;
+      ft = &nd->struct_type;
+      fsize = nd->struct_size;
+      falign = nd->struct_align;
+      f->arg_structs[i] = refexp(fields[i]);
+    } else if (isstring(fields[i]) &&
+               alc_ffi_typeof((char *)exp_text(fields[i]), &t, &ft) == 0 &&
+               t != AFFI_VOID && t != AFFI_STRING) {
+      fsize = ft->size;
+      falign = ft->alignment;
+    } else {
       alc_ffi_free(f);
       err = error(ERROR_ILLEGAL_VALUE, e, env,
-                  "ffi-struct: field type must be int/long/double/ptr (got %s)",
-                  (char *)exp_text(fields[i]));
+                  "ffi-struct: field must be int/long/double/ptr or a struct "
+                  "descriptor");
       goto cleanup;
     }
     f->arg_tags[i] = (uint8_t)t;
     f->atypes[i] = ft;
     f->elements[i] = ft;
-    size_t fa = ft->alignment;
-    off = (off + fa - 1) & ~(fa - 1);
+    off = (off + falign - 1) & ~(falign - 1);
     f->offsets[i] = off;
-    off += ft->size;
-    if (fa > align)
-      align = fa;
+    off += fsize;
+    if (falign > align)
+      align = falign;
   }
   f->elements[nf] = NULL;
   f->nargs = (unsigned int)nf;
   f->struct_size = (off + align - 1) & ~(align - 1);
+  f->struct_align = align;
   /* Leave size/alignment 0 so ffi_prep_cif computes the authoritative
      in-cif layout when this descriptor is used as an ffi-fn arg/return; our
      manual offsets/struct_size drive pack/unpack and match it for scalars. */
@@ -7227,6 +7251,13 @@ exp_t *ffipackcmd(exp_t *e, env_t *env) {
       if (!(isnumber(v) || v == NIL_EXP)) goto badfield;
       *(void **)slot = (v == NIL_EXP) ? NULL : (void *)(uintptr_t)FIX_VAL(v);
       break;
+    case AFFI_STRUCT: {
+      /* nested struct field: v is a blob packed to the nested layout. */
+      alc_ffi_t *nd = d->arg_structs[i] ? (alc_ffi_t *)d->arg_structs[i]->ptr : NULL;
+      if (!nd || !isblob(v) || blob_len(v) != nd->struct_size) goto badfield;
+      memcpy(slot, blob_bytes(v), nd->struct_size);
+      break;
+    }
     default:
       goto badfield;
     }
@@ -7284,6 +7315,11 @@ exp_t *ffiunpackcmd(exp_t *e, env_t *env) {
     case AFFI_LONG:   v = MAKE_FIX(*(const int64_t *)slot); break;
     case AFFI_DOUBLE: v = make_floatf(*(const double *)slot); break;
     case AFFI_PTR:    v = MAKE_FIX((int64_t)(uintptr_t)*(void *const *)slot); break;
+    case AFFI_STRUCT: { /* nested struct → blob of its bytes (ffi-unpack again) */
+      alc_ffi_t *nd = d->arg_structs[i] ? (alc_ffi_t *)d->arg_structs[i]->ptr : NULL;
+      v = nd ? make_blob(slot, nd->struct_size) : NIL_EXP;
+      break;
+    }
     default:          v = NIL_EXP; break;
     }
     exp_t *node = make_node(v);

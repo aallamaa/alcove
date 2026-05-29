@@ -389,6 +389,16 @@
     (= ffi-mk (ffi-fn "" "alc_ffi_selftest_pt_make" FP "double" "double"))
     (assert "ffi struct-by-value ret"   (ffi-unpack FP (ffi-mk 5.0 6.0))
                                         (list 5.0 6.0))
+    ; nested struct (struct field inside a struct)
+    (= FSEG (ffi-struct FP FP))
+    (= ffi-seglen (ffi-fn "" "alc_ffi_selftest_seg_len2" "double" FSEG))
+    (assert "ffi nested struct arg"
+            (ffi-seglen (ffi-pack FSEG (ffi-pack FP 0.0 0.0) (ffi-pack FP 3.0 4.0)))
+            25.0)
+    (assert "ffi nested struct unpack"
+            (ffi-unpack FP (car (cdr (ffi-unpack FSEG
+              (ffi-pack FSEG (ffi-pack FP 1.0 1.0) (ffi-pack FP 4.0 5.0))))))
+            (list 4.0 5.0))
     (assert "ffi unknown symbol errors"
             (try (ffi-fn "" "no_such_sym_xyzzy" "long") (fn (e) 'caught)) 'caught)
     (assert "ffi unknown type errors"
