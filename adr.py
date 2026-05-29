@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-alcove script -> alcove transpiler.
+Adder -> alcove transpiler.
 
-Implements the reader described in alcove-script-spec.md:
+Implements the reader described in adder-spec.md:
 
     source text  ->  reader  ->  Lisp forms  ->  emit alcove
 
@@ -37,9 +37,9 @@ alcove target tweaks (spec section 19, adapted to alcove not CL):
   def / fn / do / if / let / while / for : already native to alcove.
 
 Usage:
-    python3 als.py prog.als               # print alcove to stdout
-    python3 als.py prog.als -o prog.alc   # write a file
-    python3 als.py prog.als | ./alcove    # run it
+    python3 adr.py prog.adr               # print alcove to stdout
+    python3 adr.py prog.adr -o prog.alc   # write a file
+    python3 adr.py prog.adr | ./alcove    # run it
 """
 
 import sys
@@ -323,7 +323,7 @@ def main(argv):
     try:
         result = transpile(src)
     except SyntaxError as e:
-        print(f"; alcove-script read error: {e}", file=sys.stderr)
+        print(f"; adder read error: {e}", file=sys.stderr)
         return 1
     if out:
         with open(out, "w") as f:

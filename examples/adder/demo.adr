@@ -1,5 +1,5 @@
-# alcove script demo -- transpiles to alcove
-# (run: python3 als.py examples/alcove-script/demo.als | ./alcove --noload)
+# Adder demo -- transpiles to alcove
+# (run: python3 adr.py examples/adder/demo.adr | ./alcove --noload)
 
 def assert (txt a b):
   pr txt

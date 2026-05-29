@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-alcove (.alc Lisp)  ->  alcove script (.als)
+alcove (.alc Lisp)  ->  Adder (.adr)
 
-The inverse of als.py. It reads alcove source into the same
+The inverse of adr.py. It reads alcove source into the same
 plain-list form model the indent reader produces, then re-emits it in
 the indentation syntax. The pair round-trips:
 
-    alc2als.py f.alc | als.py /dev/stdin   ==  f.alc  (behaviourally)
+    alc2adr.py f.alc | adr.py /dev/stdin   ==  f.alc  (behaviourally)
 
 Reader fidelity notes (matched to alcove's own reader in alcove.c):
   ; ...            line comment            -> dropped (whitespace)
@@ -26,8 +26,8 @@ block rule appends those children back as the same trailing elements,
 so structure is preserved exactly.
 
 Usage:
-    python3 alc2als.py test.alc                 # -> stdout
-    python3 alc2als.py test.alc -o test.als
+    python3 alc2adr.py test.alc                 # -> stdout
+    python3 alc2adr.py test.alc -o test.adr
 """
 
 import sys
@@ -153,7 +153,7 @@ class Reader:
         return Sym(self.s[start:self.i])
 
 
-# ---- emit alcove script ------------------------------------------------------
+# ---- emit Adder ------------------------------------------------------
 
 WIDTH = 78
 
@@ -179,7 +179,7 @@ HEADER_ARITY = {
 LADDER_HEADS = {"list", "cons", "append", "quasiquote"}
 
 
-# Head-symbol aliases emitted purely for readability in .als output:
+# Head-symbol aliases emitted purely for readability in .adr output:
 # `= a 1` reads oddly in indented code, so we print `setf a 1`. `setf`
 # is a real exact synonym of `=` in the runtime + compiler, so the
 # output runs everywhere (including nested, e.g. `prn (setf x 5)`).
@@ -204,7 +204,7 @@ def joined(f, hi):
 def tok(x):
     if not isinstance(x, Str):
         return x.t
-    # the .als file is read line-by-line, so a real newline inside a
+    # the .adr file is read line-by-line, so a real newline inside a
     # string literal must travel as the \n escape (alcove's reader
     # turns it back into a newline -> identical string value).
     return '"' + x.raw.replace("\n", "\\n").replace("\r", "\\r") + '"'
@@ -304,7 +304,7 @@ def convert(src):
 
 def main(argv):
     if len(argv) < 2:
-        sys.stderr.write("usage: python3 alc2als.py in.alc [-o out.als]\n")
+        sys.stderr.write("usage: python3 alc2adr.py in.alc [-o out.adr]\n")
         return 2
     out = argv[argv.index("-o") + 1] if "-o" in argv else None
     with open(argv[1]) as fh:

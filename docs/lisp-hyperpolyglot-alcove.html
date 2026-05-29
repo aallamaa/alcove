@@ -223,7 +223,7 @@ href="https://hyperpolyglot.org/lisp">Hyperpolyglot’s Lisp
 comparison</a>. It is not a copy of that page: the rows are reorganized
 for Alcove, and the Alcove columns cover the current implementation in
 this repository.</p>
-<p>Alcove Script is a surface reader for Alcove forms. Canonical Alcove
+<p>Adder is a surface reader for Alcove forms. Canonical Alcove
 Script omits the outer parentheses for calls (<code>is a b</code>, not
 <code>(is a b)</code>), while inline parenthesized Lisp remains valid
 where useful. Its block syntax is indentation-sensitive; multiline table
@@ -247,7 +247,7 @@ examples use preformatted code blocks.</p>
 <th>Clojure</th>
 <th>Emacs Lisp</th>
 <th>Alcove</th>
-<th>Alcove Script</th>
+<th>Adder</th>
 </tr>
 </thead>
 <tbody>
@@ -258,7 +258,7 @@ examples use preformatted code blocks.</p>
 <td><code>.clj</code></td>
 <td><code>.el</code></td>
 <td><code>.alc</code></td>
-<td><code>.als</code></td>
+<td><code>.adr</code></td>
 </tr>
 <tr class="even">
 <td>Run script</td>
@@ -267,8 +267,8 @@ examples use preformatted code blocks.</p>
 <td><code>clojure file.clj</code></td>
 <td><code>emacs --script file.el</code></td>
 <td><code>alcove file.alc</code></td>
-<td><code>alcoves file.als</code> when built with <code>make als</code>;
-<code>als.py file.als \| alcove</code></td>
+<td><code>adder file.adr</code> when built with <code>make als</code>;
+<code>adr.py file.adr \| alcove</code></td>
 </tr>
 <tr class="odd">
 <td>REPL</td>
@@ -277,7 +277,7 @@ examples use preformatted code blocks.</p>
 <td><code>clj</code>, <code>clojure</code></td>
 <td><code>ielm</code></td>
 <td><code>alcove</code></td>
-<td><code>alcoves</code>; ALS input is enabled in the ALS build</td>
+<td><code>adder</code>; ALS input is enabled in the ALS build</td>
 </tr>
 <tr class="even">
 <td>One expression</td>
@@ -286,7 +286,7 @@ examples use preformatted code blocks.</p>
 <td><code>clojure -e</code></td>
 <td><code>emacs --eval</code></td>
 <td><code>alcove -e '(+ 1 2)'</code></td>
-<td><code>alcoves -e '+ 1 2'</code> in ALS builds</td>
+<td><code>adder -e '+ 1 2'</code> in ALS builds</td>
 </tr>
 <tr class="odd">
 <td>Compiler</td>
@@ -398,7 +398,7 @@ Emacs Lisp
 Alcove
 </th>
 <th>
-Alcove Script
+Adder
 </th>
 </tr>
 </thead>
@@ -638,7 +638,7 @@ Function predicate
 <th>Clojure</th>
 <th>Emacs Lisp</th>
 <th>Alcove</th>
-<th>Alcove Script</th>
+<th>Adder</th>
 </tr>
 </thead>
 <tbody>
@@ -761,7 +761,7 @@ comparisons for tests</td>
 <th>Clojure</th>
 <th>Emacs Lisp</th>
 <th>Alcove</th>
-<th>Alcove Script</th>
+<th>Adder</th>
 </tr>
 </thead>
 <tbody>
@@ -893,7 +893,7 @@ comparisons for tests</td>
 <code>set-&gt;list</code>; typed identity for fixnums, floats, chars,
 strings, symbols, blobs, <code>nil</code>, and <code>t</code></td>
 <td><code>hash-set 1 2 3</code>, <code>set-has? s x</code>;
-<code>set</code> is assignment syntax in Alcove Script</td>
+<code>set</code> is assignment syntax in Adder</td>
 </tr>
 </tbody>
 </table>
@@ -917,7 +917,7 @@ Time</h2>
 <th>Clojure</th>
 <th>Emacs Lisp</th>
 <th>Alcove</th>
-<th>Alcove Script</th>
+<th>Adder</th>
 </tr>
 </thead>
 <tbody>
@@ -1039,7 +1039,7 @@ Emacs Lisp
 Alcove
 </th>
 <th>
-Alcove Script
+Adder
 </th>
 </tr>
 </thead>
@@ -1315,7 +1315,7 @@ Interop</h2>
 <th>Clojure</th>
 <th>Emacs Lisp</th>
 <th>Alcove</th>
-<th>Alcove Script</th>
+<th>Adder</th>
 </tr>
 </thead>
 <tbody>

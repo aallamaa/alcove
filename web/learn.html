@@ -184,7 +184,7 @@
   <div class="topbar">
     <div>
       <h1>Alcove Rosetta</h1>
-      <div class="subtitle">Editable examples running in WebAssembly through the Alcove and Alcove Script interpreters.</div>
+      <div class="subtitle">Editable examples running in WebAssembly through the Alcove and Adder interpreters.</div>
     </div>
     <nav aria-label="web demos">
       <a href="index.html">REPL</a>
@@ -197,14 +197,14 @@
 <main>
   <section class="runtime" aria-label="runtime status">
     <div class="metric"><strong>Alcove</strong><span id="alcove-ready">loading</span></div>
-    <div class="metric"><strong>Alcove Script</strong><span id="alcoves-ready">loading</span></div>
+    <div class="metric"><strong>Adder</strong><span id="adder-ready">loading</span></div>
     <div class="metric"><strong>Update Mode</strong><span>on input</span></div>
   </section>
   <section id="examples" class="grid"></section>
 </main>
 
 <script src="alcove.js"></script>
-<script src="alcoves.js"></script>
+<script src="adder.js"></script>
 <script>
 (function () {
   "use strict";
@@ -215,7 +215,7 @@
       note: "Printing, return values, and prefix arithmetic.",
       lisp: `(println "hello, alcove")
 (+ 40 2)`,
-      als: `println "hello, alcove"
+      adr: `println "hello, alcove"
 + 40 2`,
     },
     {
@@ -224,7 +224,7 @@
       lisp: `(= radius 5)
 (= area (* 3.14159 (* radius radius)))
 area`,
-      als: `set radius 5
+      adr: `set radius 5
 set area (* 3.14159 (* radius radius))
 area`,
     },
@@ -233,7 +233,7 @@ area`,
       note: "Named functions and higher-order calls.",
       lisp: `(def square (x) (* x x))
 (map square (list 1 2 3 4 5))`,
-      als: `def square (x):
+      adr: `def square (x):
   * x x
 map square (list 1 2 3 4 5)`,
     },
@@ -243,7 +243,7 @@ map square (list 1 2 3 4 5)`,
       lisp: `(def fact (n)
   (if (<= n 1) 1 (* n (fact (- n 1)))))
 (fact 6)`,
-      als: `def fact (n):
+      adr: `def fact (n):
   if (<= n 1) 1 (* n (fact (- n 1)))
 fact 6`,
     },
@@ -255,7 +255,7 @@ fact 6`,
     (if (>= n 80) "B"
       (if (>= n 70) "C" "study"))))
 (grade 84)`,
-      als: `def grade (n):
+      adr: `def grade (n):
   if (>= n 90) "A" (if (>= n 80) "B" (if (>= n 70) "C" "study"))
 grade 84`,
     },
@@ -265,7 +265,7 @@ grade 84`,
       lisp: `(= total 0)
 (for i 1 10 (= total (+ total i)))
 total`,
-      als: `set total 0
+      adr: `set total 0
 for i 1 10:
   set total (+ total i)
 total`,
@@ -281,7 +281,7 @@ total`,
   (map sq-list xs)
   (filter gt3-list xs)
   (reduce add-list 0 xs))`,
-      als: `set xs (list 1 2 3 4 5 6)
+      adr: `set xs (list 1 2 3 4 5 6)
 def sq-list (x):
   * x x
 def gt3-list (x):
@@ -299,7 +299,7 @@ list:
       lisp: `(= a (vector 1.0 2.0 3.0))
 (= b (vector 4.0 5.0 6.0))
 (list (vec-dot a b) (vec-argmax b))`,
-      als: `set a (vector 1.0 2.0 3.0)
+      adr: `set a (vector 1.0 2.0 3.0)
 set b (vector 4.0 5.0 6.0)
 list (vec-dot a b) (vec-argmax b)`,
     },
@@ -309,7 +309,7 @@ list (vec-dot a b) (vec-argmax b)`,
       lisp: `(= person (hash-map "name" "Ada" :age 36))
 (assoc! person "field" "math")
 (list (get person "name") (contains? person :age) (keys person))`,
-      als: `set person (hash-map "name" "Ada" :age 36)
+      adr: `set person (hash-map "name" "Ada" :age 36)
 assoc! person "field" "math"
 list (get person "name") (contains? person :age) (keys person)`,
     },
@@ -322,7 +322,7 @@ list (get person "name") (contains? person :age) (keys person)`,
   (count a)
   (set-has? a :x)
   (set->list (set-intersection a b)))`,
-      als: `set a (hash-set 1 2 3 3 :x)
+      adr: `set a (hash-set 1 2 3 3 :x)
 set b (hash-set 3 4 :x)
 list:
   (count a)
@@ -338,7 +338,7 @@ list:
   (substr "abcdef" 1 4)
   (string-join words " / ")
   (string-upcase "fast"))`,
-      als: `set words (string-split "red,green,blue" ",")
+      adr: `set words (string-split "red,green,blue" ",")
 list:
   (string-append "alc" "ove")
   (substr "abcdef" 1 4)
@@ -351,7 +351,7 @@ list:
       lisp: `(write-string "/notes.txt" "one\\ntwo\\n")
 (append-string "/notes.txt" "three\\n")
 (read-lines "/notes.txt")`,
-      als: `write-string "/notes-script.txt" "one\\ntwo\\n"
+      adr: `write-string "/notes-script.txt" "one\\ntwo\\n"
 append-string "/notes-script.txt" "three\\n"
 read-lines "/notes-script.txt"`,
     },
@@ -363,7 +363,7 @@ read-lines "/notes-script.txt"`,
     (fn () (do (= n (+ n 1)) n))))
 (= counter (make-counter))
 (list (counter) (counter) (counter))`,
-      als: `def make-counter ():
+      adr: `def make-counter ():
   let n 0:
     fn ():
       do (= n (+ n 1)) n
@@ -375,7 +375,7 @@ list (counter) (counter) (counter)`,
       note: "Macros build forms before evaluation; the backtick reader templates them (, unquotes, ,@ splices).",
       lisp: `(defmacro my-when (c body) \`(if ,c ,body nil))
 (my-when (> 5 3) "macro branch")`,
-      als: `macro my-when (c body):
+      adr: `macro my-when (c body):
   \`(if ,c ,body nil)
 my-when (> 5 3) "macro branch"`,
     },
@@ -386,7 +386,7 @@ my-when (> 5 3) "macro branch"`,
 (push-left! q "first")
 (push-right! q "last")
 (list (peek-left q) (peek-right q) (count q))`,
-      als: `set q (deque "middle")
+      adr: `set q (deque "middle")
 push-left! q "first"
 push-right! q "last"
 list (peek-left q) (peek-right q) (count q)`,
@@ -396,7 +396,7 @@ list (peek-left q) (peek-right q) (count q)`,
       note: "Binary data is separate from strings.",
       lisp: `(= blob (string->blob "abc"))
 (list (blob-len blob) (blob-ref blob 1) (blob->string blob))`,
-      als: `set blob (string->blob "abc")
+      adr: `set blob (string->blob "abc")
 list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
     },
     {
@@ -405,7 +405,7 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
       lisp: `(list
   (let* (a 1 b (* a 10)) (+ a b))
   (let (lo hi) (list 3 9) (- hi lo)))`,
-      als: `list:
+      adr: `list:
   (let* (a 1 b (* a 10)) (+ a b))
   (let (lo hi) (list 3 9) (- hi lo))`,
     },
@@ -413,7 +413,7 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
       title: "Numbers And Math",
       note: "Rounding family (all return floats) plus integer/float coercion.",
       lisp: `(list (round 2.6) (floor 2.4) (ceil 2.1) (int 3.9) (float 5))`,
-      als: `list (round 2.6) (floor 2.4) (ceil 2.1) (int 3.9) (float 5)`,
+      adr: `list (round 2.6) (floor 2.4) (ceil 2.1) (int 3.9) (float 5)`,
     },
     {
       title: "Sequence Utilities",
@@ -422,7 +422,7 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
   (range 0 5)
   (take 2 (list 9 8 7))
   (sort (list 3 1 2)))`,
-      als: `list:
+      adr: `list:
   (range 0 5)
   (take 2 (list 9 8 7))
   (sort (list 3 1 2))`,
@@ -431,31 +431,31 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
       title: "Formatting",
       note: "fmt: {} interpolates, {:spec} applies a printf-style spec.",
       lisp: `(fmt "{} items, {:.1f}% done" 7 42.5)`,
-      als: `fmt "{} items, {:.1f}% done" 7 42.5`,
+      adr: `fmt "{} items, {:.1f}% done" 7 42.5`,
     },
     {
       title: "Error Handling",
       note: "Errors are values; try catches one and passes it to a handler.",
       lisp: `(try (/ 1 0)
   (fn (e) (error-message e)))`,
-      als: `try (/ 1 0):
+      adr: `try (/ 1 0):
   fn (e):
     error-message e`,
     },
   ];
 
   const root = document.getElementById("examples");
-  const queues = { alcove: Promise.resolve(), alcoves: Promise.resolve() };
+  const queues = { alcove: Promise.resolve(), adder: Promise.resolve() };
   const runtimes = {
     alcove: {
       name: "Alcove",
       api: () => window.Alcove,
       readyId: "alcove-ready",
     },
-    alcoves: {
-      name: "Alcove Script",
-      api: () => window.AlcoveScript,
-      readyId: "alcoves-ready",
+    adder: {
+      name: "Adder",
+      api: () => window.Adder,
+      readyId: "adder-ready",
     },
   };
 
@@ -489,7 +489,7 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
       article.innerHTML = `<h2>${esc(ex.title)}</h2><div class="note">${esc(ex.note)}</div><div class="pair"></div>`;
       const pair = article.querySelector(".pair");
       pair.appendChild(makeRunner("alcove", ex.lisp));
-      pair.appendChild(makeRunner("alcoves", ex.als));
+      pair.appendChild(makeRunner("adder", ex.adr));
       root.appendChild(article);
     }
   }

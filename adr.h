@@ -1,6 +1,6 @@
-/* als.h — alcove script -> alcove S-expression transpiler, in C.
+/* adr.h — Adder -> alcove S-expression transpiler, in C.
  *
- * A self-contained port of als.py. One entry point:
+ * A self-contained port of adr.py. One entry point:
  *
  *     char *als_to_sexpr(const char *src);   // malloc'd; caller frees
  *
@@ -8,7 +8,7 @@
  * s-expression text, which alcove's existing reader then parses. No
  * alcove headers are needed here; this is pure string -> string.
  *
- * Reader rules (see alcove-script-spec.md):
+ * Reader rules (see adder-spec.md):
  *   - bare word = symbol; "..." string (escapes verbatim); numbers ride
  *     through verbatim.
  *   - inline (...) are normal lists and nest.

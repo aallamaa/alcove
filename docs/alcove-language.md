@@ -40,7 +40,7 @@ CPython 3.13 by 1.6×–60×.
 
 ```sh
 make                  # build alcove (JIT by default; `make nojit` opts out)
-make install          # install alcove and alcoves into ~/.local/bin by default
+make install          # install alcove and adder into ~/.local/bin by default
 alcove              # REPL (use rlwrap for line editing)
 alcove file.alc     # run a script and exit
 alcove --noload     # skip loading db.dump at startup
@@ -162,7 +162,7 @@ left-hand side may be:
 `(setq sym val [sym val ...])` is the Emacs-style variable-only form:
 it updates the nearest existing lexical binding, but if the name is
 unbound it creates/updates a top-level session binding even when called
-inside a function. Alcove Script can call it directly:
+inside a function. Adder can call it directly:
 
 ```text
 setq x 10
@@ -657,7 +657,7 @@ elements, and `set->list` preserves the original element types.
 (set-difference s (set "a"))
 ```
 
-Alcove Script reserves `set` for assignment, so use `hash-set` there:
+Adder reserves `set` for assignment, so use `hash-set` there:
 `set s (hash-set 1 2 3)`.
 
 ### Persistent maps (HAMT)

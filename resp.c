@@ -2375,7 +2375,7 @@ extern int toeval;
 /* Drain a single complete top-level form from `acc`/`*plen`. Returns
    the byte count consumed (incl. trailing whitespace) or 0 if no
    complete form is buffered yet. The caller slides the remainder.
-   Plain (s-expression) build only — the alcoves build uses the
+   Plain (s-expression) build only — the adder build uses the
    indentation-aware resp_repl_consume_als instead. */
 #ifndef ALCOVE_ALS
 static size_t resp_repl_consume_form(const char *acc, size_t len) {
@@ -2417,8 +2417,8 @@ static size_t resp_repl_consume_form(const char *acc, size_t len) {
 #endif /* !ALCOVE_ALS */
 
 #ifdef ALCOVE_ALS
-/* alcove-script is indentation-based, not paren-balanced, so the s-expr
-   form scanner above can't find unit boundaries in the alcoves build.
+/* adder is indentation-based, not paren-balanced, so the s-expr
+   form scanner above can't find unit boundaries in the adder build.
    A complete top-level unit is either a single balanced line that does
    NOT open a block (no trailing ':'), or a multi-line block terminated by
    a blank line with parens balanced — mirroring the readline als reader
@@ -2484,7 +2484,7 @@ static size_t resp_repl_consume_als(const char *acc, size_t len) {
 /* Evaluate one complete REPL unit. Delegates to the shared transpile +
    eval + print core (repl_eval_text, in alcove.c) — the same path the
    interactive readline REPL uses — so the two never diverge (this is what
-   the alcove-script-in-`-R` fix is built on). quit/exit -> stop reactor. */
+   the adder-in-`-R` fix is built on). quit/exit -> stop reactor. */
 static void resp_repl_eval_print(env_t *global, const char *src, size_t n,
                                  int idx) {
   if (repl_eval_text(src, n, global, idx))

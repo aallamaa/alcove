@@ -1,32 +1,32 @@
-# alcove script -> alcove
+# Adder -> alcove
 
-`als.py` (repo root) is a homoiconic reader for the Python-like
-indentation syntax described in `alcove-script-spec.md`. It turns source
+`adr.py` (repo root) is a homoiconic reader for the Python-like
+indentation syntax described in `adder-spec.md`. It turns source
 into Lisp *forms* (not an AST) and emits alcove.
 
 ```sh
-python3 als.py examples/alcove-script/demo.als            # to stdout
-python3 als.py examples/alcove-script/demo.als -o out.alc # to a file
-python3 als.py examples/alcove-script/demo.als | ./alcove --noload
+python3 adr.py examples/adder/demo.adr            # to stdout
+python3 adr.py examples/adder/demo.adr -o out.alc # to a file
+python3 adr.py examples/adder/demo.adr | ./alcove --noload
 ```
 
 This is **not** the same as `alcove-py.py`, which compiles *real* Python
-(`return`, `range`, `elif`, ...) via `ast`. alcove script has no Python
+(`return`, `range`, `elif`, ...) via `ast`. Adder has no Python
 semantics: bare words are symbols, there is no `return`, a line is just
 a list.
 
-## Native binary: ./alcoves
+## Native binary: ./adder
 
-`make als` builds `./alcoves` — the full alcove runtime (JIT, readline
-highlighting, completion, history, FFI, RESP) with the alcove script
+`make als` builds `./adder` — the full alcove runtime (JIT, readline
+highlighting, completion, history, FFI, RESP) with the Adder
 front end wired in. `./alcove` is untouched (built without `ALCOVE_ALS`).
 
 ```sh
-make als                       # -> ./alcoves
-./alcoves                    # ALS REPL, syntax highlighted
-./alcoves prog.als            # run an ALS file
-cat prog.als | ./alcoves      # piped ALS
-./alcoves -e 'prn (+ 2 3)'   # ALS one-liner
+make als                       # -> ./adder
+./adder                    # ALS REPL, syntax highlighted
+./adder prog.adr            # run an ALS file
+cat prog.adr | ./adder      # piped ALS
+./adder -e 'prn (+ 2 3)'   # ALS one-liner
 ```
 
 In the REPL a one-line form submits on Enter. A line ending in `:`
@@ -44,9 +44,9 @@ In [2]: prn (fib 10)
 55
 ```
 
-`alcoves.c` simply `#include`s `alcove.c` (renaming its `main`); the
-transpiler lives in `als.h` and is a C port of `als.py`.
-`alc2als.py` / `als.py` remain useful as offline batch tools.
+`adder.c` simply `#include`s `alcove.c` (renaming its `main`); the
+transpiler lives in `adr.h` and is a C port of `adr.py`.
+`alc2adr.py` / `adr.py` remain useful as offline batch tools.
 
 ## Reader rules
 

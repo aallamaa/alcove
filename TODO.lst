@@ -4,7 +4,7 @@
        self-library, HAMT, call/cc, MessagePack) is now RUN-verified on
        Linux/amd64, not just macOS arm64. Results:
        1. `make test-all` → 1069 passed, 0 failed on ALL 10 variants
-          (5 alcove + 5 alcoves; FFI + readline detected).
+          (5 alcove + 5 adder; FFI + readline detected).
        2. ASan: initially flagged a 527-byte leak (19 strdup allocs) — the
           savedb/loaddb path-adoption strdup that overwrote alcove_db_path
           without freeing the prior owned copy (a long-acknowledged "leaks

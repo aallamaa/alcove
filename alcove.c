@@ -30,10 +30,10 @@
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
 #ifdef ALCOVE_ALS
-/* alcove script front end: a string->string transpiler that turns the
+/* Adder front end: a string->string transpiler that turns the
    whitespace/`:`-block surface syntax into ordinary alcove
    s-expressions before they reach reader(). */
-#include "als.h"
+#include "adr.h"
 #endif
 #ifdef ALCOVE_WEB
 #include <emscripten/emscripten.h>
@@ -3952,7 +3952,7 @@ const char doc_eq[] =
     "...), or (str i) for in-place char update.";
 const char doc_setf[] =
     "(setf place val) — exact synonym of (= place val); a more readable head "
-    "for assignment, especially in indented Alcove Script.";
+    "for assignment, especially in indented Adder.";
 exp_t *equalcmd(exp_t *e, env_t *env) {
   /* Strict arity: exactly (= place val). Silent truncation was hiding
      real bugs — (= a 1 2 3 4) used to bind a=1 and discard the rest;
@@ -10081,8 +10081,8 @@ static void pp_form(exp_t *e, int indent) {
    a "; closure over <env>" comment so the user knows the body's
    free vars resolve against a captured environment. */
 #ifdef ALCOVE_ALS
-/* ---- alcove-script source rendering ------------------------------
-   Render a lambda/macro as alcove script: drop outer parens at
+/* ---- adder source rendering ------------------------------
+   Render a lambda/macro as Adder: drop outer parens at
    statement position, open `:`-blocks for body-bearing special forms,
    ladder trailing list/cons builders, shorten (quote x) to 'x. */
 static int als_len(exp_t *x) {
@@ -10214,7 +10214,7 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
   env_t *cap = (env_t *)(arg->next ? arg->next->meta : NULL);
   int captured = (cap && cap != g_global_env) ? 1 : 0;
 #ifdef ALCOVE_ALS
-  /* alcove-script rendering: `def NAME (params):` then the body as
+  /* adder rendering: `def NAME (params):` then the body as
      indented statements (no outer parens, `:`-blocks, 'quote). */
   {
     const char *kw = arg->meta ? (is_macro ? "defmacro" : "def")
@@ -19959,7 +19959,7 @@ static char *alc_readline(const char *prompt) {
 /* Read one complete top-level form from the terminal. Continues
    prompting (with a continuation prompt) until paren balance hits 0.
    Returned string is malloc'd. NULL on EOF. */
-#ifndef ALCOVE_ALS /* superseded by als_rl_read_form in the alcove-script build */
+#ifndef ALCOVE_ALS /* superseded by als_rl_read_form in the adder build */
 static char *rl_read_form(int idx) {
   char prompt[64];
   /* Wrap escape codes with \001/\002 (RL_PROMPT_START_IGNORE /
@@ -20073,7 +20073,7 @@ static int als_preinput(void) {
   return 0;
 }
 
-/* alcove-script-aware form reader for the interactive prompt. A one-line
+/* adder-aware form reader for the interactive prompt. A one-line
    form (balanced parens, no trailing `:`) submits on Enter. Anything
    that opens a block or has unbalanced parens enters continuation mode
    ("    ... " prompt, auto-indented) and submits on a whitespace-only
@@ -20135,7 +20135,7 @@ static char *als_rl_read_form(int idx) {
   return acc;
 }
 
-/* alcove script is whitespace-significant, so TAB at the start of a line
+/* Adder is whitespace-significant, so TAB at the start of a line
    (point is at column 0 or only whitespace precedes it) inserts one
    indent level instead of triggering completion. With real tokens to
    the left it still completes, so `(fi<TAB>` etc. keep working. */
@@ -22004,8 +22004,8 @@ UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
    Defined here (before the resp.c include and main) so all three input
    loops — the interactive readline REPL, the file/stdin loop, and the -R
    combined REPL+RESP loop — run the SAME transpile + eval + print path.
-   Previously each loop reimplemented it, which is how `alcoves -R` ended
-   up reading raw s-expressions instead of alcove-script. */
+   Previously each loop reimplemented it, which is how `adder -R` ended
+   up reading raw s-expressions instead of adder. */
 
 #ifdef ALCOVE_READLINE
 /* Shared readline configuration for the interactive REPL — used by BOTH the
@@ -22045,7 +22045,7 @@ static void repl_history_load(int save_history) {
     return;
   const char *home = getenv("HOME");
 #ifdef ALCOVE_ALS
-  const char *hist_name = "/.alcoves_history";
+  const char *hist_name = "/.adder_history";
 #else
   const char *hist_name = "/.alcove_history";
 #endif
@@ -22099,7 +22099,7 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
   return 0;
 }
 
-/* Transpile a complete input chunk (alcove-script in the alcoves build,
+/* Transpile a complete input chunk (adder in the adder build,
    s-expressions otherwise) and eval+print every top-level form it yields.
    Returns 1 iff quit/exit was seen. The interactive readline REPL and the
    -R combined REPL both feed it one complete unit at a time, so neither
@@ -22613,7 +22613,7 @@ int main(int argc, char *argv[]) {
     stream = stdin;
 
 #ifdef ALCOVE_ALS
-  /* Non-interactive input (file arg, piped stdin, -e) is alcove script:
+  /* Non-interactive input (file arg, piped stdin, -e) is Adder:
      slurp it, transpile to s-expressions, and hand reader() a memstream
      of the result. Interactive tty input is handled block-wise in the
      readline path below, so skip the slurp there (it would block). */
@@ -22656,7 +22656,7 @@ int main(int argc, char *argv[]) {
     while (1) {
       idx++;
 #ifdef ALCOVE_ALS
-      char *line = als_rl_read_form(idx); /* one alcove-script unit */
+      char *line = als_rl_read_form(idx); /* one adder unit */
 #else
       char *line = rl_read_form(idx); /* one balanced s-expr form */
 #endif
@@ -22669,7 +22669,7 @@ int main(int argc, char *argv[]) {
         idx--;
         continue;
       }
-      /* Shared transpile + eval + print core (als-aware in the alcoves
+      /* Shared transpile + eval + print core (als-aware in the adder
          build). Returns 1 on quit/exit. */
       int quit = repl_eval_text(line, strlen(line), global, idx);
       free(line);

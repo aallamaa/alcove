@@ -161,22 +161,26 @@ endif
 	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
-# alcove script build: the full JIT runtime + the .als front end, emitted
-# as the local alcoves binary. alcoves.c #includes alcove.c.
-als:
+# Adder build: the full JIT runtime + the .adr front end, emitted
+# as the local adder binary. adder.c #includes alcove.c.
+adder:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o alcoves  alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
-install: jit als
+# Backwards-compatible aliases for the old target names.
+als: adder
+alcoves: adder
+
+install: jit adder
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 755 alcove "$(DESTDIR)$(BINDIR)/alcove"
-	install -m 755 alcoves "$(DESTDIR)$(BINDIR)/alcoves"
+	install -m 755 adder "$(DESTDIR)$(BINDIR)/adder"
 
 uninstall:
-	rm -f "$(DESTDIR)$(BINDIR)/alcove" "$(DESTDIR)$(BINDIR)/alcoves"
+	rm -f "$(DESTDIR)$(BINDIR)/alcove" "$(DESTDIR)$(BINDIR)/adder"
 # -Os removed
 
 # Print just the dependency status without rebuilding. Handy when a user
@@ -212,15 +216,15 @@ endif
 
 # Cross-variant matrix: build and run the full suite against every core
 # build variant (parser/speed/mono/jit/jit-mono) for the native `alcove`,
-# AND the same five variants of the alcove-script front end `alcoves`
-# (running test.als + a new-features.als crash check) — so JIT- and
+# AND the same five variants of the adder front end `adder`
+# (running test.adr + a new-features.adr crash check) — so JIT- and
 # threading-specific regressions are caught on both binaries. Prints one
 # line per variant and exits non-zero if ANY variant fails to build,
 # crashes, or reports a non-zero failed count. Restores ./alcove (jit) and
-# ./alcoves (als) at the end.
+# ./adder (als) at the end.
 TEST_VARIANTS := parser speed mono jit jit-mono
 # Per-variant compiler flags, matching the parser/speed/mono/jit/jit-mono
-# targets. Used to build alcoves.c (which #includes alcove.c) in each config.
+# targets. Used to build adder.c (which #includes alcove.c) in each config.
 ALS_SPECS := "parser:-g3" "speed:-O3" "mono:-O3 -DALCOVE_SINGLE_THREADED=1" \
              "jit:-O3 $(JIT_FLAGS)" "jit-mono:-O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1"
 test-all:
@@ -236,23 +240,23 @@ test-all:
 	    *) echo "  FAILURES — $$res"; ok=0;; \
 	  esac; \
 	done; \
-	abin=/tmp/alcoves-test.$$$$; \
+	abin=/tmp/adder-test.$$$$; \
 	for spec in $(ALS_SPECS); do \
 	  aname=$${spec%%:*}; aflags=$${spec#*:}; \
-	  printf '\n=== alcoves/%s (alcove-script front end) ===\n' "$$aname"; \
-	  if $(CC) -Wall -W $(SAFE_FLAGS) $$aflags -o "$$abin" alcoves.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
-	    res=$$("$$abin" --noload test.als 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	  printf '\n=== adder/%s (adder front end) ===\n' "$$aname"; \
+	  if $(CC) -Wall -W $(SAFE_FLAGS) $$aflags -o "$$abin" adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
+	    res=$$("$$abin" --noload test.adr 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
 	    case "$$res" in \
-	      *" 0 failed") echo "  OK — $$res (test.als)";; \
+	      *" 0 failed") echo "  OK — $$res (test.adr)";; \
 	      "") echo "  CRASH / early exit — no TEST RESULT line"; ok=0;; \
 	      *) echo "  FAILURES — $$res"; ok=0;; \
 	    esac; \
-	    af=0; for i in 1 2 3 4; do "$$abin" --noload examples/alcove-script/new-features.als >/dev/null 2>&1 || af=1; done; \
-	    [ $$af -eq 0 ] || { echo "  CRASH in new-features.als run"; ok=0; }; \
+	    af=0; for i in 1 2 3 4; do "$$abin" --noload examples/adder/new-features.adr >/dev/null 2>&1 || af=1; done; \
+	    [ $$af -eq 0 ] || { echo "  CRASH in new-features.adr run"; ok=0; }; \
 	  else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	done; \
 	rm -f "$$abin" "$$bld"; \
-	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s als >/dev/null 2>&1; \
+	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
 	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi
@@ -292,8 +296,8 @@ mpsc-test-tsan:
 	  || echo "tsan unavailable on this toolchain — skipping"
 
 # WebAssembly build via Emscripten. Produces web/alcove-core.{js,wasm}
-# and web/alcoves-core.{js,wasm}, wrapped by web/alcove.js and
-# web/alcoves.js. Excludes JIT, FFI, readline, and the RESP server
+# and web/adder-core.{js,wasm}, wrapped by web/alcove.js and
+# web/adder.js. Excludes JIT, FFI, readline, and the RESP server
 # (all unavailable in the browser). See the runnable demos at
 # web/index.html and web/learn.html.
 EMCC ?= emcc
@@ -316,14 +320,14 @@ web:
 	  -sNO_EXIT_RUNTIME=1 \
 	  -sALLOW_MEMORY_GROWTH=1 \
 	  -sMODULARIZE=1 \
-	  -sEXPORT_NAME=createAlcoveScriptModule \
+	  -sEXPORT_NAME=createAdderModule \
 	  -sEXPORTED_FUNCTIONS=_main,_alcove_web_eval,_alcove_register_cmd,_alcove_arg_int,_alcove_arg_string,_alcove_make_int \
 	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
 	  -sALLOW_TABLE_GROWTH=1 \
-	  -o web/alcoves-core.js alcoves.c -lm
+	  -o web/adder-core.js adder.c -lm
 
 clean:
-	rm -f alcove alcoves mpsc_test mpsc_test_tsan
-	rm -f web/alcove-core.js web/alcove-core.wasm web/alcoves-core.js web/alcoves-core.wasm
+	rm -f alcove adder mpsc_test mpsc_test_tsan
+	rm -f web/alcove-core.js web/alcove-core.wasm web/adder-core.js web/adder-core.wasm
 
-.PHONY: parser speed nojit mono jit jit-mono als install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean

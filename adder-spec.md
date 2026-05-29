@@ -1,8 +1,8 @@
-# alcove script Specification
+# Adder Specification
 
 ## 1. Goal
 
-alcove script is a whitespace-sensitive surface syntax for Lisp.
+Adder is a whitespace-sensitive surface syntax for Lisp.
 
 It allows code like:
 
@@ -894,7 +894,7 @@ The reader returns a list of top-level forms:
 
 ### 16.1 Basic Line
 
-alcove script:
+Adder:
 
 ```python
 foo a b
@@ -910,7 +910,7 @@ Lisp:
 
 ### 16.2 Block
 
-alcove script:
+Adder:
 
 ```python
 foo a:
@@ -930,7 +930,7 @@ Lisp:
 
 ### 16.3 Nested Block
 
-alcove script:
+Adder:
 
 ```python
 foo:
@@ -950,7 +950,7 @@ Lisp:
 
 ### 16.4 Inline Form
 
-alcove script:
+Adder:
 
 ```python
 prn (+ 1 2)
@@ -966,7 +966,7 @@ Lisp:
 
 ### 16.5 Function Definition
 
-alcove script:
+Adder:
 
 ```python
 def add(a b):
@@ -991,7 +991,7 @@ Common Lisp target:
 
 ### 16.6 If
 
-alcove script:
+Adder:
 
 ```python
 if (> x 0):
@@ -1011,7 +1011,7 @@ Lisp:
 
 ### 16.7 Function Call Sugar
 
-alcove script:
+Adder:
 
 ```python
 foo(bar baz)
@@ -1398,7 +1398,7 @@ Common Lisp-style output:
 The language should be specified as:
 
 ```text
-alcove script is an indentation-sensitive reader syntax for Lisp forms.
+Adder is an indentation-sensitive reader syntax for Lisp forms.
 
 A line becomes a list.
 A colon appends an indented block to that list.

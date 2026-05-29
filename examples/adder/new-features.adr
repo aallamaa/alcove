@@ -1,10 +1,10 @@
-# new-features.als — examples for cond, match, try/finally,
+# new-features.adr — examples for cond, match, try/finally,
 # destructuring params, and generators.
-# Run: alcoves --noload new-features.als   ← preferred (uses als.h with elif/else)
-#  or: python3 als.py new-features.als | alcove --noload  ← if/elif/else won't work
+# Run: adder --noload new-features.adr   ← preferred (uses adr.h with elif/else)
+#  or: python3 adr.py new-features.adr | alcove --noload  ← if/elif/else won't work
 #
 # ALS block syntax notes:
-#   - `if/elif/else` work in block style via alcoves (als.h); als.py lacks elif.
+#   - `if/elif/else` work in block style via adder (adr.h); adr.py lacks elif.
 #   - `match` and `cond` take FLAT alternating (pattern result) pairs.
 #     ALS wraps each block-body line into a list, breaking the flat protocol.
 #     Write `match`/`cond` inline (all on one line), or use if/elif/else.
@@ -304,7 +304,7 @@ prn (collect! (running-sum (range! 1 6)))   # (1 3 6 10 15)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 6. vector literals — #[...] works in Alcove Script (lowered to (vector ...))
+# 6. vector literals — #[...] works in Adder (lowered to (vector ...))
 # ──────────────────────────────────────────────────────────────────────────
 prn #[1 2 3]                          # #[1 2 3]
 prn (vec-ref #[10 20 30] 1)           # 20

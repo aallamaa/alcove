@@ -2,7 +2,7 @@
 
 This proposal uses the Lisp areas covered by
 [Hyperpolyglot's Lisp comparison](https://hyperpolyglot.org/lisp) as a feature
-checklist, then maps the missing pieces to practical Alcove and Alcove Script
+checklist, then maps the missing pieces to practical Alcove and Adder
 work. The goal is not to clone Common Lisp, Racket, Clojure, or Emacs Lisp; it
 is to make Alcove feel complete for scripts, libraries, persistence, and RESP
 work without losing the small single-binary model.
@@ -18,9 +18,9 @@ work without losing the small single-binary model.
 ## P0: Load And Library Reuse
 
 Current state: first-step `(load "file.alc")` exists for Alcove source files and
-evaluates into the current environment. Alcove Script can call it as `load
+evaluates into the current environment. Adder can call it as `load
 "file.alc"`. Remaining gaps are scoped/module loading, loaded-file tracking,
-cycle detection, and direct `.als` loading from plain Alcove.
+cycle detection, and direct `.adr` loading from plain Alcove.
 
 Proposed Alcove API:
 
@@ -30,7 +30,7 @@ Proposed Alcove API:
 (loaded-files)                   ; list absolute paths loaded this process
 ```
 
-Proposed Alcove Script:
+Proposed Adder:
 
 ```text
 load "lib.alc"
@@ -77,7 +77,7 @@ Implementation notes:
 - Implemented: blobs for binary and strings/lists for text.
 - Keep errors explicit: missing files should produce an error object, not
   silent `nil`, unless a default argument is supplied.
-- Add Alcove Script examples using `:` blocks once `with-open-file` exists.
+- Add Adder examples using `:` blocks once `with-open-file` exists.
 
 ## P0: Exceptions And Error Handling
 
@@ -135,7 +135,7 @@ Implementation notes:
 - Keep `format` deliberately small at first: `%s`, `%d`, `%f`, `%%`.
 - Implemented: `string-split` uses literal separators; regex splitting can come
   after regex support.
-- Alcove Script should use the same calls; no special syntax needed.
+- Adder should use the same calls; no special syntax needed.
 
 ## P1: Modules And Namespaces
 
@@ -167,7 +167,7 @@ Implementation notes:
 - Keep top-level interop explicit: imported symbols should be copied or aliased
   intentionally, not silently shadow existing session bindings.
 - Persistence should record module-qualified names once modules exist.
-- Alcove Script can map `module name:` and `export x y` to the same forms.
+- Adder can map `module name:` and `export x y` to the same forms.
 
 ## P1: Macro Completeness
 
@@ -246,7 +246,7 @@ Implementation notes:
 ## P1: Sets
 
 Current state: `EXP_SET` exists as a hash-backed set using typed identity keys
-plus stored element values. Alcove has `(set ...)`; Alcove Script should use
+plus stored element values. Alcove has `(set ...)`; Adder should use
 `hash-set` because `set` is assignment syntax there.
 
 Proposed Alcove API:
@@ -299,7 +299,7 @@ Implementation notes:
   JSON null to `nil`.
 - Reject blobs and functions in `json-stringify` with clear errors.
 
-## P1: Alcove Script Polish
+## P1: Adder Polish
 
 Current state: ALS supports indentation, `:`, `name(args)` call sugar, `#`
 comments, `macro` to `defmacro`, and `set` to `=`.
@@ -307,7 +307,7 @@ comments, `macro` to `defmacro`, and `set` to `=`.
 Proposed work:
 
 ```text
-import "lib.als"
+import "lib.adr"
 module math:
   export square
 
@@ -319,7 +319,7 @@ Implementation notes:
 
 - Add source locations to ALS reader errors.
 - Add a formatter or canonical emitter for ALS.
-- Add shebang tests for `.als` scripts.
+- Add shebang tests for `.adr` scripts.
 - Keep the homoiconic guarantee: every ALS feature should lower to ordinary
   Alcove forms before macro expansion.
 

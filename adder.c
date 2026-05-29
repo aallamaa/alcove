@@ -1,12 +1,12 @@
-/* alcoves.c — alcove with the alcove script front end.
+/* adder.c — alcove with the Adder front end.
  *
  * This is the whole alcove runtime, unchanged, plus a string->string
- * transpiler (als.h) wired in at every input chokepoint. You get the
- * Python-like `.als` surface syntax in the REPL (with the same readline
+ * transpiler (adr.h) wired in at every input chokepoint. You get the
+ * Python-like `.adr` surface syntax in the REPL (with the same readline
  * syntax highlighting / completion / history) and for files, piped
  * stdin, and -e.
  *
- * Build:  make als        ->  ./alcoves
+ * Build:  make als        ->  ./adder
  *
  * Mechanism: we compile alcove.c straight into this translation unit.
  * ALCOVE_ALS switches on the (otherwise inert) #ifdef hooks in

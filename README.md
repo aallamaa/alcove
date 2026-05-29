@@ -9,12 +9,12 @@ to train an MLP digit classifier in pure Lisp.
 running under WebAssembly:
 **[aallamaa.github.io/alcove/mario.html](https://aallamaa.github.io/alcove/mario.html)**
 
-📚 **Learn alcove in the browser** — editable Alcove and Alcove Script
+📚 **Learn alcove in the browser** — editable Alcove and Adder
 examples with immediate output:
 **[aallamaa.github.io/alcove/learn.html](https://aallamaa.github.io/alcove/learn.html)**
 
 🧭 **Lisp comparison table** — Common Lisp, Racket, Clojure, Emacs Lisp,
-Alcove, and Alcove Script side by side:
+Alcove, and Adder side by side:
 **[aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html)**
 
 > This README is the working overview as of 2026. The original 2014
@@ -260,17 +260,17 @@ test instead of matching a key):
 (done? (next! (range! 0 0)))        ; t
 ```
 
-See [`examples/alcove-script/new-features.als`](examples/alcove-script/new-features.als)
+See [`examples/adder/new-features.adr`](examples/adder/new-features.adr)
 for comprehensive examples of all five features.
 
-### 9. Alcove Script — a Pythonic Lisp
+### 9. Adder — a Pythonic Lisp
 
-**Alcove Script is an attempt to make a Pythonic Lisp** — Lisp's
+**Adder is an attempt to make a Pythonic Lisp** — Lisp's
 homoiconic core dressed in Python's indentation-based, paren-light
 surface syntax. The goal is code that reads like Python while staying
 fully a Lisp underneath, with no loss of macros or code-as-data.
 
-`make als` builds `alcoves`: the full runtime plus a whitespace /
+`make als` builds `adder`: the full runtime plus a whitespace /
 `:`-block reader. It is *not* a new language — the reader turns
 indentation into ordinary Lisp forms *before* macro-expansion, so it
 stays fully homoiconic. A line is a list; a trailing `:` opens a
@@ -335,7 +335,7 @@ def fib (n):                 # ladder all the way down
 
 **The REPL is block-aware** — continuation prompt, auto-indent after
 `:`, blank line submits, live syntax highlighting + history. And
-`(source f)` prints the definition *back as Alcove Script*, normalised
+`(source f)` prints the definition *back as Adder*, normalised
 to the idiomatic form (homoiconicity, round-tripped):
 
 ```
@@ -358,11 +358,11 @@ def fib (n):
     + (fib (- n 1)) (fib (- n 2))
 ```
 
-Alcove Script is accepted at the prompt, in `.als` files, piped
-stdin, and `-e`; `alcove` itself is unchanged. `als.py` (forward)
-and `alc2als.py` (`.alc` → `.als`, with builder laddering) are
-offline tools. See [`examples/alcove-script/`](examples/alcove-script/)
-and [`alcove-script-spec.md`](alcove-script-spec.md).
+Adder is accepted at the prompt, in `.adr` files, piped
+stdin, and `-e`; `alcove` itself is unchanged. `adr.py` (forward)
+and `alc2adr.py` (`.alc` → `.adr`, with builder laddering) are
+offline tools. See [`examples/adder/`](examples/adder/)
+and [`adder-spec.md`](adder-spec.md).
 
 ---
 
@@ -371,12 +371,12 @@ and [`alcove-script-spec.md`](alcove-script-spec.md).
 | path | what |
 |---|---|
 | [`examples/mario/`](examples/mario/) | Side-scrolling platformer with SDL2 (native) and Canvas/WASM (web). See the [live demo](https://aallamaa.github.io/alcove/mario.html). |
-| [`web/learn.html`](web/learn.html) | Editable Rosetta-style examples for Alcove and Alcove Script. See the [live page](https://aallamaa.github.io/alcove/learn.html). |
-| [`docs/lisp-hyperpolyglot-alcove.html`](docs/lisp-hyperpolyglot-alcove.html) | Lisp comparison table extended with Alcove and Alcove Script. See the [live table](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html). |
+| [`web/learn.html`](web/learn.html) | Editable Rosetta-style examples for Alcove and Adder. See the [live page](https://aallamaa.github.io/alcove/learn.html). |
+| [`docs/lisp-hyperpolyglot-alcove.html`](docs/lisp-hyperpolyglot-alcove.html) | Lisp comparison table extended with Alcove and Adder. See the [live table](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html). |
 | [`examples/mlp/`](examples/mlp/) | MLP digit classifier on UCI optdigits — full pipeline with `make data && make train`. |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
 | [`ffi-examples/`](ffi-examples/) | libm, libc strings, sleeping via usleep, a custom .so for everything FFI can call. |
-| [`examples/alcove-script/`](examples/alcove-script/) | Alcove Script (`.als`) — Python-like indentation syntax over the same Lisp forms; `make als` → `alcoves`. |
+| [`examples/adder/`](examples/adder/) | Adder (`.adr`) — Python-like indentation syntax over the same Lisp forms; `make als` → `adder`. |
 
 ---
 
@@ -390,8 +390,8 @@ history, paren-match, color), `libffi` (the `(ffi-fn …)` builtin).
 make              # build alcove, JIT enabled (default goal)
 make nojit        # JIT off; bytecode only
 make jit-mono     # JIT + single-threaded refcounts (fastest)
-make als          # → alcoves (Alcove Script front end)
-make install      # install alcove and alcoves into ~/.local/bin by default
+make als          # → adder (Adder front end)
+make install      # install alcove and adder into ~/.local/bin by default
 make parser       # debug build with -g3
 make test         # run test.alc (currently 400+ asserts) + ffi-examples
 make benchmark    # alcove vs python3 microbenchmarks (incl. mlp)
@@ -425,10 +425,10 @@ alcove -r 6379                  # RESP2 server mode
   refcount duality.
 - **Feature proposals**: [`docs/specs/proposals.md`](docs/specs/proposals.md)
   — open language ideas (string-buf, try/catch, unquote-splicing).
-- **Alcove Script**: [`alcove-script-spec.md`](alcove-script-spec.md)
+- **Adder**: [`adder-spec.md`](adder-spec.md)
   — the indentation reader spec, plus
-  [`examples/alcove-script/README.md`](examples/alcove-script/README.md)
-  for the `alcoves` REPL, `.als` files, and the offline tools.
+  [`examples/adder/README.md`](examples/adder/README.md)
+  for the `adder` REPL, `.adr` files, and the offline tools.
 - **Editor support**: [`editor/`](editor/README.md) — syntax
   highlighting for vim and emacs (drop-in files + install steps).
 

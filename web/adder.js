@@ -1,5 +1,5 @@
-// alcoves.js — browser wrapper around alcoves-core.{js,wasm}.
-// Exposes AlcoveScript.eval(src), using the same runtime as alcoves.
+// adder.js — browser wrapper around adder-core.{js,wasm}.
+// Exposes Adder.eval(src), using the same runtime as adder.
 
 (function (global) {
   "use strict";
@@ -52,7 +52,7 @@
       userSink(str, kind);
       return;
     }
-    const el = document.getElementById("alcoves-output");
+    const el = document.getElementById("adder-output");
     if (el) el.insertAdjacentHTML("beforeend", ansiToHtml(str) + "\n");
     (kind === "stderr" ? console.error : console.log)(stripAnsi(str));
   }
@@ -61,11 +61,11 @@
     const scripts = document.getElementsByTagName("script");
     for (let i = scripts.length - 1; i >= 0; i--) {
       const src = scripts[i].src;
-      if (src && /alcoves\.js(\?|$)/.test(src)) {
-        return src.replace(/alcoves\.js(\?.*)?$/, "alcoves-core.js");
+      if (src && /adder\.js(\?|$)/.test(src)) {
+        return src.replace(/adder\.js(\?.*)?$/, "adder-core.js");
       }
     }
-    return "alcoves-core.js";
+    return "adder-core.js";
   }
 
   function loadCoreScript() {
@@ -84,10 +84,10 @@
 
   const ready = (async function () {
     await loadCoreScript();
-    if (typeof global.createAlcoveScriptModule !== "function") {
-      throw new Error("createAlcoveScriptModule not exported by alcoves-core.js");
+    if (typeof global.createAdderModule !== "function") {
+      throw new Error("createAdderModule not exported by adder-core.js");
     }
-    Module = await global.createAlcoveScriptModule({
+    Module = await global.createAdderModule({
       print: (s) => emit(s, "stdout"),
       printErr: (s) => emit(s, "stderr"),
     });
@@ -95,7 +95,7 @@
     return Module;
   })();
 
-  const AlcoveScript = {
+  const Adder = {
     ready,
     setOutput(fn) {
       userSink = typeof fn === "function" ? fn : null;
@@ -108,22 +108,22 @@
     },
   };
 
-  global.AlcoveScript = AlcoveScript;
+  global.Adder = Adder;
 
   async function runInlineBlocks() {
     await ready;
-    const blocks = document.querySelectorAll('script[type="text/alcoves"]');
+    const blocks = document.querySelectorAll('script[type="text/adder"]');
     for (const b of blocks) {
       if (b.src) {
         try {
           const r = await fetch(b.src);
           if (!r.ok) {
-            emit(`alcoves: fetch ${b.src} -> ${r.status}`, "stderr");
+            emit(`adder: fetch ${b.src} -> ${r.status}`, "stderr");
             continue;
           }
           alcoveWebEval(await r.text());
         } catch (e) {
-          emit("alcoves: " + e.message, "stderr");
+          emit("adder: " + e.message, "stderr");
         }
       } else {
         alcoveWebEval(b.textContent || "");
