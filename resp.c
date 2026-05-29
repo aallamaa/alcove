@@ -2572,11 +2572,7 @@ int resp_repl_serve(int port, env_t *global) {
   if (isatty(0) && pipe(resp_rl_wake) == 0) {
     use_thread = 1;
     resp_rl_env = global;
-    g_global_env = global; /* completer walks env bindings */
-    rl_attempted_completion_function = alcove_rl_completer;
-#ifdef ALCOVE_ALS
-    rl_bind_key('\t', als_smart_tab);
-#endif
+    repl_readline_setup(global); /* exact same readline config as the REPL */
     resp_set_nonblock(resp_rl_wake[0]);
     repl_fd = resp_rl_wake[0];
     pthread_create(&resp_rl_tid, NULL, resp_rl_reader_main, NULL);

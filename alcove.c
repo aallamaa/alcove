@@ -19717,6 +19717,28 @@ UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
    Previously each loop reimplemented it, which is how `alcoves -R` ended
    up reading raw s-expressions instead of alcove-script. */
 
+#ifdef ALCOVE_READLINE
+/* Shared readline configuration for the interactive REPL — used by BOTH the
+   standalone REPL (main) and the -R combined REPL's reader thread, so line
+   editing, completion, syntax coloring, paren-blink, and history behave
+   identically. The colored-redisplay hook is load-bearing: it suppresses
+   readline's own trailing newline (als_rl_read_form emits one itself), so
+   without it -R doubled every line's newline. History FILE load/save stays
+   with each caller (the standalone REPL gates it on --no-history). */
+static void repl_readline_setup(env_t *global) {
+  g_global_env = global; /* completer walks env bindings */
+  rl_attempted_completion_function = alcove_rl_completer;
+#ifdef ALCOVE_ALS
+  rl_bind_key('\t', als_smart_tab); /* TAB indents at line start, else completes */
+#endif
+  rl_basic_word_break_characters = " \t\n()'`,;\"";
+  rl_variable_bind("blink-matching-paren", "on");
+  rl_redisplay_function = alcove_colored_redisplay; /* real-time highlighting */
+  using_history();
+  stifle_history(1000);
+}
+#endif
+
 /* Eval one already-read top-level form with REPL semantics. `quiet` (file
    load) suppresses the Out[] print. Handles the quit/exit and toeval REPL
    words. Consumes `form`. Returns 1 iff quit/exit was seen. */
@@ -20290,23 +20312,7 @@ int main(int argc, char *argv[]) {
      reader path. The completer needs g_global_env to walk env bindings. */
   int rl_active = (stream == stdin) && isatty(fileno(stdin));
   if (rl_active) {
-    g_global_env = global;
-    rl_attempted_completion_function = alcove_rl_completer;
-#ifdef ALCOVE_ALS
-    /* Whitespace-significant surface syntax: TAB indents on a fresh /
-       indentation-only line, completes otherwise. */
-    rl_bind_key('\t', als_smart_tab);
-#endif
-    /* Use space as the only word separator so e.g. (fib|TAB completes
-       the symbol "fib" with "(" left of cursor counted as boundary. */
-    rl_basic_word_break_characters = " \t\n()'`,;\"";
-    /* Visual matching-paren: when typing ")" the cursor briefly jumps
-       to the matching "(" before settling. Built into readline. */
-    rl_variable_bind("blink-matching-paren", "on");
-    /* Real-time syntax highlighting via custom redisplay function. */
-    rl_redisplay_function = alcove_colored_redisplay;
-    using_history();
-    stifle_history(1000);
+    repl_readline_setup(global); /* shared with the -R reader thread */
     if (save_history) {
       const char *home = getenv("HOME");
 #ifdef ALCOVE_ALS
