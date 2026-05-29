@@ -5092,12 +5092,12 @@ const char doc_vecref[] =
 exp_t *vecrefcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(vexp, iexp);
 
-  if (!isvector(vexp) || !isnumber(iexp))
+  if (!isvector(vexp) || !(isnumber(iexp) || isfloat(iexp)))
     CLEAN_RETURN_2(
         vexp, iexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args"));
 
-  int64_t i = FIX_VAL(iexp);
+  int64_t i = isnumber(iexp) ? FIX_VAL(iexp) : (int64_t)iexp->f; /* float idx truncates */
   if (i < 0 || i >= vec_len(vexp))
     CLEAN_RETURN_2(
         vexp, iexp,
@@ -5112,12 +5112,12 @@ const char doc_vecset[] =
 exp_t *vecsetcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(vexp, iexp, valexp);
 
-  if (!isvector(vexp) || !isnumber(iexp))
+  if (!isvector(vexp) || !(isnumber(iexp) || isfloat(iexp)))
     CLEAN_RETURN_3(
         vexp, iexp, valexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args"));
 
-  int64_t i = FIX_VAL(iexp);
+  int64_t i = isnumber(iexp) ? FIX_VAL(iexp) : (int64_t)iexp->f; /* float idx truncates */
   if (i < 0 || i >= vec_len(vexp))
     CLEAN_RETURN_3(vexp, iexp, valexp,
                    error(ERROR_INDEX_OUT_OF_RANGE, e, env,
@@ -18856,12 +18856,17 @@ l_slot_le_slot: {
 
 l_vec_ref: {
   exp_t *iexp = POP(), *vexp = POP();
-  if (!isvector(vexp) || !isnumber(iexp)) {
+  if (!isvector(vexp) || !(isnumber(iexp) || isfloat(iexp))) {
     unrefexp(iexp);
     unrefexp(vexp);
     RUNTIME_ERR("vec-ref: bad args");
   }
-  int64_t i = FIX_VAL(iexp);
+  /* A float index truncates to its integer part (matches the AST vec-ref
+     and ordinary integer division semantics). This also absorbs a value
+     that arrived as a float instead of a fixnum — e.g. (/ a b) taking the
+     float path on a 32-bit target — where the truncated result is still
+     the correct index. */
+  int64_t i = isnumber(iexp) ? FIX_VAL(iexp) : (int64_t)iexp->f;
   if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(iexp);
     unrefexp(vexp);
@@ -18875,13 +18880,13 @@ l_vec_ref: {
 }
 l_vec_set: {
   exp_t *valexp = POP(), *iexp = POP(), *vexp = POP();
-  if (!isvector(vexp) || !isnumber(iexp)) {
+  if (!isvector(vexp) || !(isnumber(iexp) || isfloat(iexp))) {
     unrefexp(valexp);
     unrefexp(iexp);
     unrefexp(vexp);
     RUNTIME_ERR("vec-set!: bad args");
   }
-  int64_t i = FIX_VAL(iexp);
+  int64_t i = isnumber(iexp) ? FIX_VAL(iexp) : (int64_t)iexp->f; /* float idx truncates */
   if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(valexp);
     unrefexp(iexp);
