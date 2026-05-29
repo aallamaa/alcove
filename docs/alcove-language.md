@@ -319,6 +319,39 @@ When the handler evaluation itself raises an error, the handler's error
 surfaces (not the original body error). This lets you distinguish "body
 failed" from "cleanup failed".
 
+### `call/cc` — escape continuations
+
+`(call/cc f)` calls `f` with one argument, a continuation `k`. Invoking
+`(k v)` abandons the work in progress and makes the whole `call/cc` form
+return `v`. If `k` is never called, `call/cc` returns `f`'s normal result.
+
+```
+(call/cc (fn (k) (+ 1 2)))          ; → 3    (k unused)
+(call/cc (fn (k) (k 42) 999))       ; → 42   (999 never runs)
+(call/cc (fn (k) (+ 1 (k 100) 2)))  ; → 100  (the + never completes)
+
+; early return / guard
+(def clamp (x lo hi)
+  (call/cc (fn (ret)
+    (do (if (< x lo) (ret lo)) (if (> x hi) (ret hi)) x))))
+
+; break out of nested loops at once
+(call/cc (fn (found)
+  (do (= i 1)
+      (while (<= i 5)
+        (do (= j 1)
+            (while (<= j 5)
+              (do (if (is (+ i j) 7) (found (list i j))) (= j (+ j 1))))
+            (= i (+ i 1)))) nil)))   ; → (2 5)
+```
+
+This is the **escape-only** form of `call/cc`: `k` is one-shot and valid
+only during `call/cc`'s dynamic extent (you can escape *outward*, not resume
+later) — equivalent to Scheme's `call/ec`. Full re-entrant continuations
+would need C-stack capture and are not provided. The escape rides the same
+value-propagation path as `try`, so it threads cleanly through `if`/`do`/
+`while`/`for`/recursion/`map`. See `docs/call_cc.md` for the full guide.
+
 ### `for` is integer-only and inclusive
 
 `(for i 1 5 body)` binds `i` to 1, 2, 3, 4, 5 in turn. Empty range
@@ -627,6 +660,29 @@ elements, and `set->list` preserves the original element types.
 Alcove Script reserves `set` for assignment, so use `hash-set` there:
 `set s (hash-set 1 2 3)`.
 
+### Persistent maps (HAMT)
+
+Unlike `hash-map` (mutable), a HAMT is **immutable**: `assoc`/`dissoc` return
+a new map that shares structure with the old one (O(log32 n) time and space),
+so prior versions stay valid. Keys are compared by value (`isequal`): fixnum,
+char, float, string, symbol, blob.
+
+```
+(= m (hamt "a" 1 "b" 2 "c" 3))
+(hamt-count m)                   ; 3
+(hamt-get m "b")                 ; 2
+(hamt-get m "z" 99)              ; 99   (default for a missing key)
+(hamt-contains? m "a")           ; t
+(= m2 (hamt-assoc m "d" 4))      ; new map; m unchanged
+(hamt-count m)                   ; still 3
+(= m3 (hamt-dissoc m "b"))       ; new map without "b"
+(hamt-keys m)                    ; list of keys (unordered)
+(hamt-vals m)                    ; list of values
+(hamt->list m)                   ; flat (k1 v1 k2 v2 …)
+(hamt-merge a b)                 ; union; b's value wins on shared keys
+(hamt? m)                        ; t
+```
+
 ### Deques
 
 Doubly-linked deque with O(1) ends:
@@ -733,13 +789,59 @@ coercion (where `(s i)` returns a char).
 
 Library names are passed straight to `dlopen`. Use `libc.so.6` on Linux
 and `libc.dylib` on macOS — alcove does no name munging. Use a path
-with `/` for your own libraries.
+with `/` for your own libraries. An **empty lib name `""`** resolves
+symbols already linked into the alcove process (libc/libm), portably:
+`(ffi-fn "" "strlen" "long" "string")`. `(ffi?)` reports whether the
+build has libffi.
 
-### What FFI cannot do
+### Callbacks — pass an alcove fn to C
 
-- **No struct-by-value, no varargs, no callbacks.** If you need any of
-  these, write a small C shim that exposes flat-int / flat-pointer
-  entry points and `dlopen` it.
+`(ffi-callback RET (ARG-TYPES…) FN)` wraps an alcove function in a libffi
+closure and returns a value you pass wherever a `ptr` arg is expected — so
+C can call back into alcove (e.g. a comparator, an event handler).
+
+```
+(= cb (ffi-callback "long" (list "long" "long") (fn (a b) (+ a b))))
+(some-c-fn cb 17 25)          ; C invokes cb -> 42
+```
+
+Ret/arg types: `void int long double ptr` (no string return — the buffer's
+lifetime can't outlive the call). Closures work as callbacks. See
+`ffi-examples/05-callbacks.alc`.
+
+### Struct-by-value
+
+`(ffi-struct FIELD-TYPES…)` defines a by-value aggregate (fields:
+`int long double ptr`, or a nested `ffi-struct` descriptor). The descriptor
+is usable as an `ffi-fn` arg/return type and with `(ffi-pack DESC vals…)` →
+a blob, and `(ffi-unpack DESC blob)` → a list of field values.
+
+```
+(= Point (ffi-struct "double" "double"))
+(= norm2 (ffi-fn LIB "pt_norm2" "double" Point))
+(norm2 (ffi-pack Point 3.0 4.0))     ; → 25.0
+(ffi-unpack Point (ffi-pack Point 7.5 8.5))   ; → (7.5 8.5)
+```
+
+See `ffi-examples/06-structs.alc`.
+
+### Varargs
+
+`(ffi-vfn LIB FN RET FIXED-ARG-TYPES…)` binds a variadic C function. The
+given types are the fixed prefix; extra call args have their type inferred
+(fixnum→`long`, so use `%ld`; float→`double`; char→`int`; string/nil→
+pointer). The cif is built per call, so each call site can pass a different
+variadic tail.
+
+```
+(= printf (ffi-vfn "" "printf" "int" "string"))
+(printf "%ld and %.1f\n" 42 3.5)
+```
+
+See `ffi-examples/07-varargs.alc`.
+
+### Other notes
+
 - **Returned `char*` is copied** into a new alcove string. C-side
   `free()` is your problem — wrap it via `(ffi-fn "libc..." "free"
   "void" "ptr")`.
@@ -952,9 +1054,12 @@ So you do not waste time looking:
 
 - No `progn` (use `do`). No `setf` as mutation (use `=` or the `setf`
   alias for `=`). `cond`, `match`, `try/finally`, and generators now exist.
-- No multiple return values, no continuations. Errors are reified as
-  values and can be caught with `(try body handler)` rather than via
-  unwinding exceptions.
+- No multiple return values. Errors are reified as values and can be caught
+  with `(try body handler)` rather than via unwinding exceptions.
+- Continuations are **escape-only** (`call/cc` = Scheme's `call/ec`): `k`
+  escapes outward within its dynamic extent. No full re-entrant/resumable
+  continuations (no generators-via-call/cc, no coroutines). See
+  `docs/call_cc.md`.
 - No bignums; integers wider than 60 bits silently become floats.
 - No threads visible from user Lisp. The RESP server runs sharded
   reactors internally but those shards do not expose user-facing

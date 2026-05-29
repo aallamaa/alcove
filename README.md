@@ -223,6 +223,17 @@ test instead of matching a key):
      (cleanup))          ; always runs, even on success
 ```
 
+**`call/cc`** — escape continuations for early return / non-local exit
+(escape-only: `k` escapes outward within its `call/cc`'s extent). See
+[`docs/call_cc.md`](docs/call_cc.md):
+
+```lisp
+(def clamp (x lo hi)
+  (call/cc (fn (ret)
+    (do (if (< x lo) (ret lo)) (if (> x hi) (ret hi)) x))))
+(clamp 99 0 10)                    ; → 10  (returns early, skips the rest)
+```
+
 **Destructuring params** — any parameter slot may be a list pattern:
 
 ```lisp
@@ -406,6 +417,9 @@ alcove -r 6379                  # RESP2 server mode
   — practical reference: literals, special forms, builtins, FFI,
   macros, persistence, closures, footguns. Generated from `alcove.c`
   + tested against `test.alc`.
+- **Escape continuations**: [`docs/call_cc.md`](docs/call_cc.md) — the
+  `call/cc` guide (early return, non-local exit, breaking nested loops,
+  exception-style bailout) with idioms and the escape-only semantics.
 - **Multithreading design**: [`docs/multithreading.md`](docs/multithreading.md)
   — how the RESP server's sharded reactors work, MPSC inboxes,
   refcount duality.

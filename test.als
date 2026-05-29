@@ -716,6 +716,56 @@ def _applyit (g):
 
 assert "closure tail-call captures" (_applyit (_mkadd 100)) 105
 
+def _cc_find (pred xs):
+  call/cc (fn (return) (do (def go (ys) (if (no ys) nil (if (pred ys) (return (car ys)) (go (cdr ys))))) (go xs)))
+
+assert "cc find-first hit" (_cc_find (fn (l) (> (car l) 3)) '(1 2 5 0 9)) 5
+
+assert "cc find-first miss" (_cc_find (fn (l) (> (car l) 99)) '(1 2 3)) nil
+
+def _cc_sdiv (a b k):
+  if (is b 0):
+    k 'div0
+    / a b
+
+assert "cc safe-div ok" (call/cc (fn (k) (_cc_sdiv 10 2 k))) 5
+
+assert "cc safe-div bail" (call/cc (fn (k) (_cc_sdiv 10 0 k))) 'div0
+
+def _cc_pair (n target):
+  call/cc (fn (found) (do (setf _i 1) (while (<= _i n) (do (setf _j 1) (while (<= _j n) (do (if (is (+ _i _j) target) (found (list _i _j))) (setf _j (+ _j 1)))) (setf _i (+ _i 1)))) nil))
+
+assert "cc nested-loop break" (_cc_pair 5 7) (list 2 5)
+
+def _cc_clamp (x lo hi):
+  call/cc (fn (ret) (do (if (< x lo) (ret lo)) (if (> x hi) (ret hi)) x))
+
+assert "cc clamp mid" (_cc_clamp 5 0 10) 5
+
+assert "cc clamp low" (_cc_clamp -3 0 10) 0
+
+assert "cc clamp high" (_cc_clamp 99 0 10) 10
+
+def _cc_sumnn (xs):
+  call/cc (fn (bail) (do (def go (ys acc) (if (no ys) acc (if (< (car ys) 0) (bail 0) (go (cdr ys) (+ acc (car ys)))))) (go xs 0)))
+
+assert "cc sum nonneg ok" (_cc_sumnn '(3 4 5)) 12
+
+assert "cc sum nonneg bail" (_cc_sumnn '(3 -1 5)) 0
+
+assert "cc nested outer" (call/cc (fn (o) (+ 1 (call/cc (fn (i) (o 100)))))):
+  100
+
+assert "cc nested inner" (call/cc (fn (o) (+ 1 (call/cc (fn (i) (i 100)))))):
+  101
+
+assert "cc escape from map" (call/cc (fn (k) (do (map (fn (x) (if (> x 2) (k x))) '(1 2 3 4)) -1))):
+  3
+
+assert "cc payload list" (call/cc (fn (k) (k (list 1 2 3)))) (list 1 2 3)
+
+assert "cc ignored k" (call/cc (fn (k) (* 6 7))) 42
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42
