@@ -67,6 +67,12 @@ enum {
 
 #define MAKE_FIX(v) ((exp_t *)((((uintptr_t)(int64_t)(v)) << 3) | TAG_FIX))
 #define FIX_VAL(e) ((int64_t)((intptr_t)(e)) >> 3) /* arithmetic shift */
+/* True if the signed value v survives a round-trip through the fixnum tag
+   (i.e. fits the (pointer_width - 3)-bit tagged range: 61-bit on 64-bit
+   targets, 29-bit on wasm32). Use this to decide fixnum-vs-float promotion
+   — it is pointer-width-correct, unlike an open-coded `<< 3 >> 3` check that
+   assumes 64-bit uintptr_t and zero-extends the sign on 32-bit. */
+#define FIX_FITS(v) (FIX_VAL(MAKE_FIX(v)) == (int64_t)(v))
 /* Coerce a numeric exp_t (fixnum or float) to double without heap allocation.
    Caller must ensure (e) is either isnumber or isfloat. */
 #define TO_DOUBLE(e) (isnumber(e) ? (double)FIX_VAL(e) : (e)->f)

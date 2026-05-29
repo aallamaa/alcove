@@ -4684,7 +4684,7 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
           /* Detect fixnum range overflow: if the negation doesn't             \
              round-trip through the 61-bit tag (arithmetic shift),             \
              promote to float. Uses signed cast before >>3 to match FIX_VAL. */\
-          if (((int64_t)((uintptr_t)(int64_t)_neg << 3)) >> 3 != _neg) {      \
+          if (!FIX_FITS(_neg)) { /* pointer-width-correct; not a 64-bit-only check */ \
             sum_f = -(expfloat)sum_i;                                          \
             saw_float = 1;                                                     \
           } else {                                                             \
@@ -7819,7 +7819,7 @@ exp_t *abscmd(exp_t *e, env_t *env) {
       /* If negation overflows fixnum range (abs of most-negative fixnum),
          promote to float rather than silently wrapping to negative.
          Uses signed >>3 to match FIX_VAL's arithmetic-shift semantics. */
-      if (v < 0 && ((int64_t)((uintptr_t)(int64_t)av << 3)) >> 3 != av)
+      if (v < 0 && !FIX_FITS(av))
         ret = make_floatf(-(expfloat)v);
       else
         ret = MAKE_FIX(av);
