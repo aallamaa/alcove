@@ -2573,6 +2573,7 @@ int resp_repl_serve(int port, env_t *global) {
     use_thread = 1;
     resp_rl_env = global;
     repl_readline_setup(global); /* exact same readline config as the REPL */
+    repl_history_load(1);        /* round-trip ~/.alcove(s)_history like the REPL */
     resp_set_nonblock(resp_rl_wake[0]);
     repl_fd = resp_rl_wake[0];
     pthread_create(&resp_rl_tid, NULL, resp_rl_reader_main, NULL);
@@ -2673,6 +2674,7 @@ int resp_repl_serve(int port, env_t *global) {
     pthread_mutex_unlock(&resp_rl_mtx);
     if (resp_rl_wake[0] >= 0) close(resp_rl_wake[0]);
     if (resp_rl_wake[1] >= 0) close(resp_rl_wake[1]);
+    repl_history_save(); /* persist this session like the standalone REPL */
   }
 #endif
   printf("\nalcove: shutting down combined REPL + RESP\n");

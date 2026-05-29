@@ -1384,11 +1384,41 @@ void print_node(exp_t *node) {
     }
     printf("]");
   } else if (node->type == EXP_BLOB) {
-    /* Compact summary, like Python `b'...'` but with byte count for big
-       payloads. Avoid dumping arbitrary bytes (may contain NULs/escapes). */
+    /* Show the content when it's printable text (b"..."), otherwise a
+       hexdump-style view with an ASCII column (non-printable -> '.'), like
+       the right column of `hexdump -C`. Binary view is capped so a large
+       payload doesn't flood the REPL. */
     alc_blob_t *b = (alc_blob_t *)node->ptr;
-    printf("\x1B[92m#<blob %zu byte%s>\x1B[39m", b ? b->len : 0,
-           (b && b->len == 1) ? "" : "s");
+    size_t n = b ? b->len : 0;
+    const unsigned char *p = b ? (const unsigned char *)b->bytes : NULL;
+    int printable = (n > 0);
+    for (size_t i = 0; i < n; i++)
+      if (p[i] < 0x20 || p[i] > 0x7e) {
+        printable = 0;
+        break;
+      }
+    if (n == 0) {
+      printf("\x1B[92m#<blob 0 bytes>\x1B[39m");
+    } else if (printable) {
+      printf("\x1B[92mb\"");
+      for (size_t i = 0; i < n; i++) {
+        if (p[i] == '"' || p[i] == '\\')
+          putchar('\\');
+        putchar(p[i]);
+      }
+      printf("\"\x1B[39m");
+    } else {
+      size_t show = n < 64 ? n : 64;
+      printf("\x1B[92m#<blob %zu: ", n);
+      for (size_t i = 0; i < show; i++)
+        printf("%02x ", p[i]);
+      if (show < n)
+        printf("... ");
+      putchar('|');
+      for (size_t i = 0; i < show; i++)
+        putchar((p[i] >= 0x20 && p[i] <= 0x7e) ? (char)p[i] : '.');
+      printf("|>\x1B[39m");
+    }
   } else if (node->type == EXP_DICT) {
     /* Clojure-style {k v, k v} so the printed form re-reads as the same
        value. Iteration order is bucket-order, not insertion-order. */
@@ -19737,6 +19767,37 @@ static void repl_readline_setup(env_t *global) {
   using_history();
   stifle_history(1000);
 }
+
+/* History-file persistence, shared by the standalone REPL and the -R
+   combined REPL so both round-trip ~/.alcove(s)_history. The resolved path
+   lives in a file-scope buffer; an empty buffer means "no persistence"
+   (HOME unset, path too long, or --no-history). */
+static char alc_hist_path[1024];
+
+static void repl_history_load(int save_history) {
+  alc_hist_path[0] = 0;
+  if (!save_history)
+    return;
+  const char *home = getenv("HOME");
+#ifdef ALCOVE_ALS
+  const char *hist_name = "/.alcoves_history";
+#else
+  const char *hist_name = "/.alcove_history";
+#endif
+  if (home && (size_t)snprintf(alc_hist_path, sizeof alc_hist_path, "%s%s",
+                               home, hist_name) < sizeof alc_hist_path)
+    read_history(alc_hist_path); /* missing file on first run is fine */
+  else
+    alc_hist_path[0] = 0; /* HOME unset or path too long — no persistence */
+}
+
+static void repl_history_save(void) {
+  if (!alc_hist_path[0])
+    return;
+  write_history(alc_hist_path);
+  history_truncate_file(alc_hist_path, 1000);
+  chmod(alc_hist_path, 0600); /* may have pasted secrets */
+}
 #endif
 
 /* Eval one already-read top-level form with REPL semantics. `quiet` (file
@@ -20142,7 +20203,6 @@ int main(int argc, char *argv[]) {
   int auto_load = 1;
   int run_init = 1;
   int save_history = 1;
-  char alc_hist_path[1024] = {0}; /* set in the rl_active block below */
   char *eval_string = NULL;
 #ifndef ALCOVE_WEB
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
@@ -20313,22 +20373,7 @@ int main(int argc, char *argv[]) {
   int rl_active = (stream == stdin) && isatty(fileno(stdin));
   if (rl_active) {
     repl_readline_setup(global); /* shared with the -R reader thread */
-    if (save_history) {
-      const char *home = getenv("HOME");
-#ifdef ALCOVE_ALS
-      const char *hist_name = "/.alcoves_history";
-#else
-      const char *hist_name = "/.alcove_history";
-#endif
-      if (home && snprintf(alc_hist_path, sizeof alc_hist_path,
-                           "%s%s", home, hist_name) > 0
-                  && (size_t)snprintf(NULL, 0, "%s%s", home, hist_name)
-                       < sizeof alc_hist_path) {
-        read_history(alc_hist_path); /* missing file on first run is fine */
-      } else {
-        alc_hist_path[0] = 0; /* path too long — disable persistence */
-      }
-    }
+    repl_history_load(save_history);
   }
 #endif
 
@@ -20396,11 +20441,7 @@ int main(int argc, char *argv[]) {
   }
 endcleanly:
 #ifdef ALCOVE_READLINE
-  if (alc_hist_path[0]) {
-    write_history(alc_hist_path);
-    history_truncate_file(alc_hist_path, 1000);
-    chmod(alc_hist_path, 0600); /* may have pasted secrets */
-  }
+  repl_history_save();
 #endif
   destroy_dict(dict);
   destroy_env(global);
