@@ -377,6 +377,9 @@ lispProc lispProcList[] = {
     LISPCMD("hamt-count", hamtcountcmd, doc_hamtcount),
     LISPCMD("hamt-contains?", hamtcontainspcmd, doc_hamtcontainsp),
     LISPCMD("hamt-keys", hamtkeyscmd, doc_hamtkeys),
+    LISPCMD("hamt-vals", hamtvalscmd, doc_hamtvals),
+    LISPCMD("hamt->list", hamtlistcmd, doc_hamtlist),
+    LISPCMD("hamt-merge", hamtmergecmd, doc_hamtmerge),
     LISPCMD("hamt?", hamtpcmd, doc_hamtp),
     /* Binary-safe blobs (EXP_BLOB) */
     LISPCMD("make-blob", makeblobcmd, doc_makeblob),
@@ -20989,6 +20992,72 @@ const char doc_hamtp[] = "(hamt? x) — t if x is a persistent map, else nil.";
 exp_t *hamtpcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(x);
   CLEAN_RETURN_1(x, refexp(ishamt(x) ? TRUE_EXP : NIL_EXP));
+}
+
+static int hamt_collect_vals(exp_t *key, exp_t *val, void *ctx) {
+  (void)key;
+  exp_t **acc = (exp_t **)ctx;
+  exp_t *node = make_node(refexp(val));
+  if (!acc[0]) { acc[0] = node; acc[1] = node; }
+  else { acc[1]->next = node; acc[1] = node; }
+  return 1;
+}
+const char doc_hamtvals[] = "(hamt-vals m) — list of the map's values (unordered).";
+exp_t *hamtvalscmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(m);
+  if (!ishamt(m))
+    CLEAN_RETURN_1(m, error(ERROR_ILLEGAL_VALUE, e, env, "hamt-vals: not a hamt"));
+  exp_t *acc[2] = {NULL, NULL};
+  hamt_node_foreach(((hamt_t *)m->ptr)->root, hamt_collect_vals, acc);
+  CLEAN_RETURN_1(m, acc[0] ? acc[0] : NIL_EXP);
+}
+
+static int hamt_collect_kv(exp_t *key, exp_t *val, void *ctx) {
+  exp_t **acc = (exp_t **)ctx; /* flat: k1 v1 k2 v2 ... (round-trips via hamt) */
+  exp_t *kn = make_node(refexp(key));
+  exp_t *vn = make_node(refexp(val));
+  kn->next = vn;
+  if (!acc[0]) { acc[0] = kn; }
+  else { acc[1]->next = kn; }
+  acc[1] = vn;
+  return 1;
+}
+const char doc_hamtlist[] =
+    "(hamt->list m) — flat list (k1 v1 k2 v2 ...) of entries (unordered); "
+    "round-trips via (apply hamt (hamt->list m)).";
+exp_t *hamtlistcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(m);
+  if (!ishamt(m))
+    CLEAN_RETURN_1(m, error(ERROR_ILLEGAL_VALUE, e, env, "hamt->list: not a hamt"));
+  exp_t *acc[2] = {NULL, NULL};
+  hamt_node_foreach(((hamt_t *)m->ptr)->root, hamt_collect_kv, acc);
+  CLEAN_RETURN_1(m, acc[0] ? acc[0] : NIL_EXP);
+}
+
+typedef struct { hamt_node *root; int64_t count; } hamt_merge_acc;
+static int hamt_merge_one(exp_t *key, exp_t *val, void *ctx) {
+  hamt_merge_acc *a = (hamt_merge_acc *)ctx;
+  int added = 0;
+  hamt_node *nr = hamt_node_assoc(a->root, key, val, hamt_hashkey(key), 0, &added);
+  hamt_node_unref(a->root);
+  a->root = nr;
+  a->count += added;
+  return 1;
+}
+const char doc_hamtmerge[] =
+    "(hamt-merge a b) — new map with all of a's and b's entries; on a key in "
+    "both, b's value wins. a and b are unchanged.";
+exp_t *hamtmergecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(a, b);
+  if (!ishamt(a) || !ishamt(b))
+    CLEAN_RETURN_2(a, b, error(ERROR_ILLEGAL_VALUE, e, env, "hamt-merge: need two hamts"));
+  hamt_t *ha = (hamt_t *)a->ptr, *hb = (hamt_t *)b->ptr;
+  hamt_merge_acc acc;
+  acc.root = hamt_node_ref(ha->root); /* start from a (shares a's nodes) */
+  acc.count = ha->count;
+  hamt_node_foreach(hb->root, hamt_merge_one, &acc);
+  exp_t *ret = hamt_wrap(acc.root, acc.count);
+  CLEAN_RETURN_2(a, b, ret);
 }
 
 /* ---------- deque / EXP_LIST ops ---------- */

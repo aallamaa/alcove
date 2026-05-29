@@ -54,11 +54,12 @@
        sharing (32-way bitmap trie, 5 hash bits/level, collision buckets).
        Refcounted C nodes shared across versions (acyclic DAG → no cycles).
        Builtins: hamt, hamt-assoc, hamt-get (w/ default), hamt-dissoc,
-       hamt-count, hamt-contains?, hamt-keys, hamt?. Wired into print
-       ({k v, ...}), istrue, unrefexp free, isatom. Tests "20f" in test.alc
-       (28 assertions incl. immutability, overwrite, 300-insert scale, mixed
-       key types); ASan-clean, version-churn RSS flat. NOT yet: hamt->list,
-       hamt-vals, hamt-merge, savedb persistence, deep iso equality.
+       hamt-count, hamt-contains?, hamt-keys, hamt-vals, hamt->list (flat
+       k v ...), hamt-merge (b wins), hamt?. Wired into print ({k v, ...}),
+       istrue, unrefexp free, isatom. Tests "20f" in test.alc (incl.
+       immutability, overwrite, 300-insert scale, mixed key types, merge);
+       ASan-clean, version-churn RSS flat. NOT yet: savedb persistence, deep
+       iso equality, apply-compat (apply doesn't compose with builtins).
        Ref: http://en.wikipedia.org/wiki/Hash_array_mapped_trie ;
        clojure PersistentHashMap ; chaelim/HAMT ; Ctries (lock-free).
 [TODO] implement http://gcc.gnu.org/onlinedocs/gcc-4.4.5/gcc/Atomic-Builtins.html for every potentially concurrent objects

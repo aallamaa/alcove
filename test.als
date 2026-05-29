@@ -637,8 +637,30 @@ assert "hamt big lookup absent" (hamt-get hbig 999) nil
 
 assert "hamt keys length" (length (hamt-keys hm)) 3
 
+assert "hamt vals length" (length (hamt-vals hm)) 3
+
+assert "hamt->list length (flat)" (length (hamt->list hm)) 6
+
 assert "hamt-get non-hamt errors" (try (hamt-get 5 "x") (fn (e) 'caught)):
   'caught
+
+setf hma (hamt "x" 1 "y" 2)
+
+setf hmb (hamt "y" 20 "z" 30)
+
+setf hmg (hamt-merge hma hmb)
+
+assert "hamt-merge count" (hamt-count hmg) 3
+
+assert "hamt-merge b wins" (hamt-get hmg "y") 20
+
+assert "hamt-merge keeps a-only" (hamt-get hmg "x") 1
+
+assert "hamt-merge adds b-only" (hamt-get hmg "z") 30
+
+assert "hamt-merge a unchanged" (hamt-get hma "y") 2
+
+assert "hamt-merge empty rhs" (hamt-count (hamt-merge hma (hamt))) 2
 
 assert "mod 17 5" (mod 17 5) 2
 
