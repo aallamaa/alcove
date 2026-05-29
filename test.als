@@ -516,6 +516,16 @@ assert "cycle: local mutual even 10" (parity 10) t
 
 refute "cycle: local mutual odd 7" (parity 7) t
 
+def usemac (k):
+  do:
+    defmacro m1 (x):
+      list '+ x 1
+    if (is k 0):
+      0
+      + (m1 k) (usemac (- k 1))
+
+assert "cycle: macro-in-fn usemac 4" (usemac 4) 14
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

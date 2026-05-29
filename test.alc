@@ -348,6 +348,13 @@
   (ev n)))
 (assert "cycle: local mutual even 10"  (parity 10)               t)
 (refute "cycle: local mutual odd 7"    (parity 7)                t)
+; (v) a macro defined INSIDE a function captures the frame like a closure
+;     and was the same per-call-ref-leak class (invokemacro borrows fn,
+;     consumes e). Exercise repeated definition+use; must stay correct.
+(def usemac (k)
+  (do (defmacro m1 (x) (list '+ x 1))
+      (if (is k 0) 0 (+ (m1 k) (usemac (- k 1))))))
+(assert "cycle: macro-in-fn usemac 4" (usemac 4)                 14)
 
 ; 21. Stdlib additions: math, seq, predicates, HOFs.
 (assert "mod 17 5"                   (mod 17 5)                    2)

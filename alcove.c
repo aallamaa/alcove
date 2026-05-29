@@ -18526,6 +18526,10 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             goto finisht;
           } else if ismacro (tmpexp2) {
             ret = invokemacro(e, tmpexp2, env);
+            /* Same ownership as the lambda branch above: invokemacro borrows
+               fn and consumes e, so release the looked-up tmpexp2 ref here.
+               (A macro defined inside a fn body leaked its frame otherwise.) */
+            unrefexp(tmpexp2);
             goto finisht;
           } else if (isstring(tmpexp2)) {
             /* (s i) where s is a var bound to a string — same semantics

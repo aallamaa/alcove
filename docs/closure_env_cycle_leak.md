@@ -153,6 +153,11 @@ add `unrefexp(tmpexp2)` after the `invoke`, matching the tail-marker branch
 immediately above. (The `tmpexp`-block `invoke` site is NOT affected — there
 `tmpexp` is borrowed from `e`, which `invoke` consumes.)
 
+The sibling `ismacro` branch in the same block had the identical bug —
+`invokemacro` also borrows `fn` and consumes `e` — so a macro defined inside
+a function body leaked its frame the same way (24.6 MB → 2.0 MB at 2000
+rounds after the matching `unrefexp(tmpexp2)`). Fixed in the same pass.
+
 ### 2. The closure↔env cycle itself (Option B)
 Even with refcounts balanced, a self-capturing closure bound in its own frame
 is a 2-cycle. `env_break_self_cycle` (called from `destroy_env` at the
