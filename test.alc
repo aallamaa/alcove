@@ -319,6 +319,36 @@
 (def bump-sf () (setf gsf (+ gsf 5)) gsf)
 (assert "compiled setf mutates global" (bump-sf)                   15)
 
+; 20c. Closure↔env cycle reclamation (destroy_env self-cycle break).
+;      These guard the cycle-collector: it MUST reclaim a local closure that
+;      captures its frame and does not escape, but MUST NOT collect a closure
+;      that was returned / stored — that would free a live env (UAF).
+; (i) nested def + returned: muln is bound in make-mul's frame AND returned,
+;     so the frame must stay alive (closure refcount > env's single ref).
+(def make-mul (n) (do (def muln (x) (* x n)) muln))
+(= m3 (make-mul 3))
+(= m4 (make-mul 4))
+(assert "cycle: nested-def closure m3" (m3 10)                    30)
+(assert "cycle: nested-def closure m4" (m4 10)                    40)
+(assert "cycle: m3 valid after m4"     (m3 5)                     15)
+; (ii) stored globally, then exercised after heavy allocation churn that
+;      would reuse a wrongly-freed arena slot — garbage/UAF if env was freed.
+(= g-mul (make-mul 7))
+(def churn (k) (if (is k 0) 0 (do (def tmp (x) (+ x 1)) (+ (tmp 1) (churn (- k 1))))))
+(churn 50)
+(assert "cycle: g-mul survives churn"  (g-mul 6)                  42)
+; (iii) the churn closures themselves DO escape nowhere → frames reclaimed;
+;       this asserts they still compute correctly (each tmp returns 2).
+(assert "cycle: churn 5 = 10"          (churn 5)                  10)
+; (iv) mutually-recursive LOCAL defs: both capture the frame, neither escapes
+;      → cycle reclaimed after the call; must compute correctly DURING it.
+(def parity (n) (do
+  (def ev (k) (if (is k 0) t   (od (- k 1))))
+  (def od (k) (if (is k 0) nil (ev (- k 1))))
+  (ev n)))
+(assert "cycle: local mutual even 10"  (parity 10)               t)
+(refute "cycle: local mutual odd 7"    (parity 7)                t)
+
 ; 21. Stdlib additions: math, seq, predicates, HOFs.
 (assert "mod 17 5"                   (mod 17 5)                    2)
 (assert "abs -42"                    (abs -42)                     42)

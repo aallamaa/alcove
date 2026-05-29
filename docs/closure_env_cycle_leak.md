@@ -1,6 +1,9 @@
 # Closure ↔ captured-env refcount cycle leak (#6)
 
-Status: **investigated, reproduced, NOT yet fixed** — awaiting decision on approach.
+Status: **FIXED** (2026-05-29). Root cause was two issues compounding; both
+addressed. Verified 951/0 across all 10 build variants, ASan-clean, and the
+repro RSS went from ~120 MB to a flat 2.0 MB at 5000 rounds. See "Resolution"
+at the bottom. The investigation that follows is kept for the record.
 
 ## The bug
 
@@ -125,3 +128,42 @@ globally-stored closure, sibling-captured env). It fixes the real shape
 without changing closure semantics. If we'd rather not touch core teardown
 right now: **Option D** (document) is the safe hold, since top-level defs —
 the common case — are unaffected.
+
+## Resolution (what was actually done)
+
+Investigation while implementing Option B uncovered that the leak was **two
+compounding bugs**, not just the cycle:
+
+### 1. Per-call refcount leak on env-resolved closures (the dominant cause)
+In `evaluate`, the `(operator args)` dispatch resolves the operator via
+`tmpexp2 = lookup(tmpexp, env)` — an **owned** ref. Every sibling branch
+released it (the FFI branch, the tail-marker branch, the string-index
+branches), but the non-tail `invoke` branch did not:
+
+```c
+ret = invoke(e, tmpexp2, env);   // invoke() BORROWS fn (own refexp/unrefexp
+goto finisht;                    // net to zero) and consumes e — tmpexp2 leaks
+```
+
+`invoke` takes its own ref on `fn` and consumes `e`, so the caller's
+`tmpexp2` ref was leaked **once per call**. For a global function this is
+masked (its other refs churn), but for a closure resolved from a local frame
+it pinned the closure alive — `inner` called once sat at `nref == 2`. Fix:
+add `unrefexp(tmpexp2)` after the `invoke`, matching the tail-marker branch
+immediately above. (The `tmpexp`-block `invoke` site is NOT affected — there
+`tmpexp` is borrowed from `e`, which `invoke` consumes.)
+
+### 2. The closure↔env cycle itself (Option B)
+Even with refcounts balanced, a self-capturing closure bound in its own frame
+is a 2-cycle. `env_break_self_cycle` (called from `destroy_env` at the
+`REFCOUNT_DEC > 0` early-break) detects when every remaining ref to env is a
+back-ref from a closure that env solely owns, and severs those edges so env
+and the closures can free. Conservative guards (`residual == self_refs`,
+per-closure `nref == 1`, `!FLAG_SHARED`) ensure a returned / globally-stored /
+sibling-captured closure is never collected — proven by the "must NOT
+collect" tests in test.alc (`cycle: m3 valid after m4`, `cycle: g-mul
+survives churn`, the mutual-recursion cases) and ASan.
+
+Fix #1 alone unmasks the cycle for once-called closures; fix #2 reclaims the
+true cycle (e.g. a closure created but whose frame would otherwise persist).
+Together the repro is flat. Tests added under "20c" in test.alc.

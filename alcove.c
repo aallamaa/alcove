@@ -778,6 +778,73 @@ inline env_t *make_env(env_t *rootenv) {
   return newenv;
 }
 
+/* True for a closure that captured THIS env (its body wrapper's meta points
+   back at env) — the lambda→env half of a (def/let f (fn ...)) cycle.
+   FLAG_SHARED closures are excluded: severing their refs non-atomically
+   would be unsafe under the multi-thread build, so we leave them alone. */
+static inline int is_self_closure(exp_t *v, env_t *env) {
+  return v && is_ptr(v) && (v->type == EXP_LAMBDA || v->type == EXP_MACRO) &&
+         !(v->flags & FLAG_SHARED) && v->next &&
+         (env_t *)v->next->meta == env;
+}
+
+/* Reclaim a self-referential closure cycle that manual refcounting cannot.
+   A closure created with (def/let f (fn ...)) inside a function body captures
+   its frame (f->next->meta == env, an owned ref) while the frame owns f (its
+   name binding) — a 2-node strong cycle. When the ONLY refs still keeping env
+   alive are such closures, each owned SOLELY by env, sever the closure→env
+   edges so env — and then, via the normal dict/inline unref below, the
+   closures — can be freed.
+
+   `residual` is env->nref AFTER the frame's own ref was dropped. We collect
+   only when residual == (count of solely-env-owned self-closures): any other
+   holder of env (an anonymous escaped closure that captured env but isn't
+   bound here, or a live child env) makes residual exceed that count, and any
+   self-closure with an extra referrer (e.g. it was returned) has nref != 1 —
+   both cases bail, leaving live data untouched. Returns 1 if it severed the
+   cycle (env is now collectible), 0 to leave the early-break intact. */
+static inline int env_break_self_cycle(env_t *env, int residual) {
+  int self_refs = 0;
+  for (int i = 0; i < env->n_inline; i++) {
+    exp_t *v = env->inline_vals[i];
+    if (!is_self_closure(v, env))
+      continue;
+    if (v->nref != 1)
+      return 0; /* owned elsewhere too → still live */
+    self_refs++;
+  }
+  if (env->d)
+    for (int h = 0; h < 2; h++) {
+      kvht_t *t = &env->d->ht[h];
+      for (unsigned long b = 0; b < t->size; b++)
+        for (keyval_t *k = t->table[b]; k; k = k->next) {
+          if (!is_self_closure(k->val, env))
+            continue;
+          if (k->val->nref != 1)
+            return 0;
+          self_refs++;
+        }
+    }
+  /* Every remaining ref to env must be a self-closure back-ref. */
+  if (self_refs == 0 || self_refs != residual)
+    return 0;
+  /* Sever each closure→env edge. unrefexp's closure-free path keys on
+     next->meta to release the captured env; NULLing it makes the dict/inline
+     unref below free the closure without re-entering destroy_env(env). */
+  for (int i = 0; i < env->n_inline; i++)
+    if (is_self_closure(env->inline_vals[i], env))
+      env->inline_vals[i]->next->meta = NULL;
+  if (env->d)
+    for (int h = 0; h < 2; h++) {
+      kvht_t *t = &env->d->ht[h];
+      for (unsigned long b = 0; b < t->size; b++)
+        for (keyval_t *k = t->table[b]; k; k = k->next)
+          if (is_self_closure(k->val, env))
+            k->val->next->meta = NULL;
+    }
+  return 1;
+}
+
 inline void *destroy_env(env_t *env) {
   /* Iterative release — each env holds a ref to its parent via
      make_env/ref_env. Recursing would blow the C stack on deep call chains.
@@ -788,7 +855,12 @@ inline void *destroy_env(env_t *env) {
   shard_t *sh = current_shard;
   while (env) {
     env_t *parent = env->root;
-    if (REFCOUNT_DEC(&env->nref) > 0)
+    int residual = REFCOUNT_DEC(&env->nref);
+    /* residual > 0 normally means "still referenced, stop". But a closure
+       defined in this env can hold the env's only outstanding ref via a
+       refcount cycle (see env_break_self_cycle); if so, sever it and fall
+       through to free env. Otherwise honor the early-break. */
+    if (residual > 0 && !env_break_self_cycle(env, residual))
       break;
     {
       int i;
@@ -18445,6 +18517,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
               goto finisht;
             }
             ret = invoke(e, tmpexp2, env);
+            /* invoke() borrows fn (its own refexp/unrefexp net to zero) and
+               consumes e — but tmpexp2 is a separately-owned ref from the
+               lookup above, so release it here like every sibling branch
+               does. Omitting this leaked one ref per call on env-resolved
+               closures, pinning the closure↔frame cycle alive. */
+            unrefexp(tmpexp2);
             goto finisht;
           } else if ismacro (tmpexp2) {
             ret = invokemacro(e, tmpexp2, env);

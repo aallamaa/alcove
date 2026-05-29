@@ -468,6 +468,54 @@ def bump-sf ():
 
 assert "compiled setf mutates global" (bump-sf) 15
 
+def make-mul (n):
+  do:
+    def muln (x):
+      * x n
+    muln
+
+setf m3 (make-mul 3)
+
+setf m4 (make-mul 4)
+
+assert "cycle: nested-def closure m3" (m3 10) 30
+
+assert "cycle: nested-def closure m4" (m4 10) 40
+
+assert "cycle: m3 valid after m4" (m3 5) 15
+
+setf g-mul (make-mul 7)
+
+def churn (k):
+  if (is k 0):
+    0
+    do:
+      def tmp (x):
+        + x 1
+      + (tmp 1) (churn (- k 1))
+
+churn 50
+
+assert "cycle: g-mul survives churn" (g-mul 6) 42
+
+assert "cycle: churn 5 = 10" (churn 5) 10
+
+def parity (n):
+  do:
+    def ev (k):
+      if (is k 0):
+        t
+        od (- k 1)
+    def od (k):
+      if (is k 0):
+        nil
+        ev (- k 1)
+    ev n
+
+assert "cycle: local mutual even 10" (parity 10) t
+
+refute "cycle: local mutual odd 7" (parity 7) t
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

@@ -103,13 +103,17 @@
        comparator). Each needs a libffi closure setup but no fundamental
        blocker.
 
-[TODO] MEMORY LEAK: closure↔captured-env refcount cycle. A def/let closure
-       created INSIDE a function body forms a strong 2-cycle (lambda owns
-       its captured env via next->meta; env owns the lambda via its name
-       binding) that refcounting can't reclaim — leaks, scaling with
-       closures created. Top-level defs are immune (immortal global env).
-       Repro + 5 fix options (recommend B: targeted cycle-break in
-       destroy_env) in docs/closure_env_cycle_leak.md.
+[DONE] MEMORY LEAK: closure↔captured-env refcount cycle. A def/let closure
+       created INSIDE a function body leaked, scaling with closures created
+       (top-level defs immune). Root cause was TWO compounding bugs: (1) a
+       per-call refcount leak — evaluate's (operator args) dispatch leaked
+       the owned tmpexp2 ref after the non-tail invoke (every sibling branch
+       released it; the invoke branch forgot), pinning env-resolved closures;
+       (2) the genuine lambda↔env 2-cycle. Fix: add the missing
+       unrefexp(tmpexp2) + env_break_self_cycle() in destroy_env (Option B,
+       conservative guards). Repro 120MB→2MB flat; 951/0 + ASan-clean.
+       Full writeup in docs/closure_env_cycle_leak.md; tests "20c" in
+       test.alc.
 
 [DONE] security/memory audit (2026-05): fixed FFI ->ptr crash (ffi-fn arg
        type read raw union as a pointer → SIGSEGV; now exp_text), RESP
