@@ -1,3 +1,39 @@
+[TODO] LINUX/amd64 RUNTIME VERIFICATION (PENDING — run on a Linux x86_64 box).
+       The 2026-05 feature work (FFI callbacks/struct-by-value/varargs/nested
+       structs + the "" self-library, HAMT, call/cc, MessagePack) was verified
+       only on macOS arm64. It is portable-by-construction (libffi owns the
+       call ABI; layout math is plain C; no arch-specific code), but has NOT
+       been RUN on Linux/amd64. Prereq: `apt-get install libffi-dev libreadline-dev`.
+       Run these and confirm; report any failure back.
+       1. Full matrix: `make test-all` → expect "1069 passed, 0 failed" on ALL
+          10 variants (5 alcove + 5 alcoves). If FFI/readline are detected the
+          count is 1069; without libffi it drops by the FFI block (~18) but
+          must still be 0 failed and consistent across variants.
+       2. ASan (Linux supports leak detection, unlike macOS):
+          cc -g -O1 -fsanitize=address -fno-omit-frame-pointer -DALCOVE_JIT=1 \
+             -rdynamic -DALCOVE_FFI=1 $(pkg-config --cflags libffi) \
+             -o /tmp/asan alcove.c -lm $(pkg-config --libs libffi) -ldl
+          ASAN_OPTIONS=detect_leaks=1 /tmp/asan --noload test.alc
+          → 1069/0, zero AddressSanitizer reports (errors AND leaks).
+       3. amd64 JIT backend (auto-selected on x86_64): run the benchmarks /
+          fib; `(disasm some-fn)` should show native code. CRITICAL: the
+          non-Apple W^X path maps the JIT page RW then mprotect()s it R+X —
+          verify JIT'd fns execute and that a hardened kernel (PaX/SELinux
+          W^X) doesn't reject the mapping.
+       4. FFI examples: `cd ffi-examples && make run` → 01-07 all clean.
+          ABI-sensitive spots to eyeball: 05 (callbacks via ffi_closure on
+          SysV x86_64), 06 (struct-by-value layout must match the SysV ABI —
+          norm2(3,4)=25, seg_len2=25), 07 (varargs via ffi_prep_cif_var —
+          printf "%ld %.1f" prints correctly).
+       5. The "" self-library NEEDS -rdynamic on Linux (macOS exports by
+          default): test.alc's FFI block binds alc_ffi_selftest_* via
+          dlopen(NULL); if step 1 is 1069 with FFI on, this is confirmed.
+          Sanity: (ffi-fn "" "strlen" "long" "string") then (it "abc") → 3.
+       6. RESP server (Linux is the primary target): smoke-test the
+          write-buffer ceiling / realloc hardening under a slow-reading client
+          if feasible.
+       7. (Optional, existing infra) qemu-aarch64 cross-check still passes.
+
 [TODO] setup etag to index with emacs
 [DONE] (loaddb) command + auto-load at startup (skip with --noload / -n)
 [DONE] persistence: phase 1 — EXP_NUMBER, EXP_FLOAT, EXP_SYMBOL added
