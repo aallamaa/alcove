@@ -783,6 +783,62 @@ assert "cc payload list" (call/cc (fn (k) (k (list 1 2 3)))) (list 1 2 3)
 
 assert "cc ignored k" (call/cc (fn (k) (* 6 7))) 42
 
+assert "msgpack int" (msgpack-decode (msgpack-encode 42)) 42
+
+assert "msgpack neg fixint" (msgpack-decode (msgpack-encode -5)) -5
+
+assert "msgpack int16" (msgpack-decode (msgpack-encode -1000)) -1000
+
+assert "msgpack uint32" (msgpack-decode (msgpack-encode 1000000000)):
+  1000000000
+
+assert "msgpack int64" (msgpack-decode (msgpack-encode 5000000000)) 5000000000
+
+assert "msgpack float" (msgpack-decode (msgpack-encode 3.14)) 3.14
+
+assert "msgpack nil" (msgpack-decode (msgpack-encode nil)) nil
+
+assert "msgpack true" (msgpack-decode (msgpack-encode t)) t
+
+assert "msgpack fixstr" (msgpack-decode (msgpack-encode "hello")) "hello"
+
+assert "msgpack empty str" (msgpack-decode (msgpack-encode "")) ""
+
+assert "msgpack str8 path" (msgpack-decode (msgpack-encode "0123456789012345678901234567890123456789")):
+  "0123456789012345678901234567890123456789"
+
+assert "msgpack char->int" (msgpack-decode (msgpack-encode #\A)) 65
+
+assert "msgpack list" (iso (msgpack-decode (msgpack-encode (list 1 2 3))) (list 1 2 3)):
+  t
+
+assert "msgpack list mixed" (iso (msgpack-decode (msgpack-encode (list 1 "a" nil t))) (list 1 "a" nil t)):
+  t
+
+assert "msgpack nested" (iso (msgpack-decode (msgpack-encode (list 1 (list 2 3) "x"))) (list 1 (list 2 3) "x")):
+  t
+
+assert "msgpack blob" (iso (msgpack-decode (msgpack-encode (string->blob "ab"))) (string->blob "ab")):
+  t
+
+setf _mpd (msgpack-decode (msgpack-encode (hash-map "a" 1 "b" 2)))
+
+assert "msgpack dict get a" (get _mpd "a") 1
+
+assert "msgpack dict get b" (get _mpd "b") 2
+
+assert "msgpack decode bad" (try (msgpack-decode (string->blob "\xc1")) (fn (e) 'caught)):
+  'caught
+
+assert "msgpack decode trailing" (try (msgpack-decode (string->blob "\x01\x02")) (fn (e) 'caught)):
+  'caught
+
+assert "msgpack encode bad" (try (msgpack-encode (fn (x) x)) (fn (e) 'caught)):
+  'caught
+
+assert "msgpack decode non-blob" (try (msgpack-decode 5) (fn (e) 'caught)):
+  'caught
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

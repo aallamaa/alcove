@@ -58,7 +58,15 @@
        the caller's env for a CLOSURE tail-callee, resolving the closure's
        captured free vars wrong — now real (non-global) closures route through
        vm_invoke_values (top-level defs keep TCO). Tests "20g" in test.alc.
-[TODO] add support for http://wiki.msgpack.org/display/MSGPACK/Format+specification
+[DONE] MessagePack codec: (msgpack-encode v) -> blob, (msgpack-decode blob)
+       -> value. Covers nil, t, fixnums (fixint/uint/int 8-64), floats
+       (float32 decode, float64), strings/symbols (fixstr/str8-32), blobs
+       (bin8-32), lists (fixarray/array16-32), string-keyed dicts
+       (fixmap/map16-32); chars encode as int codepoint. Big-endian,
+       bounds-checked decode. Errors (encode: unsupported type; decode:
+       malformed/truncated/non-string key/trailing data) are catchable.
+       Self-contained codec (alcove.c, like the savedb serializer); tests
+       "20i" in test.alc.
 [TODO] check added value of http://www.canonware.com/jemalloc/ instead of malloc
 [TODO] see https://www.hackerschool.com/blog/13-list-comprehensions-in-eight-lines-of-clojure
 [TODO] see concatenative stuff: http://blog.fogus.me/2013/01/06/pesto5-a-concatenative-programming-library-in-5-lines-of-clojure/

@@ -128,6 +128,7 @@ extern const char doc_set[], doc_hashset[], doc_setaddbang[], doc_setdelbang[],
 extern const char doc_hamt[], doc_hamtassoc[], doc_hamtget[], doc_hamtdissoc[],
                   doc_hamtcount[], doc_hamtcontainsp[], doc_hamtkeys[],
                   doc_hamtvals[], doc_hamtlist[], doc_hamtmerge[], doc_hamtp[];
+extern const char doc_msgpackencode[], doc_msgpackdecode[];
 extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
                   doc_blob2string[], doc_string2blob[], doc_readbytes[];
 extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],

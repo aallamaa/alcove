@@ -683,6 +683,22 @@ char, float, string, symbol, blob.
 (hamt? m)                        ; t
 ```
 
+### MessagePack
+
+`(msgpack-encode v)` serializes a value to a MessagePack blob;
+`(msgpack-decode blob)` parses it back. Supported value types: nil, `t`,
+fixnums, floats, strings (and symbols), blobs (→ bin), lists (→ array), and
+string-keyed dicts (→ map). Chars encode as their integer codepoint.
+
+```
+(= b (msgpack-encode (list 1 "two" (hash-map "k" 3.5))))
+(msgpack-decode b)               ; → (1 "two" {"k" 3.5})
+```
+
+Unsupported types (lambda, ffi, …) make `encode` error; malformed or
+truncated input (or a non-string map key) makes `decode` error — both
+catchable with `try`.
+
 ### Deques
 
 Doubly-linked deque with O(1) ends:

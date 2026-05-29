@@ -811,6 +811,9 @@ exp_t *hamtmergecmd(exp_t *e, env_t *env);
 exp_t *hamtpcmd(exp_t *e, env_t *env);
 /* Escape continuations */
 exp_t *callcccmd(exp_t *e, env_t *env);
+/* MessagePack codec */
+exp_t *msgpackencodecmd(exp_t *e, env_t *env);
+exp_t *msgpackdecodecmd(exp_t *e, env_t *env);
 exp_t *sourcecmd(exp_t *e, env_t *env);
 exp_t *veccmd(exp_t *e, env_t *env);
 exp_t *vecrefcmd(exp_t *e, env_t *env);
