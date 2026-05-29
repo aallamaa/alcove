@@ -70,9 +70,11 @@
        hamt-count, hamt-contains?, hamt-keys, hamt-vals, hamt->list (flat
        k v ...), hamt-merge (b wins), hamt?. Wired into print ({k v, ...}),
        istrue, unrefexp free, isatom. Tests "20f" in test.alc (incl.
-       immutability, overwrite, 300-insert scale, mixed key types, merge);
-       ASan-clean, version-churn RSS flat. NOT yet: savedb persistence, deep
-       iso equality, apply-compat (apply doesn't compose with builtins).
+       immutability, overwrite, 300-insert scale, mixed key types, merge,
+       deep iso equality); ASan-clean, version-churn RSS flat. `iso` compares
+       two HAMTs by content (order-independent, deep); `is` stays identity.
+       NOT yet: savedb persistence; apply-compat (apply doesn't compose with
+       builtins).
        Ref: http://en.wikipedia.org/wiki/Hash_array_mapped_trie ;
        clojure PersistentHashMap ; chaelim/HAMT ; Ctries (lock-free).
 [TODO] implement http://gcc.gnu.org/onlinedocs/gcc-4.4.5/gcc/Atomic-Builtins.html for every potentially concurrent objects

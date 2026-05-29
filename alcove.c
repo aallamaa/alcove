@@ -9210,6 +9210,8 @@ int isequal(exp_t *cur1, exp_t *cur2) {
   return ret;
 }
 
+static int hamt_iso(exp_t *a, exp_t *b); /* deep map equality; HAMT section */
+
 int isoequal(exp_t *cur1, exp_t *cur2) {
   /* borrow ref to cur1 and cur2 */
   int ret = 0;
@@ -9247,6 +9249,8 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
           unrefexp(b);
         }
       }
+    } else if (ishamt(cur1)) {
+      ret = hamt_iso(cur1, cur2); /* same entries (deep), order-independent */
     } else
       ret = isequal(cur1, cur2);
   }
@@ -20965,6 +20969,28 @@ static int hamt_node_foreach(hamt_node *node, hamt_visit_fn fn, void *ctx) {
     }
   }
   return 1;
+}
+
+/* Deep map equality (for `iso`): same count, and every key in `a` maps to an
+   iso-equal value in `b`. With equal counts that's a bijection → equal. */
+typedef struct { exp_t *other; int ok; } hamt_iso_ctx;
+static int hamt_iso_visit(exp_t *key, exp_t *val, void *ctx) {
+  hamt_iso_ctx *c = (hamt_iso_ctx *)ctx;
+  hamt_t *b = (hamt_t *)c->other->ptr;
+  exp_t *bv = hamt_node_get(b->root, key, hamt_hashkey(key), 0);
+  if (!bv || !isoequal(val, bv)) {
+    c->ok = 0;
+    return 0; /* stop the walk */
+  }
+  return 1;
+}
+static int hamt_iso(exp_t *a, exp_t *b) {
+  hamt_t *ha = (hamt_t *)a->ptr, *hb = (hamt_t *)b->ptr;
+  if (ha->count != hb->count)
+    return 0;
+  hamt_iso_ctx ctx = {b, 1};
+  hamt_node_foreach(ha->root, hamt_iso_visit, &ctx);
+  return ctx.ok;
 }
 
 /* Wrap a (root,count) into a fresh EXP_HAMT value. Takes ownership of root. */

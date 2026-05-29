@@ -668,6 +668,23 @@ assert "hamt-merge a unchanged" (hamt-get hma "y") 2
 
 assert "hamt-merge empty rhs" (hamt-count (hamt-merge hma (hamt))) 2
 
+assert "hamt iso same diff-order" (iso (hamt "a" 1 "b" 2) (hamt "b" 2 "a" 1)):
+  t
+
+refute "hamt iso diff value" (iso (hamt "a" 1) (hamt "a" 2)) t
+
+refute "hamt iso diff count" (iso (hamt "a" 1) (hamt "a" 1 "b" 2)) t
+
+assert "hamt iso empty" (iso (hamt) (hamt)) t
+
+assert "hamt iso after assoc" (iso (hamt-assoc (hamt "a" 1) "b" 2) (hamt "a" 1 "b" 2)):
+  t
+
+assert "hamt iso deep value" (iso (hamt "k" (list 1 2)) (hamt "k" (list 1 2))):
+  t
+
+refute "hamt is is identity" (is (hamt "a" 1) (hamt "a" 1)) t
+
 assert "call/cc no escape" (call/cc (fn (k) (+ 1 2))) 3
 
 assert "call/cc escape value" (call/cc (fn (k) (k 42) 999)) 42
