@@ -356,6 +356,46 @@
       (if (is k 0) 0 (+ (m1 k) (usemac (- k 1))))))
 (assert "cycle: macro-in-fn usemac 4" (usemac 4)                 14)
 
+; 20e. FFI (libffi) — guarded by (ffi?) so a no-libffi build skips the block
+;      uniformly across all variants. Binds to alcove's own exported self-test
+;      fixtures via the "" (process-self) library plus libc strlen, so no
+;      external shared object is needed. Covers scalar calls, callbacks
+;      (incl. a C loop, a double, and a closure), struct-by-value (pack/unpack,
+;      arg, return), and the two main error paths.
+(if (ffi?)
+  (do
+    (assert "ffi? true in this build"   (ffi?)                          t)
+    (= ffi-add (ffi-fn "" "alc_ffi_selftest_add" "long" "long" "long"))
+    (assert "ffi scalar self add"       (ffi-add 17 25)                 42)
+    (= ffi-slen (ffi-fn "" "strlen" "long" "string"))
+    (assert "ffi libc strlen"           (ffi-slen "hello")              5)
+    (= ffi-ap2 (ffi-fn "" "alc_ffi_selftest_apply2" "long" "ptr" "long" "long"))
+    (= ffi-mul-cb (ffi-callback "long" (list "long" "long") (fn (a b) (* a b))))
+    (assert "ffi callback mul"          (ffi-ap2 ffi-mul-cb 6 7)        42)
+    (= ffi-sm (ffi-fn "" "alc_ffi_selftest_sum_map" "long" "ptr" "long"))
+    (= ffi-sq-cb (ffi-callback "long" (list "long") (fn (x) (* x x))))
+    (assert "ffi callback in C loop"    (ffi-sm ffi-sq-cb 10)           285)
+    (= ffi-bias 1000)
+    (= ffi-bias-cb (ffi-callback "long" (list "long") (fn (x) (+ x ffi-bias))))
+    (assert "ffi closure callback"      (ffi-sm ffi-bias-cb 3)          3003)
+    (= ffi-apd (ffi-fn "" "alc_ffi_selftest_apply_d" "double" "ptr" "double"))
+    (= ffi-dbl-cb (ffi-callback "double" (list "double") (fn (x) (* x 2.0))))
+    (assert "ffi double callback"       (ffi-apd ffi-dbl-cb 20.5)       41.0)
+    (= FP (ffi-struct "double" "double"))
+    (assert "ffi struct pack/unpack"    (ffi-unpack FP (ffi-pack FP 7.5 8.5))
+                                        (list 7.5 8.5))
+    (= ffi-n2 (ffi-fn "" "alc_ffi_selftest_pt_norm2" "double" FP))
+    (assert "ffi struct-by-value arg"   (ffi-n2 (ffi-pack FP 3.0 4.0))  25.0)
+    (= ffi-mk (ffi-fn "" "alc_ffi_selftest_pt_make" FP "double" "double"))
+    (assert "ffi struct-by-value ret"   (ffi-unpack FP (ffi-mk 5.0 6.0))
+                                        (list 5.0 6.0))
+    (assert "ffi unknown symbol errors"
+            (try (ffi-fn "" "no_such_sym_xyzzy" "long") (fn (e) 'caught)) 'caught)
+    (assert "ffi unknown type errors"
+            (try (ffi-fn "" "alc_ffi_selftest_add" "frob" "long") (fn (e) 'caught))
+            'caught)
+    nil))
+
 ; 21. Stdlib additions: math, seq, predicates, HOFs.
 (assert "mod 17 5"                   (mod 17 5)                    2)
 (assert "abs -42"                    (abs -42)                     42)

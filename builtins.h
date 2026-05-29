@@ -107,6 +107,7 @@ extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
 extern const char doc_time[], doc_exit[], doc_webp[], doc_sleepms[];
 exp_t *webpcmd(exp_t *e, env_t *env);
 exp_t *sleepmscmd(exp_t *e, env_t *env);
+extern const char doc_ffip[];
 extern const char doc_ffifn[];
 extern const char doc_fficallback[];
 extern const char doc_ffistruct[];

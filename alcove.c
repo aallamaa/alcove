@@ -335,6 +335,7 @@ lispProc lispProcList[] = {
     LISPCMD("docstring", docstringcmd, doc_docstring),
     LISPCMD("help", helpcmd, doc_help),
     /* FFI */
+    LISPCMD("ffi?", ffipcmd, doc_ffip),
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
     LISPCMD("ffi-callback", fficallbackcmd, doc_fficallback),
     LISPCMD("ffi-struct", ffistructcmd, doc_ffistruct),
@@ -6482,10 +6483,27 @@ static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env);
    ffi_call, and marshals the result back.
 
    Conditional on -DALCOVE_FFI=1 (Makefile auto-detects via ffi.h). */
+/* (ffi?) — runtime probe for FFI support. Always compiled (outside the
+   ALCOVE_FFI block) so scripts/tests can branch on it; lets test.alc guard
+   its FFI assertions so a no-libffi build skips them uniformly. */
+const char doc_ffip[] =
+    "(ffi?) — t if this build links libffi (ffi-fn/-callback/-struct usable), "
+    "else nil.";
+exp_t *ffipcmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+#ifdef ALCOVE_FFI
+  return refexp(TRUE_EXP);
+#else
+  return refexp(NIL_EXP);
+#endif
+}
+
 const char doc_ffifn[] =
     "(ffi-fn lib name ret arg-types ...) — bind a C function from a shared "
     "library. Types: void int long uint ulong ptr cstr double float. "
-    "ALCOVE_FFI build only.";
+    "An empty lib name (\"\") resolves symbols already linked into alcove "
+    "(libc/libm). ALCOVE_FFI build only.";
 const char doc_fficallback[] =
     "(ffi-callback ret (arg-types...) fn) — expose an alcove fn to C as a "
     "function pointer (e.g. a qsort comparator). Pass the result where a ptr "
@@ -6642,11 +6660,15 @@ static void *alc_ffi_dlopen(const char *name) {
       FFI_LIBS_UNLOCK();
       return h;
     }
-  /* RTLD_LOCAL keeps the lib's symbols out of the global namespace —
-     reduces accidental shadowing if multiple libs export the same
-     name. RTLD_NOW resolves all symbols at load so dlsym failures
+  /* An empty lib name means "this process": dlopen(NULL) resolves symbols
+     already linked into alcove (libc, libm, libffi, and alcove's own
+     exported functions). Lets scripts/tests bind well-known symbols
+     (strlen, abs, …) without naming a platform-specific shared object.
+     Otherwise: RTLD_LOCAL keeps the lib's symbols out of the global
+     namespace — reduces accidental shadowing if multiple libs export the
+     same name. RTLD_NOW resolves all symbols at load so dlsym failures
      surface promptly. */
-  void *h = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+  void *h = dlopen(name[0] ? name : NULL, RTLD_NOW | RTLD_LOCAL);
   if (!h) {
     FFI_LIBS_UNLOCK();
     return NULL;
@@ -6658,6 +6680,32 @@ static void *alc_ffi_dlopen(const char *name) {
   g_ffi_libs = c;
   FFI_LIBS_UNLOCK();
   return h;
+}
+
+/* ---- FFI self-test fixtures ----
+   Tiny exported C functions the test suite (test.alc) binds to via the ""
+   (process-self) library, so the whole FFI surface — scalar calls, callbacks,
+   and struct-by-value — has automated regression coverage with no external
+   .so. They must NOT be static (dlsym resolves them) and the binary is linked
+   with -rdynamic so Linux exports them too (macOS exports by default). Not a
+   public API; the alc_ffi_selftest_ prefix keeps them out of the way. */
+long alc_ffi_selftest_add(long a, long b) { return a + b; }
+long alc_ffi_selftest_apply2(long (*fn)(long, long), long a, long b) {
+  return fn(a, b);
+}
+long alc_ffi_selftest_sum_map(long (*fn)(long), long n) {
+  long s = 0;
+  for (long i = 0; i < n; i++) s += fn(i);
+  return s;
+}
+double alc_ffi_selftest_apply_d(double (*fn)(double), double x) { return fn(x); }
+typedef struct { double x, y; } alc_ffi_selftest_point;
+double alc_ffi_selftest_pt_norm2(alc_ffi_selftest_point p) {
+  return p.x * p.x + p.y * p.y;
+}
+alc_ffi_selftest_point alc_ffi_selftest_pt_make(double x, double y) {
+  alc_ffi_selftest_point p = {x, y};
+  return p;
 }
 
 /* (ffi-fn lib-name fn-name return-type arg-type ...) */

@@ -55,6 +55,18 @@ Pass the runtime `.so` (not the dev `.so` symlink). Common ones on Linux:
 For your own libraries, use a path with a slash (`./mylib.so`) or
 install on `LD_LIBRARY_PATH` / standard search paths.
 
+An **empty library name** (`""`) resolves symbols already linked into the
+running `alcove` process — libc, libm, and alcove's own exported functions —
+without naming a platform-specific shared object:
+
+```
+(= slen (ffi-fn "" "strlen" "long" "string"))   ; libc, portable
+(prn (slen "hello"))                             ; → 5
+```
+
+This is how the test suite exercises FFI with no external `.so`. Use
+`(ffi?)` to check at runtime whether the build has FFI support.
+
 ## Examples in this directory
 
 - **01-libm-math.alc** — sqrt, sin, cos, pow, log, exp.

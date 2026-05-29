@@ -526,6 +526,39 @@ def usemac (k):
 
 assert "cycle: macro-in-fn usemac 4" (usemac 4) 14
 
+if (ffi?):
+  do:
+    assert "ffi? true in this build" (ffi?) t
+    setf ffi-add (ffi-fn "" "alc_ffi_selftest_add" "long" "long" "long")
+    assert "ffi scalar self add" (ffi-add 17 25) 42
+    setf ffi-slen (ffi-fn "" "strlen" "long" "string")
+    assert "ffi libc strlen" (ffi-slen "hello") 5
+    setf ffi-ap2 (ffi-fn "" "alc_ffi_selftest_apply2" "long" "ptr" "long" "long")
+    setf ffi-mul-cb (ffi-callback "long" (list "long" "long") (fn (a b) (* a b)))
+    assert "ffi callback mul" (ffi-ap2 ffi-mul-cb 6 7) 42
+    setf ffi-sm (ffi-fn "" "alc_ffi_selftest_sum_map" "long" "ptr" "long")
+    setf ffi-sq-cb (ffi-callback "long" (list "long") (fn (x) (* x x)))
+    assert "ffi callback in C loop" (ffi-sm ffi-sq-cb 10) 285
+    setf ffi-bias 1000
+    setf ffi-bias-cb (ffi-callback "long" (list "long") (fn (x) (+ x ffi-bias)))
+    assert "ffi closure callback" (ffi-sm ffi-bias-cb 3) 3003
+    setf ffi-apd (ffi-fn "" "alc_ffi_selftest_apply_d" "double" "ptr" "double")
+    setf ffi-dbl-cb (ffi-callback "double" (list "double") (fn (x) (* x 2.0)))
+    assert "ffi double callback" (ffi-apd ffi-dbl-cb 20.5) 41.0
+    setf FP (ffi-struct "double" "double")
+    assert "ffi struct pack/unpack" (ffi-unpack FP (ffi-pack FP 7.5 8.5)):
+      list 7.5 8.5
+    setf ffi-n2 (ffi-fn "" "alc_ffi_selftest_pt_norm2" "double" FP)
+    assert "ffi struct-by-value arg" (ffi-n2 (ffi-pack FP 3.0 4.0)) 25.0
+    setf ffi-mk (ffi-fn "" "alc_ffi_selftest_pt_make" FP "double" "double")
+    assert "ffi struct-by-value ret" (ffi-unpack FP (ffi-mk 5.0 6.0)):
+      list 5.0 6.0
+    assert "ffi unknown symbol errors" (try (ffi-fn "" "no_such_sym_xyzzy" "long") (fn (e) 'caught)):
+      'caught
+    assert "ffi unknown type errors" (try (ffi-fn "" "alc_ffi_selftest_add" "frob" "long") (fn (e) 'caught)):
+      'caught
+    nil
+
 assert "mod 17 5" (mod 17 5) 2
 
 assert "abs -42" (abs -42) 42

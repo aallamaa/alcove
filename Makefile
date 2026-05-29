@@ -89,6 +89,11 @@ ifeq ($(FFI_OK),yes)
   ifeq ($(UNAME_S),Linux)
     FFI_LIBS += -ldl
   endif
+  # Export the executable's own symbols to the dynamic table so an empty-lib
+  # (ffi-fn "" ...) — dlopen(NULL) — can resolve alcove's own functions
+  # (the FFI self-test fixtures the test suite binds to). macOS exports by
+  # default; Linux needs -rdynamic. Harmless where unneeded.
+  FFI_FLAGS += -rdynamic
 endif
 
 # Reusable hint snippet — prints a one-shot summary of what's missing
