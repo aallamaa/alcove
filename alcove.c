@@ -337,6 +337,9 @@ lispProc lispProcList[] = {
     /* FFI */
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
     LISPCMD("ffi-callback", fficallbackcmd, doc_fficallback),
+    LISPCMD("ffi-struct", ffistructcmd, doc_ffistruct),
+    LISPCMD("ffi-pack", ffipackcmd, doc_ffipack),
+    LISPCMD("ffi-unpack", ffiunpackcmd, doc_ffiunpack),
     /* Clojure-style hash-maps (EXP_DICT) */
     LISPCMD("hash-map", hashmapcmd, doc_hashmap),
     LISPCMD("assoc!", assocbangcmd, doc_assocbang),
@@ -6488,6 +6491,17 @@ const char doc_fficallback[] =
     "function pointer (e.g. a qsort comparator). Pass the result where a ptr "
     "arg is expected. ret/args: void int long double ptr (no string return). "
     "ALCOVE_FFI build only.";
+const char doc_ffistruct[] =
+    "(ffi-struct field-types...) — define a by-value C struct type. Fields: "
+    "int long double ptr. Returns a descriptor usable as an ffi-fn arg/return "
+    "type and with ffi-pack / ffi-unpack. ALCOVE_FFI build only.";
+const char doc_ffipack[] =
+    "(ffi-pack struct-desc vals...) — pack field values into a blob laid out "
+    "per the C ABI for struct-desc. Pass the blob where a struct arg is "
+    "expected. ALCOVE_FFI build only.";
+const char doc_ffiunpack[] =
+    "(ffi-unpack struct-desc blob) — read a packed struct blob back into a "
+    "list of field values (the inverse of ffi-pack). ALCOVE_FFI build only.";
 #ifdef ALCOVE_FFI
 #include <dlfcn.h>
 #include <ffi.h>
@@ -6499,29 +6513,42 @@ typedef enum {
   AFFI_LONG,
   AFFI_DOUBLE,
   AFFI_STRING,
-  AFFI_PTR
+  AFFI_PTR,
+  AFFI_STRUCT /* by-value aggregate; see AFFI_KIND_STRUCT descriptor */
 } alc_ffi_tag_t;
 
-/* An EXP_FFI value is either a bound C function (FN — ffi-fn) or an alcove
-   lambda exposed to C as a function pointer (CB — ffi-callback). memalloc
-   zeroes the struct, so AFFI_KIND_FN == 0 keeps existing ffi-fn paths intact. */
-typedef enum { AFFI_KIND_FN = 0, AFFI_KIND_CB } alc_ffi_kind_t;
+/* An EXP_FFI value is one of: a bound C function (FN — ffi-fn), an alcove
+   lambda exposed to C as a function pointer (CB — ffi-callback), or a
+   by-value struct type descriptor (STRUCT — ffi-struct). memalloc zeroes the
+   struct, so AFFI_KIND_FN == 0 keeps existing ffi-fn paths intact. */
+typedef enum { AFFI_KIND_FN = 0, AFFI_KIND_CB, AFFI_KIND_STRUCT } alc_ffi_kind_t;
 
 typedef struct alc_ffi_t {
   void *fn; /* dlsym result (FN kind) */
   ffi_cif cif;
   ffi_type *rtype;
-  unsigned int nargs;
-  ffi_type *atypes[ALC_FFI_MAX_ARGS];
+  unsigned int nargs; /* FN/CB: arg count. STRUCT: field count. */
+  ffi_type *atypes[ALC_FFI_MAX_ARGS]; /* FN/CB args; STRUCT field types */
   uint8_t ret_tag;
-  uint8_t arg_tags[ALC_FFI_MAX_ARGS];
-  uint8_t kind;       /* AFFI_KIND_FN | AFFI_KIND_CB */
-  char *display_name; /* "lib:fn" (FN) / "<callback>" (CB) for errors */
+  uint8_t arg_tags[ALC_FFI_MAX_ARGS]; /* FN/CB arg tags; STRUCT field tags */
+  uint8_t kind;       /* AFFI_KIND_FN | _CB | _STRUCT */
+  char *display_name; /* "lib:fn" (FN) / "<callback>" / "<struct>" for errors */
   /* CB kind only — the libffi closure trampoline and the alcove fn it calls.
      `code` is the C-callable entry point; pass it where a ptr arg is wanted. */
   ffi_closure *closure;
   void *code;
   exp_t *cb_lambda; /* owned ref so the lambda outlives any C-side calls */
+  /* FN kind only — for STRUCT-tagged args/return, the owning descriptor
+     (so we know the size to validate/allocate). NULL for scalar slots. */
+  exp_t *arg_structs[ALC_FFI_MAX_ARGS];
+  exp_t *ret_struct;
+  /* STRUCT kind only — the by-value aggregate layout. struct_type is the
+     FFI_TYPE_STRUCT passed to ffi_prep_cif; elements is its NULL-terminated
+     member array; offsets/struct_size are computed for pack/unpack. */
+  ffi_type struct_type;
+  ffi_type *elements[ALC_FFI_MAX_ARGS + 1];
+  size_t offsets[ALC_FFI_MAX_ARGS];
+  size_t struct_size;
 } alc_ffi_t;
 
 /* Map a type-name string to (tag, ffi_type*). Returns 0 on success, -1
@@ -6560,6 +6587,31 @@ static int alc_ffi_typeof(const char *name, alc_ffi_tag_t *tag,
   }
   return -1;
 }
+
+/* Resolve an ffi type spec used by ffi-fn for a return/arg type: either a
+   type-name string (scalar) or a struct descriptor value from ffi-struct.
+   On success sets the tag and ffi_type out-params plus *desc (the descriptor
+   exp for a struct, else NULL) and returns 0; returns -1 on an invalid spec. */
+static int alc_ffi_resolve_type(exp_t *spec, alc_ffi_tag_t *tag,
+                                ffi_type **out, exp_t **desc) {
+  *desc = NULL;
+  if (isffi(spec)) {
+    alc_ffi_t *d = (alc_ffi_t *)spec->ptr;
+    if (d->kind != AFFI_KIND_STRUCT)
+      return -1;
+    *tag = AFFI_STRUCT;
+    *out = &d->struct_type;
+    *desc = spec;
+    return 0;
+  }
+  if (isstring(spec))
+    return alc_ffi_typeof((char *)exp_text(spec), tag, out);
+  return -1;
+}
+
+/* Forward decl: ffi-fn's error paths free a partially-built binding via the
+   full destructor (it may already hold refexp'd struct descriptors). */
+void alc_ffi_free(void *ptr);
 
 /* Process-wide cache of dlopen handles keyed by lib name. dlopen with
    the same name on Linux returns the same handle anyway, but caching
@@ -6665,9 +6717,9 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
     goto cleanup;
   }
 
-  if (!isstring(libname) || !isstring(fnname) || !isstring(rtype)) {
+  if (!isstring(libname) || !isstring(fnname)) {
     err = error(ERROR_ILLEGAL_VALUE, e, env,
-                "ffi-fn: lib/name/rtype must be strings");
+                "ffi-fn: lib and name must be strings");
     goto cleanup;
   }
   void *h = alc_ffi_dlopen((char *)exp_text(libname));
@@ -6688,35 +6740,34 @@ exp_t *ffifncmd(exp_t *e, env_t *env) {
   f->nargs = (unsigned int)n_a;
   alc_ffi_tag_t rt;
   ffi_type *rt_ffi;
-  if (alc_ffi_typeof((char *)exp_text(rtype), &rt, &rt_ffi) < 0) {
+  exp_t *rdesc;
+  if (alc_ffi_resolve_type(rtype, &rt, &rt_ffi, &rdesc) < 0) {
     free(f);
-    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown return type %s",
-                (char *)exp_text(rtype));
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown return type");
     goto cleanup;
   }
   f->ret_tag = rt;
   f->rtype = rt_ffi;
+  if (rdesc) /* struct-by-value return: hold the descriptor for sizing */
+    f->ret_struct = refexp(rdesc);
   for (int i = 0; i < n_a; i++) {
-    if (!isstring(atypes[i])) {
-      free(f);
-      err =
-          error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: arg-type must be string");
-      goto cleanup;
-    }
     alc_ffi_tag_t at;
     ffi_type *at_ffi;
-    if (alc_ffi_typeof((char *)exp_text(atypes[i]), &at, &at_ffi) < 0) {
-      free(f);
-      err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: unknown arg type %s",
-                  (char *)exp_text(atypes[i]));
+    exp_t *adesc;
+    if (alc_ffi_resolve_type(atypes[i], &at, &at_ffi, &adesc) < 0) {
+      alc_ffi_free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env,
+                  "ffi-fn: unknown/invalid arg type at slot %d", i);
       goto cleanup;
     }
     f->arg_tags[i] = at;
     f->atypes[i] = at_ffi;
+    if (adesc) /* struct-by-value arg: hold the descriptor for sizing */
+      f->arg_structs[i] = refexp(adesc);
   }
   if (ffi_prep_cif(&f->cif, FFI_DEFAULT_ABI, f->nargs, f->rtype, f->atypes) !=
       FFI_OK) {
-    free(f);
+    alc_ffi_free(f);
     err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-fn: ffi_prep_cif failed");
     goto cleanup;
   }
@@ -6921,6 +6972,214 @@ cleanup:
   return err ? err : ret;
 }
 
+/* (ffi-struct field-type-str...) — define a by-value C struct type. Fields
+   are scalar type names (int long double ptr). Computes the ABI layout
+   (offsets + size) with the standard scalar-aggregate alignment rule, which
+   matches the C ABI on every libffi target for non-packed scalar members —
+   so no dependency on ffi_get_struct_offsets (libffi 3.3+). */
+exp_t *ffistructcmd(exp_t *e, env_t *env) {
+  exp_t *cur = e->next;
+  exp_t *err = NULL, *ret = NULL;
+  exp_t *fields[ALC_FFI_MAX_ARGS] = {0};
+  int nf = 0;
+  while (cur && nf < ALC_FFI_MAX_ARGS) {
+    fields[nf] = EVAL(cur->content, env);
+    if (iserror(fields[nf])) { err = fields[nf]; fields[nf] = NULL; goto cleanup; }
+    nf++;
+    cur = cur->next;
+  }
+  if (cur) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-struct: too many fields (max %d)",
+                ALC_FFI_MAX_ARGS);
+    goto cleanup;
+  }
+  if (nf == 0) {
+    err = error(ERROR_MISSING_PARAMETER, e, env,
+                "ffi-struct: need at least one field type");
+    goto cleanup;
+  }
+  alc_ffi_t *f = (alc_ffi_t *)memalloc(1, sizeof(alc_ffi_t));
+  f->kind = AFFI_KIND_STRUCT;
+  size_t off = 0, align = 1;
+  for (int i = 0; i < nf; i++) {
+    if (!isstring(fields[i])) {
+      alc_ffi_free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-struct: field type must be a string");
+      goto cleanup;
+    }
+    alc_ffi_tag_t t;
+    ffi_type *ft;
+    if (alc_ffi_typeof((char *)exp_text(fields[i]), &t, &ft) < 0 ||
+        t == AFFI_VOID || t == AFFI_STRING) {
+      alc_ffi_free(f);
+      err = error(ERROR_ILLEGAL_VALUE, e, env,
+                  "ffi-struct: field type must be int/long/double/ptr (got %s)",
+                  (char *)exp_text(fields[i]));
+      goto cleanup;
+    }
+    f->arg_tags[i] = (uint8_t)t;
+    f->atypes[i] = ft;
+    f->elements[i] = ft;
+    size_t fa = ft->alignment;
+    off = (off + fa - 1) & ~(fa - 1);
+    f->offsets[i] = off;
+    off += ft->size;
+    if (fa > align)
+      align = fa;
+  }
+  f->elements[nf] = NULL;
+  f->nargs = (unsigned int)nf;
+  f->struct_size = (off + align - 1) & ~(align - 1);
+  /* Leave size/alignment 0 so ffi_prep_cif computes the authoritative
+     in-cif layout when this descriptor is used as an ffi-fn arg/return; our
+     manual offsets/struct_size drive pack/unpack and match it for scalars. */
+  f->struct_type.size = 0;
+  f->struct_type.alignment = 0;
+  f->struct_type.type = FFI_TYPE_STRUCT;
+  f->struct_type.elements = f->elements;
+  f->display_name = strdup("<struct>");
+  INIT_TYPED(ret, EXP_FFI, f);
+cleanup:
+  for (int i = 0; i < nf; i++)
+    unrefexp(fields[i]);
+  unrefexp(e);
+  return err ? err : ret;
+}
+
+/* (ffi-pack struct-desc vals...) — pack scalar field values into a blob laid
+   out per the descriptor's ABI layout. */
+exp_t *ffipackcmd(exp_t *e, env_t *env) {
+  exp_t *cur = e->next;
+  exp_t *err = NULL, *ret = NULL, *desc = NULL;
+  exp_t *vals[ALC_FFI_MAX_ARGS] = {0};
+  int nv = 0;
+  if (!cur) {
+    err = error(ERROR_MISSING_PARAMETER, e, env, "(ffi-pack struct-desc vals...)");
+    goto cleanup;
+  }
+  desc = EVAL(cur->content, env);
+  if (iserror(desc)) { err = desc; desc = NULL; goto cleanup; }
+  cur = cur->next;
+  while (cur && nv < ALC_FFI_MAX_ARGS) {
+    vals[nv] = EVAL(cur->content, env);
+    if (iserror(vals[nv])) { err = vals[nv]; vals[nv] = NULL; goto cleanup; }
+    nv++;
+    cur = cur->next;
+  }
+  if (cur) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-pack: too many values (max %d)",
+                ALC_FFI_MAX_ARGS);
+    goto cleanup;
+  }
+  if (!isffi(desc) || ((alc_ffi_t *)desc->ptr)->kind != AFFI_KIND_STRUCT) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env,
+                "ffi-pack: first arg must be an ffi-struct descriptor");
+    goto cleanup;
+  }
+  alc_ffi_t *d = (alc_ffi_t *)desc->ptr;
+  if ((unsigned int)nv != d->nargs) {
+    err = error(ERROR_MISSING_PARAMETER, e, env,
+                "ffi-pack: expected %u fields, got %d", d->nargs, nv);
+    goto cleanup;
+  }
+  char *buf = (char *)memalloc(d->struct_size ? d->struct_size : 1, 1);
+  for (int i = 0; i < nv; i++) {
+    exp_t *v = vals[i];
+    void *slot = buf + d->offsets[i];
+    switch (d->arg_tags[i]) {
+    case AFFI_INT:
+      if (!(isnumber(v) || isfloat(v) || ischar(v))) goto badfield;
+      *(int32_t *)slot = isnumber(v) ? (int32_t)FIX_VAL(v)
+                         : ischar(v) ? (int32_t)CHAR_VAL(v)
+                                     : (int32_t)v->f;
+      break;
+    case AFFI_LONG:
+      if (!(isnumber(v) || isfloat(v) || ischar(v))) goto badfield;
+      *(int64_t *)slot = isnumber(v) ? FIX_VAL(v)
+                         : ischar(v) ? (int64_t)CHAR_VAL(v)
+                                     : (int64_t)v->f;
+      break;
+    case AFFI_DOUBLE:
+      if (!(isnumber(v) || isfloat(v) || ischar(v))) goto badfield;
+      *(double *)slot = isfloat(v) ? v->f
+                        : ischar(v) ? (double)CHAR_VAL(v)
+                                    : (double)FIX_VAL(v);
+      break;
+    case AFFI_PTR:
+      if (!(isnumber(v) || v == NIL_EXP)) goto badfield;
+      *(void **)slot = (v == NIL_EXP) ? NULL : (void *)(uintptr_t)FIX_VAL(v);
+      break;
+    default:
+      goto badfield;
+    }
+    continue;
+  badfield:
+    free(buf);
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-pack: field %d wrong type", i);
+    goto cleanup;
+  }
+  ret = make_blob(buf, d->struct_size);
+  free(buf);
+cleanup:
+  unrefexp(desc);
+  for (int i = 0; i < nv; i++)
+    unrefexp(vals[i]);
+  unrefexp(e);
+  return err ? err : ret;
+}
+
+/* (ffi-unpack struct-desc blob) — inverse of ffi-pack: read each field into
+   a list of alcove values. */
+exp_t *ffiunpackcmd(exp_t *e, env_t *env) {
+  exp_t *err = NULL, *ret = NULL, *desc = NULL, *blob = NULL;
+  if (!e->next || !e->next->next) {
+    err = error(ERROR_MISSING_PARAMETER, e, env, "(ffi-unpack struct-desc blob)");
+    goto cleanup;
+  }
+  desc = EVAL(e->next->content, env);
+  if (iserror(desc)) { err = desc; desc = NULL; goto cleanup; }
+  blob = EVAL(e->next->next->content, env);
+  if (iserror(blob)) { err = blob; blob = NULL; goto cleanup; }
+  if (!isffi(desc) || ((alc_ffi_t *)desc->ptr)->kind != AFFI_KIND_STRUCT) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env,
+                "ffi-unpack: first arg must be an ffi-struct descriptor");
+    goto cleanup;
+  }
+  if (!isblob(blob)) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env, "ffi-unpack: second arg must be a blob");
+    goto cleanup;
+  }
+  alc_ffi_t *d = (alc_ffi_t *)desc->ptr;
+  if (blob_len(blob) < d->struct_size) {
+    err = error(ERROR_ILLEGAL_VALUE, e, env,
+                "ffi-unpack: blob too small (%zu < %zu)", blob_len(blob),
+                d->struct_size);
+    goto cleanup;
+  }
+  const char *buf = blob_bytes(blob);
+  exp_t *head = NULL, *tail = NULL;
+  for (unsigned int i = 0; i < d->nargs; i++) {
+    const void *slot = buf + d->offsets[i];
+    exp_t *v;
+    switch (d->arg_tags[i]) {
+    case AFFI_INT:    v = MAKE_FIX((int64_t)*(const int32_t *)slot); break;
+    case AFFI_LONG:   v = MAKE_FIX(*(const int64_t *)slot); break;
+    case AFFI_DOUBLE: v = make_floatf(*(const double *)slot); break;
+    case AFFI_PTR:    v = MAKE_FIX((int64_t)(uintptr_t)*(void *const *)slot); break;
+    default:          v = NIL_EXP; break;
+    }
+    exp_t *node = make_node(v);
+    if (!head) { head = node; tail = node; }
+    else { tail->next = node; tail = node; }
+  }
+  ret = head ? head : NIL_EXP;
+cleanup:
+  unrefexp(desc);
+  unrefexp(blob);
+  unrefexp(e);
+  return err ? err : ret;
+}
+
 void alc_ffi_free(void *ptr) {
   alc_ffi_t *f = (alc_ffi_t *)ptr;
   if (!f)
@@ -6931,6 +7190,13 @@ void alc_ffi_free(void *ptr) {
     if (f->cb_lambda)
       unrefexp(f->cb_lambda);
   }
+  /* FN bindings hold a ref to the descriptor of each struct-by-value
+     arg/return (and STRUCT/CB kinds leave these NULL). */
+  for (int i = 0; i < ALC_FFI_MAX_ARGS; i++)
+    if (f->arg_structs[i])
+      unrefexp(f->arg_structs[i]);
+  if (f->ret_struct)
+    unrefexp(f->ret_struct);
   if (f->display_name)
     free(f->display_name);
   free(f);
@@ -6983,6 +7249,12 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
       ok = isnumber(a) || a == NIL_EXP ||
            (isffi(a) && ((alc_ffi_t *)a->ptr)->kind == AFFI_KIND_CB);
       break;
+    case AFFI_STRUCT: {
+      /* A struct-by-value arg is a blob packed to the declared layout. */
+      alc_ffi_t *d = f->arg_structs[i] ? (alc_ffi_t *)f->arg_structs[i]->ptr : NULL;
+      ok = d && isblob(a) && blob_len(a) == d->struct_size;
+      break;
+    }
     default:
       ok = 1;
       break;
@@ -7031,6 +7303,11 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
         slots[i].p = (void *)(uintptr_t)FIX_VAL(a);
       avalues[i] = &slots[i].p;
       break;
+    case AFFI_STRUCT:
+      /* Pass the packed bytes directly; libffi copies struct_size bytes per
+         the cif. (Validated as a correctly-sized blob in the check above.) */
+      avalues[i] = (void *)(uintptr_t)blob_bytes(a);
+      break;
     default:
       slots[i].l = 0;
       avalues[i] = &slots[i].l;
@@ -7043,7 +7320,19 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     double d;
     void *p;
   } rval;
-  ffi_call(&f->cif, FFI_FN(f->fn), &rval, avalues);
+  /* Struct-by-value return needs a buffer sized to the struct (at least
+     ffi_arg, libffi's minimum return slot). Scalars use the union above. */
+  void *rvalue = &rval;
+  char *struct_buf = NULL;
+  size_t struct_ret_size = 0;
+  if (f->ret_tag == AFFI_STRUCT && f->ret_struct) {
+    struct_ret_size = ((alc_ffi_t *)f->ret_struct->ptr)->struct_size;
+    size_t bufsz =
+        struct_ret_size < sizeof(ffi_arg) ? sizeof(ffi_arg) : struct_ret_size;
+    struct_buf = (char *)memalloc(bufsz ? bufsz : 1, 1);
+    rvalue = struct_buf;
+  }
+  ffi_call(&f->cif, FFI_FN(f->fn), rvalue, avalues);
   exp_t *ret = NIL_EXP;
   switch (f->ret_tag) {
   case AFFI_VOID:
@@ -7074,7 +7363,13 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
   case AFFI_PTR:
     ret = MAKE_FIX((int64_t)(uintptr_t)rval.p);
     break;
+  case AFFI_STRUCT:
+    /* Hand the returned struct bytes back as a blob (ffi-unpack reads it). */
+    ret = make_blob(struct_buf, struct_ret_size);
+    break;
   }
+  if (struct_buf)
+    free(struct_buf);
   for (int i = 0; i < nargs; i++)
     unrefexp(args[i]);
   return ret;
@@ -7091,6 +7386,21 @@ exp_t *fficallbackcmd(exp_t *e, env_t *env) {
   return error(ERROR_ILLEGAL_VALUE, NULL, env,
                "ffi-callback: alcove built without libffi (install "
                "libffi-dev and rebuild).");
+}
+exp_t *ffistructcmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "ffi-struct: alcove built without libffi.");
+}
+exp_t *ffipackcmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "ffi-pack: alcove built without libffi.");
+}
+exp_t *ffiunpackcmd(exp_t *e, env_t *env) {
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "ffi-unpack: alcove built without libffi.");
 }
 void alc_ffi_free(void *ptr) {
   (void)ptr;

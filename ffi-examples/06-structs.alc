@@ -1,0 +1,33 @@
+; FFI example: struct-by-value — pass and return C structs by value.
+;
+; Build the lib first (same one as examples 04/05):
+;   cc -shared -fPIC -O2 -o libmylib.so 04-custom-mylib.c
+; Then:
+;   alcove 06-structs.alc
+;
+; (ffi-struct FIELD-TYPES...) defines a by-value struct type from scalar
+; fields (int long double ptr). The returned descriptor can be used as an
+; ffi-fn argument or return type, and with:
+;   (ffi-pack   DESC vals...)  -> a blob laid out per the C ABI
+;   (ffi-unpack DESC blob)     -> a list of the field values
+; The layout matches the C compiler's on Linux and macOS, arm64 and x86_64
+; (standard scalar-aggregate alignment; libffi handles the call ABI).
+
+(= Point (ffi-struct "double" "double"))   ; struct { double x, y; }
+
+; struct arg → double
+(= norm2 (ffi-fn "./libmylib.so" "mylib_pt_norm2" "double" Point))
+(prn "norm2 (3,4)        => " (norm2 (ffi-pack Point 3.0 4.0)))         ; 25
+
+; doubles → struct return, then read the fields back
+(= make-pt (ffi-fn "./libmylib.so" "mylib_pt_make" Point "double" "double"))
+(prn "make-pt (5,6)      => " (ffi-unpack Point (make-pt 5.0 6.0)))     ; (5 6)
+
+; two structs in, one struct out
+(= add-pt (ffi-fn "./libmylib.so" "mylib_pt_add" Point Point Point))
+(= sum (add-pt (ffi-pack Point 1.0 2.0) (ffi-pack Point 10.0 20.0)))
+(prn "add (1,2)+(10,20)  => " (ffi-unpack Point sum))                   ; (11 22)
+
+; pack/unpack also works standalone (no C call) — handy for building
+; buffers to hand to ptr-taking C functions.
+(prn "pack/unpack 7.5,8.5 => " (ffi-unpack Point (ffi-pack Point 7.5 8.5))) ; (7.5 8.5)

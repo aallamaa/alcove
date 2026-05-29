@@ -106,10 +106,17 @@
        that capture free vars. Ret/arg types: void int long double ptr (no
        string return — buffer lifetime). Portable (libffi owns the
        executable trampoline; no arch code). Example ffi-examples/05.
-[TODO] FFI: support struct-by-value and varargs (printf). Varargs is parked
-       on the Apple-arm64 ABI wall (branch wip-ffi-varargs). Struct-by-value
-       needs an ffi_type struct-layout registry + a value representation
-       (pack/unpack to a blob) — larger; no fundamental blocker.
+[DONE] FFI struct-by-value: (ffi-struct field-types...) defines a by-value
+       aggregate (scalar fields int/long/double/ptr); usable as an ffi-fn
+       arg/return type. (ffi-pack desc vals...) -> blob laid out per the C
+       ABI; (ffi-unpack desc blob) -> field-value list. Manual scalar-
+       aggregate layout (matches the C ABI on all libffi targets; no
+       dependency on ffi_get_struct_offsets). Struct args pass blob bytes;
+       struct returns wrap the bytes in a blob. Verified: struct arg, struct
+       return, 2-in-1-out, mixed int/double fields, ASan-clean under churn.
+       Example ffi-examples/06. NOT yet: nested structs, string fields.
+[TODO] FFI: support varargs (printf). Parked on the Apple-arm64 ABI wall
+       (branch wip-ffi-varargs) — needs ffi_prep_cif_var + per-call cif.
 
 [DONE] MEMORY LEAK: closure↔captured-env refcount cycle. A def/let closure
        created INSIDE a function body leaked, scaling with closures created

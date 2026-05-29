@@ -65,6 +65,8 @@ install on `LD_LIBRARY_PATH` / standard search paths.
 - **05-callbacks.alc** — pass an alcove function to C as a function
   pointer via `(ffi-callback …)` (C calling back into alcove, incl. in a
   loop, with `double` and closures).
+- **06-structs.alc** — by-value structs via `(ffi-struct …)` /
+  `(ffi-pack …)` / `(ffi-unpack …)`: struct args, struct returns, and both.
 
 Run them all (auto-builds `libmylib.so`):
 
@@ -97,8 +99,11 @@ handle for the lifetime of the process.
 - **Callbacks are supported** via `(ffi-callback RET (ARG-TYPES…) FN)` —
   see 05-callbacks.alc. Pass the result where a `ptr` arg is expected.
   Callback ret/arg types: void int long double ptr (no string return).
-- **No struct-by-value or varargs yet.** Pointer args + a C shim are the
-  workaround for those.
+- **Struct-by-value is supported** via `(ffi-struct …)` + `(ffi-pack …)` /
+  `(ffi-unpack …)` — see 06-structs.alc. Struct fields: int long double ptr
+  (scalar; no nested structs or string fields yet). Works as ffi-fn arg and
+  return types.
+- **No varargs yet** (e.g. `printf`). Parked on the Apple-arm64 ABI wall.
 - **Returned `char*` is copied** into a fresh alcove string. If your
   function returns a pointer the caller is supposed to `free()`,
   alcove leaks it (no `free` builtin yet — wrap it via FFI:

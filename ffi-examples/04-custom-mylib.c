@@ -48,3 +48,23 @@ long mylib_sum_map(long (*fn)(long), long n) {
 
 /* Floating-point callback: returns fn(x) + 1.0. */
 double mylib_apply_d(double (*fn)(double), double x) { return fn(x) + 1.0; }
+
+/* ---- By-value struct demos (ffi-struct / ffi-pack / ffi-unpack). See
+   06-structs.alc. ---- */
+
+typedef struct { double x, y; } mylib_point;
+
+/* Struct passed by value → scalar. */
+double mylib_pt_norm2(mylib_point p) { return p.x * p.x + p.y * p.y; }
+
+/* Scalars → struct returned by value. */
+mylib_point mylib_pt_make(double x, double y) {
+  mylib_point p = {x, y};
+  return p;
+}
+
+/* Two structs by value → struct by value. */
+mylib_point mylib_pt_add(mylib_point a, mylib_point b) {
+  mylib_point r = {a.x + b.x, a.y + b.y};
+  return r;
+}
