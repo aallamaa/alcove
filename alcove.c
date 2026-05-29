@@ -21030,6 +21030,56 @@ void hamt_print(exp_t *m) {
   printf("}");
 }
 
+/* savedb/loaddb persistence: serialize as type-tag, entry count, then each
+   (key, value) pair recursively via the generic dump/load. Mirrors the deque
+   serializer. */
+typedef struct { FILE *s; int ok; } hamt_dump_ctx;
+static int hamt_dump_visit(exp_t *key, exp_t *val, void *ctx) {
+  hamt_dump_ctx *c = (hamt_dump_ctx *)ctx;
+  if (!key || !__DUMPABLE__(key) || !__DUMP__(key, c->s) ||
+      !val || !__DUMPABLE__(val) || !__DUMP__(val, c->s)) {
+    c->ok = 0;
+    return 0;
+  }
+  return 1;
+}
+exp_t *dump_hamt_value(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  hamt_t *h = (hamt_t *)e->ptr;
+  size_t n = h ? (size_t)h->count : 0;
+  if (dumpsize_t(stream, &n) <= 0)
+    return NULL;
+  if (!h || !h->root)
+    return e;
+  hamt_dump_ctx ctx = {stream, 1};
+  hamt_node_foreach(h->root, hamt_dump_visit, &ctx);
+  return ctx.ok ? e : NULL;
+}
+exp_t *load_hamt_value(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  size_t n = 0;
+  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
+    return NULL;
+  hamt_node *root = NULL;
+  int64_t count = 0;
+  for (size_t i = 0; i < n; i++) {
+    exp_t *k = load_exp_t(stream);
+    if (!k) { hamt_node_unref(root); return NULL; }
+    exp_t *v = load_exp_t(stream);
+    if (!v) { unrefexp(k); hamt_node_unref(root); return NULL; }
+    int added = 0;
+    hamt_node *nr = hamt_node_assoc(root, k, v, hamt_hashkey(k), 0, &added);
+    hamt_node_unref(root);
+    root = nr;
+    count += added;
+    unrefexp(k);
+    unrefexp(v);
+  }
+  return hamt_wrap(root, count);
+}
+
 const char doc_hamt[] =
     "(hamt k v ...) — build a persistent (immutable) map from key/value "
     "pairs. assoc/dissoc return new maps sharing structure with the old.";
@@ -22011,6 +22061,9 @@ int main(int argc, char *argv[]) {
   exp_tfuncList[EXP_LIST] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_LIST]->load = load_deque_value;
   exp_tfuncList[EXP_LIST]->dump = dump_deque_value;
+  exp_tfuncList[EXP_HAMT] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_HAMT]->load = load_hamt_value;
+  exp_tfuncList[EXP_HAMT]->dump = dump_hamt_value;
 
   reserved_symbol = create_dict();
   /* Allocate immortal singletons before any other code references them. */
@@ -22320,6 +22373,7 @@ endcleanly:
   free(exp_tfuncList[EXP_SET]);
   free(exp_tfuncList[EXP_DICT]);
   free(exp_tfuncList[EXP_LIST]);
+  free(exp_tfuncList[EXP_HAMT]);
   unrefexp(t);
   unrefexp(nil);
   /* Immortal singletons. We can't free() the exp_t pointer itself

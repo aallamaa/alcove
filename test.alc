@@ -818,6 +818,19 @@
                                             (set-has? persisted-set (string->blob "bb"))) t)
 (forget 'persisted-set)
 
+;; persistence: a HAMT (incl. a nested list value) survives savedb/loaddb
+(= persisted-hamt (hamt "a" 1 "b" 2 3.14 'pi "nums" (list 10 20)))
+(persist 'persisted-hamt)
+(savedb "/tmp/alcove-test-hamt.db")
+(forget 'persisted-hamt)
+(loaddb "/tmp/alcove-test-hamt.db")
+(assert "hamt persistence type"        (hamt? persisted-hamt)              t)
+(assert "hamt persistence count"       (hamt-count persisted-hamt)         4)
+(assert "hamt persistence string key"  (hamt-get persisted-hamt "a")       1)
+(assert "hamt persistence float key"   (hamt-get persisted-hamt 3.14)      'pi)
+(assert "hamt persistence nested val"  (iso (hamt-get persisted-hamt "nums") (list 10 20)) t)
+(forget 'persisted-hamt)
+
 ;; savedb optional-path error path -- bad type causes error; execution
 ;; continues in file mode (the error propagates to the top level, which resumes).
 (savedb 42)

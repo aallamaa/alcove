@@ -1190,6 +1190,29 @@ assert "set persistence member" (and (set-has? persisted-set 9) (set-has? persis
 
 forget 'persisted-set
 
+setf persisted-hamt (hamt "a" 1 "b" 2 3.14 'pi "nums" (list 10 20))
+
+persist 'persisted-hamt
+
+savedb "/tmp/alcove-test-hamt.db"
+
+forget 'persisted-hamt
+
+loaddb "/tmp/alcove-test-hamt.db"
+
+assert "hamt persistence type" (hamt? persisted-hamt) t
+
+assert "hamt persistence count" (hamt-count persisted-hamt) 4
+
+assert "hamt persistence string key" (hamt-get persisted-hamt "a") 1
+
+assert "hamt persistence float key" (hamt-get persisted-hamt 3.14) 'pi
+
+assert "hamt persistence nested val" (iso (hamt-get persisted-hamt "nums") (list 10 20)):
+  t
+
+forget 'persisted-hamt
+
 savedb 42
 
 assert "after bad savedb arg: recovery" 1 1
