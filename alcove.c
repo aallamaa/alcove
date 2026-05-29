@@ -638,58 +638,91 @@ static inline int unrefexp(exp_t *e) {
       e->next->meta = NULL;
     }
     exp_t *next = e->next;
-    /* ERROR always heap-allocates its message (vasprintf), and its `flags`
-       field is overloaded as the error code — so never flag-test it here. */
-    if (e->type == EXP_ERROR) {
+    /* Release this node's payload, dispatched on type. Contiguous enum -> a
+       jump table; the hot EXP_PAIR case (every cons cell + nil) lands in
+       `default` directly instead of after ~10 sequential `e->type ==` tests.
+       EXP_FLOAT / EXP_INTERNAL / immediates MUST be explicit no-op cases:
+       falling through to `default` would call unrefexp on their inline union
+       value (a double / fn pointer), not a child. ERROR heap-allocates its
+       message via vasprintf (and overloads `flags` as the error code, so it
+       is never flag-tested). A container with a NULL ptr does nothing —
+       equivalent to the old fall-through, since ptr aliases content. */
+    switch (e->type) {
+    case EXP_ERROR:
       free(e->ptr);
-    } else if (e->type == EXP_SYMBOL || e->type == EXP_STRING) {
-      /* Handle symbols/strings entirely here so they never fall through to
-         the `unrefexp(e->content)` recurse below — for an inline exp,
-         `content`/`ptr` hold text bytes, not a child pointer. Free the heap
-         text only when it isn't inline (inline lives in the struct). */
+      break;
+    case EXP_SYMBOL:
+    case EXP_STRING:
+      /* Free heap text only when not inline (inline bytes live in the
+         struct's `ptr` union — see FLAG_INLINE_TXT). */
       if (!(e->flags & FLAG_INLINE_TXT))
         free(e->ptr);
-    } else if (e->type == EXP_FFI) {
+      break;
+    case EXP_FFI: {
       extern void alc_ffi_free(void *ptr); /* defined alongside ffi_call */
       alc_ffi_free(e->ptr);
-    } else if (e->type == EXP_VECTOR && e->ptr) {
-      /* For VEC_KIND_GEN, each live cell owns a ref — walk and release.
-         For typed kinds (i64/f64), cells are raw scalars — no ownership
-         to drop, just free the storage. */
-      if (vec_kind(e) == VEC_KIND_GEN) {
-        int64_t n = vec_len(e);
-        int64_t i;
-        for (i = 0; i < n; i++)
-          unrefexp(vec_gen_at(e, i));
+      break;
+    }
+    case EXP_VECTOR:
+      if (e->ptr) {
+        /* VEC_KIND_GEN cells each own a ref — walk and release. Typed
+           (i64/f64) cells are raw scalars — just free the storage. */
+        if (vec_kind(e) == VEC_KIND_GEN) {
+          int64_t n = vec_len(e);
+          for (int64_t i = 0; i < n; i++)
+            unrefexp(vec_gen_at(e, i));
+        }
+        free(e->ptr);
       }
-      free(e->ptr);
-    } else if (e->type == EXP_BLOB) {
+      break;
+    case EXP_BLOB:
       free(e->ptr); /* alc_blob_t is a single flex-array alloc */
-    } else if ((e->type == EXP_DICT || e->type == EXP_SET) && e->ptr) {
-      destroy_dict((dict_t *)e->ptr); /* unrefs every value internally */
-    } else if (e->type == EXP_HAMT && e->ptr) {
-      extern void hamt_free(void *ptr); /* defined alongside the HAMT ops */
-      hamt_free(e->ptr);                /* unrefs the shared trie (refcounted) */
-    } else if (e->type == EXP_LIST && e->ptr) {
-      alc_list_t *l = (alc_list_t *)e->ptr;
-      alc_listnode_t *n = l->head;
-      while (n) {
-        alc_listnode_t *nx = n->next;
-        unrefexp(n->val);
-        free(n);
-        n = nx;
+      break;
+    case EXP_DICT:
+    case EXP_SET:
+      if (e->ptr)
+        destroy_dict((dict_t *)e->ptr); /* unrefs every value internally */
+      break;
+    case EXP_HAMT:
+      if (e->ptr) {
+        extern void hamt_free(void *ptr); /* defined alongside the HAMT ops */
+        hamt_free(e->ptr);                /* unrefs the shared (refcounted) trie */
       }
-      free(l);
-    } else if (((e->type >= EXP_NUMBER) && (e->type <= EXP_BOOLEAN)) ||
-               (e->type == EXP_INTERNAL)) {
-      /* Numeric/char/bool live inline in the union; EXP_INTERNAL has
-         no payload — nothing to release here. */
-    } else if ((e->flags & FLAG_COMPILED) &&
-               (e->type == EXP_LAMBDA || e->type == EXP_MACRO)) {
-      /* content is unioned with bc; bytecode_free above already
-         released the params via bc->content. */
-    } else
+      break;
+    case EXP_LIST:
+      if (e->ptr) {
+        alc_list_t *l = (alc_list_t *)e->ptr;
+        alc_listnode_t *n = l->head;
+        while (n) {
+          alc_listnode_t *nx = n->next;
+          unrefexp(n->val);
+          free(n);
+          n = nx;
+        }
+        free(l);
+      }
+      break;
+    case EXP_NUMBER:
+    case EXP_FLOAT:
+    case EXP_CHAR:
+    case EXP_BOOLEAN:
+    case EXP_INTERNAL:
+      /* Numeric/char/bool live inline in the union; EXP_INTERNAL has no
+         owned payload — nothing to release. */
+      break;
+    case EXP_LAMBDA:
+    case EXP_MACRO:
+      /* Compiled: content is unioned with bc, already released by
+         bytecode_free above. AST: content is the params list — recurse. */
+      if (!(e->flags & FLAG_COMPILED))
+        unrefexp(e->content);
+      break;
+    default:
+      /* EXP_PAIR (incl. nil), EXP_TREE, EXP_PAIR_CIRCULAR: recurse on the
+         child; e->next is released by the next loop iteration. */
       unrefexp(e->content);
+      break;
+    }
 
     e->next = exp_freelist;
     exp_freelist = e;
@@ -3142,7 +3175,6 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
 // istrue borrow object reference
 inline int istrue(exp_t *e) {
-  int ret = 0;
   if (!e)
     return 0;
   /* Tagged immediates first — cheap tag check, no deref. */
@@ -3152,40 +3184,47 @@ inline int istrue(exp_t *e) {
     return 0; /* preserve historical behavior */
   if (!is_ptr(e))
     return 0;
-  /* Containers (blob/vec/dict/list) are folded into isatom() for other
-     reasons, so handle them by type before the isatom catch-all below. */
-  if (e->type == EXP_BLOB)
-    return (e->ptr && ((alc_blob_t *)e->ptr)->len > 0);
-  if (e->type == EXP_VECTOR)
+  /* Heap object — dispatch on type. The enum is contiguous, so this lowers
+     to a jump table: the hot nil/pair case lands directly instead of after a
+     dozen sequential `e->type ==` comparisons. Function-like values (lambda /
+     builtin / macro / ffi / continuation) are always truthy — a callable is a
+     real value, not "empty". Containers are truthy when non-empty. default
+     covers immediates-as-heap (shouldn't occur), booleans, errors, and the
+     internal tree/circular markers, all falsy as before. */
+  switch (e->type) {
+  case EXP_PAIR:
+    return (e->content || e->next) ? 1 : 0; /* nil = empty pair -> 0 */
+  case EXP_SYMBOL:
+    return strcmp(exp_text(e), "nil") != 0;
+  case EXP_STRING: {
+    const char *t = exp_text(e);
+    return t ? (*t != '\0') : 0;
+  }
+  case EXP_FLOAT:
+    return e->f != 0;
+  case EXP_VECTOR:
     return (e->ptr && vec_len(e) > 0);
-  if (e->type == EXP_LIST)
+  case EXP_BLOB:
+    return (e->ptr && ((alc_blob_t *)e->ptr)->len > 0);
+  case EXP_LIST:
     return (e->ptr && ((alc_list_t *)e->ptr)->len > 0);
-  if (e->type == EXP_SET || e->type == EXP_DICT) {
+  case EXP_SET:
+  case EXP_DICT: {
     dict_t *d = (dict_t *)e->ptr;
     return (d && d->ht[0].used > 0);
   }
-  if (e->type == EXP_HAMT)
+  case EXP_HAMT:
     return (e->ptr && ((hamt_t *)e->ptr)->count > 0);
-  /* Function-like values are always truthy. A lambda / builtin / macro /
-     ffi callable is a real value, not "empty" — without this, (if some-fn
-     ...) and every istrue-based check (e.g. try's handler dispatch) wrongly
-     treat callables as false. */
-  if (e->type == EXP_LAMBDA || e->type == EXP_INTERNAL ||
-      e->type == EXP_MACRO || e->type == EXO_MACROINTERNAL ||
-      e->type == EXP_FFI || e->type == EXP_CONT)
+  case EXP_LAMBDA:
+  case EXP_INTERNAL:
+  case EXP_MACRO:
+  case EXO_MACROINTERNAL:
+  case EXP_FFI:
+  case EXP_CONT:
     return 1;
-  if isatom (e) {
-    if isstring (e)
-      { const char *_t = exp_text(e); ret = ((_t) ? strlen(_t) : 0); }
-    else if isfloat (e)
-      ret = (e->f != 0);
-    else if issymbol (e)
-      ret = (strcmp(exp_text(e), "nil") != 0);
-  } else if ispair (e) {
-    if (e->content || e->next)
-      ret = 1;
+  default:
+    return 0;
   }
-  return ret;
 }
 
 inline exp_t *lookup(exp_t *e, env_t *env) {
