@@ -14,14 +14,25 @@
 # pre-push hook). The format check below is fast and always runs.
 
 # Staged C/H files this commit touches (Added/Copied/Modified).
-# clang-format runs on every staged C source and header (formatting a header
-# in isolation is fine). clang-tidy, below, runs only on .c files: a real
-# translation unit. The project's .h files are include-only (adr.h, alcove.h,
-# builtins.h, …) — analyzing one as its own TU yields false positives (no
-# caller context) and misses cross-file flow. Header changes are covered by
-# `make tidy`, which analyzes the .c units that include them.
+# clang-format runs on every staged C source and header (formatting a file in
+# isolation is fine). clang-tidy, below, runs only on files that are a real
+# translation unit. Two kinds of staged C files are NOT standalone TUs and would
+# yield false positives / fail to compile if analyzed alone:
+#   - .h files: include-only (adr.h, alcove.h, builtins.h, hamt.h, …).
+#   - include-only .c fragments: files pulled in via `#include "x.c"` (lfkv.c,
+#     resp.c, epoch.c, reader.c) — they reference the includer's internals.
+# Both are linted in context by `make tidy` (which analyzes alcove.c + adder.c).
 CFILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.c' '*.h')
-TIDY_CFILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.c')
+# Set of include-only .c fragments: the .c files pulled into the main TU via
+# `#include "x.c"` in alcove.c (reader.c, resp.c, lfkv.c, epoch.c). We scan
+# alcove.c specifically — scanning the test files would catch their
+# `#include "alcove.c"` and wrongly exclude the main TU itself.
+# space-separated (the `case` match below needs spaces, not newlines)
+INCLUDED_C=$(grep -E '#include "[A-Za-z0-9_]+\.c"' alcove.c 2>/dev/null |
+             sed -E 's/.*#include "([^"]+)".*/\1/' | sort -u | tr '\n' ' ')
+TIDY_CFILES=$(for f in $(git diff --cached --name-only --diff-filter=ACM -- '*.c'); do
+  case " $INCLUDED_C " in *" $f "*) ;; *) printf '%s\n' "$f";; esac
+done)
 [ -z "$CFILES" ] && exit 0
 
 status=0
