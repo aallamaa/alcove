@@ -1713,6 +1713,22 @@
 (assert "blob?: vec"                (blob? (vec 1 0))          nil)
 (assert "blob?: list"               (blob? (list 1))           nil)
 
+;; ---- reader literals: #b"..." (blob) and #{...} (set) round-trip the printer.
+;; The REPL prints a printable blob as #b"..." and a set as #{...}; these forms
+;; must read back to the same value (see reader's dispatch-macro handler).
+(assert "blob literal: type"        (blob? #b"test")                       t)
+(assert "blob literal: value"       (iso #b"test" (string->blob "test"))   t)
+(assert "blob literal: escaped \""  (blob->string #b"a\"b")                "a\"b")
+(assert "blob literal: backslash"   (blob->string #b"a\\b")                "a\\b")
+(assert "set literal: type"         (set? #{1 2 3})                        t)
+(assert "set literal: members"      (and (set-has? #{1 2 3} 1)
+                                         (set-has? #{1 2 3} 2)
+                                         (set-has? #{1 2 3} 3))            t)
+(assert "set literal: non-member"   (set-has? #{1 2 3} 9)                  nil)
+(assert "set literal: empty"        (set? #{})                             t)
+(assert "set literal: mixed"        (set-has? #{1 "a" :k} :k)              t)
+(assert "vector literal: #[]"       (vec? #[1 2 3])                        t)
+
 ;; RESP keyspace from Lisp — values are stored as existing exp_t containers
 ;; normalized to Redis-safe blobs/list/hash payloads.
 (redis-flush)

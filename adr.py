@@ -129,6 +129,14 @@ class LineReader:
         if self.s[self.i:self.i + 2] == "#[":
             self.i += 2
             return [Sym("vector")] + self.read_forms(terminator="]")
+        # set literal #{a b c} -> (hash-set a b c)
+        if self.s[self.i:self.i + 2] == "#{":
+            self.i += 2
+            return [Sym("hash-set")] + self.read_forms(terminator="}")
+        # blob literal #b"..." -> (string->blob "...")
+        if self.s[self.i:self.i + 3] == '#b"':
+            self.i += 2                       # consume #b, leave the string
+            return [Sym("string->blob"), self.read_string()]
         return self.read_atom()
 
     def read_string(self):
@@ -154,7 +162,7 @@ class LineReader:
             self.i += 3
             return Sym(tok)
         start = self.i
-        while self.i < self.n and self.s[self.i] not in ' \t()[]"\'':
+        while self.i < self.n and self.s[self.i] not in ' \t()[]{}"\'':
             self.i += 1
         tok = self.s[start:self.i]
         # alcove-target literal mapping
@@ -183,8 +191,20 @@ def strip_comment(line):
             if c == '"':
                 in_str = False
         else:
-            # `#` starts a comment, except `#\` (char) and `#[` (vector).
-            if c == "#" and line[i + 1:i + 2] not in ("\\", "["):
+            # Char literal #\X: copy `#\` and the value byte verbatim so a
+            # value of `#`, `"`, `;`, or space isn't read as a comment/string.
+            if c == "#" and line[i + 1:i + 2] == "\\":
+                out.append(c)
+                if i + 1 < len(line):
+                    out.append(line[i + 1])
+                if i + 2 < len(line):
+                    out.append(line[i + 2])
+                i += 3
+                continue
+            # A line comment is `#` followed by a space, tab, or end of line.
+            # A `#` glued to the next char is a dispatch token (#[ #{ #b"…)
+            # and survives to the reader. One rule, no per-token exceptions.
+            if c == "#" and line[i + 1:i + 2] in (" ", "\t", ""):
                 break
             out.append(c)
             if c == '"':

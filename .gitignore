@@ -64,6 +64,21 @@ examples/mario/web/theme.ogg
 mpsc_test
 mpsc_test_tsan
 
+# Parser/tokenizer test + fuzz binaries and libFuzzer crash/leak artifacts
+# (`make parser-test` / `make fuzz`). The source parser_test.c stays tracked.
+parser_test
+parser_fuzz
+crash-*
+leak-*
+timeout-*
+
+# Python bytecode cache (adr.py / alc2adr.py imports).
+__pycache__/
+*.pyc
+
+# Antigravity CLI scratch.
+.antigravitycli/
+
 # Built benchmark binaries (./benchmark/run.sh produces these).
 benchmark/bin/
 

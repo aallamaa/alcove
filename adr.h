@@ -108,7 +108,8 @@ typedef struct {
 
 static int als_is_delim(char c) {
   return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' ||
-         c == '\'' || c == '`' || c == ',' || c == '[' || c == ']';
+         c == '\'' || c == '`' || c == ',' || c == '[' || c == ']' ||
+         c == '{' || c == '}';
 }
 
 static als_node *als_read_one(als_lr *r);
@@ -228,6 +229,38 @@ static als_node *als_read_one(als_lr *r) {
     als_read_forms(r, ']', vec);
     return vec;
   }
+  /* set literal #{a b c} -> (hash-set a b c). alcove's reader expands #{...}
+     the same way; lowering it here keeps the printed form of a set readable
+     in Adder too. */
+  if (c == '#' && r->i + 1 < r->n && r->s[r->i + 1] == '{') {
+    r->i += 2; /* consume #{ */
+    als_node *set = als_list();
+    als_push(set, als_atom("hash-set", 8));
+    als_read_forms(r, '}', set);
+    return set;
+  }
+  /* blob literal #b"..." -> (string->blob "..."). This is the form the printer
+     emits for a printable blob, so a printed blob re-reads in Adder. */
+  if (c == '#' && r->i + 2 < r->n && r->s[r->i + 1] == 'b' &&
+      r->s[r->i + 2] == '"') {
+    r->i += 2;             /* consume `#b`; r->i now at the opening '"' */
+    size_t start = r->i++; /* keep the string (with quotes/escapes) verbatim */
+    while (r->i < r->n) {
+      if (r->s[r->i] == '\\') {
+        r->i += 2;
+        continue;
+      }
+      if (r->s[r->i] == '"') {
+        r->i++;
+        break;
+      }
+      r->i++;
+    }
+    als_node *blob = als_list();
+    als_push(blob, als_atom("string->blob", 12));
+    als_push(blob, als_atom(r->s + start, r->i - start));
+    return blob;
+  }
   size_t start = r->i;
   while (r->i < r->n && !als_is_delim(r->s[r->i]))
     r->i++;
@@ -252,31 +285,56 @@ static als_node *als_line_node(const char *text) {
 
 /* ---- comment / colon handling ---- */
 
-/* copy `line` minus a `#` comment (not `#\`, not inside a string) */
+/* copy `line` minus a `#` comment (not `#\`, not inside a string).
+   Plain while-loop with explicit index advancement: every read is guarded by
+   the loop's `i < n` plus an explicit `i + k < n`, so it's both correct and
+   easy for the static analyzer to prove in-bounds. */
 static char *als_strip_comment(const char *line) {
   size_t n = strlen(line);
   char *out = (char *)malloc(n + 1);
   size_t o = 0;
   int in_str = 0;
-  for (size_t i = 0; i < n; i++) {
+  size_t i = 0;
+  while (i < n) {
     char c = line[i];
     if (in_str) {
       out[o++] = c;
       if (c == '\\' && i + 1 < n) {
-        out[o++] = line[++i];
+        out[o++] = line[i + 1]; /* keep the escape pair verbatim */
+        i += 2;
         continue;
       }
       if (c == '"')
         in_str = 0;
-    } else {
-      /* `#` starts a comment, EXCEPT `#\` (char literal) and `#[` (vector
-         literal) which are real tokens that must survive to the reader. */
-      if (c == '#' && line[i + 1] != '\\' && line[i + 1] != '[')
-        break;
-      out[o++] = c;
-      if (c == '"')
-        in_str = 1;
+      i++;
+      continue;
     }
+    /* Char literal #\X: copy `#\` and the value byte verbatim, so a value of
+       `#`, `"`, `;`, or a space isn't mistaken for a comment or a string
+       opener. (A multi-byte #\é leaks only continuation bytes 0x80-0xBF,
+       never '#'/'"'/';', so copying one byte here is enough.) */
+    if (c == '#' && i + 1 < n && line[i + 1] == '\\') {
+      out[o++] = '#';
+      out[o++] = '\\';
+      if (i + 2 < n) {
+        out[o++] = line[i + 2];
+        i += 3;
+      } else {
+        i += 2; /* dangling `#\` at end of line — copy what's there */
+      }
+      continue;
+    }
+    /* A line comment is `#` followed by a space, tab, or end of line:
+       `# like this`. A `#` glued to the next character is a dispatch token
+       (#[ vector, #{ set, #b"..." blob) and passes through to the reader
+       untouched. This one rule replaces a per-token exception list — see the
+       matching rule in adr.py / als_read_one. */
+    if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' || line[i + 1] == '\t'))
+      break;
+    out[o++] = c;
+    if (c == '"')
+      in_str = 1;
+    i++;
   }
   out[o] = 0;
   return out;

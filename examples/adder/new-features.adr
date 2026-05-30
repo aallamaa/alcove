@@ -312,5 +312,19 @@ prn (vec-len #[5 6 7 8])              # 4
 prn #[#[1 2] #[3 4]]                  # nested: #[#[1 2] #[3 4]]
 = grid #[#[1 2 3] #[4 5 6]]
 prn (vec-ref (vec-ref grid 1) 2)      # 6
-# `#` still starts a comment everywhere else:
+
+# ──────────────────────────────────────────────────────────────────────────
+# 7. set + blob literals — #{...} and #b"..." (the forms the printer emits)
+# ──────────────────────────────────────────────────────────────────────────
+prn #{1 2 3}                          # #{...}: a set
+prn (set-has? #{1 2 3} 2)             # t
+prn #b"hello"                         # #b"hello": a blob
+prn (blob->string #b"hello")          # "hello"
+prn (iso #b"hi" (string->blob "hi"))  # t
+
+# ──────────────────────────────────────────────────────────────────────────
+# 8. comments — a comment is `#` followed by a space (runs to end of line).
+#    A `#` glued to a token is a dispatch literal (#[ #{ #b" #\), not a comment.
+# ──────────────────────────────────────────────────────────────────────────
 prn "comments still work"             # this trailing text is ignored
+prn #\#                               # the character '#', not a comment

@@ -349,6 +349,29 @@ TIDY_CFLAGS := -std=gnu11 $(JIT_FLAGS) -DALCOVE_FFI=1 -DALCOVE_READLINE=1 \
                $(shell pkg-config --cflags libffi 2>/dev/null) \
                $(shell pkg-config --cflags readline 2>/dev/null)
 
+# ---------------------------------------------------------------------------
+# Parser / tokenizer tests.
+#   make parser-test  — unit tests + bounded deterministic fuzz, under ASan
+#   make fuzz         — coverage-guided libFuzzer run (needs clang)
+# parser_test.c #includes alcove.c, so it sees the reader internals directly
+# and feeds inputs through fmemopen exactly like the real -e / web paths.
+parser-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  $(JIT_FLAGS) -o parser_test parser_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./parser_test
+
+# Coverage-guided fuzzing. clang + libFuzzer; runs 60s by default. Override:
+#   make fuzz FUZZ_ARGS='-max_total_time=600 corpus/'
+# libFuzzer ships with clang only; auto-pick an installed clang (the distro may
+# only have versioned binaries like clang-19). Override with `make fuzz CLANG=...`.
+FUZZ_ARGS ?= -max_total_time=60
+CLANG ?= $(shell command -v clang || command -v clang-19 || command -v clang-18 || command -v clang-17)
+fuzz:
+	@[ -n "$(CLANG)" ] || { echo "no clang found — install clang for libFuzzer"; exit 1; }
+	$(CLANG) -DPARSER_LIBFUZZER -g -O1 -fsanitize=fuzzer,address,undefined \
+	  $(JIT_FLAGS) -o parser_fuzz parser_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./parser_fuzz $(FUZZ_ARGS)
+
 fmt:
 	$(FMT) -i $(FMT_FILES)
 

@@ -2630,6 +2630,28 @@ assert "blob?: vec" (blob? (vec 1 0)) nil
 
 assert "blob?: list" (blob? (list 1)) nil
 
+assert "blob literal: type" (blob? (string->blob "test")) t
+
+assert "blob literal: value" (iso (string->blob "test") (string->blob "test")):
+  t
+
+assert "blob literal: escaped \"" (blob->string (string->blob "a\"b")) "a\"b"
+
+assert "blob literal: backslash" (blob->string (string->blob "a\\b")) "a\\b"
+
+assert "set literal: type" (set? (hash-set 1 2 3)) t
+
+assert "set literal: members" (and (set-has? (hash-set 1 2 3) 1) (set-has? (hash-set 1 2 3) 2) (set-has? (hash-set 1 2 3) 3)):
+  t
+
+assert "set literal: non-member" (set-has? (hash-set 1 2 3) 9) nil
+
+assert "set literal: empty" (set? (hash-set)) t
+
+assert "set literal: mixed" (set-has? (hash-set 1 "a" :k) :k) t
+
+assert "vector literal: #[]" (vec? (vector 1 2 3)) t
+
 redis-flush()
 
 assert "redis-set string -> blob" (do (redis-set "alcove:test:string" "abc") (blob->string (redis-get "alcove:test:string"))):

@@ -15,7 +15,9 @@ Checks: >
   -bugprone-suspicious-include,
   -bugprone-multi-level-implicit-pointer-conversion,
   -bugprone-reserved-identifier,
-  -bugprone-easily-swappable-parameters
+  -bugprone-easily-swappable-parameters,
+  -bugprone-not-null-terminated-result,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 WarningsAsErrors: ''
 # Only surface diagnostics from this project's own headers (not system/libffi).
 HeaderFilterRegex: '(alcove|builtins|adr|char|epoch|lfkv|mpsc|resp)\.h$'

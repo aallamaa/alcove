@@ -32,7 +32,7 @@ Usage:
 
 import sys
 
-DELIM = set(' \t\r\n()[]";\'`,')
+DELIM = set(' \t\r\n()[]{}";\'`,')
 
 
 class Sym:
@@ -61,6 +61,11 @@ class Reader:
             if c in " \t\r\n":
                 self.i += 1
             elif c == ";":
+                while self.i < self.n and self.s[self.i] != "\n":
+                    self.i += 1
+            elif c == "#" and self.s[self.i + 1:self.i + 2] in (" ", "\t", ""):
+                # `# ...` line comment (alcove + adder share this rule); a `#`
+                # glued to a token is a dispatch literal, handled in form().
                 while self.i < self.n and self.s[self.i] != "\n":
                     self.i += 1
             else:
@@ -117,6 +122,18 @@ class Reader:
                         self.i += 1
                         return v
                     v.append(self.form())
+            if nxt == "{":                        # #{..} set literal
+                self.i += 2
+                v = [Sym("hash-set")]
+                while True:
+                    self.skip()
+                    if self.i < self.n and self.s[self.i] == "}":
+                        self.i += 1
+                        return v
+                    v.append(self.form())
+            if nxt == "b" and self.s[self.i + 2:self.i + 3] == '"':
+                self.i += 2                       # #b"..." blob literal
+                return [Sym("string->blob"), self.string()]
         return self.atom()
 
     def lst(self, close):

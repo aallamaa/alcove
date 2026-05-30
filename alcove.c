@@ -1760,7 +1760,10 @@ void print_node(exp_t *node) {
     if (n == 0) {
       printf("\x1B[92m#<blob 0 bytes>\x1B[39m");
     } else if (printable) {
-      printf("\x1B[92mb\"");
+      /* #b"..." — a dispatch-macro literal (Scheme/EDN style) so the form
+         re-reads as the same blob. The `#` prefix keeps it distinct from the
+         symbol `b` (a normal constituent). */
+      printf("\x1B[92m#b\"");
       for (size_t i = 0; i < n; i++) {
         if (p[i] == '"' || p[i] == '\\')
           putchar('\\');
@@ -2732,7 +2735,13 @@ exp_t *make_atom_from_token(token_t *token) {
   int dot = 0;
   char v;
   char *stro = str;
-  if (str[0] == '\"')
+  /* A token literally starting with `"` is a quoted string. Normal strings
+     are read in the reader's escape mode and never reach here; this path
+     catches a `"` that arrived via a single-escape (e.g. the input `\"`),
+     which can yield a 1-char `"` token — length-2 would then be negative and
+     blow up make_string_from_token's memcpy. Require the full open+close so
+     a stray quote falls through to the symbol/number scanner instead. */
+  if (str[0] == '\"' && length >= 2)
     return make_string_from_token(token, 1, length - 2);
   /* Hex literals: 0xNN / 0XNN, optionally with leading +/-. The decimal
      state machine below rejects 'x', so without this fast path 0xFF
@@ -3018,8 +3027,19 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         return NULL; /* OK */
       }
       if (x == '#') {
-        // Dispatch macro
+        // Dispatch macro — or a `# ` line comment.
         if ((y = getc(stream)) != EOF) {
+          if (y == ' ' || y == '\t' || y == '\n') {
+            /* `# ...` line comment, running to end of line (Adder uses the
+               same rule). Only `#` + whitespace is a comment; `#` glued to a
+               token stays a dispatch macro (#\ char, #[ vector, #{ set,
+               #b"..." blob). `;` remains a comment too. This was previously a
+               hard parse error, so no valid program is affected. */
+            if (y != '\n')
+              while ((z = getc(stream)) != EOF && z != '\n')
+                ;
+            continue;
+          }
           if (y == '\\') { // returning char
             if ((z = getc(stream)) != EOF) {
               return make_char(utf8_decode_stream(z, stream));
@@ -3043,6 +3063,42 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
               vcnode = vcnode->next = make_node(vvnode);
             }
             return vlnode;
+          } else if (y == 'b') {
+            /* Blob literal: #b"..." → an EXP_BLOB holding the string's bytes.
+               This is the form the printer emits for a printable blob, so the
+               value round-trips. The next char must open a string. */
+            if ((z = getc(stream)) != '"') {
+              if (z != EOF)
+                ungetc(z, stream);
+              return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
+                           "#b must be followed by a string literal");
+            }
+            ungetc(z, stream); /* hand the `"` back to the string reader */
+            exp_t *str = reader(stream, 0, 0);
+            if (!str)
+              return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
+                           "End of file in #b\"...\" literal");
+            if (iserror(str))
+              return str;
+            const char *sb = exp_text(str);
+            exp_t *blob = make_blob(sb ? sb : "", sb ? strlen(sb) : 0);
+            unrefexp(str);
+            return blob;
+          } else if (y == '{') {
+            /* Set literal: #{1 2 3} → (hash-set 1 2 3). This is the form the
+               printer emits for an EXP_SET, so a printed set re-reads as the
+               same value. (Plain `{...}` is the hash-map literal.) */
+            exp_t *slnode = make_node(make_symbol("hash-set", 8));
+            exp_t *scnode = slnode;
+            exp_t *svnode;
+            while ((svnode = reader(stream, '}', 0))) {
+              if (iserror(svnode)) {
+                unrefexp(slnode);
+                return svnode;
+              }
+              scnode = scnode->next = make_node(svnode);
+            }
+            return slnode;
           } else
             return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
                          "call to dispatch macro char %c unkown!", y);
@@ -3096,8 +3152,12 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             continue;
           } else if (ISSINGLEESCAPE & chrmap[y]) {
             if ((z = getc(stream)) != EOF) {
-              if ((ret = escapereader(stream, &token, z)))
+              if ((ret = escapereader(stream, &token, z))) {
+                if (token)
+                  freetoken(token); /* a bad escape (e.g. \x with non-hex)
+                                       must not leak the in-progress token */
                 return ret;
+              }
             } else {
               freetoken(token);
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
@@ -3117,9 +3177,13 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
           } else
             pushtoken = 1;
         } else {
-          freetoken(token);
-          return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                       "End of file reached while parsing");
+          /* EOF immediately after a token's last byte — no trailing
+             delimiter. The token is nonetheless complete, so flush it as an
+             atom instead of discarding the whole form. Without this, a final
+             bare atom with no newline was silently dropped: `alcove -e 42`
+             and newline-less piped input produced nothing. (Unterminated
+             strings are handled in escape mode below and still error.) */
+          pushtoken = 1;
         }
       } else { // Escape mode
         // step 9
@@ -3147,8 +3211,12 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             tokenadd(token, y);
           else if (ISSINGLEESCAPE & chrmap[y]) {
             if ((z = getc(stream)) != EOF) {
-              if ((ret = escapereader(stream, &token, z)))
+              if ((ret = escapereader(stream, &token, z))) {
+                if (token)
+                  freetoken(token); /* bad escape inside a "string" — free the
+                                       partial token before bailing */
                 return ret;
+              }
             } else {
               freetoken(token);
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
