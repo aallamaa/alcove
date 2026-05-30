@@ -235,8 +235,12 @@
       <li><strong>Assignment is <code>setf</code></strong> (the alias of
       <code>=</code>). A bare <code>set</code> is the set constructor, just like
       Alcove.</li>
-      <li><strong>Quote</strong> is <code>'x</code>; <strong>comments</strong>
-      start with <code>#</code>.</li>
+      <li><strong>Quote</strong> is <code>'x</code>. A <strong>comment</strong>
+      is <code>#</code> followed by a space, to end of line; a <code>#</code>
+      glued to a token is instead a literal: <code>#[1 2 3]</code> vector,
+      <code>#{1 2 3}</code> set, <code>#b"bytes"</code> blob, <code>#\c</code>
+      char. <code>;</code> also starts a comment. These print-forms re-read, so
+      a value you print can be pasted straight back.</li>
     </ul>
     <p>So the keyspace form <code>(with-db 0 …)</code> — run the body with
     database 0 selected — is written:</p>
