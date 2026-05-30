@@ -34,6 +34,9 @@
    whitespace/`:`-block surface syntax into ordinary alcove
    s-expressions before they reach reader(). */
 #include "adr.h"
+#define ALCOVE_PROGNAME "adder"
+#else
+#define ALCOVE_PROGNAME "alcove"
 #endif
 #ifdef ALCOVE_WEB
 #include <emscripten/emscripten.h>
@@ -18134,6 +18137,33 @@ int compile_lambda(exp_t *fn, int is_closure) {
   return 1;
 }
 
+/* "Callable index" — the family of types that support (container i) as a
+   read, mirroring the (string i) sugar. Keeping the membership test and the
+   element fetch in one place means every call site (the AST evaluator's two
+   head paths, vm_invoke_values, and the OP_TAIL_CALL fallback) stays in sync,
+   and a new indexable type is a one-line addition here rather than four. */
+static inline int isindexable(exp_t *e) {
+  return isstring(e) || isvector(e) || isblob(e);
+}
+/* Fetch element i (0-based) of an indexable container. Returns an owned ref
+   (vector cell) or a fresh immediate (string -> char, blob -> byte fixnum),
+   or NULL when i is out of range / negative. Caller guarantees isindexable(c)
+   and that i came from a validated integer. */
+static exp_t *index_get(exp_t *c, int64_t i) {
+  if (i < 0)
+    return NULL;
+  if (isstring(c)) {
+    uint32_t cp;
+    return utf8_index(exp_text(c), i, &cp) ? make_char(cp) : NULL;
+  }
+  if (isvector(c))
+    return (i < vec_len(c)) ? vec_get_boxed(c, i) : NULL;
+  /* blob: one byte, 0..255, as a fixnum (matches blob-ref). */
+  return ((size_t)i < blob_len(c))
+             ? MAKE_FIX((int64_t)(unsigned char)blob_bytes(c)[i])
+             : NULL;
+}
+
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
@@ -18661,11 +18691,12 @@ l_tail_call: {
 #ifdef ALCOVE_FFI
   is_ffi_callee = isffi(new_fn);
 #endif
-  if (isstring(new_fn) || iscont(new_fn) || is_ffi_callee) {
-    /* String-index, escape continuation, or an ffi-fn value reached in
-       tail position: vm_invoke_values has the matching arms (the FFI arm
-       dispatches to alc_ffi_call). Without this an FFI call as the tail
-       expression of a compiled body would be rejected as "not a lambda". */
+  if (isindexable(new_fn) || iscont(new_fn) || is_ffi_callee) {
+    /* Indexable container (string/vector/blob), escape continuation, or an
+       ffi-fn value reached in tail position: vm_invoke_values has the matching
+       arms (container indexing; the FFI arm dispatches to alc_ffi_call).
+       Without this such a callable as the tail expression of a compiled body
+       would be rejected as "not a lambda". */
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
@@ -19050,28 +19081,31 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
      symbol-lookup path added in ticket 5). The bytecode VM compiles
      (sym args...) as OP_CALL_GLOBAL → vm_invoke_values, so we need the
      same arm here or compiled bodies miscompile string-index reads. */
-  if (isstring(fn)) {
+  if (isindexable(fn)) {
+    /* (container i) read — string -> char, vector -> element, blob -> byte.
+       The AST evaluator has the same arm on its two head paths; this one
+       keeps compiled bodies in sync. A float index truncates (matches
+       vec-ref). */
     int i;
     if (nargs != 1) {
       for (i = 0; i < nargs; i++)
         unrefexp(argv[i]);
       return error(ERROR_MISSING_PARAMETER, fn, env,
-                   "string-index: expected exactly 1 arg, got %d", nargs);
+                   "index: expected exactly 1 arg, got %d", nargs);
     }
     exp_t *idx = argv[0];
-    if (!isnumber(idx)) {
+    if (!isnumber(idx) && !isfloat(idx)) {
       unrefexp(idx);
       return error(ERROR_NUMBER_EXPECTED, fn, env,
-                   "string-index: arg must be a fixnum");
+                   "index: arg must be a number");
     }
-    int64_t i64 = FIX_VAL(idx);
+    int64_t i64 = isnumber(idx) ? FIX_VAL(idx) : (int64_t)idx->f;
     unrefexp(idx);
-    uint32_t cp;
-    if (i64 < 0 || !utf8_index(exp_text(fn), i64, &cp)) {
+    exp_t *r = index_get(fn, i64);
+    if (!r)
       return error(ERROR_INDEX_OUT_OF_RANGE, fn, env,
-                   "string-index: %lld out of range", (long long)i64);
-    }
-    return make_char(cp);
+                   "index: %lld out of range", (long long)i64);
+    return r; /* owned ref / immediate; caller unrefs fn */
   }
   if (iscont(fn)) {
     /* (k v) reached from compiled code: produce the escape token. */
@@ -19534,13 +19568,13 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                (A macro defined inside a fn body leaked its frame otherwise.) */
             unrefexp(tmpexp2);
             goto finisht;
-          } else if (isstring(tmpexp2)) {
-            /* (s i) where s is a var bound to a string — same semantics
-               as ("foo" i) on a literal (handled below). Without this
-               branch, the symbol-lookup path returned the bound string
-               whole, ignoring the index argument. Clear tail position
-               for the index eval — a tail marker leaking in here gets
-               rejected as ERROR_NUMBER_EXPECTED instead of indexing. */
+          } else if (isindexable(tmpexp2)) {
+            /* (c i) where c is a var bound to a string/vector/blob — element
+               read (string->char, vector->element, blob->byte). Without this
+               the symbol-lookup path returned the container whole, ignoring
+               the index. Clear tail position for the index eval — a leaked
+               tail marker would be rejected as ERROR_NUMBER_EXPECTED instead
+               of indexing. A float index truncates (matches vec-ref). */
             int outer_tail = in_tail_position;
             in_tail_position = 0;
             exp_t *idx = EVAL(cadr(e), env);
@@ -19550,15 +19584,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
               ret = idx;
               goto finish;
             }
-            if (isnumber(idx)) {
-              int64_t i = FIX_VAL(idx);
-              uint32_t cp;
-              if ((i >= 0) && utf8_index(exp_text(tmpexp2), i, &cp)) {
-                ret = make_char(cp);
-              } else {
-                ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
-                            "Error index out of range");
-              }
+            if (isnumber(idx) || isfloat(idx)) {
+              int64_t i = isnumber(idx) ? FIX_VAL(idx) : (int64_t)idx->f;
+              exp_t *el = index_get(tmpexp2, i);
+              ret = el ? el
+                       : error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                               "Error index out of range");
             } else {
               ret =
                   error(ERROR_NUMBER_EXPECTED, e, env, "Error number expected");
@@ -19580,21 +19611,21 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         }
         ret = e; // what is happening here?
         goto finisht;
-      } else if (isstring(tmpexp)) {
-        /* ("foo" i) literal-string indexer. Same tail-clear as the
-           bound-string path above. */
+      } else if (isindexable(tmpexp)) {
+        /* (c i) literal container head — string/vector/blob element read.
+           Same tail-clear as the symbol-bound path above. tmpexp is borrowed
+           from e (not unref'd). A float index truncates (matches vec-ref). */
         int outer_tail = in_tail_position;
         in_tail_position = 0;
         tmpexp2 = EVAL(cadr(e), env);
         in_tail_position = outer_tail;
-        if (isnumber(tmpexp2)) {
-          int64_t idx = FIX_VAL(tmpexp2);
-          uint32_t cp;
-          if ((idx >= 0) && utf8_index(exp_text(tmpexp), idx, &cp)) {
-            ret = make_char(cp);
-          } else
-            ret = error(ERROR_INDEX_OUT_OF_RANGE, e, env,
-                        "Error index out of range");
+        if (isnumber(tmpexp2) || isfloat(tmpexp2)) {
+          int64_t idx =
+              isnumber(tmpexp2) ? FIX_VAL(tmpexp2) : (int64_t)tmpexp2->f;
+          exp_t *el = index_get(tmpexp, idx);
+          ret = el ? el
+                   : error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                           "Error index out of range");
         } else
           ret = error(ERROR_NUMBER_EXPECTED, e, env, "Error number expected");
         unrefexp(tmpexp2);
@@ -22310,7 +22341,7 @@ int respN_serve(int port, int nthreads) {
     shards[i] = sh;
   }
   /* Spawn workers 1..N-1; main thread runs worker 0. */
-  printf("alcove: spawning %d reactor threads on port %d\n", nthreads, port);
+  printf(ALCOVE_PROGNAME ": spawning %d reactor threads on port %d\n", nthreads, port);
   fflush(stdout);
   for (int i = 1; i < nthreads; i++) {
     args[i].sh = shards[i];
@@ -22384,7 +22415,7 @@ static int alcove_run_init_file(env_t *global, const char *path) {
    match — never runs both. Silent on miss; one-line announce on hit. */
 static void alcove_try_init_files(env_t *global) {
   if (alcove_run_init_file(global, "./.init.alc")) {
-    printf("alcove: loaded ./.init.alc\n");
+    printf(ALCOVE_PROGNAME ": loaded ./.init.alc\n");
     return;
   }
   const char *home = getenv("HOME");
@@ -22395,7 +22426,7 @@ static void alcove_try_init_files(env_t *global) {
   if (n < 0 || (size_t)n >= (int)sizeof path)
     return;
   if (alcove_run_init_file(global, path))
-    printf("alcove: loaded %s\n", path);
+    printf(ALCOVE_PROGNAME ": loaded %s\n", path);
 }
 
 int main(int argc, char *argv[]) {
@@ -22591,7 +22622,7 @@ int main(int argc, char *argv[]) {
       if (kv) {
         int loaded = loaddb_from_file_path(global, alcove_db_path);
         if (loaded > 0)
-          printf("alcove: auto-loaded %d entries from %s\n", loaded,
+          printf(ALCOVE_PROGNAME ": auto-loaded %d entries from %s\n", loaded,
                  alcove_db_path);
       }
     }
@@ -22611,7 +22642,7 @@ int main(int argc, char *argv[]) {
     if (auto_load) {
       int loaded = loaddb_from_file_path(global, alcove_db_path);
       if (loaded > 0)
-        printf("alcove: auto-loaded %d entries from %s\n", loaded,
+        printf(ALCOVE_PROGNAME ": auto-loaded %d entries from %s\n", loaded,
                alcove_db_path);
     }
     if (run_init)
@@ -22626,7 +22657,7 @@ int main(int argc, char *argv[]) {
   if (auto_load) {
     int loaded = loaddb_from_file_path(global, alcove_db_path);
     if (loaded > 0)
-      printf("alcove: auto-loaded %d entries from %s (use --noload to "
+      printf(ALCOVE_PROGNAME ": auto-loaded %d entries from %s (use --noload to "
              "skip)\n",
              loaded, alcove_db_path);
   }
