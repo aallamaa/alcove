@@ -286,7 +286,7 @@ the surface differs, not what is missing.</p>
 <td><code>clj</code>, <code>clojure</code></td>
 <td><code>ielm</code></td>
 <td><code>alcove</code></td>
-<td><code>adder</code>; ALS input is enabled in the ALS build</td>
+<td><code>adder</code> (the Adder front end; reads <code>.adr</code>)</td>
 </tr>
 <tr class="even">
 <td>One expression</td>
@@ -295,7 +295,7 @@ the surface differs, not what is missing.</p>
 <td><code>clojure -e</code></td>
 <td><code>emacs --eval</code></td>
 <td><code>alcove -e '(+ 1 2)'</code></td>
-<td><code>adder -e '+ 1 2'</code> in ALS builds</td>
+<td><code>adder -e '+ 1 2'</code></td>
 </tr>
 <tr class="odd">
 <td>Compiler</td>
@@ -715,7 +715,8 @@ comparisons for tests</td>
 <code>%</code></td>
 <td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>,
 <code>mod</code></td>
-<td><code>+ a b</code>, <code>mod a b</code></td>
+<td><code>+ a b</code>, <code>- a b</code>, <code>* a b</code>,
+<code>/ a b</code>, <code>mod a b</code></td>
 </tr>
 <tr class="odd">
 <td>Math</td>
@@ -727,8 +728,9 @@ comparisons for tests</td>
 <code>sqrt</code>, <code>sqrt-int</code>, <code>exp</code>,
 <code>expt</code>, <code>**</code>, <code>random</code>,
 <code>odd</code></td>
-<td><code>sqrt x</code>, <code>expt b e</code>,
-<code>random n</code></td>
+<td><code>abs x</code>, <code>min a b</code>, <code>max a b</code>,
+<code>sqrt x</code>, <code>sqrt-int x</code>, <code>exp x</code>,
+<code>expt b e</code>, <code>random n</code>, <code>odd x</code></td>
 </tr>
 <tr class="even">
 <td>Bitwise</td>
@@ -741,7 +743,10 @@ comparisons for tests</td>
 <code>bit-or</code>/<code>|</code>, <code>bit-xor</code>/<code>^</code>,
 <code>bit-not</code>/<code>~</code>, <code>&lt;&lt;</code>,
 <code>&gt;&gt;</code></td>
-<td><code>bit-and a b</code>, <code>&lt;&lt; x n</code></td>
+<td><code>bit-and a b</code>, <code>bit-or a b</code>,
+<code>bit-xor a b</code>, <code>bit-not a</code>, <code>&lt;&lt; x n</code>,
+<code>&gt;&gt; x n</code> (or the <code>&amp;</code> <code>|</code>
+<code>^</code> <code>~</code> spellings)</td>
 </tr>
 <tr class="odd">
 <td>Number tower</td>
@@ -750,7 +755,7 @@ comparisons for tests</td>
 <td>JVM numeric tower</td>
 <td>integers/floats vary</td>
 <td>fixnums and floats; no bignums, ratios, or complex numbers</td>
-<td>runtime types unchanged; ALS only changes source spelling</td>
+<td>runtime types unchanged; Adder only changes source spelling</td>
 </tr>
 </tbody>
 </table>
@@ -793,7 +798,7 @@ comparisons for tests</td>
 <td><code>first</code>, <code>rest</code>, <code>nth</code></td>
 <td><code>car</code>, <code>cdr</code>, <code>nth</code></td>
 <td><code>car</code>, <code>cdr</code>, <code>nth</code></td>
-<td><code>car xs</code>, <code>nth xs 0</code></td>
+<td><code>car xs</code>, <code>cdr xs</code>, <code>nth xs 0</code></td>
 </tr>
 <tr class="odd">
 <td>List transforms</td>
@@ -805,7 +810,9 @@ comparisons for tests</td>
 <code>cl-reduce</code></td>
 <td><code>map</code>, <code>filter</code>, <code>reduce</code>,
 <code>reverse</code>, <code>append</code>, <code>length</code></td>
-<td><code>map f xs</code>, <code>reduce f init xs</code></td>
+<td><code>map f xs</code>, <code>filter p xs</code>,
+<code>reduce f init xs</code>, <code>reverse xs</code>,
+<code>append a b</code>, <code>length xs</code></td>
 </tr>
 <tr class="even">
 <td>Sequence predicates</td>
@@ -816,7 +823,9 @@ comparisons for tests</td>
 <td><code>pair?</code>, <code>vec?</code>, <code>dict?</code>,
 <code>deque?</code>, <code>blob?</code>, <code>string?</code>,
 <code>number?</code></td>
-<td><code>pair? x</code>, <code>vec? x</code>, <code>dict? x</code></td>
+<td><code>pair? x</code>, <code>vec? x</code>, <code>dict? x</code>,
+<code>deque? x</code>, <code>blob? x</code>, <code>string? x</code>,
+<code>number? x</code></td>
 </tr>
 <tr class="odd">
 <td>Fixed array/vector</td>
@@ -846,7 +855,7 @@ comparisons for tests</td>
 <td><code>count</code></td>
 <td><code>length</code></td>
 <td><code>vec-len</code>, <code>length</code>, <code>count</code></td>
-<td><code>vec-len v</code>, <code>count v</code></td>
+<td><code>vec-len v</code>, <code>length v</code>, <code>count v</code></td>
 </tr>
 <tr class="even">
 <td>Vector deque window</td>
@@ -856,7 +865,8 @@ comparisons for tests</td>
 <td>lists/ring library</td>
 <td><code>vec-push!</code>, <code>vec-pop!</code>,
 <code>vec-unshift!</code>, <code>vec-shift!</code></td>
-<td><code>vec-push! v x</code>, <code>vec-shift! v</code></td>
+<td><code>vec-push! v x</code>, <code>vec-pop! v</code>,
+<code>vec-unshift! v x</code>, <code>vec-shift! v</code></td>
 </tr>
 <tr class="odd">
 <td>Hash map (mutable)</td>
@@ -895,7 +905,9 @@ sharing; callable: <code>(m k)</code> is <code>(hamt-get m k)</code></td>
 <code>push-left!</code>, <code>pop-right!</code>,
 <code>pop-left!</code>, <code>peek-right</code>,
 <code>peek-left</code></td>
-<td><code>deque a b</code>, <code>push-right! q x</code></td>
+<td><code>deque a b</code>, <code>push-right! q x</code>,
+<code>push-left! q x</code>, <code>pop-right! q</code>,
+<code>pop-left! q</code>, <code>peek-right q</code>, <code>peek-left q</code></td>
 </tr>
 <tr class="odd">
 <td>Binary data</td>
@@ -1019,7 +1031,9 @@ Time</h2>
 <td><code>string-split</code>, <code>string-join</code>,
 <code>string-trim</code>, <code>string-upcase</code>,
 <code>string-downcase</code></td>
-<td><code>string-split s sep</code>, <code>string-join xs sep</code></td>
+<td><code>string-split s sep</code>, <code>string-join xs sep</code>,
+<code>string-trim s</code>, <code>string-upcase s</code>,
+<code>string-downcase s</code></td>
 </tr>
 <tr class="even">
 <td>Regex</td>
@@ -1440,7 +1454,9 @@ Interop</h2>
 <code>printf</code>), <code>ffi-callback</code> (Alcove lambda → C fn
 pointer), <code>ffi-struct</code>/<code>ffi-pack</code>/<code>ffi-unpack</code>
 (struct-by-value, incl. nested) — via libffi. Native builds only.</td>
-<td><code>ffi-fn lib symbol ret arg...</code></td>
+<td><code>ffi-fn lib symbol ret arg...</code>, plus <code>ffi-vfn</code>,
+<code>ffi-callback</code>, <code>ffi-struct</code>, <code>ffi-pack</code>,
+<code>ffi-unpack</code> (same family; native builds only)</td>
 </tr>
 <tr class="odd">
 <td>Serialization</td>
