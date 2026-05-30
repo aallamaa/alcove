@@ -256,6 +256,14 @@ test-all:
 	  else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	done; \
 	rm -f "$$abin" "$$bld"; \
+	wbld=/tmp/alcove-web.$$$$; \
+	if command -v $(EMCC) >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then \
+	  printf '\n=== wasm/emcc smoke (alcove + adder) ===\n'; \
+	  if $(MAKE) -s web >"$$wbld" 2>&1 && node web/test_web.js >>"$$wbld" 2>&1; then \
+	    grep -E 'passed,' "$$wbld" | sed 's/^/  OK — /'; \
+	  else echo "  WASM SMOKE FAILED:"; sed 's/^/    /' "$$wbld" | tail -20; ok=0; fi; \
+	else printf '\n=== wasm/emcc smoke: skipped (need emcc + node) ===\n'; fi; \
+	rm -f "$$wbld"; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
@@ -301,6 +309,13 @@ mpsc-test-tsan:
 # (all unavailable in the browser). See the runnable demos at
 # web/index.html and web/learn.html.
 EMCC ?= emcc
+
+# Build the wasm modules and smoke-test them under node, asserting results
+# match native ./alcove output (catches wasm/clang-backend miscompiles that the
+# native test-all can't — the fixnum-tag / vec-ref class of bug). Needs node.
+test-web: web
+	node web/test_web.js
+
 web:
 	@command -v $(EMCC) >/dev/null 2>&1 || \
 	  (echo "emcc not found. Install Emscripten from https://emscripten.org"; \
@@ -428,4 +443,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test dict-test msgpack-test utf8-test hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test dict-test msgpack-test utf8-test test-web hooks
