@@ -330,4 +330,37 @@ clean:
 	rm -f alcove adder mpsc_test mpsc_test_tsan
 	rm -f web/alcove-core.js web/alcove-core.wasm web/adder-core.js web/adder-core.wasm
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean
+# ---------------------------------------------------------------------------
+# Formatting & static analysis (clang-format + clang-tidy).
+#   make fmt        — reformat the whole tree in place (one-time churn)
+#   make fmt-check  — fail if anything is mis-formatted, change nothing
+#   make tidy       — run clang-tidy on the main TU (config: .clang-tidy)
+#   make hooks      — install the staged-diff pre-commit gate
+# Day-to-day, the pre-commit hook checks only the lines you touch, so the
+# existing whole-file LLVM drift never blocks a commit. `fmt-check` over the
+# whole tree will fail until `make fmt` is run once across everything.
+FMT       ?= clang-format
+TIDY      ?= clang-tidy
+FMT_FILES := $(wildcard *.c *.h)
+# Mirror how we actually build alcove.c (JIT + FFI + readline) so the
+# analyzer sees the same code the compiler does. adder.c just #includes
+# alcove.c, so one TU covers both.
+TIDY_CFLAGS := -std=gnu11 $(JIT_FLAGS) -DALCOVE_FFI=1 -DALCOVE_READLINE=1 \
+               $(shell pkg-config --cflags libffi 2>/dev/null) \
+               $(shell pkg-config --cflags readline 2>/dev/null)
+
+fmt:
+	$(FMT) -i $(FMT_FILES)
+
+fmt-check:
+	$(FMT) --dry-run --Werror $(FMT_FILES)
+
+tidy:
+	$(TIDY) alcove.c -- $(TIDY_CFLAGS)
+
+hooks:
+	git config core.hooksPath .githooks
+	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
+	@echo "It formats + lints only the lines you stage."
+
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy hooks

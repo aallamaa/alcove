@@ -1,0 +1,22 @@
+# clang-tidy for Alcove — focused on the bug classes that matter in a
+# refcounted C interpreter: the path-sensitive static analyzer (leaks,
+# use-after-free, double-free, null deref, bad frees) and bugprone-*.
+# Style / modernize / readability checks are noisy or C++-oriented on this
+# code and are intentionally left off. A few bugprone checks that fire
+# constantly on idiomatic C here are disabled; re-enable as you tighten.
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-switch-missing-default-case,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-suspicious-include,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-reserved-identifier,
+  -bugprone-easily-swappable-parameters
+WarningsAsErrors: ''
+# Only surface diagnostics from this project's own headers (not system/libffi).
+HeaderFilterRegex: '(alcove|builtins|adr|char|epoch|lfkv|mpsc|resp)\.h$'
+FormatStyle: file

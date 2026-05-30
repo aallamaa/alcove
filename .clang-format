@@ -1,0 +1,6 @@
+# C formatting for Alcove. The codebase already follows the LLVM preset
+# (2-space indent, 80-column, K&R braces); pinning it here stops the style
+# from drifting. `make fmt` reformats the whole tree (a one-time churn); the
+# pre-commit hook formats only the lines you change (via git clang-format), so
+# day-to-day commits don't rewrite history.
+BasedOnStyle: LLVM
