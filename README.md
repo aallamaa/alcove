@@ -1,5 +1,7 @@
 # Alcove
 
+[![CI](https://github.com/aallamaa/alcove/actions/workflows/ci.yml/badge.svg)](https://github.com/aallamaa/alcove/actions/workflows/ci.yml)
+
 A Lisp-1 dialect in one C file. Arc + Clojure flavour, bytecode VM,
 native JIT (arm64 + amd64), persistent key-value store, RESP2 server
 mode, libffi-based C interop, and a small tensor toolkit fast enough

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # All 10 native build variants (parser/speed/mono/jit/jit-mono x {alcove,adder})
+  # run against test.alc / test.adr, plus every per-module C unit+fuzz harness
+  # under ASan/UBSan. test-all's wasm stage self-skips here (no emcc); the wasm
+  # job below covers it.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
+      - name: Cross-variant suite (make test-all)
+        run: make test-all
+      - name: C unit + fuzz harnesses (ASan/UBSan)
+        run: |
+          set -e
+          for t in parser hamt dict blob set vector msgpack utf8; do
+            echo "::group::$t-test"; make $t-test; echo "::endgroup::"
+          done
+          echo "::group::adr-test"; make adr-test; echo "::endgroup::"
+
+  # wasm/Emscripten build + node smoke battery (asserts results == native).
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: wasm smoke (make test-web)
+        run: make test-web   # node is preinstalled on ubuntu-latest
+
+  # Coverage-guided libFuzzer over the reader and the Adder transpiler — short
+  # runs (60s each) to catch parser/transpiler regressions on every push.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps (clang for libFuzzer)
+        run: sudo apt-get update && sudo apt-get install -y clang libffi-dev
+      - name: libFuzzer — reader
+        run: make fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
+      - name: libFuzzer — adder transpiler
+        run: make adr-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
