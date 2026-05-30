@@ -20427,19 +20427,21 @@ static char *als_rl_read_form(int idx) {
   return acc;
 }
 
-/* Adder is whitespace-significant, so TAB at the start of a line
-   (point is at column 0 or only whitespace precedes it) inserts one
-   indent level instead of triggering completion. With real tokens to
-   the left it still completes, so `(fi<TAB>` etc. keep working. */
-#define ALS_INDENT "  " /* one indent level = 2 spaces */
-static int als_smart_tab(int count, int key) {
+#endif /* ALCOVE_ALS */
+
+/* TAB at the start of a line — column 0, or only whitespace before the cursor
+   — inserts one indent level instead of triggering completion. With a real
+   token to the left it completes as usual, so `(fi<TAB>` etc. keep working.
+   Shared by both binaries: convenient indentation in plain alcove, and
+   required by Adder's whitespace-significant syntax. */
+#define ALCOVE_INDENT "  " /* one indent level = 2 spaces */
+static int alcove_smart_tab(int count, int key) {
   for (int i = 0; i < rl_point; i++)
     if (rl_line_buffer[i] != ' ' && rl_line_buffer[i] != '\t')
       return rl_complete(count, key); /* a token precedes -> complete */
-  rl_insert_text(ALS_INDENT);
+  rl_insert_text(ALCOVE_INDENT);
   return 0;
 }
-#endif /* ALCOVE_ALS */
 #endif /* ALCOVE_READLINE */
 
 /* Help / discovery — both implemented at file scope so they can scan
@@ -22364,9 +22366,8 @@ static void repl_readline_setup(env_t *global) {
   setlocale(LC_CTYPE, "");
   g_global_env = global; /* completer walks env bindings */
   rl_attempted_completion_function = alcove_rl_completer;
-#ifdef ALCOVE_ALS
-  rl_bind_key('\t', als_smart_tab); /* TAB indents at line start, else completes */
-#endif
+  /* TAB indents at line start (only whitespace precedes), else completes. */
+  rl_bind_key('\t', alcove_smart_tab);
   rl_basic_word_break_characters = " \t\n()'`,;\"";
   rl_variable_bind("blink-matching-paren", "on");
   rl_redisplay_function = alcove_colored_redisplay; /* real-time highlighting */
