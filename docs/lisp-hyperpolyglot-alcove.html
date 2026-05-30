@@ -1489,8 +1489,11 @@ Clojure sequence functions or CL <code>subseq</code>/<code>loop</code>;
 <td>Vectors</td>
 <td><code>vec</code>, <code>vector</code>, <code>vec-ref</code>,
 <code>vec-set!</code>, <code>vec-len</code></td>
-<td>CL arrays/vectors; Racket vectors; Clojure vectors; Emacs
-vectors</td>
+<td>CL arrays/vectors; Racket vectors; Clojure vectors; Emacs vectors.
+Vectors — like strings and blobs — are <em>callable</em>:
+<code>(v i)</code> reads element <code>i</code> (Clojure-style), the same
+sugar as <code>("abc" 0)</code> for a char or <code>(b 0)</code> for a
+byte.</td>
 </tr>
 <tr class="odd">
 <td>Numeric vector kernels</td>
@@ -1510,9 +1513,13 @@ equivalent</td>
 <tr class="odd">
 <td>Functions/macros/eval</td>
 <td><code>def</code>, <code>fn</code>, <code>defmacro</code>,
-<code>macroexpand-1</code>, <code>eval</code>, <code>apply</code></td>
+<code>macroexpand-1</code>, <code>eval</code>, <code>apply</code>,
+<code>call/cc</code></td>
 <td>Standard Lisp function and macro facilities, with syntax
-differences</td>
+differences; <code>call/cc</code> is an escape (upward, one-shot)
+continuation — like Scheme's <code>call/ec</code>, not a full re-entrant
+<code>call/cc</code>: the captured <code>k</code> is valid only within the
+dynamic extent of the <code>call/cc</code> call</td>
 </tr>
 <tr class="even">
 <td>Higher order</td>
@@ -1558,16 +1565,39 @@ values; dict/deque persistence is still a feature gap.</td>
 </tr>
 <tr class="odd">
 <td>FFI</td>
-<td><code>ffi-fn</code></td>
+<td><code>ffi-fn</code>, <code>ffi-vfn</code>, <code>ffi-callback</code>,
+<code>ffi-struct</code>, <code>ffi-pack</code>, <code>ffi-unpack</code></td>
 <td>CL CFFI/implementation FFI; Racket FFI; Clojure JNI/JNA; Emacs
-modules</td>
+modules. <code>ffi-vfn</code> binds variadic C functions (e.g.
+<code>printf</code>); <code>ffi-callback</code> wraps an Alcove lambda as a
+C function pointer; <code>ffi-struct</code>/<code>ffi-pack</code>/<code>ffi-unpack</code>
+do struct-by-value (incl. nested). Native builds only — the WASM/browser
+build has no FFI.</td>
 </tr>
 <tr class="even">
 <td>Hash maps</td>
 <td><code>hash-map</code>, <code>assoc!</code>, <code>dissoc!</code>,
 <code>get</code>, <code>contains?</code>, <code>keys</code>,
 <code>vals</code>, <code>count</code></td>
-<td>Hash tables/maps</td>
+<td>Hash tables/maps (mutable)</td>
+</tr>
+<tr class="odd">
+<td>Persistent maps (HAMT)</td>
+<td><code>hamt</code>, <code>hamt-assoc</code>, <code>hamt-get</code>,
+<code>hamt-dissoc</code>, <code>hamt-count</code>,
+<code>hamt-contains?</code>, <code>hamt-keys</code>, <code>hamt-vals</code>,
+<code>hamt-&gt;list</code>, <code>hamt-merge</code>, <code>hamt?</code></td>
+<td>Clojure persistent hash maps; Scheme/Racket immutable hashes.
+Immutable with structural sharing — <code>hamt-assoc</code>/<code>hamt-dissoc</code>
+return a new map, the original is untouched. 32-way bitmap trie; savedb
+round-trips it.</td>
+</tr>
+<tr class="even">
+<td>Serialization</td>
+<td><code>msgpack-encode</code>, <code>msgpack-decode</code></td>
+<td>MessagePack libraries. Round-trips nil, t, fixnums, floats,
+strings/symbols, blobs, lists, and string-keyed dicts; bounds-checked
+decode with catchable errors.</td>
 </tr>
 <tr class="odd">
 <td>Deques</td>

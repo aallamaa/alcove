@@ -442,6 +442,47 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
   fn (e):
     error-message e`,
     },
+    {
+      title: "Indexing By Call",
+      note: "Strings, vectors, and blobs are callable: (c i) reads element i (char, value, byte).",
+      lisp: `(= word "alcove")
+(= v #[10 20 30])
+(= b (string->blob "Hi"))
+(list (word 0) (v 2) (b 1))`,
+      adr: `set word "alcove"
+set v #[10 20 30]
+set b (string->blob "Hi")
+list (word 0) (v 2) (b 1)`,
+    },
+    {
+      title: "Persistent Maps (HAMT)",
+      note: "Immutable maps with structural sharing — assoc returns a new map, the original is untouched.",
+      lisp: `(= m (hamt "a" 1 "b" 2))
+(= m2 (hamt-assoc m "c" 3))
+(list (hamt-get m "a")
+      (hamt-count m2)
+      (hamt-get m "c" "none"))`,
+      adr: `set m (hamt "a" 1 "b" 2)
+set m2 (hamt-assoc m "c" 3)
+list (hamt-get m "a") (hamt-count m2) (hamt-get m "c" "none")`,
+    },
+    {
+      title: "Escape Continuations (call/cc)",
+      note: "(call/cc f) calls f with an escape k; (k v) returns v immediately, abandoning the work in between.",
+      lisp: `(call/cc
+  (fn (k) (+ 1 (k 41))))`,
+      adr: `call/cc:
+  fn (k):
+    + 1 (k 41)`,
+    },
+    {
+      title: "MessagePack",
+      note: "Compact binary serialization round-trips lists, dicts, numbers, strings, and blobs.",
+      lisp: `(= packed (msgpack-encode (list 1 "two" 3.5)))
+(msgpack-decode packed)`,
+      adr: `set packed (msgpack-encode (list 1 "two" 3.5))
+msgpack-decode packed`,
+    },
   ];
 
   const root = document.getElementById("examples");
