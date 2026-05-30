@@ -23,9 +23,9 @@
 #ifndef ALCOVE_ALS_H
 #define ALCOVE_ALS_H
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 /* ---- growable byte buffer ---- */
 typedef struct {
@@ -57,7 +57,7 @@ static void als_buf_putc(als_buf *b, char c) { als_buf_putn(b, &c, 1); }
 /* ---- form model: ATOM (raw text) or LIST (children) ---- */
 typedef struct als_node {
   int is_list;
-  char *atom;               /* when !is_list — owned */
+  char *atom; /* when !is_list — owned */
   struct als_node **kid;
   int n, cap;
 } als_node;
@@ -137,12 +137,12 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
       r->i++; /* consume ( */
       als_node *args = als_list();
       als_read_forms(r, ')', args);
-      if (args->n == 0) {            /* name()  -> (name) */
+      if (args->n == 0) { /* name()  -> (name) */
         als_node *call = als_list();
         als_push(call, f);
         als_free(args);
         als_push(out, call);
-      } else {                       /* name(a b) -> name (a b) */
+      } else { /* name(a b) -> name (a b) */
         als_push(out, f);
         als_push(out, args);
       }
@@ -207,12 +207,13 @@ static als_node *als_read_one(als_lr *r) {
   if (c == ',') {
     r->i++; /* consume ',' */
     int splice = r->i < r->n && r->s[r->i] == '@';
-    if (splice) r->i++; /* consume '@' */
+    if (splice)
+      r->i++; /* consume '@' */
     while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
       r->i++;
     als_node *q = als_list();
-    als_push(q, als_atom(splice ? "unquote-splicing" : "unquote",
-                         splice ? 16 : 7));
+    als_push(
+        q, als_atom(splice ? "unquote-splicing" : "unquote", splice ? 16 : 7));
     als_push(q, als_read_one(r));
     return q;
   }
@@ -381,7 +382,8 @@ static int als_opens_block(char *t) {
 
 /* head-symbol remap: macro -> defmacro. Assignment is `setf` (the built-in
    alias of `=`), which needs no remap; `set` is intentionally NOT remapped so
-   it remains the set constructor, matching Alcove — (set 1 2 3) builds a set. */
+   it remains the set constructor, matching Alcove — (set 1 2 3) builds a set.
+ */
 static void als_head_remap(als_node *node) {
   if (!node->is_list || node->n == 0)
     return;
@@ -452,11 +454,15 @@ char *als_to_sexpr(const char *src) {
     int indent = 0;
     while (nocom[indent] == ' ' || nocom[indent] == '\t')
       indent++;
+    /* if_stack is indexed by indentation COLUMN (not nesting depth), so clamp
+       the index — pathologically deep indentation (hostile / fuzzed input)
+       must not write out of bounds. Real source never nears 256 columns. */
+    int iidx = indent < MAXD ? indent : MAXD - 1;
     /* trim both ends into `body` */
     char *body = strdup(nocom + indent);
-    for (size_t k = strlen(body); k > 0 && (body[k - 1] == ' ' ||
-                                            body[k - 1] == '\t' ||
-                                            body[k - 1] == '\r');)
+    for (size_t k = strlen(body);
+         k > 0 &&
+         (body[k - 1] == ' ' || body[k - 1] == '\t' || body[k - 1] == '\r');)
       body[--k] = 0;
     free(nocom);
     if (body[0] == 0) { /* blank */
@@ -475,12 +481,13 @@ char *als_to_sexpr(const char *src) {
       /* Pop stack back to the level of the matching if */
       while (sp > 0 && indent <= ind_stack[sp - 1])
         sp--;
-      als_node *target = if_stack[indent];
+      als_node *target = if_stack[iidx];
       if (target) {
         if (is_elif) {
           /* Append the elif condition to the existing if node */
           char *cond_text = body + 4; /* skip "elif" */
-          while (*cond_text == ' ' || *cond_text == '\t') cond_text++;
+          while (*cond_text == ' ' || *cond_text == '\t')
+            cond_text++;
           als_node *cond = als_line_node(cond_text);
           als_push(target, cond);
         }
@@ -493,7 +500,8 @@ char *als_to_sexpr(const char *src) {
           node_stack[sp] = do_node;
           sp++;
         }
-        if (is_else) if_stack[indent] = NULL; /* else terminates the chain */
+        if (is_else)
+          if_stack[iidx] = NULL; /* else terminates the chain */
       }
       free(body);
       continue;
@@ -513,13 +521,12 @@ char *als_to_sexpr(const char *src) {
       sp--;
 
     /* Track if/when/unless nodes for subsequent elif/else attachment. */
-    if_stack[indent] = NULL;
+    if_stack[iidx] = NULL;
     if (block && node->is_list && node->n > 0 && !node->kid[0]->is_list) {
       const char *head = node->kid[0]->atom;
-      if (head && (strcmp(head, "if") == 0 ||
-                   strcmp(head, "when") == 0 ||
+      if (head && (strcmp(head, "if") == 0 || strcmp(head, "when") == 0 ||
                    strcmp(head, "unless") == 0))
-        if_stack[indent] = node;
+        if_stack[iidx] = node;
     }
 
     if (sp > 0) {
