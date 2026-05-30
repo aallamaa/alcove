@@ -455,6 +455,16 @@ set b (string->blob "Hi")
 list (word 0) (v 2) (b 1)`,
     },
     {
+      title: "Maps & Sets By Call",
+      note: "Keyed containers are callable too: (m k) looks up a key (nil if absent); (s x) returns x if it's a member.",
+      lisp: `(= m (hamt "a" 1 "b" 2))
+(= s (set 1 2 3))
+(list (m "a") (m "z") (s 2) (s 9))`,
+      adr: `set m (hamt "a" 1 "b" 2)
+set s (hash-set 1 2 3)
+list (m "a") (m "z") (s 2) (s 9)`,
+    },
+    {
       title: "Persistent Maps (HAMT)",
       note: "Immutable maps with structural sharing — assoc returns a new map, the original is untouched.",
       lisp: `(= m (hamt "a" 1 "b" 2))
