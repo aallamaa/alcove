@@ -1013,3 +1013,37 @@ exp_t *vecshiftcmd(exp_t *e, env_t *env) {
   vexp->vec_win.start++;
   CLEAN_RETURN_1(vexp, ret);
 }
+
+/* the `vector` constructor builtin — kept with the vector ops it builds. */
+const char doc_vector[] = "(vector x ...) — build an EXP_VECTOR populated with "
+                          "the given elements. Same as #[x ...].";
+exp_t *vectorcmd(exp_t *e, env_t *env) {
+  /* Two-pass: count elements (so we can size the vector once), then
+     evaluate-and-store. Cheaper than growing a list intermediary. */
+  long n = 0;
+  for (exp_t *p = cdr(e); p; p = p->next)
+    n++;
+  exp_t *ret = make_vector(n, NIL_EXP);
+  if (!ret) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "vector: alloc failed");
+  }
+  long i = 0;
+  for (exp_t *p = cdr(e); p; p = p->next, i++) {
+    exp_t *v = EVAL(car(p), env);
+    if (iserror(v)) {
+      unrefexp(ret);
+      unrefexp(e);
+      return v;
+    }
+    /* make_vector pre-filled with NIL (refcount bump per slot); release
+       the placeholder before overwriting. */
+    unrefexp(vec_gen_at(ret, i));
+    vec_gen_at(ret, i) = v; /* take ownership */
+  }
+  /* Now that all elements are known, tighten to the narrowest kind:
+     all-fixnum → I64, all-numeric → F64, anything else stays GEN. */
+  vec_tighten(ret);
+  unrefexp(e);
+  return ret;
+}
