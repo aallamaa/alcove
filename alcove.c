@@ -249,6 +249,7 @@ lispProc lispProcList[] = {
     LISPCMD("vec-shift!", vecshiftcmd, doc_vecshift),
     /* Functions and binding */
     LISPCMD("def", defcmd, doc_def),
+    LISPCMD("defn", defncmd, doc_defn),
     LISPCMD("fn", fncmd, doc_fn),
     LISPCMD("defmacro", defmacrocmd, doc_defmacro),
     LISPCMD("macroexpand-1", expandmacrocmd, doc_macroexpand),
@@ -1076,6 +1077,12 @@ static int is_fully_dumpable(exp_t *e, int depth) {
   if (!e || e == NIL_EXP || is_imm(e))
     return 1; /* nil + tagged fixnum/char always round-trip */
   if (!__DUMPABLE__(e))
+    return 0;
+  /* A multi-arity (defn) lambda stores clause lambdas in `content`, not a
+     param list, and has no single body — the source-form serializer can't
+     round-trip it. Treat it as non-dumpable so savedb skips it (with a
+     warning) instead of writing a record that reloads as a broken lambda. */
+  if (e->type == EXP_LAMBDA && (e->flags & FLAG_MULTI))
     return 0;
   if (isvector(e)) {
     if (vec_kind(e) != VEC_KIND_GEN)
@@ -3658,6 +3665,73 @@ exp_t *defcmd(exp_t *e, env_t *env) {
   } else
     val = error(EXP_ERROR_MISSING_NAME, e, env,
                 "Error missing name or name not a lambda");
+  unrefexp(e);
+  return val;
+}
+
+const char doc_defn[] =
+    "(defn name (params body...) (params body...) ...) — multi-arity function. "
+    "Each clause is a param list (which may use . rest) plus a body; a call "
+    "dispatches on the argument count to the matching clause (a variadic clause "
+    "catches any count >= its fixed arity). No matching clause raises an error.";
+/* Multi-arity define. Builds one ordinary closure per clause and stores them
+   in a FLAG_MULTI wrapper lambda (content = the clause-lambda list); the call
+   paths intercept FLAG_MULTI and dispatch by arity to the right clause, reusing
+   invoke / vm_invoke_values for the actual bind+run. */
+exp_t *defncmd(exp_t *e, env_t *env) {
+  exp_t *val;
+  exp_t *cur = cdr(e);
+  if (!cur || !issymbol(cur->content)) {
+    val = error(EXP_ERROR_MISSING_NAME, e, env, "defn: missing function name");
+    unrefexp(e);
+    return val;
+  }
+  exp_t *name = car(cur);
+  CHECK_RESERVED_BIND(name, val, "as a function name",
+                      { unrefexp(e); return val; });
+  cur = cdr(cur);
+  if (!cur) {
+    val = error(ERROR_MISSING_PARAMETER, e, env,
+                "defn: needs at least one (params body...) clause");
+    unrefexp(e);
+    return val;
+  }
+  /* Build the clause-lambda list. Each clause is (PARAM-LIST . BODY); the
+     param list must be a list (possibly empty ()), not a bare symbol — that
+     keeps the multi-clause form unambiguous and consistent. */
+  exp_t *clauses_head = NIL_EXP, *clauses_tail = NULL;
+  for (exp_t *cl = cur; cl; cl = cl->next) {
+    exp_t *clause = cl->content; /* (params . body) */
+    if (!is_ptr(clause) || !ispair(clause) || !ispair(car(clause)) ||
+        !cdr(clause)) {
+      unrefexp(clauses_head);
+      val = error(ERROR_ILLEGAL_VALUE, e, env,
+                  "defn: each clause must be (PARAM-LIST BODY...) — a list of "
+                  "params followed by a non-empty body");
+      unrefexp(e);
+      return val;
+    }
+    exp_t *L = make_node(refexp(car(clause)));      /* content = params */
+    L->next = make_node(refexp(cdr(clause)));       /* next->content = body */
+    L->type = EXP_LAMBDA;
+    if (env)
+      L->next->meta = (struct keyval_t *)ref_env(env); /* closure capture */
+    compile_lambda(L, env && env->root);
+    exp_t *node = make_node(L); /* owns L */
+    if (clauses_tail)
+      clauses_tail = clauses_tail->next = node;
+    else
+      clauses_head = clauses_tail = node;
+  }
+  /* Wrapper: an EXP_LAMBDA flagged multi; content holds the clause list. */
+  val = make_node(clauses_head);
+  val->type = EXP_LAMBDA;
+  val->flags |= FLAG_MULTI;
+  val->meta = (struct keyval_t *)strdup(exp_text(name));
+  if (!(env->d))
+    env->d = create_dict();
+  set_get_keyval_dict(env->d, exp_text(name), val);
+  GEN_BUMP();
   unrefexp(e);
   return val;
 }
@@ -19093,7 +19167,22 @@ l_length: {
    operand stack holds fn for the duration of this call, so its lifetime
    is already guaranteed — skipping the atomic pair is measurable on
    call-heavy benchmarks. */
+static exp_t *multi_pick(exp_t *clauses, int n); /* defined below, before invoke */
+
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
+  /* Multi-arity (defn) reached from compiled code: dispatch on arg count to
+     the matching clause lambda, then run it normally. Before the param-list
+     reads below. */
+  if (islambda(fn) && (fn->flags & FLAG_MULTI)) {
+    exp_t *chosen = multi_pick(fn->content, nargs);
+    if (!chosen) {
+      for (int i = 0; i < nargs; i++)
+        unrefexp(argv[i]);
+      return error(ERROR_MISSING_PARAMETER, fn, env,
+                   "no matching clause for %d argument(s)", nargs);
+    }
+    return vm_invoke_values(chosen, nargs, argv, env);
+  }
   /* String-as-callable: (s i) returns the indexed char. The AST
      evaluator handles this in two places (literal string head and the
      symbol-lookup path added in ticket 5). The bytecode VM compiles
@@ -19235,6 +19324,27 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   return ret;
 }
 
+/* Pick the clause lambda from a FLAG_MULTI wrapper whose param list matches
+   `n` args: an exact fixed-arity match, or a variadic (. rest) clause whose
+   fixed count is <= n. First match in definition order wins; NULL if none. */
+static exp_t *multi_pick(exp_t *clauses, int n) {
+  for (exp_t *c = clauses; c && c->content; c = c->next) {
+    exp_t *L = c->content;
+    int fixed = 0, variadic = 0;
+    for (exp_t *p = lambda_params(L); p && p->content; p = p->next) {
+      if (issymbol(p->content) &&
+          strcmp((char *)exp_text(p->content), ".") == 0) {
+        variadic = 1;
+        break;
+      }
+      fixed++;
+    }
+    if (variadic ? (n >= fixed) : (n == fixed))
+      return L;
+  }
+  return NULL;
+}
+
 exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
   /* e->content = fn name, e->next = args list,
      fn->content = params list, fn->next->content = body list.
@@ -19243,6 +19353,23 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
      symbols (whose ->ptr we borrow into env->inline_keys) can never be
      freed while the env is live. Tail calls reuse the frame via a
      trampoline loop — O(1) C stack for tail recursion. */
+
+  /* Multi-arity (defn): dispatch on argument count to the matching clause,
+     then run that ordinary clause lambda through the normal path. Must come
+     before any read of fn->content as a param list. */
+  if (fn->flags & FLAG_MULTI) {
+    int n = 0;
+    for (exp_t *a = e->next; a; a = a->next)
+      n++;
+    exp_t *chosen = multi_pick(fn->content, n);
+    if (!chosen) {
+      exp_t *er = error(ERROR_MISSING_PARAMETER, e, env,
+                        "no matching clause for %d argument(s)", n);
+      unrefexp(e);
+      return er;
+    }
+    return invoke(e, chosen, env); /* consumes e; refexps chosen internally */
+  }
 
   /* Nested invokes inherit but don't export tail-position: the CALLEE
      decides for its own body. Save/restore around the call. */

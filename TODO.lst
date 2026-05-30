@@ -87,7 +87,18 @@
        with optional params run via the AST evaluator (the bytecode fast path
        assumes exact arity, so they don't compile — correctness over speed).
        Tests "dp-*" / "default" in test.alc.
-[TODO] add support for polymorphism in lambda
+[DONE] add support for polymorphism in lambda — arity overloading via
+       (defn name (PARAMS body...) (PARAMS body...) ...). Each clause is a
+       param list (which may use . rest) + body; a call dispatches on the
+       argument count to the matching clause (a variadic clause catches any
+       count >= its fixed arity; first match wins; no match raises a catchable
+       error). Implemented as a FLAG_MULTI wrapper lambda holding one ordinary
+       closure per clause; invoke / vm_invoke_values intercept the flag and
+       delegate to the arity-matched clause, so binding (incl. defaults /
+       destructuring / rest within a clause), recursion across clauses, and
+       compiled callers all reuse the existing machinery. Type-based dispatch
+       was rejected — Alcove is untyped, so arity is the natural axis. Tests
+       "defn *" in test.alc. (Anonymous case-lambda not added; defn is named.)
 [DONE] call/cc — ESCAPE continuations (one-shot, upward). (call/cc f) calls f
        with k; (k v) makes call/cc return v, abandoning the work between. Full
        re-entrant continuations aren't feasible in a recursive C tree-walker +

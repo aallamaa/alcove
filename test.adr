@@ -3994,6 +3994,37 @@ assert "doc+default body works" (ds-def 5) 7
 
 assert "docstring of unknown is nil" (docstring 'no-such-fn-xyz) nil
 
+defn dfn-area ((r) (* r r)) ((w h) (* w h))
+
+assert "defn dispatch arity 1" (dfn-area 5) 25
+
+assert "defn dispatch arity 2" (dfn-area 4 6) 24
+
+defn dfn-v ((x) (list 'one x)) ((x . more) (list 'many x more))
+
+assert "defn fixed clause wins" (dfn-v 1) (list 'one 1)
+
+assert "defn variadic clause" (dfn-v 1 2 3) (list 'many 1 (list 2 3))
+
+defn dfn-cnt ((n) (dfn-cnt n 0)):
+  (n acc) (if (is n 0) acc (dfn-cnt (- n 1) (+ acc 1)))
+
+assert "defn recursion across clauses" (dfn-cnt 5) 5
+
+assert "defn no matching clause errors" (try (dfn-area 1 2 3) (fn (e) 'caught)):
+  'caught
+
+def dfn-call (n):
+  dfn-area n
+
+assert "defn called from compiled fn" (dfn-call 7) 49
+
+defn dfn-empty (() 'zero) ((x) x)
+
+assert "defn empty-params clause" (dfn-empty) 'zero
+
+assert "defn is callable/truthy" (if dfn-area t nil) t
+
 assert "= reserved errors" (error? (setf count 5)) t
 
 assert "= reserved message" (string-contains? (error-message (setf list 5)) "reserved"):

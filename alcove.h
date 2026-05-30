@@ -218,6 +218,11 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
    kind. Symbols/strings are never vectors, so there is no overlap. */
 #define FLAG_INLINE_TXT 64
 #define INLINE_TXT_CAP 7 /* 7 chars + NUL fit the 8-byte union slot */
+/* Multi-arity lambda (defn): an EXP_LAMBDA whose `content` is a LIST of
+   per-clause lambda values rather than a param list. The call paths
+   (invoke / vm_invoke_values) intercept this flag and dispatch to the clause
+   whose arity matches before any code reads content as params. Bit 7. */
+#define FLAG_MULTI 128
 
 /* For EXP_VECTOR only: element kind, encoded in bits 4-5 of exp_t->flags.
    GEN keeps the old behavior — each slot is an owning exp_t* ref. I64/F64
@@ -830,6 +835,7 @@ exp_t *loaddbcmd(exp_t *e, env_t *env);
 int loaddb_from_file(env_t *env); /* shared with main() for auto-load */
 /* lisp macro */
 exp_t *defcmd(exp_t *e, env_t *env);
+exp_t *defncmd(exp_t *e, env_t *env);
 exp_t *expandmacrocmd(exp_t *e, env_t *env);
 exp_t *defmacrocmd(exp_t *e, env_t *env);
 exp_t *fncmd(exp_t *e, env_t *env);
