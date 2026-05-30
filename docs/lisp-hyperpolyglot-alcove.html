@@ -223,11 +223,20 @@ href="https://hyperpolyglot.org/lisp">Hyperpolyglot’s Lisp
 comparison</a>. It is not a copy of that page: the rows are reorganized
 for Alcove, and the Alcove columns cover the current implementation in
 this repository.</p>
-<p>Adder is a surface reader for Alcove forms. Canonical Alcove
-Script omits the outer parentheses for calls (<code>is a b</code>, not
-<code>(is a b)</code>), while inline parenthesized Lisp remains valid
-where useful. Its block syntax is indentation-sensitive; multiline table
-examples use preformatted code blocks.</p>
+<p>Adder (file extension <code>.adr</code>) is a surface reader for Alcove
+forms: it omits the outer parentheses for calls (<code>is a b</code>, not
+<code>(is a b)</code>) and uses indentation-sensitive <code>:</code> blocks,
+while inline parenthesized Lisp stays valid where useful. Assignment is
+<code>setf</code> (the built-in alias of <code>=</code>); a leading
+<code>set</code> is <em>not</em> special, so it remains the set constructor as
+in Alcove.</p>
+<p><strong>Adder and Alcove are one runtime and one builtin set</strong> —
+Adder just transpiles to Alcove S-expressions before evaluation. So every
+function shown in an Alcove cell is available in Adder unchanged, written in
+call form (<code>f a b</code>). Where an Alcove cell lists several builtins and
+the Adder cell shows only one, that is a syntax sample, <em>not</em> a smaller
+API: the same names work in Adder. The Adder column therefore highlights how
+the surface differs, not what is missing.</p>
 <h2 id="runtime-and-syntax">Runtime And Syntax</h2>
 <table style="width:100%;">
 <colgroup>
@@ -449,11 +458,11 @@ top-level binding. <code>(def f (x) …)</code> defines a top-level
 function.
 </td>
 <td>
-<pre><code>setq x 3       # root/session binding
+<pre><code>setq x 3        # root/session binding
 
-set x 3        # general assignment = (= x 3):
-               # session var at top level,
-               # a local inside a fn body
+setf x 3        # general assignment = (= x 3):
+                # session var at top level,
+                # a local inside a fn body
 
 def f (x):
   + x 1</code></pre>
@@ -650,8 +659,8 @@ Function predicate
 <td><code>eq?</code>, <code>eqv?</code></td>
 <td><code>identical?</code></td>
 <td><code>eq</code></td>
-<td><code>(is a b)</code></td>
-<td><code>is a b</code></td>
+<td><code>(is a b)</code>; aliases <code>eq</code>, <code>eq?</code></td>
+<td><code>is a b</code>, <code>eq a b</code>, <code>eq? a b</code></td>
 </tr>
 <tr class="even">
 <td>Structural equality</td>
@@ -670,7 +679,8 @@ Function predicate
 <td><code>=</code> for numbers</td>
 <td><code>(= place value)</code> assigns; <code>(iso ...)</code> or
 comparisons for tests</td>
-<td><code>set</code> maps to assignment</td>
+<td><code>setf x v</code> is assignment (the <code>=</code> alias);
+<code>iso</code> / comparisons for tests</td>
 </tr>
 <tr class="even">
 <td>Comparisons</td>
@@ -914,10 +924,11 @@ sharing; callable: <code>(m k)</code> is <code>(hamt-get m k)</code></td>
 strings, symbols, blobs, <code>nil</code>, and <code>t</code>; callable:
 <code>(s x)</code> returns <code>x</code> if present, else
 <code>nil</code></td>
-<td>In Adder a line-leading <code>set</code> is the assignment statement
-(<code>set x v</code> = <code>(= x v)</code>), so the constructor is spelled
-<code>hash-set 1 2 3</code> — or parenthesized as <code>(set 1 2 3)</code>,
-which is unaffected. Then <code>set-has? s x</code>, <code>s x</code>.</td>
+<td><code>set 1 2 3</code> or <code>hash-set 1 2 3</code> (Adder assignment is
+<code>setf</code>, so <code>set</code> is free to be the constructor, as in
+Alcove); <code>set-has? s x</code>, <code>s x</code>; same set algebra
+(<code>set-union</code>, <code>set-intersection</code>,
+<code>set-difference</code>, <code>set-&gt;list</code>)</td>
 </tr>
 </tbody>
 </table>
