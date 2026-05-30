@@ -20442,6 +20442,23 @@ static int alcove_smart_tab(int count, int key) {
   rl_insert_text(ALCOVE_INDENT);
   return 0;
 }
+
+/* Shift-TAB (back-tab, the ESC[Z sequence) dedents: removes up to one indent
+   level (2 spaces) immediately before the cursor, when present. A no-op if the
+   cursor isn't preceded by spaces. The inverse of alcove_smart_tab's indent. */
+static int alcove_back_tab(int count, int key) {
+  (void)count;
+  (void)key;
+  int k = 0;
+  while (k < 2 && rl_point - k - 1 >= 0 &&
+         rl_line_buffer[rl_point - k - 1] == ' ')
+    k++;
+  if (k > 0) {
+    rl_delete_text(rl_point - k, rl_point);
+    rl_point -= k;
+  }
+  return 0;
+}
 #endif /* ALCOVE_READLINE */
 
 /* Help / discovery — both implemented at file scope so they can scan
@@ -22368,6 +22385,8 @@ static void repl_readline_setup(env_t *global) {
   rl_attempted_completion_function = alcove_rl_completer;
   /* TAB indents at line start (only whitespace precedes), else completes. */
   rl_bind_key('\t', alcove_smart_tab);
+  /* Shift-TAB (back-tab, ESC[Z) dedents by up to one indent level. */
+  rl_bind_keyseq("\033[Z", alcove_back_tab);
   rl_basic_word_break_characters = " \t\n()'`,;\"";
   rl_variable_bind("blink-matching-paren", "on");
   rl_redisplay_function = alcove_colored_redisplay; /* real-time highlighting */
