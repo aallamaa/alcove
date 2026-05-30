@@ -312,9 +312,12 @@ EMCC ?= emcc
 
 # Build the wasm modules and smoke-test them under node, asserting results
 # match native ./alcove output (catches wasm/clang-backend miscompiles that the
-# native test-all can't — the fixnum-tag / vec-ref class of bug). Needs node.
+# native test-all can't — the fixnum-tag / vec-ref class of bug). NODE is
+# overridable: under setup-emsdk in CI, bare `node` on PATH isn't directly
+# runnable, so we pass NODE="$EMSDK_NODE".
+NODE ?= node
 test-web: web
-	node web/test_web.js
+	$(NODE) web/test_web.js
 
 web:
 	@command -v $(EMCC) >/dev/null 2>&1 || \

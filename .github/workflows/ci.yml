@@ -38,7 +38,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mymindstorm/setup-emsdk@v14
       - name: wasm smoke (make test-web)
-        run: make test-web   # node is preinstalled on ubuntu-latest
+        # setup-emsdk shadows `node` on PATH with its own bundled node; bare
+        # `node` isn't directly runnable in the make sub-shell, so use the
+        # emsdk-provided binary explicitly.
+        run: make test-web NODE="$EMSDK_NODE"
 
   # Coverage-guided libFuzzer over the reader and the Adder transpiler — short
   # runs (60s each) to catch parser/transpiler regressions on every push.
