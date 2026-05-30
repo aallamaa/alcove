@@ -75,8 +75,18 @@
        assignment (= (s i) ch) rebuilds for variable width; als
        transpiler reads multi-byte #\X literals. utf8_* helpers in
        alcove.c. Tests: "utf8 *" block in test.alc.
-[TODO] add support for documentation in function header
-[TODO] add support for default parameters
+[DONE] add support for documentation in function header — (def f (args)
+       "docstring" body...): a leading string FOLLOWED by more body forms is
+       stored (keyed by name in user_doc) and surfaced by (doc f) / (docstring
+       f); a lone string body stays the return value. def-only (anonymous fn
+       has no name to key by). Tests "docstring *" in test.alc.
+[DONE] add support for default parameters — (def f (x (y 10)) ...): a param
+       written (name default-expr) is optional; a missing arg evaluates the
+       default in the frame being built, so a default can reference params
+       bound earlier (def h (a (b (+ a 1))) ...). Bound in var2env; functions
+       with optional params run via the AST evaluator (the bytecode fast path
+       assumes exact arity, so they don't compile — correctness over speed).
+       Tests "dp-*" / "default" in test.alc.
 [TODO] add support for polymorphism in lambda
 [DONE] call/cc — ESCAPE continuations (one-shot, upward). (call/cc f) calls f
        with k; (k v) makes call/cc return v, abandoning the work between. Full
@@ -162,10 +172,14 @@
        Regression tests "filter inside recursion" + per-builtin
        "(cdr 1-elem)" cases in test.alc.
 
-[TODO] Reserved-name shadowing: lookup() checks reserved_symbol BEFORE
-       env, so `(= time (ffi-fn ...))` doesn't take effect at top level
-       (alcove's builtin time wins). Either flip lookup order or
-       provide an explicit "shadow" form.
+[REJECTED] Reserved-name shadowing: lookup() checks reserved_symbol BEFORE
+       env, so `(= time (ffi-fn ...))` doesn't shadow the builtin `time` at
+       top level. WON'T DO (2026-05-30): builtins-win precedence is intentional
+       — flipping the order is on the hottest path (every symbol resolution)
+       and letting user bindings silently override core builtins is a footgun
+       (a stray `(= map ...)` would break the language under you). Assignment
+       to a reserved name is already rejected at the source (CHECK_RESERVED_BIND
+       / REJECT_RESERVED_ASSIGN). Use a different name instead.
 
 [DONE] FFI callbacks: (ffi-callback RET (ARG-TYPES...) fn) wraps an alcove
        lambda in a libffi closure (ffi_closure_alloc/ffi_prep_closure_loc)
