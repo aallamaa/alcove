@@ -70,6 +70,7 @@ parser_test
 parser_fuzz
 adr_test
 adr_fuzz
+hamt_test
 crash-*
 leak-*
 timeout-*

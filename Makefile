@@ -379,6 +379,12 @@ adr-test:
 	  -I. -o adr_test adr_test.c
 	./adr_test
 
+# HAMT (hamt.h) unit + fuzz tests; includes alcove.c for the hamt_* internals.
+hamt-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  $(JIT_FLAGS) -o hamt_test hamt_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./hamt_test
+
 # Coverage-guided fuzzing of the Adder transpiler (clang + libFuzzer).
 adr-fuzz:
 	@[ -n "$(CLANG)" ] || { echo "no clang found — install clang for libFuzzer"; exit 1; }
@@ -404,4 +410,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test hooks
