@@ -385,6 +385,12 @@ hamt-test:
 	  $(JIT_FLAGS) -o hamt_test hamt_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
 	./hamt_test
 
+# dict_t (dict.h) hash-table unit + fuzz tests; includes alcove.c.
+dict-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  $(JIT_FLAGS) -o dict_test dict_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./dict_test
+
 # MsgPack (msgpack.h) round-trip + decoder-fuzz tests; includes alcove.c.
 msgpack-test:
 	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
@@ -422,4 +428,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test msgpack-test utf8-test hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test dict-test msgpack-test utf8-test hooks

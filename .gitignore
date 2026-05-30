@@ -71,6 +71,7 @@ parser_fuzz
 adr_test
 adr_fuzz
 hamt_test
+dict_test
 msgpack_test
 utf8_test
 crash-*
