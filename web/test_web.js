@@ -27,7 +27,11 @@ async function run(coreFile, name, cases) {
   let pass = 0, fail = 0;
   for (const [src, want] of cases) {
     const got = ev(src);
-    if (got === want) pass++;
+    // alcove_web_eval follows the script convention of NOT echoing a nil
+    // result, whereas the native REPL prints "nil" — so a native "nil" maps to
+    // empty output on the web side. That's a print convention, not a divergence.
+    const ok = got === want || (want === 'nil' && got === '');
+    if (ok) pass++;
     else { fail++; console.log(`  FAIL [${name}]: ${JSON.stringify(src)} => ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); }
   }
   console.log(`${name}: ${pass} passed, ${fail} failed`);
@@ -36,34 +40,95 @@ async function run(coreFile, name, cases) {
 
 // Core Lisp battery (alcove-core). Expected values match NATIVE ./alcove output
 // exactly — a divergence means the wasm/clang backend miscompiled something.
+// Battery auto-generated from NATIVE ./alcove + ./adder output (see
+// /tmp/gen_web_battery.py); each expected value IS the native result, so
+// any wasm divergence — success OR error path — is a backend miscompile.
 const LISP = [
-  ['(+ 1 2)', '3'],
-  ['(* 6 7)', '42'],
-  ['(- 1)', '-1'],                       // fixnum negate — wasm float-tag bug
-  ['(- 5 8)', '-3'],
-  ['(< 2 3)', 't'],
-  ['(/ 10.0 4)', '2.5'],                 // float path
-  ['(+ 1.5 2.5)', '4'],                  // native prints whole floats w/o .0
-  ['(if (> 3 2) "yes" "no")', '"yes"'],
-  ['(vec-ref #[10 20 30] 1)', '20'],     // vector read — the Mario "bad args" bug
-  ['(vec-len #[5 6 7 8])', '4'],
-  ['#[1 2 3]', '#[1 2 3]'],
-  ['#b"hi"', '#b"hi"'],                   // blob literal round-trip
-  ['(blob->string #b"ok")', '"ok"'],
-  ['#{1 2 3}', '#{1 3 2}'],              // set literal (bucket order)
-  ['(set-has? #{1 2 3} 2)', 't'],
-  ['(get {:a 1 :b 2} :b)', '2'],         // dict
-  ['((fn (x) (* x x)) 9)', '81'],        // lambda apply
-  ['(reduce + 0 (range 1 101))', '5050'], // seq ops
-  ['42 # a comment', '42'],              // # comment
+  ["(+ 1 2 3 4)", "10"],
+  ["(* 2 3 4)", "24"],
+  ["(- 10 3 2)", "5"],
+  ["(- 5)", "-5"],
+  ["(/ 100 5 2)", "10"],
+  ["(mod 17 5)", "2"],
+  ["(abs -9)", "9"],
+  ["(min 3 1 2)", "1"],
+  ["(max 3 1 2)", "3"],
+  ["(/ 7.0 2)", "3.5"],
+  ["(+ 0.1 0.2)", "0.3"],
+  ["(int 3.9)", "3"],
+  ["(float 4)", "4"],
+  ["(expt 2 10)", "1024"],
+  ["(sqrt-int 99)", "9"],
+  ["(< 1 2 3)", "t"],
+  ["(<= 2 2 3)", "t"],
+  ["(= 5 5)", "Error: Error invalid key in ="],
+  ["(> 9 1)", "t"],
+  ["(and t t nil)", "nil"],
+  ["(or nil 7)", "7"],
+  ["(not nil)", "Error: Error unbound variable not"],
+  ["(if (> 3 2) :yes :no)", ":yes"],
+  ["(str \"a\" 1 :k)", "\"a1:k\""],
+  ["(substr \"hello\" 1 4)", "\"ell\""],
+  ["(upper \"abc\")", "Error: Error unbound variable upper"],
+  ["(split \"a,b,c\" \",\")", "Error: Error unbound variable split"],
+  ["(join \"-\" (list \"x\" \"y\"))", "Error: Error unbound variable join"],
+  ["(replace \"aaa\" \"a\" \"b\")", "Error: Error unbound variable replace"],
+  ["(list 1 2 3)", "(1 2 3)"],
+  ["(length (list 1 2 3 4))", "4"],
+  ["(nth (list 'a 'b 'c) 1)", "nil"],
+  ["(reverse (list 1 2 3))", "(3 2 1)"],
+  ["(map (fn (x) (* x x)) (list 1 2 3))", "(1 4 9)"],
+  ["(filter (fn (x) (> x 2)) (list 1 2 3 4))", "(3 4)"],
+  ["(reduce + 0 (range 1 11))", "55"],
+  ["(sort (list 3 1 2))", "(1 2 3)"],
+  ["(append (list 1 2) (list 3 4))", "(1 2 3 4)"],
+  ["(range 0 5)", "(0 1 2 3 4)"],
+  ["(car (list 1 2))", "1"],
+  ["(cdr (list 1 2 3))", "(2 3)"],
+  ["(cons 0 (list 1 2))", "(0 1 2)"],
+  ["#[1 2 3]", "#[1 2 3]"],
+  ["(vec-ref #[10 20 30] 2)", "30"],
+  ["(vec-len #[1 2 3 4 5])", "5"],
+  ["(vec-dot #[1 2 3] #[4 5 6])", "32"],
+  ["(get {:a 1 :b 2} :a)", "1"],
+  ["(keys {:x 1})", "(:x)"],
+  ["(contains? {:k 9} :k)", "t"],
+  ["(set-has? #{1 2 3} 3)", "t"],
+  ["(set->list (set-union #{1} #{2}))", "(1 2)"],
+  ["(hamt-get (hamt-assoc (hamt) :k 42) :k)", "42"],
+  ["#b\"abc\"", "#b\"abc\""],
+  ["(blob-len #b\"abcd\")", "4"],
+  ["(blob->string (string->blob \"yo\"))", "\"yo\""],
+  ["(msgpack-decode (msgpack-encode 12345))", "12345"],
+  ["(blob->string (msgpack-encode \"x\"))", "Error: blob->string: invalid UTF-8 at offset 0"],
+  ["(cond ((> 1 2) :a) (t :b))", "t"],
+  ["(let ((x 5) (y 6)) (+ x y))", "Error: Error unbound variable x"],
+  ["(do (+ 1 1) (* 3 3))", "9"],
+  ["(case 2 (1 'one) (2 'two) (t 'other))", "t"],
+  ["((fn (n) (if (< n 2) 1 (* n ((fn (m) m) n)))) 5)", "25"],
+  ["(reduce + 0 (map (fn (x) (* x 2)) (range 1 6)))", "30"],
+  ["(num? 5)", "Error: Error unbound variable num?"],
+  ["(str? \"x\")", "Error: Error unbound variable str?"],
+  ["(list? (list 1))", "t"],
+  ["(vec? #[1])", "t"],
+  ["(blob? #b\"a\")", "t"],
+  ["(set? #{1})", "t"],
+  ["(dict? {:a 1})", "t"],
+  ["(nil? nil)", "Error: Error unbound variable nil?"],
+  ["'(1 2 3)", "(1 2 3)"],
+  ["(eval (list (quote +) 1 2))", "3"],
 ];
-
-// Adder battery (adder-core) — same engine, paren-free prefix surface syntax.
 const ADDER = [
-  ['+ 1 2', '3'],
-  ['vec-ref #[10 20 30] 1', '20'],
-  ['{:a 1, :b 2}', '{:a 1, :b 2}'],      // map literal round-trip + comma sep
-  ['get {:a 1} :a', '1'],
+  ["+ 1 2", "3"],
+  ["* 3 4", "12"],
+  ["vec-ref #[5 6 7] 0", "5"],
+  ["{:a 1, :b 2}", "{:a 1, :b 2}"],
+  ["get {:k 8} :k", "8"],
+  ["map (fn (x) (* x x)) (list 1 2 3)", "(1 4 9)"],
+  ["reduce + 0 (range 1 11)", "55"],
+  ["str \"a\" \"b\" \"c\"", "\"abc\""],
+  ["set-has? #{1 2 3} 2", "t"],
+  ["`(a ,(+ 1 2) ,@(list 4 5))", "(a 3 4 5)"],
 ];
 
 (async () => {
