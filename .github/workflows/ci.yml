@@ -55,3 +55,5 @@ jobs:
         run: make fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
       - name: libFuzzer — adder transpiler
         run: make adr-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
+      - name: libFuzzer — msgpack decoder
+        run: make msgpack-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'

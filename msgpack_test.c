@@ -147,6 +147,23 @@ static void fuzz_blob_roundtrip(int iters) {
   }
 }
 
+#ifdef MSGPACK_LIBFUZZER
+/* Coverage-guided entry point for the binary decoder — the highest-value fuzz
+   target since mp_decode consumes fully untrusted bytes (RESP values, db
+   payloads). Build with:
+     clang -DMSGPACK_LIBFUZZER -fsanitize=fuzzer,address,undefined
+   msgpack_test.c libFuzzer supplies main(); init the singletons once on first
+   call. */
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  if (!nil_singleton)
+    init_singletons();
+  size_t pos = 0;
+  exp_t *d = mp_decode(data, size, &pos);
+  if (d)
+    unrefexp(d);
+  return 0;
+}
+#else
 int main(int argc, char *argv[]) {
   int iters = (argc > 1) ? atoi(argv[1]) : 300000;
   init_singletons();
@@ -166,3 +183,4 @@ int main(int argc, char *argv[]) {
   printf(">>> ALL MSGPACK TESTS PASSED\n");
   return 0;
 }
+#endif /* MSGPACK_LIBFUZZER */
