@@ -11,6 +11,18 @@
  * NOT separately compiled. The chrmap/schrmap/chr2hex tables live in char.h.
  * Exercised + fuzzed by parser_test.c.
  */
+/* make_integer/make_float/MAKE_FIX read the token text but, unlike
+   make_symbol_from_token / make_string_from_token, do NOT take ownership of the
+   token — so every numeric exit has to free it. This unifies that into one
+   line so the number paths read like the symbol/string ones (and the
+   free-then-return order can't drift between them). */
+#define ATOM_NUM_RETURN(mk)                                                    \
+  do {                                                                         \
+    exp_t *_ret = (mk);                                                        \
+    freetoken(token);                                                          \
+    return _ret;                                                               \
+  } while (0)
+
 exp_t *make_atom_from_token(token_t *token) {
   char *str = token->data;
   int length = token->size;
@@ -59,10 +71,8 @@ exp_t *make_atom_from_token(token_t *token) {
           int64_t fix_min = -((int64_t)1 << 60);
           if (neg)
             hv = -hv;
-          if (hv >= fix_min && hv <= fix_max) {
-            freetoken(token);
-            return MAKE_FIX((int64_t)hv);
-          }
+          if (hv >= fix_min && hv <= fix_max)
+            ATOM_NUM_RETURN(MAKE_FIX((int64_t)hv));
         }
       }
     }
@@ -109,18 +119,15 @@ exp_t *make_atom_from_token(token_t *token) {
   } else {
     if (test == 1)
       return make_symbol_from_token(token);
-    else if ((test == 3) && !dot) {
-      exp_t *ret = make_integer(stro);
-      freetoken(token);
-      return ret;
-    } else if ((test == 31) || (test == 3)) {
-      exp_t *ret = make_float(stro);
-      freetoken(token);
-      return ret;
-    } else
+    else if ((test == 3) && !dot)
+      ATOM_NUM_RETURN(make_integer(stro));
+    else if ((test == 31) || (test == 3))
+      ATOM_NUM_RETURN(make_float(stro));
+    else
       return make_symbol_from_token(token);
   }
 }
+#undef ATOM_NUM_RETURN
 
 exp_t *callmacrochar(FILE *stream, unsigned char x) {
   exp_t *lnode = NULL; // Initial List Node
