@@ -4025,6 +4025,18 @@ assert "defn empty-params clause" (dfn-empty) 'zero
 
 assert "defn is callable/truthy" (if dfn-area t nil) t
 
+defn dfn-ls (r (* r r)) (w h (* w h))
+
+assert "defn leading-symbol arity 1" (dfn-ls 5) 25
+
+assert "defn leading-symbol arity 2" (dfn-ls 4 6) 24
+
+defn dfn-mix ((r) (* r 2)) (w h (+ w h))
+
+assert "defn mixed clause forms 1" (dfn-mix 5) 10
+
+assert "defn mixed clause forms 2" (dfn-mix 3 4) 7
+
 assert "= reserved errors" (error? (setf count 5)) t
 
 assert "= reserved message" (string-contains? (error-message (setf list 5)) "reserved"):

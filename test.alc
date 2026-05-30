@@ -2693,6 +2693,15 @@
 (defn dfn-empty (() 'zero) ((x) x))
 (assert "defn empty-params clause"     (dfn-empty)                   'zero)
 (assert "defn is callable/truthy"      (if dfn-area t nil)           t)
+;; Leading-symbol clause form (what Adder's `r:` / `w h:` block produces):
+;; a clause's leading symbols are the params, the first non-symbol begins the
+;; body. Equivalent to the explicit ((r) ...) form; both are accepted.
+(defn dfn-ls (r (* r r)) (w h (* w h)))
+(assert "defn leading-symbol arity 1"  (dfn-ls 5)                    25)
+(assert "defn leading-symbol arity 2"  (dfn-ls 4 6)                  24)
+(defn dfn-mix ((r) (* r 2)) (w h (+ w h)))   ;; explicit + leading-symbol mixed
+(assert "defn mixed clause forms 1"    (dfn-mix 5)                   10)
+(assert "defn mixed clause forms 2"    (dfn-mix 3 4)                 7)
 
 ;; --- assigning to a reserved name is rejected too (=/setf/setq) ---
 ;; Same footgun on the write side: (= count 5) could never take effect

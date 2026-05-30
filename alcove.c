@@ -3670,10 +3670,12 @@ exp_t *defcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_defn[] =
-    "(defn name (params body...) (params body...) ...) — multi-arity function. "
-    "Each clause is a param list (which may use . rest) plus a body; a call "
-    "dispatches on the argument count to the matching clause (a variadic clause "
-    "catches any count >= its fixed arity). No matching clause raises an error.";
+    "(defn name CLAUSE...) — multi-arity function; a call dispatches on the "
+    "argument count to the matching clause (a variadic . rest clause catches "
+    "any count >= its fixed arity; no match raises). A clause is either "
+    "((params) body...) or leading-symbol form (a b body...) where the leading "
+    "symbols are the params and the first non-symbol begins the body — e.g. "
+    "(defn f ((x) (* x x)) (w h (* w h))).";
 /* Multi-arity define. Builds one ordinary closure per clause and stores them
    in a FLAG_MULTI wrapper lambda (content = the clause-lambda list); the call
    paths intercept FLAG_MULTI and dispatch by arity to the right clause, reusing
@@ -3696,23 +3698,55 @@ exp_t *defncmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return val;
   }
-  /* Build the clause-lambda list. Each clause is (PARAM-LIST . BODY); the
-     param list must be a list (possibly empty ()), not a bare symbol — that
-     keeps the multi-clause form unambiguous and consistent. */
+  /* Build the clause-lambda list. A clause is accepted in two shapes:
+       explicit param list:   ((r) BODY...)   -> params (r),  body BODY
+       leading-symbol params:  (r BODY...)     -> params (r),  body BODY
+                               (w h BODY...)   -> params (w h),body BODY
+     The leading-symbol shape is what the Adder block `r:` / `w h:` produces
+     (the `:` block appends the body next to the head symbols). It is read as
+     "leading symbols are the params; the first non-symbol element begins the
+     body" — so a clause body that *starts* with a bare symbol needs the
+     explicit `()` form. Empty params are written `()` (explicit form). */
   exp_t *clauses_head = NIL_EXP, *clauses_tail = NULL;
   for (exp_t *cl = cur; cl; cl = cl->next) {
-    exp_t *clause = cl->content; /* (params . body) */
-    if (!is_ptr(clause) || !ispair(clause) || !ispair(car(clause)) ||
-        !cdr(clause)) {
+    exp_t *clause = cl->content;
+    exp_t *params_node = NULL, *body_node = NULL; /* each becomes an owned ref */
+    if (is_ptr(clause) && ispair(clause)) {
+      exp_t *first = car(clause);
+      if (is_ptr(first) && ispair(first)) {
+        /* explicit param list */
+        params_node = refexp(first);
+        if (cdr(clause))
+          body_node = refexp(cdr(clause));
+      } else if (issymbol(first)) {
+        /* leading-symbol params: collect leading symbols into a fresh list,
+           the remainder is the body. */
+        exp_t *ph = NIL_EXP, *pt = NULL, *p = clause;
+        while (p && p->content && issymbol(p->content)) {
+          exp_t *pn = make_node(refexp(p->content));
+          if (pt)
+            pt = pt->next = pn;
+          else
+            ph = pt = pn;
+          p = p->next;
+        }
+        params_node = ph; /* owned */
+        if (p && p->content)
+          body_node = refexp(p);
+      }
+    }
+    if (!params_node || !body_node) {
+      unrefexp(params_node);
       unrefexp(clauses_head);
       val = error(ERROR_ILLEGAL_VALUE, e, env,
-                  "defn: each clause must be (PARAM-LIST BODY...) — a list of "
-                  "params followed by a non-empty body");
+                  "defn: each clause must be (PARAMS BODY...) — params as a "
+                  "list ((r) ...) or leading symbols (r ...) — with a "
+                  "non-empty body");
       unrefexp(e);
       return val;
     }
-    exp_t *L = make_node(refexp(car(clause)));      /* content = params */
-    L->next = make_node(refexp(cdr(clause)));       /* next->content = body */
+    exp_t *L = make_node(params_node);              /* content = params */
+    L->next = make_node(body_node);                 /* next->content = body */
     L->type = EXP_LAMBDA;
     if (env)
       L->next->meta = (struct keyval_t *)ref_env(env); /* closure capture */
