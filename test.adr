@@ -22,6 +22,26 @@ def refute (txt a b):
       setf _test_pass (+ _test_pass 1)
       prn "\t: \x1B[92mPassed\x1B[39m"
 
+def assert-true (txt x):
+  pr txt
+  if x:
+    do:
+      setf _test_pass (+ _test_pass 1)
+      prn "\t: \x1B[92mPassed\x1B[39m"
+    do:
+      setf _test_fail (+ _test_fail 1)
+      prn "\t: \x1B[91mFailed\x1B[39m"
+
+def assert-false (txt x):
+  pr txt
+  if x:
+    do:
+      setf _test_fail (+ _test_fail 1)
+      prn "\t: \x1B[91mFailed\x1B[39m"
+    do:
+      setf _test_pass (+ _test_pass 1)
+      prn "\t: \x1B[92mPassed\x1B[39m"
+
 assert "This will Pass" 1 1
 
 refute "assert detects inequality" 1 0
@@ -3991,4 +4011,99 @@ assert "= cons place ok" (let x (list 1 2) (setf (car x) 'z) x) (list 'z 2)
 
 assert "= string-key ok" (do (setf "carwash" 7) carwash) 7
 
+assert "string literal index" ("toto" 1) #\o
+
+setf _ci_s "toto"
+
+assert "string via var" (_ci_s 3) #\o
+
+setf _ci_v (vector 10 3 4 5 6)
+
+assert "vector via var" (_ci_v 2) 4
+
+assert "vector literal head" ((vector 7 8 9) 0) 7
+
+setf _ci_b (string->blob "toto")
+
+assert "blob byte t" (_ci_b 0) 116
+
+assert "blob byte o" (_ci_b 1) 111
+
+assert "blob literal head" ((string->blob "Hi") 1) 105
+
+def _ci_get (c i):
+  c i
+
+assert "compiled index: string" (_ci_get "abc" 2) #\c
+
+assert "compiled index: vector" (_ci_get _ci_v 4) 6
+
+assert "compiled index: blob" (_ci_get _ci_b 3) 111
+
+assert "index float truncates" (_ci_v 2.9) 4
+
+assert "vector index out-of-range" (try (_ci_v 99) (fn (e) 'caught)) 'caught
+
+assert "blob index out-of-range" (try (_ci_b 99) (fn (e) 'caught)) 'caught
+
+assert "string index out-of-range" (try ("ab" 9) (fn (e) 'caught)) 'caught
+
+assert "index negative errors" (try (_ci_v -1) (fn (e) 'caught)) 'caught
+
+assert-false "falsy: nil" nil
+
+assert-false "falsy: 0" 0
+
+assert-false "falsy: 0.0" 0.0
+
+assert-false "falsy: empty string" ""
+
+assert-false "falsy: char (by design)" #\a
+
+assert-false "falsy: empty list" (list)
+
+assert-false "falsy: empty vector" (vec 0 nil)
+
+assert-false "falsy: empty hamt" (hamt)
+
+assert-false "falsy: empty set" (set)
+
+assert-false "falsy: empty dict" (hash-map)
+
+assert-false "falsy: empty blob" (string->blob "")
+
+assert-true "truthy: t" t
+
+assert-true "truthy: 1" 1
+
+assert-true "truthy: -1" -1
+
+assert-true "truthy: 1.5" 1.5
+
+assert-true "truthy: non-empty str" "a"
+
+assert-true "truthy: symbol" 'foo
+
+assert-true "truthy: non-empty list" (list 1)
+
+assert-true "truthy: non-empty vec" (vec 3 0)
+
+assert-true "truthy: non-empty hamt" (hamt "a" 1)
+
+assert-true "truthy: non-empty set" (set 1)
+
+assert-true "truthy: non-empty dict" (hash-map "a" 1)
+
+assert-true "truthy: non-empty blob" (string->blob "a")
+
+assert-true "truthy: lambda" (fn (x) x)
+
+assert-true "truthy: builtin" car
+
+assert-true "assert-true detects truthy" t
+
+assert-false "assert-false detects falsy" nil
+
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
+
+exit (if (> _test_fail 0) 1 0)

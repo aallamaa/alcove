@@ -13,6 +13,21 @@
   (if (iso a b)
       (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
       (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))))
+;; assert-true / assert-false exercise the REAL truthiness path (the `if`
+;; special form -> istrue) for a value, not iso equality. They close the
+;; per-type coverage gap: a regression in how any value kind is judged
+;; truthy/falsy (e.g. "empty vector becomes truthy", "lambda becomes falsy")
+;; is caught here even though such a value is never compared with iso.
+(def assert-true (txt x)
+  (pr txt)
+  (if x
+      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))
+      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))))
+(def assert-false (txt x)
+  (pr txt)
+  (if x
+      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
+      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))))
 
 (assert "This will Pass" 1 1)
 (refute "assert detects inequality" 1 0)
@@ -2673,7 +2688,76 @@
 (assert "= string-key ok"              (do (= "carwash" 7) carwash)           7)
 
 ;; ====================================================================
+;; Callable indexing — (container i) reads element i for every indexable
+;; type (string->char, vector->element, blob->byte), exercised in operator
+;; position: literal head, via a var, compiled-body, and tail position; plus
+;; float-index truncation and out-of-range errors. All four call sites
+;; (AST literal head, AST var head, vm_invoke_values, OP_TAIL_CALL) share
+;; one isindexable/index_get helper — these lock that contract down.
+;; ====================================================================
+(assert "string literal index"        ("toto" 1)                            #\o)
+(= _ci_s "toto")
+(assert "string via var"              (_ci_s 3)                              #\o)
+(= _ci_v #[10 3 4 5 6])
+(assert "vector via var"              (_ci_v 2)                              4)
+(assert "vector literal head"         (#[7 8 9] 0)                           7)
+(= _ci_b (string->blob "toto"))
+(assert "blob byte t"                 (_ci_b 0)                              116)
+(assert "blob byte o"                 (_ci_b 1)                              111)
+(assert "blob literal head"           ((string->blob "Hi") 1)                105)
+(def _ci_get (c i) (c i))   ;; compiled body; the (c i) tail call also covers OP_TAIL_CALL
+(assert "compiled index: string"      (_ci_get "abc" 2)                      #\c)
+(assert "compiled index: vector"      (_ci_get _ci_v 4)                      6)
+(assert "compiled index: blob"        (_ci_get _ci_b 3)                      111)
+(assert "index float truncates"       (_ci_v 2.9)                            4)
+(assert "vector index out-of-range"   (try (_ci_v 99) (fn (e) 'caught))      'caught)
+(assert "blob index out-of-range"     (try (_ci_b 99) (fn (e) 'caught))      'caught)
+(assert "string index out-of-range"   (try ("ab" 9) (fn (e) 'caught))        'caught)
+(assert "index negative errors"       (try (_ci_v -1) (fn (e) 'caught))      'caught)
+
+;; ====================================================================
+;; Truthiness matrix — one assert-true/assert-false per value KIND, so a
+;; refactor of istrue (or anything feeding the `if`/and/or/while truthiness
+;; path) is caught per-type instead of only where a value happens to be
+;; iso-compared. Falsy set: nil, zero (int+float), empty string, char(!),
+;; and every EMPTY container. Truthy set: t, nonzero numbers, non-empty
+;; string, symbol, non-empty containers, and callables.
+;; ====================================================================
+(assert-false "falsy: nil"             nil)
+(assert-false "falsy: 0"               0)
+(assert-false "falsy: 0.0"             0.0)
+(assert-false "falsy: empty string"    "")
+(assert-false "falsy: char (by design)" #\a)
+(assert-false "falsy: empty list"      (list))
+(assert-false "falsy: empty vector"    (vec 0 nil))
+(assert-false "falsy: empty hamt"      (hamt))
+(assert-false "falsy: empty set"       (set))
+(assert-false "falsy: empty dict"      (hash-map))
+(assert-false "falsy: empty blob"      (string->blob ""))
+(assert-true  "truthy: t"              t)
+(assert-true  "truthy: 1"              1)
+(assert-true  "truthy: -1"             -1)
+(assert-true  "truthy: 1.5"            1.5)
+(assert-true  "truthy: non-empty str"  "a")
+(assert-true  "truthy: symbol"         'foo)
+(assert-true  "truthy: non-empty list" (list 1))
+(assert-true  "truthy: non-empty vec"  (vec 3 0))
+(assert-true  "truthy: non-empty hamt" (hamt "a" 1))
+(assert-true  "truthy: non-empty set"  (set 1))
+(assert-true  "truthy: non-empty dict" (hash-map "a" 1))
+(assert-true  "truthy: non-empty blob" (string->blob "a"))
+(assert-true  "truthy: lambda"         (fn (x) x))
+(assert-true  "truthy: builtin"        car)
+;; assert-true/assert-false self-check (harness sanity, like assert/refute above)
+(assert-true  "assert-true detects truthy" t)
+(assert-false "assert-false detects falsy" nil)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
+;; The process also exits 1 if any test failed (0 otherwise), so a runner
+;; can rely on the exit code — and a crash mid-suite never looks like a
+;; pass, since the (exit 0) below is only reached when every test ran.
 ;; ====================================================================
 (prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed"))
+(exit (if (> _test_fail 0) 1 0))
