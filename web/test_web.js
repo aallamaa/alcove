@@ -117,6 +117,11 @@ const LISP = [
   ["(nil? nil)", "Error: Error unbound variable nil?"],
   ["'(1 2 3)", "(1 2 3)"],
   ["(eval (list (quote +) 1 2))", "3"],
+  // deep non-tail recursion (~500 C frames) — guards the web build's
+  // -sSTACK_SIZE: emcc's 64KB default overflows the wasm stack here and traps
+  // with "memory access out of bounds"; native (8MB) and the fixed web build
+  // (8MB) return 500.
+  ["(do (= cnt (fn (n) (if (< n 1) 0 (+ 1 (cnt (- n 1)))))) (cnt 500))", "500"],
 ];
 const ADDER = [
   ["+ 1 2", "3"],

@@ -329,6 +329,7 @@ web:
 	  -sEXPORTED_FUNCTIONS=_main,_alcove_web_eval,_alcove_register_cmd,_alcove_arg_int,_alcove_arg_string,_alcove_make_int \
 	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
 	  -sALLOW_TABLE_GROWTH=1 \
+	  -sSTACK_SIZE=8388608 \
 	  -o web/alcove-core.js alcove.c -lm
 	$(EMCC) -O2 -Wall -W $(SAFE_FLAGS) \
 	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
@@ -339,6 +340,7 @@ web:
 	  -sEXPORTED_FUNCTIONS=_main,_alcove_web_eval,_alcove_register_cmd,_alcove_arg_int,_alcove_arg_string,_alcove_make_int \
 	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
 	  -sALLOW_TABLE_GROWTH=1 \
+	  -sSTACK_SIZE=8388608 \
 	  -o web/adder-core.js adder.c -lm
 
 clean:
