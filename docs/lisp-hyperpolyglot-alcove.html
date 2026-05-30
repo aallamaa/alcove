@@ -847,15 +847,31 @@ comparisons for tests</td>
 <td><code>vec-push! v x</code>, <code>vec-shift! v</code></td>
 </tr>
 <tr class="odd">
-<td>Hash map</td>
+<td>Hash map (mutable)</td>
 <td>hash tables</td>
 <td>hash tables</td>
 <td>maps</td>
 <td>hash tables</td>
 <td><code>hash-map</code>, <code>assoc!</code>, <code>dissoc!</code>,
 <code>get</code>, <code>contains?</code>, <code>keys</code>,
-<code>vals</code>, <code>count</code></td>
-<td><code>hash-map "k" v</code>, <code>get d "k"</code></td>
+<code>vals</code>, <code>count</code>; callable: <code>(d k)</code> is
+<code>(get d k)</code></td>
+<td><code>hash-map "k" v</code>, <code>get d "k"</code>,
+<code>d "k"</code></td>
+</tr>
+<tr class="odd">
+<td>Persistent map (HAMT)</td>
+<td>FSet/immutable libs</td>
+<td><code>hash</code> (immutable)</td>
+<td>maps (persistent by default)</td>
+<td>—</td>
+<td><code>hamt</code>, <code>hamt-assoc</code>, <code>hamt-dissoc</code>,
+<code>hamt-get</code>, <code>hamt-count</code>,
+<code>hamt-contains?</code>, <code>hamt-keys</code>,
+<code>hamt-vals</code>, <code>hamt-merge</code>; immutable, structural
+sharing; callable: <code>(m k)</code> is <code>(hamt-get m k)</code></td>
+<td><code>hamt "a" 1</code>, <code>hamt-assoc m "b" 2</code>,
+<code>m "a"</code></td>
 </tr>
 <tr class="even">
 <td>Deque</td>
@@ -877,8 +893,10 @@ comparisons for tests</td>
 <td>unibyte strings</td>
 <td><code>make-blob</code>, <code>blob-len</code>,
 <code>blob-ref</code>, <code>blob-&gt;string</code>,
-<code>string-&gt;blob</code>, <code>read-bytes</code></td>
-<td><code>make-blob n</code>, <code>read-bytes path</code></td>
+<code>string-&gt;blob</code>, <code>read-bytes</code>; callable:
+<code>(b i)</code> is the byte at <code>i</code></td>
+<td><code>make-blob n</code>, <code>read-bytes path</code>,
+<code>b i</code></td>
 </tr>
 <tr class="even">
 <td>Sets</td>
@@ -891,9 +909,11 @@ comparisons for tests</td>
 <code>set-has?</code>, <code>set-union</code>,
 <code>set-intersection</code>, <code>set-difference</code>,
 <code>set-&gt;list</code>; typed identity for fixnums, floats, chars,
-strings, symbols, blobs, <code>nil</code>, and <code>t</code></td>
-<td><code>hash-set 1 2 3</code>, <code>set-has? s x</code>;
-<code>set</code> is assignment syntax in Adder</td>
+strings, symbols, blobs, <code>nil</code>, and <code>t</code>; callable:
+<code>(s x)</code> returns <code>x</code> if present, else
+<code>nil</code></td>
+<td><code>hash-set 1 2 3</code>, <code>set-has? s x</code>,
+<code>s x</code>; <code>set</code> is assignment syntax in Adder</td>
 </tr>
 </tbody>
 </table>
@@ -1293,6 +1313,33 @@ tools
 <code>help</code>
 </td>
 </tr>
+<tr>
+<td>
+Escape continuation
+</td>
+<td>
+<code>block</code>/<code>return-from</code>, <code>catch</code>/<code>throw</code>
+</td>
+<td>
+<code>call/ec</code>, <code>let/ec</code>
+</td>
+<td>
+no <code>call/cc</code>; exceptions
+</td>
+<td>
+<code>catch</code>/<code>throw</code>
+</td>
+<td>
+<code>(call/cc (fn (k) … (k v) …))</code> — one-shot, upward escape (like
+Scheme <code>call/ec</code>); <code>k</code> is valid only within the
+<code>call/cc</code> extent
+</td>
+<td>
+<pre><code>call/cc:
+  fn (k):
+    + 1 (k 41)</code></pre>
+</td>
+</tr>
 </tbody>
 </table>
 <h2 id="files-namespaces-and-interop">Files, Namespaces, And
@@ -1374,10 +1421,25 @@ Interop</h2>
 <td>Racket FFI</td>
 <td>JNI/JNA/Java interop</td>
 <td>dynamic modules/modules</td>
-<td><code>(ffi-fn lib symbol ret arg...)</code></td>
+<td><code>ffi-fn</code> (functions), <code>ffi-vfn</code> (varargs, e.g.
+<code>printf</code>), <code>ffi-callback</code> (Alcove lambda → C fn
+pointer), <code>ffi-struct</code>/<code>ffi-pack</code>/<code>ffi-unpack</code>
+(struct-by-value, incl. nested) — via libffi. Native builds only.</td>
 <td><code>ffi-fn lib symbol ret arg...</code></td>
 </tr>
 <tr class="odd">
+<td>Serialization</td>
+<td>libraries</td>
+<td>libraries</td>
+<td>EDN / libraries</td>
+<td>libraries</td>
+<td><code>msgpack-encode</code> → blob, <code>msgpack-decode</code> → value
+(MessagePack): nil/t, fixnums, floats, strings/symbols, blobs, lists,
+string-keyed dicts; <code>savedb</code>/<code>loaddb</code> for the session
+store</td>
+<td><code>msgpack-encode v</code>, <code>msgpack-decode b</code></td>
+</tr>
+<tr class="even">
 <td>Java interop</td>
 <td>implementation-specific</td>
 <td>JVM variants only</td>
