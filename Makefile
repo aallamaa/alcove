@@ -372,6 +372,20 @@ fuzz:
 	  $(JIT_FLAGS) -o parser_fuzz parser_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
 	./parser_fuzz $(FUZZ_ARGS)
 
+# Adder transpiler (adr.h) tests. adr.h is self-contained string->string, so
+# this links nothing else. unit tests + bounded deterministic fuzz, under ASan.
+adr-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  -I. -o adr_test adr_test.c
+	./adr_test
+
+# Coverage-guided fuzzing of the Adder transpiler (clang + libFuzzer).
+adr-fuzz:
+	@[ -n "$(CLANG)" ] || { echo "no clang found — install clang for libFuzzer"; exit 1; }
+	$(CLANG) -DADR_LIBFUZZER -g -O1 -fsanitize=fuzzer,address,undefined \
+	  -I. -o adr_fuzz adr_test.c
+	./adr_fuzz $(FUZZ_ARGS)
+
 fmt:
 	$(FMT) -i $(FMT_FILES)
 
@@ -390,4 +404,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hooks

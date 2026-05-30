@@ -114,10 +114,15 @@ static int als_is_delim(char c) {
 
 static als_node *als_read_one(als_lr *r);
 
-/* read forms until end (term==0) or until `term` char consumed */
+/* read forms until end (term==0) or until `term` char consumed.
+   Inside a brace container ({…} map, #{…} set — both close with '}') a comma
+   is an entry separator and counts as whitespace; everywhere else ',' stays
+   the unquote reader macro, so the quasiquote/unquote meta-syntax is intact. */
 static void als_read_forms(als_lr *r, char term, als_node *out) {
+  int sep_comma = (term == '}');
   for (;;) {
-    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t'))
+    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t' ||
+                           (sep_comma && r->s[r->i] == ',')))
       r->i++;
     if (r->i >= r->n)
       return;
@@ -149,6 +154,17 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
 
 static als_node *als_read_one(als_lr *r) {
   char c = r->s[r->i];
+  if (c == '{') {
+    /* hash-map literal {k v, k v} -> (hash-map k v k v). This is the form the
+       printer emits for a dict; als_read_forms treats the ',' separators as
+       whitespace (see its sep_comma note). `#{…}` (set) is handled in the `#`
+       dispatch below. */
+    r->i++;
+    als_node *m = als_list();
+    als_push(m, als_atom("hash-map", 8));
+    als_read_forms(r, '}', m);
+    return m;
+  }
   if (c == '(') {
     r->i++;
     als_node *L = als_list();

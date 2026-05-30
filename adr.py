@@ -85,10 +85,17 @@ class LineReader:
             self.i += 1
 
     def read_forms(self, terminator=None):
-        """Read forms until end of string, or until `terminator` (')')."""
+        """Read forms until end of string, or until `terminator` (')').
+        Inside a brace container ({…} map / #{…} set, both closed by '}') a
+        comma separates entries and counts as whitespace; elsewhere ',' stays
+        the unquote reader macro, keeping the quasiquote meta-syntax intact."""
+        sep_comma = terminator == "}"
         forms = []
         while True:
             self.skip_ws()
+            while sep_comma and self.i < self.n and self.s[self.i] == ",":
+                self.i += 1
+                self.skip_ws()
             if self.i >= self.n:
                 if terminator is not None:
                     raise SyntaxError("unbalanced '(' in: " + self.s)
@@ -115,6 +122,11 @@ class LineReader:
 
     def read_one(self):
         c = self.s[self.i]
+        if c == "{":
+            # hash-map literal {k v, k v} -> (hash-map k v k v); read_forms
+            # treats the ',' separators as whitespace. (#{…} set is below.)
+            self.i += 1
+            return [Sym("hash-map")] + self.read_forms(terminator="}")
         if c == "(":
             self.i += 1
             return self.read_forms(terminator=")")
@@ -162,7 +174,10 @@ class LineReader:
             self.i += 3
             return Sym(tok)
         start = self.i
-        while self.i < self.n and self.s[self.i] not in ' \t()[]{}"\'':
+        # `,` and `` ` `` terminate an atom too (they are reader macros), so a
+        # token like `1,` splits into `1` and `,` — matching adr.h's
+        # als_is_delim. Otherwise a map's `k v,` glues the comma onto the value.
+        while self.i < self.n and self.s[self.i] not in ' \t()[]{}"\',`':
             self.i += 1
         tok = self.s[start:self.i]
         # alcove-target literal mapping

@@ -68,6 +68,8 @@ mpsc_test_tsan
 # (`make parser-test` / `make fuzz`). The source parser_test.c stays tracked.
 parser_test
 parser_fuzz
+adr_test
+adr_fuzz
 crash-*
 leak-*
 timeout-*
