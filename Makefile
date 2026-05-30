@@ -412,6 +412,18 @@ blob-test:
 	  $(JIT_FLAGS) -o blob_test blob_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
 	./blob_test
 
+# vector (vector.h) unit + fuzz tests; includes alcove.c.
+vector-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  $(JIT_FLAGS) -o vector_test vector_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./vector_test
+
+# set (set.h) unit + fuzz tests; includes alcove.c.
+set-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  $(JIT_FLAGS) -o set_test set_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./set_test
+
 # MsgPack (msgpack.h) round-trip + decoder-fuzz tests; includes alcove.c.
 msgpack-test:
 	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
@@ -449,4 +461,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test dict-test blob-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

@@ -73,6 +73,8 @@ adr_fuzz
 hamt_test
 dict_test
 blob_test
+set_test
+vector_test
 msgpack_test
 utf8_test
 crash-*
