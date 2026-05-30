@@ -378,8 +378,12 @@ fmt:
 fmt-check:
 	$(FMT) --dry-run --Werror $(FMT_FILES)
 
+# Analyze both translation units: alcove.c (the core) and adder.c (which adds
+# ALCOVE_ALS + #includes adr.h), so the include-only headers — adr.h in
+# particular — are checked in real caller context, not standalone.
 tidy:
 	$(TIDY) alcove.c -- $(TIDY_CFLAGS)
+	$(TIDY) adder.c  -- -DALCOVE_ALS=1 $(TIDY_CFLAGS)
 
 hooks:
 	git config core.hooksPath .githooks

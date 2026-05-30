@@ -14,7 +14,14 @@
 # pre-push hook). The format check below is fast and always runs.
 
 # Staged C/H files this commit touches (Added/Copied/Modified).
+# clang-format runs on every staged C source and header (formatting a header
+# in isolation is fine). clang-tidy, below, runs only on .c files: a real
+# translation unit. The project's .h files are include-only (adr.h, alcove.h,
+# builtins.h, …) — analyzing one as its own TU yields false positives (no
+# caller context) and misses cross-file flow. Header changes are covered by
+# `make tidy`, which analyzes the .c units that include them.
 CFILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.c' '*.h')
+TIDY_CFILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.c')
 [ -z "$CFILES" ] && exit 0
 
 status=0
@@ -40,12 +47,14 @@ fi
 # --- 2. clang-tidy: new diagnostics on the changed lines (slow) -------------
 if [ "$ALCOVE_SKIP_TIDY" = "1" ]; then
   echo "• ALCOVE_SKIP_TIDY=1 — skipping clang-tidy."
+elif [ -z "$TIDY_CFILES" ]; then
+  echo "• only headers staged — clang-tidy needs a .c TU; run 'make tidy'."
 elif command -v clang-tidy-diff >/dev/null 2>&1 || command -v clang-tidy-diff.py >/dev/null 2>&1; then
   TIDY_DIFF=$(command -v clang-tidy-diff || command -v clang-tidy-diff.py)
   CFLAGS="-std=gnu11 -DALCOVE_JIT=1 -DALCOVE_FFI=1 -DALCOVE_READLINE=1"
   CFLAGS="$CFLAGS $(pkg-config --cflags libffi 2>/dev/null) $(pkg-config --cflags readline 2>/dev/null)"
   echo "• clang-tidy on changed lines (analyzing the full TU, ~3 min)…"
-  tidy=$(git diff --cached -U0 -- $CFILES | "$TIDY_DIFF" -p1 -quiet -- $CFLAGS 2>/dev/null)
+  tidy=$(git diff --cached -U0 -- $TIDY_CFILES | "$TIDY_DIFF" -p1 -quiet -- $CFLAGS 2>/dev/null)
   if printf '%s\n' "$tidy" | grep -qE 'warning:|error:'; then
     echo "✗ clang-tidy flagged your changed lines:"
     printf '%s\n' "$tidy" | grep -E 'warning:|error:' | sed 's/^/    /' | head -40
