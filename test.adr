@@ -4079,6 +4079,16 @@ assert "compiled keyed: hamt" (_ci_lookup _ci_h "x") 10
 
 assert "compiled keyed: set" (_ci_lookup _ci_set 3) 3
 
+assert "eq same fixnum" (eq 3 3) t
+
+assert "eq different fixnum" (eq 3 4) nil
+
+assert "eq? alias works" (eq? 'a 'a) t
+
+assert "eq matches is" (eq (eq 5 5) (is 5 5)) t
+
+assert "eq same string content" (eq "hi" "hi") t
+
 assert-false "falsy: nil" nil
 
 assert-false "falsy: 0" 0

@@ -2731,6 +2731,12 @@
 (assert "compiled keyed: dict"        (_ci_lookup _ci_d "b")                 2)
 (assert "compiled keyed: hamt"        (_ci_lookup _ci_h "x")                 10)
 (assert "compiled keyed: set"         (_ci_lookup _ci_set 3)                 3)
+;; eq / eq? are aliases of is (identity). Same semantics, different spelling.
+(assert "eq same fixnum"              (eq 3 3)                               t)
+(assert "eq different fixnum"         (eq 3 4)                               nil)
+(assert "eq? alias works"             (eq? 'a 'a)                            t)
+(assert "eq matches is"               (eq (eq 5 5) (is 5 5))                 t)
+(assert "eq same string content"      (eq "hi" "hi")                         t)
 
 ;; ====================================================================
 ;; Truthiness matrix — one assert-true/assert-false per value KIND, so a

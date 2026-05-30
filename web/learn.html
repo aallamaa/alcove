@@ -224,8 +224,8 @@
       lisp: `(= radius 5)
 (= area (* 3.14159 (* radius radius)))
 area`,
-      adr: `set radius 5
-set area (* 3.14159 (* radius radius))
+      adr: `setf radius 5
+setf area (* 3.14159 (* radius radius))
 area`,
     },
     {
@@ -265,9 +265,9 @@ grade 84`,
       lisp: `(= total 0)
 (for i 1 10 (= total (+ total i)))
 total`,
-      adr: `set total 0
+      adr: `setf total 0
 for i 1 10:
-  set total (+ total i)
+  setf total (+ total i)
 total`,
     },
     {
@@ -281,7 +281,7 @@ total`,
   (map sq-list xs)
   (filter gt3-list xs)
   (reduce add-list 0 xs))`,
-      adr: `set xs (list 1 2 3 4 5 6)
+      adr: `setf xs (list 1 2 3 4 5 6)
 def sq-list (x):
   * x x
 def gt3-list (x):
@@ -299,8 +299,8 @@ list:
       lisp: `(= a (vector 1.0 2.0 3.0))
 (= b (vector 4.0 5.0 6.0))
 (list (vec-dot a b) (vec-argmax b))`,
-      adr: `set a (vector 1.0 2.0 3.0)
-set b (vector 4.0 5.0 6.0)
+      adr: `setf a (vector 1.0 2.0 3.0)
+setf b (vector 4.0 5.0 6.0)
 list (vec-dot a b) (vec-argmax b)`,
     },
     {
@@ -309,21 +309,21 @@ list (vec-dot a b) (vec-argmax b)`,
       lisp: `(= person (hash-map "name" "Ada" :age 36))
 (assoc! person "field" "math")
 (list (get person "name") (contains? person :age) (keys person))`,
-      adr: `set person (hash-map "name" "Ada" :age 36)
+      adr: `setf person (hash-map "name" "Ada" :age 36)
 assoc! person "field" "math"
 list (get person "name") (contains? person :age) (keys person)`,
     },
     {
       title: "Sets",
-      note: "Hash sets, membership, and set algebra.",
+      note: "Hash sets, membership, and setf algebra.",
       lisp: `(= a (set 1 2 3 3 :x))
 (= b (set 3 4 :x))
 (list
   (count a)
   (set-has? a :x)
   (set->list (set-intersection a b)))`,
-      adr: `set a (hash-set 1 2 3 3 :x)
-set b (hash-set 3 4 :x)
+      adr: `setf a (hash-set 1 2 3 3 :x)
+setf b (hash-set 3 4 :x)
 list:
   (count a)
   (set-has? a :x)
@@ -338,7 +338,7 @@ list:
   (substr "abcdef" 1 4)
   (string-join words " / ")
   (string-upcase "fast"))`,
-      adr: `set words (string-split "red,green,blue" ",")
+      adr: `setf words (string-split "red,green,blue" ",")
 list:
   (string-append "alc" "ove")
   (substr "abcdef" 1 4)
@@ -367,7 +367,7 @@ read-lines "/notes-script.txt"`,
   let n 0:
     fn ():
       do (= n (+ n 1)) n
-set counter (make-counter)
+setf counter (make-counter)
 list (counter) (counter) (counter)`,
     },
     {
@@ -386,7 +386,7 @@ my-when (> 5 3) "macro branch"`,
 (push-left! q "first")
 (push-right! q "last")
 (list (peek-left q) (peek-right q) (count q))`,
-      adr: `set q (deque "middle")
+      adr: `setf q (deque "middle")
 push-left! q "first"
 push-right! q "last"
 list (peek-left q) (peek-right q) (count q)`,
@@ -396,7 +396,7 @@ list (peek-left q) (peek-right q) (count q)`,
       note: "Binary data is separate from strings.",
       lisp: `(= blob (string->blob "abc"))
 (list (blob-len blob) (blob-ref blob 1) (blob->string blob))`,
-      adr: `set blob (string->blob "abc")
+      adr: `setf blob (string->blob "abc")
 list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
     },
     {
@@ -449,9 +449,9 @@ list (blob-len blob) (blob-ref blob 1) (blob->string blob)`,
 (= v #[10 20 30])
 (= b (string->blob "Hi"))
 (list (word 0) (v 2) (b 1))`,
-      adr: `set word "alcove"
-set v #[10 20 30]
-set b (string->blob "Hi")
+      adr: `setf word "alcove"
+setf v #[10 20 30]
+setf b (string->blob "Hi")
 list (word 0) (v 2) (b 1)`,
     },
     {
@@ -460,8 +460,8 @@ list (word 0) (v 2) (b 1)`,
       lisp: `(= m (hamt "a" 1 "b" 2))
 (= s (set 1 2 3))
 (list (m "a") (m "z") (s 2) (s 9))`,
-      adr: `set m (hamt "a" 1 "b" 2)
-set s (hash-set 1 2 3)
+      adr: `setf m (hamt "a" 1 "b" 2)
+setf s (hash-set 1 2 3)
 list (m "a") (m "z") (s 2) (s 9)`,
     },
     {
@@ -472,8 +472,8 @@ list (m "a") (m "z") (s 2) (s 9)`,
 (list (hamt-get m "a")
       (hamt-count m2)
       (hamt-get m "c" "none"))`,
-      adr: `set m (hamt "a" 1 "b" 2)
-set m2 (hamt-assoc m "c" 3)
+      adr: `setf m (hamt "a" 1 "b" 2)
+setf m2 (hamt-assoc m "c" 3)
 list (hamt-get m "a") (hamt-count m2) (hamt-get m "c" "none")`,
     },
     {
@@ -490,7 +490,7 @@ list (hamt-get m "a") (hamt-count m2) (hamt-get m "c" "none")`,
       note: "Compact binary serialization round-trips lists, dicts, numbers, strings, and blobs.",
       lisp: `(= packed (msgpack-encode (list 1 "two" 3.5)))
 (msgpack-decode packed)`,
-      adr: `set packed (msgpack-encode (list 1 "two" 3.5))
+      adr: `setf packed (msgpack-encode (list 1 "two" 3.5))
 msgpack-decode packed`,
     },
   ];

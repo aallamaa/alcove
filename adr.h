@@ -305,7 +305,9 @@ static int als_opens_block(char *t) {
   return 1;
 }
 
-/* head-symbol remap: macro -> defmacro, set -> = */
+/* head-symbol remap: macro -> defmacro. Assignment is `setf` (the built-in
+   alias of `=`), which needs no remap; `set` is intentionally NOT remapped so
+   it remains the set constructor, matching Alcove — (set 1 2 3) builds a set. */
 static void als_head_remap(als_node *node) {
   if (!node->is_list || node->n == 0)
     return;
@@ -315,9 +317,6 @@ static void als_head_remap(als_node *node) {
   if (!strcmp(h->atom, "macro")) {
     free(h->atom);
     h->atom = strdup("defmacro");
-  } else if (!strcmp(h->atom, "set")) {
-    free(h->atom);
-    h->atom = strdup("=");
   }
 }
 

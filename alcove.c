@@ -172,6 +172,8 @@ lispProc lispProcList[] = {
     LISPCMD("<=", cmpcmd, doc_le),
     LISPCMD(">=", cmpcmd, doc_ge),
     LISPCMD("is", iscmd, doc_is),
+    LISPCMD("eq", iscmd, doc_is),  /* alias of is */
+    LISPCMD("eq?", iscmd, doc_is), /* alias of is */
     LISPCMD("iso", isocmd, doc_iso),
     LISPCMD("in", incmd, doc_in),
     LISPCMD("no", nocmd, doc_no),
@@ -9366,7 +9368,8 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
 }
 
 const char doc_is[] =
-    "(is a b) — pointer/value identity (eq?). Same fixnum or same heap object.";
+    "(is a b) — pointer/value identity. Same fixnum or same heap object. "
+    "Aliases: eq, eq?.";
 EQUALITY_CMD(iscmd, isequal)
 
 const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into "

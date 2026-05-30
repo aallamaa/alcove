@@ -33,7 +33,8 @@ Reader rules (see spec sections 4-6, 16-18):
 alcove target tweaks (spec section 19, adapted to alcove not CL):
   true -> t,  false -> nil,  nil -> nil
   macro -> defmacro   (head position only)
-  set   -> =          (head position only)
+  setf is the assignment word (built-in alias of =); `set` is NOT remapped,
+  so it stays the set constructor — (set 1 2 3) builds a set, as in Alcove.
   def / fn / do / if / let / while / for : already native to alcove.
 
 Usage:
@@ -221,7 +222,7 @@ def line_to_list(text):
     return forms                  # many forms -> (f f ...)
 
 
-HEAD_MAP = {"macro": "defmacro", "set": "="}
+HEAD_MAP = {"macro": "defmacro"}
 
 
 def read_program(src):
