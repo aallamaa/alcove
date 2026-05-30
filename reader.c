@@ -77,41 +77,52 @@ exp_t *make_atom_from_token(token_t *token) {
       }
     }
   }
+  /* Classify the token as integer / float / symbol with a tiny state machine
+     over `test`. A `goto scanned` (not `break`, which would only leave the
+     switch) ends the scan: the char is illegal here, so the token is a symbol.
+     If the loop instead runs to completion, `length` underflows to -1. */
   while (length--) {
     v = (char)*(str++);
-    if ((v == '+') || (v == '-')) {
-      if ((test == 1) || (test == 3)) {
-        break; // A sign after another sign => not an integer or following
-               // format +AB+
-      } else if (test == 7) {
-        // OK MANTISSA there
-        test = 15;
-      } else if (test == 0)
+    switch (v) {
+    case '+':
+    case '-':
+      /* sign is legal only at the very start (test 0) or right after the
+         exponent marker (test 7); anywhere else ends the number */
+      if (test == 1 || test == 3)
+        goto scanned;
+      else if (test == 7)
+        test = 15; /* exponent sign */
+      else if (test == 0)
         test = 1;
       else
-        break;
-    } else if (v == '.') {
-      if ((test <= 3) || !dot)
+        goto scanned;
+      break;
+    case '.':
+      if (test <= 3 || !dot)
         dot += 1;
       else
-        break;
-    } else if ((v == 'E') || (v == 'e')) {
-      // set mentisa on if not seen mantisa yet
+        goto scanned;
+      break;
+    case 'E':
+    case 'e':
       if (test == 3)
-        test = 7;
+        test = 7; /* enter mantissa/exponent */
       else
-        break;
-
-    } else if ((v <= '9') && (v >= '0')) {
-      if (test <= 3) {
+        goto scanned;
+      break;
+    case '0' ... '9':
+      if (test <= 3)
         test = 3;
-      } else if ((test == 7) || (test == 15) | (test == 31))
+      else if (test == 7 || test == 15 || test == 31)
         test = 31;
       else
-        break;
-    } else
+        goto scanned;
       break;
+    default:
+      goto scanned;
+    }
   }
+scanned:
 
   if (length != -1) {
     // not an integer then must be a symbol
