@@ -449,9 +449,11 @@ top-level binding. <code>(def f (x) …)</code> defines a top-level
 function.
 </td>
 <td>
-<pre><code>setq x 3
+<pre><code>setq x 3       # root/session binding
 
-set x 3        # top-level only
+set x 3        # general assignment = (= x 3):
+               # session var at top level,
+               # a local inside a fn body
 
 def f (x):
   + x 1</code></pre>
@@ -912,8 +914,10 @@ sharing; callable: <code>(m k)</code> is <code>(hamt-get m k)</code></td>
 strings, symbols, blobs, <code>nil</code>, and <code>t</code>; callable:
 <code>(s x)</code> returns <code>x</code> if present, else
 <code>nil</code></td>
-<td><code>hash-set 1 2 3</code>, <code>set-has? s x</code>,
-<code>s x</code>; <code>set</code> is assignment syntax in Adder</td>
+<td>In Adder a line-leading <code>set</code> is the assignment statement
+(<code>set x v</code> = <code>(= x v)</code>), so the constructor is spelled
+<code>hash-set 1 2 3</code> — or parenthesized as <code>(set 1 2 3)</code>,
+which is unaffected. Then <code>set-has? s x</code>, <code>s x</code>.</td>
 </tr>
 </tbody>
 </table>
