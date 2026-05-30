@@ -18145,6 +18145,21 @@ int compile_lambda(exp_t *fn, int is_closure) {
 static inline int isindexable(exp_t *e) {
   return isstring(e) || isvector(e) || isblob(e);
 }
+/* Keyed containers answer (m k) as a key lookup (Clojure-style), distinct
+   from the integer indexing of isindexable: dict/hamt -> value (nil if
+   absent), set -> the member (nil if absent). */
+static inline int iskeyed(exp_t *e) {
+  return isdict(e) || isset(e) || ishamt(e);
+}
+/* Any value that supports (container arg) as a read. */
+static inline int iscallable_container(exp_t *e) {
+  return isindexable(e) || iskeyed(e);
+}
+/* Apply a callable container to one already-evaluated argument, consuming
+   `arg`'s ref. Indexable -> element by integer index; keyed -> value/member
+   by key. Returns an owned result (nil for an absent key) or an error.
+   Defined after the HAMT ops since it needs hamt_node_get. */
+static exp_t *container_apply(exp_t *c, exp_t *arg, env_t *env);
 /* Fetch element i (0-based) of an indexable container. Returns an owned ref
    (vector cell) or a fresh immediate (string -> char, blob -> byte fixnum),
    or NULL when i is out of range / negative. Caller guarantees isindexable(c)
@@ -18691,12 +18706,12 @@ l_tail_call: {
 #ifdef ALCOVE_FFI
   is_ffi_callee = isffi(new_fn);
 #endif
-  if (isindexable(new_fn) || iscont(new_fn) || is_ffi_callee) {
-    /* Indexable container (string/vector/blob), escape continuation, or an
-       ffi-fn value reached in tail position: vm_invoke_values has the matching
-       arms (container indexing; the FFI arm dispatches to alc_ffi_call).
-       Without this such a callable as the tail expression of a compiled body
-       would be rejected as "not a lambda". */
+  if (iscallable_container(new_fn) || iscont(new_fn) || is_ffi_callee) {
+    /* Callable container (string/vector/blob index, or dict/hamt/set key
+       lookup), escape continuation, or an ffi-fn value reached in tail
+       position: vm_invoke_values has the matching arms (the FFI arm
+       dispatches to alc_ffi_call). Without this such a callable as the tail
+       expression of a compiled body would be rejected as "not a lambda". */
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
@@ -19081,11 +19096,10 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
      symbol-lookup path added in ticket 5). The bytecode VM compiles
      (sym args...) as OP_CALL_GLOBAL → vm_invoke_values, so we need the
      same arm here or compiled bodies miscompile string-index reads. */
-  if (isindexable(fn)) {
-    /* (container i) read — string -> char, vector -> element, blob -> byte.
-       The AST evaluator has the same arm on its two head paths; this one
-       keeps compiled bodies in sync. A float index truncates (matches
-       vec-ref). */
+  if (iscallable_container(fn)) {
+    /* (container arg) read — indexable: element by int index; keyed
+       (dict/hamt/set): value/member by key. The AST evaluator has the same
+       arm on its two head paths; this keeps compiled bodies in sync. */
     int i;
     if (nargs != 1) {
       for (i = 0; i < nargs; i++)
@@ -19093,19 +19107,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
       return error(ERROR_MISSING_PARAMETER, fn, env,
                    "index: expected exactly 1 arg, got %d", nargs);
     }
-    exp_t *idx = argv[0];
-    if (!isnumber(idx) && !isfloat(idx)) {
-      unrefexp(idx);
-      return error(ERROR_NUMBER_EXPECTED, fn, env,
-                   "index: arg must be a number");
-    }
-    int64_t i64 = isnumber(idx) ? FIX_VAL(idx) : (int64_t)idx->f;
-    unrefexp(idx);
-    exp_t *r = index_get(fn, i64);
-    if (!r)
-      return error(ERROR_INDEX_OUT_OF_RANGE, fn, env,
-                   "index: %lld out of range", (long long)i64);
-    return r; /* owned ref / immediate; caller unrefs fn */
+    return container_apply(fn, argv[0], env); /* consumes argv[0]; caller unrefs fn */
   }
   if (iscont(fn)) {
     /* (k v) reached from compiled code: produce the escape token. */
@@ -19568,13 +19570,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                (A macro defined inside a fn body leaked its frame otherwise.) */
             unrefexp(tmpexp2);
             goto finisht;
-          } else if (isindexable(tmpexp2)) {
-            /* (c i) where c is a var bound to a string/vector/blob — element
-               read (string->char, vector->element, blob->byte). Without this
-               the symbol-lookup path returned the container whole, ignoring
-               the index. Clear tail position for the index eval — a leaked
-               tail marker would be rejected as ERROR_NUMBER_EXPECTED instead
-               of indexing. A float index truncates (matches vec-ref). */
+          } else if (iscallable_container(tmpexp2)) {
+            /* (c arg) where c is a var bound to a callable container —
+               indexable: element by int index; keyed (dict/hamt/set):
+               value/member by key. Without this the lookup path returned the
+               container whole, ignoring the arg. Clear tail position for the
+               arg eval — a leaked tail marker would otherwise be misread. */
             int outer_tail = in_tail_position;
             in_tail_position = 0;
             exp_t *idx = EVAL(cadr(e), env);
@@ -19584,17 +19585,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
               ret = idx;
               goto finish;
             }
-            if (isnumber(idx) || isfloat(idx)) {
-              int64_t i = isnumber(idx) ? FIX_VAL(idx) : (int64_t)idx->f;
-              exp_t *el = index_get(tmpexp2, i);
-              ret = el ? el
-                       : error(ERROR_INDEX_OUT_OF_RANGE, e, env,
-                               "Error index out of range");
-            } else {
-              ret =
-                  error(ERROR_NUMBER_EXPECTED, e, env, "Error number expected");
-            }
-            unrefexp(idx);
+            ret = container_apply(tmpexp2, idx, env); /* consumes idx */
             unrefexp(tmpexp2);
             goto finish;
           } else if ispair (tmpexp2) {
@@ -19611,24 +19602,19 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         }
         ret = e; // what is happening here?
         goto finisht;
-      } else if (isindexable(tmpexp)) {
-        /* (c i) literal container head — string/vector/blob element read.
+      } else if (iscallable_container(tmpexp)) {
+        /* (c arg) literal container head — indexable element or keyed lookup.
            Same tail-clear as the symbol-bound path above. tmpexp is borrowed
-           from e (not unref'd). A float index truncates (matches vec-ref). */
+           from e (not unref'd); container_apply consumes the evaluated arg. */
         int outer_tail = in_tail_position;
         in_tail_position = 0;
         tmpexp2 = EVAL(cadr(e), env);
         in_tail_position = outer_tail;
-        if (isnumber(tmpexp2) || isfloat(tmpexp2)) {
-          int64_t idx =
-              isnumber(tmpexp2) ? FIX_VAL(tmpexp2) : (int64_t)tmpexp2->f;
-          exp_t *el = index_get(tmpexp, idx);
-          ret = el ? el
-                   : error(ERROR_INDEX_OUT_OF_RANGE, e, env,
-                           "Error index out of range");
-        } else
-          ret = error(ERROR_NUMBER_EXPECTED, e, env, "Error number expected");
-        unrefexp(tmpexp2);
+        if (iserror(tmpexp2)) {
+          ret = tmpexp2;
+          goto finish;
+        }
+        ret = container_apply(tmpexp, tmpexp2, env); /* consumes tmpexp2 */
         goto finish;
       } else if (islambda(tmpexp)) {
         if (in_tail_position) {
@@ -21369,6 +21355,55 @@ exp_t *hamtcontainspcmd(exp_t *e, env_t *env) {
   hamt_t *h = (hamt_t *)m->ptr;
   exp_t *v = hamt_node_get(h->root, k, hamt_hashkey(k), 0);
   CLEAN_RETURN_2(m, k, refexp(v ? TRUE_EXP : NIL_EXP));
+}
+
+/* Apply a callable container to one already-evaluated argument, consuming
+   arg's ref (see the forward decl near vm_run). Indexable string/vector/blob:
+   element by integer index (a float index truncates), error if non-number or
+   out of range. Keyed: dict and hamt return the value at the key (nil if
+   absent), set returns the member (nil if absent) — Clojure's (m k) / (s e).
+   Returns an owned result or an error exp. */
+static exp_t *container_apply(exp_t *c, exp_t *arg, env_t *env) {
+  if (isindexable(c)) {
+    if (!isnumber(arg) && !isfloat(arg)) {
+      unrefexp(arg);
+      return error(ERROR_NUMBER_EXPECTED, c, env, "index: arg must be a number");
+    }
+    int64_t i = isnumber(arg) ? FIX_VAL(arg) : (int64_t)arg->f;
+    unrefexp(arg);
+    exp_t *r = index_get(c, i);
+    return r ? r
+             : error(ERROR_INDEX_OUT_OF_RANGE, c, env,
+                     "index: %lld out of range", (long long)i);
+  }
+  if (ishamt(c)) {
+    hamt_t *h = (hamt_t *)c->ptr;
+    exp_t *v = h ? hamt_node_get(h->root, arg, hamt_hashkey(arg), 0) : NULL;
+    exp_t *ret = refexp(v ? v : NIL_EXP);
+    unrefexp(arg);
+    return ret;
+  }
+  if (isset(c)) {
+    /* Sets canonicalize members with a type tag (set_key_for_value, malloc'd)
+       so 2 and "2" are distinct — must use the same encoder as set-has?. */
+    char *ks = set_key_for_value(arg);
+    keyval_t *kv =
+        (ks && c->ptr) ? set_get_keyval_dict((dict_t *)c->ptr, ks, NULL) : NULL;
+    free(ks);
+    exp_t *ret = refexp(kv ? arg : NIL_EXP); /* the member, or nil if absent */
+    unrefexp(arg);
+    return ret;
+  }
+  /* dict — canonical string key (keyword/string/number; else a miss -> nil). */
+  {
+    char tmp[32];
+    char *ks = alc_key_to_cstr(arg, tmp);
+    keyval_t *kv =
+        (ks && c->ptr) ? set_get_keyval_dict((dict_t *)c->ptr, ks, NULL) : NULL;
+    exp_t *ret = refexp(kv ? kv->val : NIL_EXP);
+    unrefexp(arg);
+    return ret;
+  }
 }
 
 static int hamt_collect_keys(exp_t *key, exp_t *val, void *ctx) {

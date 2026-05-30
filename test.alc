@@ -2714,6 +2714,23 @@
 (assert "blob index out-of-range"     (try (_ci_b 99) (fn (e) 'caught))      'caught)
 (assert "string index out-of-range"   (try ("ab" 9) (fn (e) 'caught))        'caught)
 (assert "index negative errors"       (try (_ci_v -1) (fn (e) 'caught))      'caught)
+;; Keyed containers are callable too (Clojure-style): dict/hamt -> value (nil
+;; if absent), set -> the member (nil if absent). Same four call sites as the
+;; indexable case (shared container_apply), so cover var/compiled heads.
+(= _ci_d (hash-map "a" 1 "b" 2))
+(assert "dict callable hit"           (_ci_d "a")                            1)
+(assert "dict callable miss -> nil"   (_ci_d "z")                            nil)
+(= _ci_h (hamt "x" 10 "y" 20))
+(assert "hamt callable hit"           (_ci_h "y")                            20)
+(assert "hamt callable miss -> nil"   (_ci_h "z")                            nil)
+(= _ci_set (set 1 2 3))
+(assert "set callable member"         (_ci_set 2)                            2)
+(assert "set callable non-member nil" (_ci_set 9)                            nil)
+(assert "hamt literal head"           ((hamt "k" 99) "k")                    99)
+(def _ci_lookup (m k) (m k))   ;; compiled + tail position over keyed containers
+(assert "compiled keyed: dict"        (_ci_lookup _ci_d "b")                 2)
+(assert "compiled keyed: hamt"        (_ci_lookup _ci_h "x")                 10)
+(assert "compiled keyed: set"         (_ci_lookup _ci_set 3)                 3)
 
 ;; ====================================================================
 ;; Truthiness matrix — one assert-true/assert-false per value KIND, so a
