@@ -391,6 +391,12 @@ msgpack-test:
 	  $(JIT_FLAGS) -o msgpack_test msgpack_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
 	./msgpack_test
 
+# utf8.h is libc-only, so its test links nothing else (the most isolated TU).
+utf8-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  -I. -o utf8_test utf8_test.c
+	./utf8_test
+
 # Coverage-guided fuzzing of the Adder transpiler (clang + libFuzzer).
 adr-fuzz:
 	@[ -n "$(CLANG)" ] || { echo "no clang found — install clang for libFuzzer"; exit 1; }
@@ -416,4 +422,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test msgpack-test hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz hamt-test msgpack-test utf8-test hooks
