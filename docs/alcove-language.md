@@ -32,9 +32,10 @@ user:
    self-tail loops, two-call recursion). Gated behind `make jit`.
 
 The compiler picks the best layer per function silently. You write Lisp;
-you get JIT speed when the shape allows. On the four canonical
-microbenchmarks (fib, fact, forsum, countdown) alcove with JIT beats
-CPython 3.13 by 1.6×–60×.
+you get JIT speed when the shape allows. On the canonical microbenchmarks
+(fib, fact, forsum, countdown, …) alcove with JIT beats CPython 3.13 by
+roughly 50×–700× on the shapes the JIT recognizes — see the README
+benchmark table or `make benchmark-jit` for current figures.
 
 ### Running it
 

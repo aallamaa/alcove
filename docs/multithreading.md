@@ -392,12 +392,20 @@ The JIT inlines `refexp` and `unrefexp` as plain word-size load/add/store.
 This is **incorrect under multi-thread** for any `exp_t` that has been
 promoted-to-shared (Option 3 from "Refcount duality"). Sites:
 
-| Backend | Function | Lines |
-|---|---|---|
-| arm64 | `try_jit_is_prime_given` | 6828–6840 |
-| arm64 | `try_jit_safe_p` | 7009–7022 |
-| x86_64 | `try_jit_safe_p` | 8957, 8979 |
-| x86_64 | `try_jit_is_prime_given` | 9184, 9207 |
+| Backend | Function (file) |
+|---|---|
+| arm64  | `try_jit_is_prime_given` (`jit_arm64.h`) |
+| arm64  | `try_jit_safe_p` (`jit_arm64.h`) |
+| x86_64 | `try_jit_safe_p` (`jit_amd64.h`) |
+| x86_64 | `try_jit_is_prime_given` (`jit_amd64.h`) |
+
+(The list/tree-walking shapes that inline `refexp`/`unrefexp` as raw
+load/add/store. The newer JIT shapes — `float_acc_loop`,
+`wide_counter_loop`, `predicate_cons_loop` — are NOT additional sites:
+they call the real `refexp`/`make_floatf`/`make_node` (via callout or a
+C kernel), which already route through the `__sync_*` refcount macros.
+Functions referenced by name, not line, since the JIT now lives in
+`jit_arm64.h` / `jit_amd64.h` / `jit_common.h`.)
 
 Resolution under path B: each JIT'd lambda runs on its lambda-home shard,
 so its environment slots and locals are single-threaded — non-atomic

@@ -4773,7 +4773,9 @@ static const char *bc_opname(uint8_t op) {
 }
 
 /* Decode one instruction at code[pc] and print it. Returns the byte
-   length (1..4) so the caller can advance. */
+   length (1..4) so the caller can advance. NOTE: bc_oplen() in jit_common.h
+   is the length-only twin of this switch — keep the two in lockstep when
+   adding or resizing opcodes (the JIT shape matchers walk via bc_oplen). */
 static int bc_disasm_one(const uint8_t *code, int pc) {
   uint8_t op = code[pc];
   switch (op) {

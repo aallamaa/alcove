@@ -224,7 +224,12 @@
        Ref: http://en.wikipedia.org/wiki/Hash_array_mapped_trie ;
        clojure PersistentHashMap ; chaelim/HAMT ; Ctries (lock-free).
 [TODO] implement http://gcc.gnu.org/onlinedocs/gcc-4.4.5/gcc/Atomic-Builtins.html for every potentially concurrent objects
-[TODO] implement JIT with DynASM http://blog.reverberate.org/2012_12_01_archive.html
+[DONE] (superseded) "implement JIT with DynASM" — alcove ships a hand-rolled
+       shape-matching JIT for arm64 + amd64 (jit_arm64.h / jit_amd64.h /
+       jit_common.h; see the JIT [DONE] entries above), not DynASM. The
+       narrow set of recognized shapes is emitted directly, so the DynASM
+       dependency was never needed. (orig ref
+       http://blog.reverberate.org/2012_12_01_archive.html)
 [TODO] check http://nanocubes.net/
 [TODO] check http://en.wikipedia.org/wiki/Splay_tree
 [TODO] check http://en.wikipedia.org/wiki/Suffix_trie
