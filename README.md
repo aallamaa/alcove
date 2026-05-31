@@ -63,22 +63,22 @@ Alcove, and Adder side by side:
 ### 1. JIT performance
 
 `make jit` builds with the native backend on by default. On the
-standard microbenchmarks alcove beats CPython 3.13 by **17–700×** on
+standard microbenchmarks alcove beats CPython 3.13 by **~6–700×** on
 the shapes the JIT recognizes (`fib`, `fact`, `tak`, `ackermann`,
 sieve-style tight loops, mlp tensor inner loops):
 
 | benchmark      | alcove   | python3   | speedup            |
 |----------------|---------:|----------:|-------------------:|
-| `fib 33`       |   2.2 ms |  249.0 ms | **~700× alcove** ¹ |
-| `nqueens 10`   |   2.5 ms |   72.9 ms | **~700× alcove** ¹ |
-| `countdown`    |   4.6 ms |  765.2 ms |  **342× alcove**   |
-| `ackermann 3 9`|  13.3 ms | 1093.4 ms |   99× alcove       |
-| `forsum 1e7`   |   6.4 ms |  182.1 ms |   43× alcove       |
-| `fact 19`      |   3.9 ms |   68.8 ms |   38× alcove       |
-| `sieve-fast`   |   2.8 ms |   19.5 ms |   21× alcove       |
-| `tak 24 16 8`  |   5.7 ms |   71.1 ms |   18× alcove       |
-| `listsum`      |   3.6 ms |   31.2 ms |   17× alcove       |
-| `mlp` (5 ep.)  | 670.0 ms | 2642.0 ms |  3.9× alcove ²     |
+| `fib 33`       | `<0.1 ms`|  384.3 ms | **~700× alcove** ¹ |
+| `nqueens 10`   | `<0.1 ms`|   51.3 ms | **~700× alcove** ¹ |
+| `countdown`    |   2.6 ms |  471.6 ms |  **178× alcove**   |
+| `forsum 1e7`   |   2.3 ms |  192.4 ms |   85× alcove       |
+| `fact 19`      |   1.4 ms |   73.7 ms |   52× alcove       |
+| `tak 24 16 8`  |   1.5 ms |   76.7 ms |   51× alcove       |
+| `listsum`      |   0.8 ms |   20.3 ms |   27× alcove       |
+| `ackermann 3 9`|  33.7 ms |  545.9 ms |   16× alcove       |
+| `sieve-fast`   |   0.5 ms |    5.8 ms |   11× alcove       |
+| `mlp` (5 ep.)  | 528.0 ms | 3173.5 ms |  6.0× alcove ²     |
 
 ¹ Net of startup, fib & nqueens land in the noise floor — sub-100 µs
 of arithmetic after the JIT shape catches. Treat as "the JIT erased
