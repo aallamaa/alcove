@@ -160,15 +160,13 @@ continuation to `return`. So `(return v)` exits the function immediately with
 `return` is bound in the body (an anaphoric capture). The param list takes the
 same forms as `def` (list pattern, or a bare symbol for rest args), and
 `(return v)` accepts any `v` including the falsy `0`/`nil`. If `return` is
-never fired, the function returns its last body form. In Adder, the `:`-block
-form works too (use indented blocks, not inline `cond: expr`):
+never fired, the function returns its last body form. In Adder the `:`-block
+form works too, either indented or inline (`head: body` on one line):
 
 ```python
 defc clamp (x lo hi):
-  if (< x lo):
-    return lo
-  if (> x hi):
-    return hi
+  if (< x lo): return lo        # inline body
+  if (> x hi): return hi
   x
 ```
 

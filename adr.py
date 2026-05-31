@@ -249,6 +249,30 @@ def opens_block(text):
     return True, text[:-1].rstrip()
 
 
+def inline_colon(text):
+    """Index of a standalone inline-block ':' — a colon followed by whitespace,
+    outside any string — at which `head: body` splits into a head form and a
+    one-line inline body (Pythonic `if cond: stmt`), or -1. A ':' glued to a
+    constituent (`:keyword`) has no following space and is left alone; a
+    trailing ':' is the block opener (opens_block); strings are skipped."""
+    in_str = False
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == ":" and i + 1 < len(text) and text[i + 1] in " \t":
+            return i if text[i + 1:].strip() else -1
+        i += 1
+    return -1
+
+
 def line_to_list(text):
     """A line's text -> the list it denotes, per the spec line rule."""
     forms = LineReader(text).read_forms()
@@ -272,12 +296,23 @@ def read_program(src):
         indent = len(raw) - len(raw.lstrip(" \t"))
         body = text.strip()
         block, body = opens_block(body)
-        node = line_to_list(body)
 
-        # a block opener must be a list so children can be appended;
-        # `do:` / `quote:` / a lone-atom head all wrap up here.
-        if block and not isinstance(node, list):
-            node = [node]
+        # inline block `head: body` (no trailing ':'): parse head and the
+        # one-line body separately and nest the body inside the head form, so
+        # an unparenthesized body stays grouped — `if c: return y` ->
+        # (if c (return y)), not (if c return y).
+        icolon = -1 if block else inline_colon(body)
+        if icolon >= 0:
+            node = line_to_list(body[:icolon])
+            if not isinstance(node, list):
+                node = [node]
+            node.append(line_to_list(body[icolon + 1:].strip()))
+        else:
+            node = line_to_list(body)
+            # a block opener must be a list so children can be appended;
+            # `do:` / `quote:` / a lone-atom head all wrap up here.
+            if block and not isinstance(node, list):
+                node = [node]
 
         # head-symbol remap (macro -> defmacro, set -> =)
         if (isinstance(node, list) and node

@@ -298,7 +298,8 @@ fully a Lisp underneath, with no loss of macros or code-as-data.
 `:`-block reader. It is *not* a new language — the reader turns
 indentation into ordinary Lisp forms *before* macro-expansion, so it
 stays fully homoiconic. A line is a list; a trailing `:` opens a
-block; `name(args)` is sugar for `name (args)`; `'x` is `(quote x)`.
+block (or `head: body` inline on one line, Python-style); `name(args)`
+is sugar for `name (args)`; `'x` is `(quote x)`.
 
 **Idiomatic — recursion, loops, locals:**
 

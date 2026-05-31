@@ -380,6 +380,38 @@ static int als_opens_block(char *t) {
   return 1;
 }
 
+/* Find a standalone inline-block ':' — a colon followed by whitespace, outside
+   any string — at which `head: body` splits into a head form and a one-line
+   inline body (Pythonic `if cond: stmt`). Returns its index, or -1.
+   A ':' glued to a constituent (`:keyword`, `{:.2f}`) has no following space
+   and is left alone; a trailing ':' is the block opener handled by
+   als_opens_block before this is consulted; a ':' inside a string is skipped.
+ */
+static int als_inline_colon(const char *t) {
+  int in_str = 0;
+  for (size_t i = 0; t[i]; i++) {
+    if (in_str) {
+      if (t[i] == '\\' && t[i + 1])
+        i++;
+      else if (t[i] == '"')
+        in_str = 0;
+      continue;
+    }
+    if (t[i] == '"') {
+      in_str = 1;
+      continue;
+    }
+    if (t[i] == ':' && (t[i + 1] == ' ' || t[i + 1] == '\t')) {
+      /* require real content after the colon — else it's trailing junk */
+      for (size_t j = i + 1; t[j]; j++)
+        if (t[j] != ' ' && t[j] != '\t')
+          return (int)i;
+      return -1;
+    }
+  }
+  return -1;
+}
+
 /* head-symbol remap: macro -> defmacro. Assignment is `setf` (the built-in
    alias of `=`), which needs no remap; `set` is intentionally NOT remapped so
    it remains the set constructor, matching Alcove — (set 1 2 3) builds a set.
@@ -507,14 +539,33 @@ char *als_to_sexpr(const char *src) {
       continue;
     }
 
-    als_node *node = als_line_node(body);
-    free(body);
-
-    if (block && !node->is_list) {
-      als_node *L = als_list();
-      als_push(L, node);
-      node = L;
+    /* Inline block `head: body` (no trailing ':', so block==0): parse the head
+       and the one-line body separately and nest the body inside the head form.
+       Splitting (rather than stripping the ':') keeps an unparenthesized body
+       grouped — `if c: return y` → (if c (return y)), not (if c return y). */
+    int icolon = block ? -1 : als_inline_colon(body);
+    als_node *node;
+    if (icolon >= 0) {
+      const char *body_part = body + icolon + 1;
+      while (*body_part == ' ' || *body_part == '\t')
+        body_part++;
+      body[icolon] = 0; /* terminate the head part at the ':' */
+      node = als_line_node(body);
+      if (!node->is_list) {
+        als_node *L = als_list();
+        als_push(L, node);
+        node = L;
+      }
+      als_push(node, als_line_node(body_part));
+    } else {
+      node = als_line_node(body);
+      if (block && !node->is_list) {
+        als_node *L = als_list();
+        als_push(L, node);
+        node = L;
+      }
     }
+    free(body);
     als_head_remap(node);
 
     while (sp > 0 && indent <= ind_stack[sp - 1])

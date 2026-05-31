@@ -803,6 +803,21 @@ assert "cc payload list" (call/cc (fn (k) (k (list 1 2 3)))) (list 1 2 3)
 
 assert "cc ignored k" (call/cc (fn (k) (* 6 7))) 42
 
+# defc plus inline colon-body — the body nests correctly whether
+# parenthesized or not (regression for the colon-leak bug).
+defc adr-clamp (x lo hi):
+  if (< x lo): (return lo)
+  if (> x hi): return hi
+  x
+assert "defc inline clamp hi" (adr-clamp 99 0 10) 10
+assert "defc inline clamp lo" (adr-clamp -3 0 10) 0
+assert "defc inline clamp mid" (adr-clamp 5 0 10) 5
+defc adr-find (pred xs):
+  each x xs: (if (pred x) (return x))
+  nil
+assert "defc inline find hit" (adr-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
+assert "defc inline find miss" (adr-find (fn (n) (> n 9)) (list 1 2 3)) nil
+
 assert "msgpack int" (msgpack-decode (msgpack-encode 42)) 42
 
 assert "msgpack neg fixint" (msgpack-decode (msgpack-encode -5)) -5
