@@ -308,7 +308,13 @@ typedef enum {
   OP_LOAD_GLOBAL, /* u8 idx (symbol) → lookup consts[idx] in env, push */
   OP_STORE_SLOT,  /* u8 idx          → pop → inline_vals[idx] (unref old) */
   OP_BIND_SLOT,   /* u8 idx          → pop → inline_vals[idx], bump n_inline */
-  OP_UNBIND_SLOT, /* u8 idx          → unref + NULL inline_vals[idx] */
+  OP_BIND_SLOT_NAMED, /* u8 idx, u8 name_const → like BIND_SLOT but also sets
+                         inline_keys[idx] = exp_text(consts[name_const]) so the
+                         let/with/for-counter local is resolvable BY NAME (an
+                         OP_EVAL_AST sub-form needs that — plain BIND_SLOT
+                         leaves a NULL key, invisible to symbolic lookup). */
+  OP_UNBIND_SLOT, /* u8 idx          → unref + NULL inline_vals[idx] (and key)
+                   */
 
   OP_ADD,
   OP_SUB,

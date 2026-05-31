@@ -1365,9 +1365,13 @@ inline exp_t *lookup(exp_t *e, env_t *env) {
     if (curenv)
       do {
         /* Fast path: scan inline function-param slots first. For the
-           common case (1-6 params) this beats a full hash lookup. */
+           common case (1-6 params) this beats a full hash lookup.
+           Innermost-first (high idx → low): a compiled multi-let env holds
+           several bindings in one env, and an inner `(let x …)` (higher slot)
+           must shadow an outer one / a param of the same name. AST envs hold
+           one binding per name, so direction is immaterial there. */
         int i;
-        for (i = 0; i < curenv->n_inline; i++) {
+        for (i = curenv->n_inline - 1; i >= 0; i--) {
           const char *k = curenv->inline_keys[i];
           if (k && strcmp(k, key) == 0)
             return refexp(curenv->inline_vals[i]);
@@ -4578,6 +4582,8 @@ static const char *bc_opname(uint8_t op) {
     return "STORE_SLOT";
   case OP_BIND_SLOT:
     return "BIND_SLOT";
+  case OP_BIND_SLOT_NAMED:
+    return "BIND_SLOT_NAMED";
   case OP_UNBIND_SLOT:
     return "UNBIND_SLOT";
   case OP_ADD:
@@ -4717,6 +4723,10 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
     printf("  %04d  %s const_idx=%d nargs=%d\n", pc, bc_opname(op),
            (int)code[pc + 1], (int)code[pc + 2]);
     return 3;
+  case OP_BIND_SLOT_NAMED:
+    printf("  %04d  %s slot=%d name_const=%d\n", pc, bc_opname(op),
+           (int)code[pc + 1], (int)code[pc + 2]);
+    return 3;
   case OP_SLOT_ADD_FIX:
   case OP_SLOT_SUB_FIX:
   case OP_SLOT_LT_FIX:
@@ -4824,6 +4834,18 @@ static int add_const(compiler_t *c, exp_t *v) {
   }
   c->consts[c->nconsts] = refexp(v);
   return c->nconsts++;
+}
+/* Emit a NAMED slot binding for a let/with/for-counter local. Storing the
+   name (as a const symbol) lets an OP_EVAL_AST sub-form resolve the local by
+   symbol at runtime; plain OP_BIND_SLOT leaves a NULL key and is kept only for
+   for's hidden, nameless end-value slot. */
+static void emit_bind_named(compiler_t *c, int slot, exp_t *var) {
+  int nk = add_const(c, var);
+  if (c->failed)
+    return;
+  emit_u8(c, OP_BIND_SLOT_NAMED);
+  emit_u8(c, (uint8_t)slot);
+  emit_u8(c, (uint8_t)nk);
 }
 static int find_slot(compiler_t *c, const char *name) {
   /* Innermost (highest idx) binding wins so inner let shadows outer.
@@ -5129,8 +5151,9 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
   compile_expr(c, val, 0);
   if (c->failed)
     return;
-  emit_u8(c, OP_BIND_SLOT);
-  emit_u8(c, (uint8_t)slot);
+  emit_bind_named(c, slot, var);
+  if (c->failed)
+    return;
   c->slot_names[slot] = (char *)exp_text(var);
   c->nslots++;
   c->nlet_depth++;
@@ -5179,8 +5202,9 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
     compile_expr(c, val, 0);
     if (c->failed)
       return;
-    emit_u8(c, OP_BIND_SLOT);
-    emit_u8(c, (uint8_t)c->nslots);
+    emit_bind_named(c, c->nslots, var);
+    if (c->failed)
+      return;
     c->slot_names[c->nslots] = (char *)exp_text(var);
     c->nslots++;
     nbindings++;
@@ -5233,8 +5257,9 @@ static void compile_letstar(compiler_t *c, exp_t *form, int tail) {
     compile_expr(c, nxt->content, 0);
     if (c->failed)
       return;
-    emit_u8(c, OP_BIND_SLOT);
-    emit_u8(c, (uint8_t)c->nslots);
+    emit_bind_named(c, c->nslots, var);
+    if (c->failed)
+      return;
     c->slot_names[c->nslots] = (char *)exp_text(var);
     c->nslots++;
     nbindings++;
@@ -5519,15 +5544,16 @@ static void compile_for(compiler_t *c, exp_t *form, int tail) {
   compile_expr(c, start_node->content, 0);
   if (c->failed)
     return;
-  emit_u8(c, OP_BIND_SLOT);
-  emit_u8(c, (uint8_t)counter_slot);
+  emit_bind_named(c, counter_slot, var);
+  if (c->failed)
+    return;
   c->slot_names[counter_slot] = (char *)exp_text(var);
   c->nslots++;
 
   compile_expr(c, end_node->content, 0);
   if (c->failed)
     return;
-  emit_u8(c, OP_BIND_SLOT);
+  emit_u8(c, OP_BIND_SLOT); /* hidden end-value slot: nameless, NULL key */
   emit_u8(c, (uint8_t)end_slot);
   c->slot_names[end_slot] = NULL;
   c->nslots++;
@@ -5941,18 +5967,16 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
            defers to the tree-walker while the enclosing lambda stays compiled
            (and keeps its tail call). Fixes the deep-recursion segfault any
            non-whitelisted builtin in a hot body used to cause.
-       Gate on nlet_depth == 0: OP_EVAL_AST resolves the sub-form's free vars by
-       NAME via the tree-walker, but let/with/for slots are bound with a NULL
-       inline_key (OP_BIND_SLOT) so they're invisible to symbolic lookup — only
-       params (param_keys), globals, and captures (parent chain) are
-       name-resolvable. Inside a let/with/for body we therefore keep the
-       wholesale-AST fallback (baseline behavior). User lambdas (not in
-       reserved_symbol) fall through to compile_call. */
+       OP_EVAL_AST resolves the sub-form's free vars BY NAME via the
+       tree-walker; params (param_keys) plus let/with/for-counter locals (now
+       bound with OP_BIND_SLOT_NAMED) plus captures (parent chain) are all
+       name-resolvable, so it is safe even inside a let/with/for body. User
+       lambdas (not in reserved_symbol) fall through to compile_call. */
     keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)s, NULL);
     if (kv && isinternal(kv->val)) {
-      if ((kv->val->flags & FLAG_TAIL_AWARE) || c->nlet_depth != 0 ||
-          !strcmp(s, "fn") || !strcmp(s, "lambda") || !strcmp(s, "def") ||
-          !strcmp(s, "defn") || !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
+      if ((kv->val->flags & FLAG_TAIL_AWARE) || !strcmp(s, "fn") ||
+          !strcmp(s, "lambda") || !strcmp(s, "def") || !strcmp(s, "defn") ||
+          !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
         c->failed = 1;
         return;
       }
@@ -6154,6 +6178,7 @@ tail_reentry:
       [OP_POP] = &&l_pop,
       [OP_DUP] = &&l_dup,
       [OP_EVAL_AST] = &&l_eval_ast,
+      [OP_BIND_SLOT_NAMED] = &&l_bind_slot_named,
       [OP_LOAD_FIX] = &&l_load_fix,
       [OP_LOAD_CONST] = &&l_load_const,
       [OP_LOAD_SLOT] = &&l_load_slot,
@@ -6382,13 +6407,30 @@ l_bind_slot: {
     env->n_inline = idx + 1;
   NEXT;
 }
+l_bind_slot_named: {
+  /* Like OP_BIND_SLOT, but records the slot's NAME so an OP_EVAL_AST sub-form
+     can resolve this let/with/for-counter local by name (symbolic lookup skips
+     NULL-keyed slots). The name points into a const symbol, which outlives the
+     frame. lookup() scans inline slots innermost-first, so a same-named inner
+     binding correctly shadows an outer one. */
+  uint8_t idx = READ_U8;
+  uint8_t name_idx = READ_U8;
+  exp_t *v = POP();
+  env->inline_vals[idx] = v;
+  env->inline_keys[idx] = (char *)exp_text(consts[name_idx]);
+  if (idx >= env->n_inline)
+    env->n_inline = idx + 1;
+  NEXT;
+}
 l_unbind_slot: {
   /* let/with exit: release the binding. destroy_env would catch any
      leftover refs via n_inline, but we explicitly clear here so the
-     slot is reusable for subsequent lets. */
+     slot is reusable for subsequent lets. Clear the key too — a freed slot
+     must not stay name-visible to a later OP_EVAL_AST symbolic lookup. */
   uint8_t idx = READ_U8;
   unrefexp(env->inline_vals[idx]);
   env->inline_vals[idx] = NULL;
+  env->inline_keys[idx] = NULL;
   if (idx + 1 == env->n_inline)
     env->n_inline = idx;
   NEXT;
