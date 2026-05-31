@@ -188,6 +188,11 @@ __attribute__((unused)) static uint32_t arm64_bl(int off_insns) {
 __attribute__((unused)) static uint32_t arm64_blr(int rn) {
   return 0xD63F0000u | ((uint32_t)rn << 5);
 }
+/* BR Xn  — branch to register, no link (tail call; callee's RET returns to
+   our caller). */
+__attribute__((unused)) static uint32_t arm64_br(int rn) {
+  return 0xD61F0000u | ((uint32_t)(rn & 0x1f) << 5);
+}
 /* SDIV Xd, Xn, Xm  — signed 64-bit divide. */
 static uint32_t arm64_sdiv(int rd, int rn, int rm) {
   return 0x9AC00C00u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
@@ -2654,6 +2659,24 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* Predicate-gated cons loop (sieve primes-up-to). The real work is the C
+   kernel jit_predicate_cons_loop (jit_common.h); here we emit only a tiny
+   trampoline that tail-calls it with (bc, env) — x0=bc, x1=env, br. The
+   kernel's RET returns straight to our caller (no frame needed). */
+static int try_jit_predicate_cons_loop(bytecode_t *bc, uint32_t *out,
+                                       int *outn) {
+  if (!match_predicate_cons_loop(bc))
+    return 0;
+  int n = 0;
+  out[n++] = arm64_mov_reg(1, 0); /* x1 = env (before x0 is clobbered) */
+  n += emit_mov64(out + n, 0, (uint64_t)(uintptr_t)bc);                  /* x0 = bc */
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&jit_predicate_cons_loop);
+  out[n++] = arm64_br(9); /* tail-call the kernel */
+  JIT_GUARD(16);
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit)
     return bc && bc->jit ? 1 : 0;
@@ -2678,6 +2701,9 @@ int jit_compile(bytecode_t *bc) {
   } else if (try_jit_wide_counter_loop(bc, insns, &n)) {
     /* counter loop with a wide (>i16) const limit — generic-compare twin
        of simple_tail_loop */
+  } else if (try_jit_predicate_cons_loop(bc, insns, &n)) {
+    /* predicate-gated cons loop (sieve primes-up-to) — trampoline to a C
+       kernel */
   } else if (try_jit_tail_loop_with_call(bc, insns, &n)) {
     /* tail loop with one inner call — fall through */
   } else if (try_jit_recurse_add_two(bc, insns, &n)) {

@@ -158,6 +158,12 @@ static int x64_call_reg(uint8_t *buf, int reg) {
   buf[1] = (uint8_t)(0xD0 + (reg & 7));
   return 2;
 }
+/* jmp reg  (FF /4) — tail call; callee's ret returns to our caller. */
+static int x64_jmp_reg(uint8_t *buf, int reg) {
+  buf[0] = 0xFF;
+  buf[1] = (uint8_t)(0xE0 + (reg & 7));
+  return 2;
+}
 /* call rel32 — 0xE8 imm32 (5 bytes). disp from end of instruction.
    Used for direct intra-buffer self-calls — the JIT emits a relative
    call back into its own entry, skipping the env-alloc helper for
@@ -3041,6 +3047,24 @@ static int jit_trace(void) {
       fprintf(stderr, "[jit] %-28s ncode=%d\n", (shape), bc->ncode);           \
   } while (0)
 
+/* Predicate-gated cons loop (sieve primes-up-to): emit a tiny trampoline that
+   tail-calls the C kernel jit_predicate_cons_loop with (bc, env) — rdi=bc,
+   rsi=env, jmp. See the kernel in jit_common.h and the arm64 twin. */
+static int try_jit_predicate_cons_loop(bytecode_t *bc, uint8_t *buf,
+                                       int *outn) {
+  if (!match_predicate_cons_loop(bc))
+    return 0;
+  int n = 0;
+  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RDI); /* rsi = env */
+  n += x64_mov_imm64(buf + n, X64_RDI, (uint64_t)(uintptr_t)bc); /* rdi = bc */
+  n += x64_mov_imm64(buf + n, X64_RAX,
+                     (uint64_t)(uintptr_t)&jit_predicate_cons_loop);
+  n += x64_jmp_reg(buf + n, X64_RAX); /* tail-call the kernel */
+  JIT_GUARD(40);
+  *outn = n;
+  return 1;
+}
+
 int jit_compile(bytecode_t *bc) {
   if (!bc || bc->jit)
     return bc && bc->jit ? 1 : 0;
@@ -3065,6 +3089,8 @@ int jit_compile(bytecode_t *bc) {
     JT("float_acc_loop");
   } else if (try_jit_wide_counter_loop(bc, buf, &n)) {
     JT("wide_counter_loop");
+  } else if (try_jit_predicate_cons_loop(bc, buf, &n)) {
+    JT("predicate_cons_loop");
   } else if (try_jit_tail_loop_with_call(bc, buf, &n)) {
     JT("tail_loop_with_call");
   } else if (try_jit_recurse_add_two(bc, buf, &n)) {

@@ -535,3 +535,151 @@ static int bc_oplen(uint8_t op) {
 #define BC_ARG(at, k) (c[(at) + 1 + (k)])
 #define BC_I16(at, k)                                                          \
   ((int16_t)((uint16_t)c[(at) + 1 + (k)] | ((uint16_t)c[(at) + 2 + (k)] << 8)))
+
+/* ---- predicate-gated cons loop (the sieve `primes-up-to` shape) ----
+   (def f (i n acc)
+     (if (> i n) acc
+         (if (PRED acc i) (f (+ i 1) n (cons i acc)) (f (+ i 1) n acc))))
+   A self-tail counter loop that, each step, calls a global predicate PRED on
+   (acc, i) and conses i onto acc when it's true. This is the first JIT shape
+   that makes a *value-returning* global call per iteration AND grows a heap
+   list, so rather than hand-emit the loop+call+cons+refcounts as machine code
+   (high miscompile risk), the backends emit only a tiny trampoline that
+   tail-calls this C kernel with (bc, env). The kernel does the loop in safe C:
+   resolves PRED from bc->consts[0] via the same gcache/lookup the
+   jit_call_global* trampolines use, calls it through vm_invoke_values, and
+   conses with jit_build_inc_cons's proven refcount discipline. Arch-
+   independent — one kernel serves both backends. NULL return => deopt; the
+   env is never mutated (the list is built locally), so a mid-loop deopt
+   re-runs the VM correctly. The matcher pins slots i=0,n=1,acc=2 and PRED at
+   const 0, so the kernel hardcodes them. */
+static exp_t *jit_predicate_cons_loop(bytecode_t *bc, env_t *env) {
+  exp_t *iexp = env->inline_vals[0];
+  exp_t *nexp = env->inline_vals[1];
+  exp_t *acc = env->inline_vals[2];
+  if (!isnumber(iexp) || !isnumber(nexp))
+    return NULL; /* deopt — non-fixnum counter/limit */
+  int64_t i = FIX_VAL(iexp);
+  int64_t n = FIX_VAL(nexp);
+
+  /* Resolve PRED (consts[0]) once, mirroring jit_call_global1_value. */
+  exp_t *callee;
+  if (bc->gcache && bc->gcache[0].gen == alcove_global_gen) {
+    callee = refexp(bc->gcache[0].val);
+  } else {
+    int is_global;
+    callee = lookup_scoped(bc->consts[0], env, &is_global);
+    if (!callee)
+      return NULL; /* unbound — let the VM raise it */
+    if (is_global) {
+      if (!bc->gcache)
+        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
+      bc->gcache[0].val = callee;
+      bc->gcache[0].gen = alcove_global_gen;
+    }
+  }
+
+  exp_t *out = refexp(acc); /* we own `out` (the growing list) */
+  while (i <= n) {          /* (> i n) false => keep going */
+    /* PRED(acc, i). vm_invoke_values CONSUMES its argv refs, so hand it a
+       fresh ref of out (ours survives) and the tagged i. */
+    exp_t *argv[2] = {refexp(out), MAKE_FIX(i)};
+    exp_t *p = vm_invoke_values(callee, 2, argv, env);
+    if (!p) {
+      unrefexp(out);
+      unrefexp(callee);
+      return NULL; /* deopt */
+    }
+    if (iserror(p)) {
+      unrefexp(out);
+      unrefexp(callee);
+      return p; /* propagate */
+    }
+    int keep = istrue(p);
+    unrefexp(p);
+    if (keep) {
+      exp_t *node = make_node(MAKE_FIX(i)); /* (cons i out) */
+      if (istrue(out))
+        node->next = out; /* transfer out's ref to the new cdr */
+      else {
+        unrefexp(out);
+        node->next = NULL;
+      }
+      out = node;
+    }
+    if (i == INT64_MAX)
+      break;
+    i++;
+  }
+  unrefexp(callee);
+  return out;
+}
+
+/* Shape validator for jit_predicate_cons_loop (50-byte body). Cursor-walked;
+   pins slots i=0,n=1,acc=2 and the predicate at const 0 so the kernel can
+   hardcode them. Returns 1 on match. Requires `bc`, `c`, `pc` per the BC_*
+   contract. */
+static int match_predicate_cons_loop(bytecode_t *bc) {
+  if (bc->nparams != 3 || bc->nconsts < 1)
+    return 0;
+  uint8_t *c = bc->code;
+  int pc = 0, at;
+  /* guard: (if (> i n) acc ...) */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 0)
+    return 0; /* i */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 1)
+    return 0; /* n */
+  BC_EAT(OP_GT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 2)
+    return 0; /* acc (base case) */
+  BC_EAT(OP_JUMP);
+  /* predicate call: (PRED acc i) */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 2)
+    return 0; /* acc */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 0)
+    return 0; /* i */
+  BC_TAKE(at, OP_CALL_GLOBAL);
+  if (BC_ARG(at, 0) != 0 || BC_ARG(at, 1) != 2)
+    return 0; /* const 0, 2 args */
+  BC_EAT(OP_BR_IF_FALSE);
+  /* true arm: (f (+ i 1) n (cons i acc)) */
+  BC_TAKE(at, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at, 0) != 0 || BC_I16(at, 1) != 1)
+    return 0;
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 1)
+    return 0; /* n */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 0)
+    return 0; /* i (cons) */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 2)
+    return 0; /* acc (cons) */
+  BC_EAT(OP_CONS);
+  BC_TAKE(at, OP_TAIL_SELF);
+  if (BC_ARG(at, 0) != 3)
+    return 0;
+  BC_EAT(OP_JUMP);
+  /* false arm: (f (+ i 1) n acc) */
+  BC_TAKE(at, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at, 0) != 0 || BC_I16(at, 1) != 1)
+    return 0;
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 1)
+    return 0; /* n */
+  BC_TAKE(at, OP_LOAD_SLOT);
+  if (BC_ARG(at, 0) != 2)
+    return 0; /* acc */
+  BC_TAKE(at, OP_TAIL_SELF);
+  if (BC_ARG(at, 0) != 3)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+  return 1;
+}

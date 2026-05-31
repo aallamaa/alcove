@@ -1066,6 +1066,14 @@
   (if (> i n) acc (jc-countprimes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc))))
 (def jc-isprime (acc i)
   (if (no acc) t (if (is (mod i (car acc)) 0) nil (jc-isprime (cdr acc) i))))
+;; predicate-gated cons loop (sieve driver): counter loop that calls a global
+;; predicate each step and conses i onto acc when true. JIT'd via a trampoline
+;; to the C kernel jit_predicate_cons_loop.
+(def jc-primes (i n acc)
+  (if (> i n) acc
+      (if (jc-isprime acc i)
+          (jc-primes (+ i 1) n (cons i acc))
+          (jc-primes (+ i 1) n acc))))
 (def jc-safe (c qs offset)
   (if (no qs) t (if (is c (car qs)) nil (if (is (+ c offset) (car qs)) nil
                     (if (is (- c offset) (car qs)) nil (jc-safe c (cdr qs) (+ offset 1)))))))
@@ -1091,6 +1099,7 @@
 (assert-jits "jit sieve: mark-from"       jc-markfrom)
 (assert-jits "jit sieve: count-primes"    jc-countprimes)
 (assert-jits "jit sieve: is-prime-given"  jc-isprime)
+(assert-jits "jit predicate-cons loop"    jc-primes)
 (assert-jits "jit nqueens: safe?"         jc-safe)
 (assert-jits "jit divides? (mod leaf)"    jc-divides)
 (assert-jits "jit float-acc: +"           jc-facc-add)
@@ -1103,6 +1112,7 @@
 (assert "jit fact result"              (jc-fact 10)          3628800)
 (assert "jit forsum result"            (jc-forsum 100000)    100000)
 (assert "jit listsum-builder length"   (length (jc-build 1 50 (list)))  50)
+(assert "jit predicate-cons result"    (length (jc-primes 2 50 (list)))  15)
 (assert "jit float-acc result"         (jc-facc-add 0 0.0)   50000.0)
 (assert "jit float-acc is float"       (iso (jc-facc-add 0 0) 50000.0)  t)
 (assert "jit float-acc 0-iter int"     (iso (jc-facc-add 200000 7) 7)   t)
