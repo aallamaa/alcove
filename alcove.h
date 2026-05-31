@@ -295,6 +295,8 @@ typedef enum {
   OP_HALT = 0,
   OP_RET,
   OP_POP,
+  OP_DUP, /* duplicate top-of-stack (fresh ref). Used by compile_and/or/case
+             to keep the tested value across a popping conditional branch. */
 
   OP_LOAD_FIX,    /* int16 imm       → push MAKE_FIX(imm) */
   OP_LOAD_CONST,  /* u8 idx          → push refexp(consts[idx]) */
@@ -324,8 +326,8 @@ typedef enum {
   OP_CALL,        /* u8 nargs        → [fn, a0..aN-1] → result */
   OP_CALL_GLOBAL, /* u8 const_idx, u8 nargs → fused LOAD_GLOBAL+CALL */
   OP_TAIL_SELF,   /* u8 nargs        → rebind inline slots, PC=0 */
-  OP_TAIL_CALL, /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to new fn
-                 */
+  OP_TAIL_CALL,   /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to new fn
+                   */
 
   OP_CONS, /* pop b, pop a    → push (cons a b) */
   OP_CAR,  /* pop pair        → push car */
@@ -350,15 +352,15 @@ typedef enum {
   /* Vector ops — direct opcodes so vec-heavy loops stay in the bytecode
      VM. Otherwise the compiler bails to AST mode for any unknown
      internal, and deeply-nested AST recursion overflows the C stack. */
-  OP_VEC_REF,  /* pop i, pop v    → push v[i] */
-  OP_VEC_SET,  /* pop val, pop i, pop v → mutate v[i] = val, push val */
-  OP_VEC_LEN,  /* pop v           → push v->len (as fixnum) */
-  OP_VEC_NEW,  /* pop init, pop n → push (vec n init) */
-  OP_SQRT_INT, /* pop n           → push (sqrt-int n) */
-  OP_LENGTH,   /* pop list        → push (length list) — walk cons chain */
-  OP_SETQ_DYN, /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
-                  env, v) — nearest existing binding else top-level;
-                  push v back (setq returns the assigned value) */
+  OP_VEC_REF,    /* pop i, pop v    → push v[i] */
+  OP_VEC_SET,    /* pop val, pop i, pop v → mutate v[i] = val, push val */
+  OP_VEC_LEN,    /* pop v           → push v->len (as fixnum) */
+  OP_VEC_NEW,    /* pop init, pop n → push (vec n init) */
+  OP_SQRT_INT,   /* pop n           → push (sqrt-int n) */
+  OP_LENGTH,     /* pop list        → push (length list) — walk cons chain */
+  OP_SETQ_DYN,   /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
+                    env, v) — nearest existing binding else top-level;
+                    push v back (setq returns the assigned value) */
   OP_STORE_FREE, /* u8 idx (symbol) → pop v; assign_store_symbol(consts[idx],
                     env, v) — `=`/`setf` to a non-slot (captured free var or
                     global): nearest existing binding else CURRENT env (this

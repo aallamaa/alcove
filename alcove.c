@@ -4558,6 +4558,8 @@ static const char *bc_opname(uint8_t op) {
     return "RET";
   case OP_POP:
     return "POP";
+  case OP_DUP:
+    return "DUP";
   case OP_LOAD_FIX:
     return "LOAD_FIX";
   case OP_LOAD_CONST:
@@ -4661,6 +4663,7 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
   case OP_HALT:
   case OP_RET:
   case OP_POP:
+  case OP_DUP:
   case OP_ADD:
   case OP_SUB:
   case OP_MUL:
@@ -5299,6 +5302,176 @@ static void compile_when_unless(compiler_t *c, exp_t *form, int tail,
   c->code[patch_end + 1] = (off_end >> 8) & 0xff;
 }
 
+/* Backpatch helper: write the i16 at code[patch..patch+1] as the relative
+   offset from end-of-operand (patch+2) to `target`. Mirrors the open-coded
+   fixups in compile_if/compile_when_unless. */
+static void patch_i16(compiler_t *c, int patch, int target) {
+  int16_t off = (int16_t)(target - (patch + 2));
+  c->code[patch] = off & 0xff;
+  c->code[patch + 1] = (off >> 8) & 0xff;
+}
+
+/* Cap on conditional branches we can backpatch per form. Each clause needs
+   one fixup slot; 64 is far past any hand-written and/or/cond/case. Above it
+   we bail to the AST tree-walker (c->failed) rather than truncate. */
+#define COND_MAX_PATCHES 64
+
+/* (and a b ... z) / (or a b ... z) — short-circuit, *value-preserving*.
+   `and` returns the first falsy operand (else the last); `or` the first
+   truthy (else the last). The deciding value must survive the branch, but
+   OP_BR_IF_* pop their test — so DUP first: the branch pops one copy and,
+   on short-circuit, jumps with the other still live; on fall-through we POP
+   that survivor and evaluate the next operand. The final operand needs no
+   guard and inherits the caller's tail flag, so a tail call inside
+   `(and ... (f x))` keeps O(1)-stack TCO instead of bailing to AST. */
+static void compile_and_or(compiler_t *c, exp_t *form, int tail, int is_or) {
+  exp_t *args = cdr(form);
+  if (!args) { /* (and) -> t ; (or) -> nil */
+    int k = add_const(c, is_or ? NIL_EXP : TRUE_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+    return;
+  }
+  uint8_t br = is_or ? OP_BR_IF_TRUE : OP_BR_IF_FALSE;
+  int patches[COND_MAX_PATCHES];
+  int npatch = 0;
+  for (exp_t *a = args; a; a = a->next) {
+    int is_last = (a->next == NULL);
+    compile_expr(c, a->content, is_last && tail);
+    if (c->failed)
+      return;
+    if (is_last)
+      break;
+    if (npatch >= COND_MAX_PATCHES) {
+      c->failed = 1;
+      return;
+    }
+    emit_u8(c, OP_DUP);
+    emit_u8(c, br);
+    patches[npatch++] = c->ncode;
+    emit_i16(c, 0);
+    emit_u8(c, OP_POP); /* fall-through: drop the survivor, try next operand */
+  }
+  int end_target = c->ncode;
+  for (int i = 0; i < npatch; i++)
+    patch_i16(c, patches[i], end_target);
+}
+
+/* (cond t1 e1 t2 e2 ... [default]) — Arc-style flat cond. A lone trailing
+   element is the unconditional default; with no default and every test
+   falsy the result is nil. Tests compile in non-tail position; the selected
+   expr (and the default) inherit the caller's tail flag. Uses only the
+   existing popping branch — tests aren't returned, so no DUP needed. */
+static void compile_cond(compiler_t *c, exp_t *form, int tail) {
+  exp_t *cur = cdr(form);
+  if (!cur) { /* (cond) -> nil */
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+    return;
+  }
+  int end_patches[COND_MAX_PATCHES];
+  int n_end = 0;
+  int had_default = 0;
+  while (cur) {
+    if (!cur->next) { /* lone trailing default */
+      compile_expr(c, cur->content, tail);
+      if (c->failed)
+        return;
+      had_default = 1;
+      break;
+    }
+    compile_expr(c, cur->content, 0); /* test */
+    if (c->failed)
+      return;
+    emit_u8(c, OP_BR_IF_FALSE);
+    int patch_next = c->ncode;
+    emit_i16(c, 0);
+    compile_expr(c, cur->next->content, tail); /* paired expr */
+    if (c->failed)
+      return;
+    if (n_end >= COND_MAX_PATCHES) {
+      c->failed = 1;
+      return;
+    }
+    emit_u8(c, OP_JUMP);
+    end_patches[n_end++] = c->ncode;
+    emit_i16(c, 0);
+    patch_i16(c, patch_next, c->ncode); /* false -> next clause */
+    cur = cur->next->next;
+  }
+  if (!had_default) { /* no clause matched -> nil */
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+  }
+  int end_target = c->ncode;
+  for (int i = 0; i < n_end; i++)
+    patch_i16(c, end_patches[i], end_target);
+}
+
+/* (case key v1 e1 v2 e2 ... [default]) — Arc-style flat pairs. The vN are
+   UNEVALUATED literals matched to the evaluated key via isequal (OP_IS,
+   exactly as casecmd does). The key is evaluated once, then DUP'd per
+   comparison; the selected expr (or trailing default) inherits the tail
+   flag. Every path discards the saved key before leaving its value. */
+static void compile_case(compiler_t *c, exp_t *form, int tail) {
+  exp_t *key = cadr(form);
+  if (!key) {
+    c->failed = 1;
+    return;
+  }
+  compile_expr(c, key, 0); /* stack: [key] */
+  if (c->failed)
+    return;
+  exp_t *cur = cddr(form); /* first vN */
+  int end_patches[COND_MAX_PATCHES];
+  int n_end = 0;
+  int had_default = 0;
+  while (cur) {
+    if (!cur->next) {     /* lone trailing default */
+      emit_u8(c, OP_POP); /* discard saved key */
+      compile_expr(c, cur->content, tail);
+      if (c->failed)
+        return;
+      had_default = 1;
+      break;
+    }
+    emit_u8(c, OP_DUP);                 /* [key, key] */
+    int k = add_const(c, cur->content); /* literal vN */
+    if (c->failed)
+      return;
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k); /* [key, key, vN] */
+    emit_u8(c, OP_IS);      /* [key, bool] (isequal) */
+    emit_u8(c, OP_BR_IF_FALSE);
+    int patch_next = c->ncode; /* false -> next clause, [key] */
+    emit_i16(c, 0);
+    emit_u8(c, OP_POP); /* matched: drop saved key, eval paired expr */
+    compile_expr(c, cur->next->content, tail);
+    if (c->failed)
+      return;
+    if (n_end >= COND_MAX_PATCHES) {
+      c->failed = 1;
+      return;
+    }
+    emit_u8(c, OP_JUMP);
+    end_patches[n_end++] = c->ncode;
+    emit_i16(c, 0);
+    patch_i16(c, patch_next, c->ncode);
+    cur = cur->next->next;
+  }
+  if (!had_default) { /* no match -> drop key, result nil */
+    emit_u8(c, OP_POP);
+    int k = add_const(c, NIL_EXP);
+    emit_u8(c, OP_LOAD_CONST);
+    emit_u8(c, (uint8_t)k);
+  }
+  int end_target = c->ncode;
+  for (int i = 0; i < n_end; i++)
+    patch_i16(c, end_patches[i], end_target);
+}
+
 /* (for counter start end body...) — counter iterates start..end inclusive.
    Matches AST forcmd semantics: the body's final expression of the
    final iteration becomes the for's return value; nil if the loop
@@ -5500,6 +5673,22 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     }
     if (!strcmp(s, "unless")) {
       compile_when_unless(c, e, tail, 1);
+      return;
+    }
+    if (!strcmp(s, "and")) {
+      compile_and_or(c, e, tail, 0);
+      return;
+    }
+    if (!strcmp(s, "or")) {
+      compile_and_or(c, e, tail, 1);
+      return;
+    }
+    if (!strcmp(s, "cond")) {
+      compile_cond(c, e, tail);
+      return;
+    }
+    if (!strcmp(s, "case")) {
+      compile_case(c, e, tail);
       return;
     }
     if (!strcmp(s, "for")) {
@@ -5934,6 +6123,7 @@ tail_reentry:
       [OP_HALT] = &&l_halt,
       [OP_RET] = &&l_ret,
       [OP_POP] = &&l_pop,
+      [OP_DUP] = &&l_dup,
       [OP_LOAD_FIX] = &&l_load_fix,
       [OP_LOAD_CONST] = &&l_load_const,
       [OP_LOAD_SLOT] = &&l_load_slot,
@@ -6009,6 +6199,12 @@ l_ret: {
 l_pop:
   unrefexp(POP());
   NEXT;
+
+l_dup: {
+  exp_t *t = stack[sp - 1];
+  PUSH(refexp(t));
+  NEXT;
+}
 
 l_load_fix: {
   int16_t v = READ_I16;
