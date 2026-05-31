@@ -7101,16 +7101,24 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   /* Multi-arity (defn) reached from compiled code: dispatch on arg count to
      the matching clause lambda, then run it normally. Before the param-list
      reads below. */
-  if (islambda(fn) && (fn->flags & FLAG_MULTI)) {
-    exp_t *chosen = multi_pick(fn->content, nargs);
-    if (!chosen) {
-      for (int i = 0; i < nargs; i++)
-        unrefexp(argv[i]);
-      return error(ERROR_MISSING_PARAMETER, fn, env,
-                   "no matching clause for %d argument(s)", nargs);
+  /* Hot path first: a plain compiled lambda is by far the common callee, so
+     test islambda once up front and jump straight to the bind+run code,
+     skipping the rare-callee probes (container / continuation / ffi) below.
+     Those probes are only worth running when fn is NOT a lambda. */
+  if (islambda(fn)) {
+    if (fn->flags & FLAG_MULTI) {
+      exp_t *chosen = multi_pick(fn->content, nargs);
+      if (!chosen) {
+        for (int i = 0; i < nargs; i++)
+          unrefexp(argv[i]);
+        return error(ERROR_MISSING_PARAMETER, fn, env,
+                     "no matching clause for %d argument(s)", nargs);
+      }
+      return vm_invoke_values(chosen, nargs, argv, env);
     }
-    return vm_invoke_values(chosen, nargs, argv, env);
+    goto bind_lambda;
   }
+  /* fn is not a lambda — the rare callee shapes, each of which returns. */
   /* String-as-callable: (s i) returns the indexed char. The AST
      evaluator handles this in two places (literal string head and the
      symbol-lookup path added in ticket 5). The bytecode VM compiles
@@ -7153,6 +7161,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
       unrefexp(argv[i]);
     return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: not a lambda");
   }
+bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
   /* Honor closure capture (see invoke()). For top-level fns this is
      just global so behavior is unchanged. */
   env_t *captured = (env_t *)fn->next->meta;
