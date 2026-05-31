@@ -313,8 +313,10 @@ the surface differs, not what is missing.</p>
 <td><code>;</code>, reader comment forms</td>
 <td><code>;</code></td>
 <td><code>;</code> line comments</td>
-<td><code>#</code> line comments, except <code>#\c</code> char
-literals</td>
+<td><code>;</code> line comments, and <code>#</code><em>+space</em> to
+end of line. A <code>#</code> glued to a token is a reader literal instead:
+<code>#[…]</code> vector, <code>#{…}</code> set, <code>#b"…"</code> blob,
+<code>#\c</code> char</td>
 </tr>
 <tr class="odd">
 <td>Separators</td>
@@ -935,7 +937,8 @@ sharing; callable: <code>(m k)</code> is <code>(hamt-get m k)</code></td>
 <code>set-&gt;list</code>; typed identity for fixnums, floats, chars,
 strings, symbols, blobs, <code>nil</code>, and <code>t</code>; callable:
 <code>(s x)</code> returns <code>x</code> if present, else
-<code>nil</code></td>
+<code>nil</code>. Prints as <code>#{1 2 3}</code> and re-reads in that
+form (as blobs print/read as <code>#b"…"</code>)</td>
 <td><code>set 1 2 3</code> or <code>hash-set 1 2 3</code> (Adder assignment is
 <code>setf</code>, so <code>set</code> is free to be the constructor, as in
 Alcove); <code>set-has? s x</code>, <code>s x</code>; same set algebra

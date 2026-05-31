@@ -79,7 +79,10 @@ place or stream output with multiple `(pr …)` calls.
 
 ### Reader
 
-- `;` starts a line comment.
+- `;` starts a line comment. `#` followed by a space (`# …`) is also a
+  line comment, to end of line. A `#` glued to a token is a reader literal
+  instead: `#[1 2 3]` vector, `#{1 2 3}` set, `#b"bytes"` blob, `#\c` char —
+  all of which print back in the same form and re-read.
 - `'expr` reads as `(quote expr)`.
 - `` `expr `` reads as `(quasiquote expr)` — a template that evaluates
   the unquoted holes and quotes everything else.
