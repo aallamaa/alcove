@@ -1,3 +1,48 @@
+[DONE] JIT hardening + loop-coverage expansion (2026-06-01, macOS arm64 /
+       Darwin 25, both backends; amd64 cross-checked under x86_64 Rosetta).
+       Commits 5dd4bfb..da47df6. Five pieces:
+       1. REGRESSION FIX: for_loop_inc (forsum) silently stopped JITting after
+          commit 997ffbb named let/for slots — OP_BIND_SLOT (2B) became
+          OP_BIND_SLOT_NAMED (3B), growing the body 48->50 and shifting every
+          hardcoded c[N] offset; both backends were gated on ncode==48 +
+          OP_BIND_SLOT, so forsum dropped to the VM (no test failure, only a
+          ~78x arm64 / ~159x amd64 benchmark slowdown). Re-pointed both
+          matchers at the 50-byte layout; forsum re-JITs.
+       2. CURSOR MATCHERS: root-caused the above to hardcoded byte offsets.
+          Added bc_oplen (length-only twin of bc_disasm_one — KEEP IN LOCKSTEP)
+          + BC_TAKE/BC_EAT/BC_TAKE_ANY/BC_EAT_ANY/BC_END/BC_ARG/BC_I16 in
+          jit_common.h, and converted ALL 26 shape matchers on both backends to
+          walk the bytecode by real opcode lengths instead of c[N] literals.
+          Offset drift can no longer silently mis-match a shape. Emitted machine
+          code unchanged throughout (parse-only refactor).
+       3. WIDER LOOP JIT: (a) generalized arm64 simple_tail_loop to materialize
+          a wide/negative tagged compare limit into a reg (was capped at u12 →
+          limit<=511), so count-up loops to any i16 limit JIT; (b) new
+          try_jit_wide_counter_loop (both backends) for counter loops whose
+          const limit exceeds i16 (the generic LOAD_SLOT/LOAD_CONST/<cmp>
+          triple, not the fused SLOT_<cmp>_FIX) — e.g. (if (< n 5000000) ...);
+          (c) new predicate-gated cons loop (sieve primes-up-to): first shape
+          with a value-returning global call per iteration + a heap cons, done
+          as a 4-instruction trampoline tail-calling a shared C kernel
+          (jit_predicate_cons_loop, jit_common.h) rather than risky hand-emitted
+          loop/cons/refcount machine code — resolves the predicate via the
+          gcache/lookup the call trampolines use, conses with jit_build_inc_cons's
+          refcount discipline. ~18x faster than the VM, RSS-flat (no leak).
+       4. TESTS: self-gating JIT-coverage block in test.alc (asserts (jit? f)
+          for every shape; build-independent so the assert count matches across
+          JIT and non-JIT variants — the net that would have caught forsum) +
+          jit_fuzz.py / `make jit-fuzz`: a differential fuzzer that runs
+          randomized counter/leaf/float-acc shapes under a JIT and a non-JIT
+          build, asserting byte-identical jit==VM (msgpack type+bit exact) AND
+          100% shape coverage.
+       5. New tail-call encoders arm64_br / x64_jmp_reg verified byte-identical
+          vs the system assembler. VALIDATION: test-all ALL VARIANTS PASSED
+          (alcove 1401/0 x5, adder 1407/0 x5, wasm 160+28); arm64 fuzz ~650
+          results byte-identical at 100% coverage; amd64 1383/0 (no-FFI) under
+          Rosetta; ASan-clean. NOT done: predicate-cons is shape-pinned to
+          slots i=0,n=1,acc=2 / const 0 (the sieve driver); a fully general
+          dual-tail emitter is future.
+
 [DONE] arm64 (Apple Silicon) JIT for the scalar FLOAT-accumulator loop
        (2026-05-31, macOS arm64 / Darwin 25, clang -O3, commit 930ae43).
        try_jit_float_acc_loop ported into the arm64 backend (jit_arm64.h) as a
