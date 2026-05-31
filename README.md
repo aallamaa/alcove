@@ -179,9 +179,19 @@ never corrupting the rest of the dump.
 
 ### 6. Three execution layers, picked automatically
 
-1. **Tree-walking evaluator** — fallback for forms the compiler does
-   not yet understand.
-2. **Bytecode VM** — runs every compiled `def`/`fn` body.
+1. **Tree-walking evaluator** — runs top-level forms and anything the
+   bytecode compiler hands back. A `def`/`fn` body still compiles even
+   when it calls a builtin the VM has no native opcode for: that one
+   sub-call is emitted as `OP_EVAL_AST` (evaluated by the tree-walker)
+   while the rest of the lambda stays compiled and keeps its
+   tail-call elimination. Only a few constructs send the *whole* body
+   back to the tree-walker — a nested `fn`/`def` (its closure must
+   capture a stable env) and the `match` / `for-gen` tail-aware forms
+   (they rely on the tree-walker's own tail-marker trampoline).
+2. **Bytecode VM** — runs every compiled `def`/`fn` body. Tail calls
+   (self and cross-function) run in O(1) C stack, so deep recursion
+   through `if`/`and`/`or`/`cond`/`case`/`let`/`when`/`for` and around
+   builtin sub-calls does not overflow.
 3. **JIT** — arm64 / amd64 native code for ~12 hot shapes (leaf
    arithmetic, self-tail loops, fib / fact / tak / ackermann /
    nqueens-safe? / sieve, …). Falls back to the bytecode VM when a

@@ -175,6 +175,27 @@
 (assert "tco through when"           (tco-when 1000000)           'ok)
 (assert "tco through unless"         (tco-unless 1000000)         nil)
 
+; 8e. TCO through and / or / cond / case — now bytecode-compiled (compile_and_or
+;     / compile_cond / compile_case), not builtin-only. 1e6 deep: each form used
+;     to drop its lambda to AST eval and SIGSEGV at ~50k frames.
+(def tco-and (n a)  (if (< n 1) a (and t (tco-and (- n 1) (+ a 1)))))
+(def tco-or (n a)   (if (< n 1) a (or nil (tco-or (- n 1) (+ a 1)))))
+(def tco-cond (n a) (cond (< n 1) a t (tco-cond (- n 1) (+ a 1))))
+(def tco-case (n a) (case n 0 a (tco-case (- n 1) (+ a 1))))
+(assert "tco through and"            (tco-and 1000000 0)          1000000)
+(assert "tco through or"             (tco-or 1000000 0)           1000000)
+(assert "tco through cond"           (tco-cond 1000000 0)         1000000)
+(assert "tco through case"           (tco-case 1000000 0)         1000000)
+
+; 8f. A non-whitelisted builtin (max/abs/…) in a hot body no longer forces the
+;     WHOLE lambda to AST — OP_EVAL_AST defers just that sub-call while the
+;     lambda stays compiled and keeps O(1)-stack TCO. Covers both a bare body
+;     and a let-enclosed builtin (resolved via OP_BIND_SLOT_NAMED).
+(def tco-builtin (n a)     (if (< n 1) a (tco-builtin (- n 1) (max a 1))))
+(def tco-let-builtin (n a) (let b (abs a) (if (< n 1) b (tco-let-builtin (- n 1) (+ a 1)))))
+(assert "tco around builtin (max)"   (tco-builtin 1000000 5)      5)
+(assert "tco around let-builtin"     (tco-let-builtin 1000000 0)  1000000)
+
 ; 9. Phase-2 compiler — `with` (multi-binding).
 (assert "with 2 bindings"            (with (a 3 b 4) (+ a b))     7)
 (assert "with shadows"               (let a 1 (with (a 9) a))     9)
