@@ -246,6 +246,56 @@ static uint32_t arm64_cbz_w(int rt, int off_insns) {
   return 0x34000000u | (((uint32_t)off_insns & 0x7FFFFu) << 5) |
          (uint32_t)(rt & 0x1f);
 }
+/* LDRH Wt, [Xn, #imm] — unsigned halfword load (zero-extended). imm scaled
+   by 2 (0..8190). Reads the 2-byte exp_t.type field for the float-box check. */
+static uint32_t arm64_ldrh_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 2) & 0xfff;
+  return 0x79400000u | (imm12 << 10) | ((uint32_t)(rn & 0x1f) << 5) |
+         (uint32_t)(rt & 0x1f);
+}
+/* AND Xd, Xn, #7 — mask the low 3 tag bits. Logical-immediate encoding for
+   the 3-consecutive-ones pattern: N=1 (64-bit element), immr=0, imms=2
+   (run length S+1 = 3). */
+static uint32_t arm64_and_imm7(int rd, int rn) {
+  return 0x92400800u | ((uint32_t)(rn & 0x1f) << 5) | (uint32_t)(rd & 0x1f);
+}
+
+/* ---- scalar floating-point (double) encoders — used by the float-acc loop.
+   All operate on the D-register file (64-bit IEEE double, low half of V). ---- */
+/* LDR Dt, [Xn, #imm] — load double, imm 8-byte-aligned (×8, 0..32760).
+   Same shape as the integer LDR (0xF9400000) with the SIMD&FP V bit (bit 26)
+   set: 0xF9400000 | (1<<26) = 0xFD400000. */
+static uint32_t arm64_ldr_d_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 8) & 0xfff;
+  return 0xFD400000u | (imm12 << 10) | ((uint32_t)(rn & 0x1f) << 5) |
+         (uint32_t)(rt & 0x1f);
+}
+/* FMOV Dd, Xn — copy the 64 raw bits of Xn into Dd (no conversion). Used to
+   load a precomputed double bit-pattern (the float const) into a D-reg.
+   sf=1 type=01(double) rmode=00 opcode=111 → 0x9E670000. */
+static uint32_t arm64_fmov_d_x(int dd, int xn) {
+  return 0x9E670000u | ((uint32_t)(xn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
+/* SCVTF Dd, Xn — signed 64-bit integer → double (round to nearest).
+   sf=1 type=01 rmode=00 opcode=010 → 0x9E620000. */
+static uint32_t arm64_scvtf_d_x(int dd, int xn) {
+  return 0x9E620000u | ((uint32_t)(xn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
+/* FADD Dd, Dn, Dm — double add (type=01, opcode=0010): 0x1E602800. */
+static uint32_t arm64_fadd_d(int dd, int dn, int dm) {
+  return 0x1E602800u | ((uint32_t)(dm & 0x1f) << 16) |
+         ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
+/* FSUB Dd, Dn, Dm — double subtract (type=01, opcode=0011): 0x1E603800. */
+static uint32_t arm64_fsub_d(int dd, int dn, int dm) {
+  return 0x1E603800u | ((uint32_t)(dm & 0x1f) << 16) |
+         ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
+/* FMUL Dd, Dn, Dm — double multiply (type=01, opcode=0000): 0x1E600800. */
+static uint32_t arm64_fmul_d(int dd, int dn, int dm) {
+  return 0x1E600800u | ((uint32_t)(dm & 0x1f) << 16) |
+         ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
 
 /* arm64 shape-emitter helpers. PATCH_DEOPT_* and the EMIT macros below
    require `out`, `n`, and `deopt_pc` to be in scope. Note: the inline
@@ -435,6 +485,276 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
      b loop, mov, ret, movz, ret + slack). Caller's buffer is uint32_t
      insns[32] — comfortable margin. Trip if a future tweak overruns. */
   JIT_GUARD(16);
+  *outn = n;
+  return 1;
+}
+
+/* Float-accumulator self-tail loop — arm64 mirror of the amd64
+   try_jit_float_acc_loop (jit_amd64.h, commit 23c0fc4). Two-slot shape
+   (25 bytes), produced by:
+     (def f (n acc) (if (< n LIM) (f (+ n 1) (<fop> acc FC)) acc))
+   where n is an INTEGER counter slot, LIM a fixnum const that doesn't fit
+   in i16 (so the compare is the generic LOAD_SLOT/LOAD_CONST/<cmp> triple,
+   not the fused SLOT_LT_FIX), and FC is a FLOAT const. fop ∈ {+, -, *}.
+
+   Bytecode (identical to the amd64 matcher):
+     [ 0] LOAD_SLOT  cslot           2   (integer counter)
+     [ 2] LOAD_CONST lim_idx         2   (consts[lim_idx] must be a fixnum)
+     [ 4] <cmp>                      1   (LT/GT/LE/GE)
+     [ 5] BR_IF_FALSE off            3
+     [ 8] SLOT_<op>_FIX cslot K      4   (counter step; op ∈ {ADD,SUB})
+     [12] LOAD_SLOT  aslot           2   (float accumulator)
+     [14] LOAD_CONST fc_idx          2   (consts[fc_idx] must be EXP_FLOAT)
+     [16] <fop>                      1   (ADD/SUB/MUL)
+     [17] TAIL_SELF 2                2
+     [19] JUMP off                   3   (unreachable; back-edge)
+     [22] LOAD_SLOT  aslot           2
+     [24] RET                        1
+
+   Codegen keeps the tagged counter in x1 and the UNBOXED accumulator in d0
+   across iterations; the float const sits in d1, the tagged limit in x4. The
+   whole self-tail loop folds into one in-buffer back-edge (no per-iteration
+   invoke()). env lives in callee-saved x19 across the two exit callouts.
+
+   Two runtime callouts on exit (no calls inside the loop, so d0/d1/x1/x4 need
+   no save/restore):
+     - 0 iterations  → return refexp(seed) UNCHANGED (matches the VM, which
+       returns the raw seed box — an int seed stays an int, a float stays a
+       float; we must NOT box a fresh float here).
+     - >=1 iteration → the acc is provably a float after the first
+       BIN_ARITH(..., FC) (int op float = float), so box the d0 result via
+       make_floatf (AAPCS: arg already in d0), matching the VM exactly.
+   All tag/type guards run before any slot mutation, and the loop body never
+   deopts, so a deopt always re-runs the VM on an untouched env. */
+static int try_jit_float_acc_loop(bytecode_t *bc, uint32_t *out, int *outn) {
+  if (bc->ncode != 25 || bc->nparams != 2)
+    return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
+  uint8_t cslot = c[1];
+  if (c[2] != OP_LOAD_CONST)
+    return 0;
+  uint8_t lim_idx = c[3];
+  uint8_t cmp_op = c[4];
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  if (c[5] != OP_BR_IF_FALSE)
+    return 0;
+
+  uint8_t step_op = c[8];
+  if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
+    return 0;
+  if (c[9] != cslot)
+    return 0;
+  int16_t step_imm = (int16_t)((uint16_t)c[10] | ((uint16_t)c[11] << 8));
+
+  if (c[12] != OP_LOAD_SLOT)
+    return 0;
+  uint8_t aslot = c[13];
+  if (c[14] != OP_LOAD_CONST)
+    return 0;
+  uint8_t fc_idx = c[15];
+  uint8_t fop = c[16];
+  if (fop != OP_ADD && fop != OP_SUB && fop != OP_MUL)
+    return 0;
+
+  if (c[17] != OP_TAIL_SELF || c[18] != 2)
+    return 0;
+  if (c[19] != OP_JUMP)
+    return 0;
+  if (c[22] != OP_LOAD_SLOT || c[23] != aslot)
+    return 0;
+  if (c[24] != OP_RET)
+    return 0;
+
+  /* slots must be distinct, in range, and consistent across the body */
+  if (cslot == aslot || cslot >= ENV_INLINE_SLOTS || aslot >= ENV_INLINE_SLOTS)
+    return 0;
+  if (lim_idx >= bc->nconsts || fc_idx >= bc->nconsts)
+    return 0;
+
+  /* CRITICAL static gate (mirrors amd64 exactly): the counter limit must be a
+     fixnum and the accumulator const must be a float. This is what stops the
+     matcher mis-firing on an identically-shaped INTEGER loop. */
+  exp_t *lim = bc->consts[lim_idx];
+  exp_t *fc = bc->consts[fc_idx];
+  if (!isnumber(lim) || !isfloat(fc))
+    return 0;
+
+  int64_t lim_val = FIX_VAL(lim);
+  /* The VM compares FIX_VAL(counter) <cmp> FIX_VAL(limit) on two fixnums.
+     We keep the counter TAGGED in x1 and compare against the TAGGED limit:
+     tagging is (v<<3)|1, monotonic for signed order, so the tagged compare
+     equals the value compare. Require limit<<3 not to overflow int64. Unlike
+     amd64 we materialize the full 64-bit tagged limit into a register (no
+     imm32 ceiling), so any 61-bit fixnum limit is fine. */
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+  int64_t lim_tagged = (lim_val << 3) | 1;
+
+  /* Counter step is ±(step_imm<<3) (preserves the tag bit). arm64 ADD/SUB
+     immediate is a u12, so only a small positive delta JITs here; anything
+     else (negative or >4095) deopts to the VM, which stays correct. The
+     real shape's step is +1 → delta 8. */
+  int step_delta = ((int)step_imm) << 3;
+  if (step_delta < 0 || step_delta > 4095)
+    return 0;
+
+  int coff = (int)offsetof(env_t, inline_vals[0]) + (int)cslot * 8;
+  int aoff = (int)offsetof(env_t, inline_vals[0]) + (int)aslot * 8;
+  if (coff > 32760 || aoff > 32760)
+    return 0;
+  int toff = (int)offsetof(exp_t, type); /* 2-byte type field */
+  int foff = (int)offsetof(exp_t, f);    /* unboxed double inside the box */
+
+  uint64_t fc_bits;
+  {
+    double d = fc->f;
+    memcpy(&fc_bits, &d, 8);
+  }
+
+  /* arm64 cond codes: GE=10, LT=11, GT=12, LE=13.
+     cont_cc = compare TRUE  (back-edge, keep looping).
+     exit_cc = compare FALSE (first test fails → 0 iterations). */
+  int cont_cc, exit_cc;
+  switch (cmp_op) {
+  case OP_LT:
+    cont_cc = 11;
+    exit_cc = 10;
+    break; /* <  : LT  / !< → GE */
+  case OP_GT:
+    cont_cc = 12;
+    exit_cc = 13;
+    break; /* >  : GT  / !> → LE */
+  case OP_LE:
+    cont_cc = 13;
+    exit_cc = 12;
+    break; /* <= : LE  / !<=→ GT */
+  case OP_GE:
+    cont_cc = 10;
+    exit_cc = 11;
+    break; /* >= : GE  / !>=→ LT */
+  default:
+    return 0;
+  }
+
+  int n = 0;
+
+  /* Entry guard: counter must be a tagged fixnum (bit 0 set). Deopt here is
+     a leaf (no frame yet) → just NULL + ret. */
+  out[n++] = arm64_ldr_imm(1, 0, coff); /* x1 = env->slot[cslot] */
+  int patch_deopt0 = n;
+  out[n++] = 0; /* tbz x1,#0,deopt0 */
+
+  /* Frame: save fp/lr + x19/x20 (16-aligned 32-byte frame); x19 = env. */
+  out[n++] = arm64_stp_pre_sp(29, 30, -32);
+  out[n++] = arm64_stp_off_sp(19, 20, 16);
+  out[n++] = arm64_mov_from_sp(29);
+  out[n++] = arm64_mov_reg(19, 0); /* x19 = env (callee-saved) */
+
+  /* x4 = tagged limit; first compare. If the loop won't run, return the seed
+     UNCHANGED via the zero_iter path. */
+  n += emit_mov64(out + n, 4, (uint64_t)lim_tagged);
+  out[n++] = arm64_cmp_reg(1, 4);
+  int patch_zero = n;
+  out[n++] = 0; /* b.<exit_cc> zero_iter */
+
+  /* >=1 iteration: load + coerce the accumulator into d0.
+     acc may be a fixnum seed (scvtf) or a float box (ldr d0,[box,#foff]).
+     Anything else → deopt_framed. */
+  out[n++] = arm64_ldr_imm(2, 19, aoff); /* x2 = acc */
+  out[n++] = arm64_and_imm7(3, 2);       /* x3 = tag bits */
+  out[n++] = arm64_cmp_imm(3, 1);        /* fixnum? */
+  int patch_check_float = n;
+  out[n++] = 0; /* b.ne check_float */
+  /* fixnum seed: arithmetic-untag then signed int->double. */
+  out[n++] = arm64_asr_imm(2, 2, 3);   /* x2 = value (sign-extended) */
+  out[n++] = arm64_scvtf_d_x(0, 2);    /* d0 = (double)x2 */
+  int patch_acc_ready = n;
+  out[n++] = 0; /* b acc_ready */
+  /* check_float: tag must be PTR(0), non-null, type==EXP_FLOAT. */
+  int check_float_pc = n;
+  int patch_df_tag = n;
+  out[n++] = 0; /* cbnz x3,deopt_framed  (tag != 0) */
+  int patch_df_null = n;
+  out[n++] = 0;                          /* cbz x2,deopt_framed   (null) */
+  out[n++] = arm64_ldrh_imm(3, 2, toff); /* w3 = box->type */
+  out[n++] = arm64_cmp_imm(3, EXP_FLOAT);
+  int patch_df_type = n;
+  out[n++] = 0;                         /* b.ne deopt_framed */
+  out[n++] = arm64_ldr_d_imm(0, 2, foff); /* d0 = box->f */
+
+  int acc_ready_pc = n;
+  out[patch_acc_ready] = arm64_b(acc_ready_pc - patch_acc_ready);
+
+  /* d1 = float const. */
+  n += emit_mov64(out + n, 5, fc_bits);
+  out[n++] = arm64_fmov_d_x(1, 5);
+
+  /* Loop body: acc = acc <fop> fc; counter += step; while (compare) loop. */
+  int loop_top = n;
+  if (fop == OP_ADD)
+    out[n++] = arm64_fadd_d(0, 0, 1);
+  else if (fop == OP_SUB)
+    out[n++] = arm64_fsub_d(0, 0, 1);
+  else
+    out[n++] = arm64_fmul_d(0, 0, 1);
+  if (step_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, step_delta);
+  else
+    out[n++] = arm64_add_imm(1, 1, step_delta);
+  out[n++] = arm64_cmp_reg(1, 4);
+  {
+    int cur = n++;
+    out[cur] = arm64_b_cond(cont_cc, loop_top - cur); /* back-edge */
+  }
+
+  /* >=1-iter exit: box d0 via make_floatf, tear down frame, return. */
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&make_floatf);
+  out[n++] = arm64_blr(9);
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  /* zero_iter: return refexp(seed) unchanged (x0 = seed). */
+  int zero_iter_pc = n;
+  out[n++] = arm64_ldr_imm(0, 19, aoff);
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&refexp);
+  out[n++] = arm64_blr(9);
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  /* deopt_framed: a tag/type guard failed AFTER the frame was set up. Can't
+     use ARM64_EMIT_DEOPT()/PATCH_DEOPT_* here — those assume a single bare
+     movz/ret stub named `deopt_pc`, but this label must first tear the frame
+     down, and it's a second deopt target distinct from deopt0. Open-coded. */
+  int deopt_framed_pc = n;
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
+  out[n++] = arm64_ret();
+
+  /* deopt0 (the leaf, pre-frame guard) is a bare movz/ret, so it reuses the
+     shared ARM64_EMIT_DEOPT()/PATCH_DEOPT_TBZ helpers (deopt_pc by name). */
+  int deopt_pc = n;
+  ARM64_EMIT_DEOPT();
+
+  /* Back-patch the forward branches with range-checked encoders. */
+  PATCH_DEOPT_TBZ(patch_deopt0, 1, 0);
+  out[patch_zero] = arm64_b_cond(exit_cc, zero_iter_pc - patch_zero);
+  out[patch_check_float] =
+      arm64_b_cond(1 /*NE*/, check_float_pc - patch_check_float);
+  out[patch_df_tag] = arm64_cbnz(3, deopt_framed_pc - patch_df_tag);
+  out[patch_df_null] = arm64_cbz(2, deopt_framed_pc - patch_df_null);
+  out[patch_df_type] = arm64_b_cond(1 /*NE*/, deopt_framed_pc - patch_df_type);
+
+  /* Worst case ≈ 55 instructions (entry guard + frame + limit/const
+     materialization + acc coerce + loop body + 3 exits). Caller's buffer is
+     uint32_t insns[128]. */
+  JIT_GUARD(110);
   *outn = n;
   return 1;
 }
@@ -2266,6 +2586,8 @@ int jit_compile(bytecode_t *bc) {
 
   if (try_jit_simple_tail_loop(bc, insns, &n)) {
     /* matched — fall through to mmap+install */
+  } else if (try_jit_float_acc_loop(bc, insns, &n)) {
+    /* integer-counter + unboxed-float-accumulator self-tail loop */
   } else if (try_jit_tail_loop_with_call(bc, insns, &n)) {
     /* tail loop with one inner call — fall through */
   } else if (try_jit_recurse_add_two(bc, insns, &n)) {
