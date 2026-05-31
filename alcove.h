@@ -362,15 +362,18 @@ typedef enum {
   /* Vector ops — direct opcodes so vec-heavy loops stay in the bytecode
      VM. Otherwise the compiler bails to AST mode for any unknown
      internal, and deeply-nested AST recursion overflows the C stack. */
-  OP_VEC_REF,    /* pop i, pop v    → push v[i] */
-  OP_VEC_SET,    /* pop val, pop i, pop v → mutate v[i] = val, push val */
-  OP_VEC_LEN,    /* pop v           → push v->len (as fixnum) */
-  OP_VEC_NEW,    /* pop init, pop n → push (vec n init) */
-  OP_SQRT_INT,   /* pop n           → push (sqrt-int n) */
-  OP_LENGTH,     /* pop list        → push (length list) — walk cons chain */
-  OP_SETQ_DYN,   /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
-                    env, v) — nearest existing binding else top-level;
-                    push v back (setq returns the assigned value) */
+  OP_VEC_REF,  /* pop i, pop v    → push v[i] */
+  OP_VEC_SET,  /* pop val, pop i, pop v → mutate v[i] = val, push val */
+  OP_VEC_LEN,  /* pop v           → push v->len (as fixnum) */
+  OP_VEC_NEW,  /* pop init, pop n → push (vec n init) */
+  OP_SQRT_INT, /* pop n           → push (sqrt-int n) */
+  OP_ABS,      /* pop a           → push (abs a) — fixnum/float, FIXMIN→float */
+  OP_NMAX,     /* pop b, pop a    → push numeric max (value-preserving) */
+  OP_NMIN,     /* pop b, pop a    → push numeric min (value-preserving) */
+  OP_LENGTH,   /* pop list        → push (length list) — walk cons chain */
+  OP_SETQ_DYN, /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
+                  env, v) — nearest existing binding else top-level;
+                  push v back (setq returns the assigned value) */
   OP_STORE_FREE, /* u8 idx (symbol) → pop v; assign_store_symbol(consts[idx],
                     env, v) — `=`/`setf` to a non-slot (captured free var or
                     global): nearest existing binding else CURRENT env (this

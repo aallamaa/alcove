@@ -4662,6 +4662,12 @@ static const char *bc_opname(uint8_t op) {
     return "VEC_NEW";
   case OP_SQRT_INT:
     return "SQRT_INT";
+  case OP_ABS:
+    return "ABS";
+  case OP_NMAX:
+    return "MAX";
+  case OP_NMIN:
+    return "MIN";
   case OP_LENGTH:
     return "LENGTH";
   default:
@@ -4698,6 +4704,9 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
   case OP_VEC_LEN:
   case OP_VEC_NEW:
   case OP_SQRT_INT:
+  case OP_ABS:
+  case OP_NMAX:
+  case OP_NMIN:
   case OP_LENGTH:
     printf("  %04d  %s\n", pc, bc_opname(op));
     return 1;
@@ -5936,6 +5945,33 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       emit_u8(c, OP_LENGTH);
       return;
     }
+    /* abs (unary) / max,min (binary) get native opcodes instead of the
+       OP_EVAL_AST tree-walk — the common arity. Wrong/variadic arity falls
+       through to OP_EVAL_AST below (where abscmd/maxcmd/mincmd handle it,
+       including variadic max/min over >2 args). */
+    if (!strcmp(s, "abs")) {
+      exp_t *a = cadr(e);
+      if (a && !cddr(e)) {
+        compile_expr(c, a, 0);
+        if (c->failed)
+          return;
+        emit_u8(c, OP_ABS);
+        return;
+      }
+    }
+    if (!strcmp(s, "max") || !strcmp(s, "min")) {
+      exp_t *a = cadr(e), *b = caddr(e);
+      if (a && b && !cdddr(e)) {
+        compile_expr(c, a, 0);
+        if (c->failed)
+          return;
+        compile_expr(c, b, 0);
+        if (c->failed)
+          return;
+        emit_u8(c, !strcmp(s, "max") ? OP_NMAX : OP_NMIN);
+        return;
+      }
+    }
     if (!strcmp(s, "quote")) {
       exp_t *q = cadr(e);
       int k = add_const(c, q ? q : nil_singleton);
@@ -6227,6 +6263,9 @@ tail_reentry:
       [OP_VEC_LEN] = &&l_vec_len,
       [OP_VEC_NEW] = &&l_vec_new,
       [OP_SQRT_INT] = &&l_sqrt_int,
+      [OP_ABS] = &&l_abs,
+      [OP_NMAX] = &&l_max,
+      [OP_NMIN] = &&l_min,
       [OP_LENGTH] = &&l_length,
       [OP_SETQ_DYN] = &&l_setq_dyn,
       [OP_STORE_FREE] = &&l_store_free,
@@ -7046,6 +7085,65 @@ l_sqrt_int: {
     r--;
   unrefexp(nexp);
   PUSH(MAKE_FIX(r));
+  NEXT;
+}
+l_abs: {
+  /* (abs a) — mirrors abscmd. Fixnum: |v|, promoting FIXMIN to float on
+     overflow. Float: fabs. A fixnum operand is an immediate (no ref); a
+     float is heap (drop its ref after reading). */
+  exp_t *a = POP();
+  if (isnumber(a)) {
+    int64_t v = FIX_VAL(a);
+    int64_t av = v < 0 ? -v : v;
+    PUSH((v < 0 && !FIX_FITS(av)) ? make_floatf(-(expfloat)v) : MAKE_FIX(av));
+  } else if (isfloat(a)) {
+    expfloat f = a->f;
+    unrefexp(a);
+    PUSH(make_floatf(f < 0 ? -f : f));
+  } else {
+    unrefexp(a);
+    RUNTIME_ERR("abs: not a number");
+  }
+  NEXT;
+}
+l_max: {
+  /* (max a b) — value-preserving (returns the actual larger operand, keeping
+     its int/float type), via alc_numlt (= maxcmd's comparator). Keep the
+     winner's ref, drop the loser's. Equal → keep a (matches maxcmd's fold). */
+  exp_t *b = POP(), *a = POP();
+  int err;
+  int a_lt_b = alc_numlt(a, b, &err);
+  if (err) {
+    unrefexp(a);
+    unrefexp(b);
+    RUNTIME_ERR("max: non-numeric");
+  }
+  if (a_lt_b) {
+    unrefexp(a);
+    PUSH(b);
+  } else {
+    unrefexp(b);
+    PUSH(a);
+  }
+  NEXT;
+}
+l_min: {
+  /* (min a b) — symmetric to OP_MAX; keep the smaller. Equal → keep a. */
+  exp_t *b = POP(), *a = POP();
+  int err;
+  int b_lt_a = alc_numlt(b, a, &err);
+  if (err) {
+    unrefexp(a);
+    unrefexp(b);
+    RUNTIME_ERR("min: non-numeric");
+  }
+  if (b_lt_a) {
+    unrefexp(a);
+    PUSH(b);
+  } else {
+    unrefexp(b);
+    PUSH(a);
+  }
   NEXT;
 }
 l_length: {

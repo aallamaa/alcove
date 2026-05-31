@@ -187,14 +187,19 @@
 (assert "tco through cond"           (tco-cond 1000000 0)         1000000)
 (assert "tco through case"           (tco-case 1000000 0)         1000000)
 
-; 8f. A non-whitelisted builtin (max/abs/…) in a hot body no longer forces the
-;     WHOLE lambda to AST — OP_EVAL_AST defers just that sub-call while the
-;     lambda stays compiled and keeps O(1)-stack TCO. Covers both a bare body
-;     and a let-enclosed builtin (resolved via OP_BIND_SLOT_NAMED).
+; 8f. A non-whitelisted builtin in a hot body no longer forces the WHOLE lambda
+;     to AST: max/min/abs have native opcodes (OP_NMAX/OP_NMIN/OP_ABS) and any
+;     other builtin defers just its sub-call via OP_EVAL_AST — either way the
+;     lambda stays compiled and keeps O(1)-stack TCO.
 (def tco-builtin (n a)     (if (< n 1) a (tco-builtin (- n 1) (max a 1))))
 (def tco-let-builtin (n a) (let b (abs a) (if (< n 1) b (tco-let-builtin (- n 1) (+ a 1)))))
 (assert "tco around builtin (max)"   (tco-builtin 1000000 5)      5)
 (assert "tco around let-builtin"     (tco-let-builtin 1000000 0)  1000000)
+; OP_EVAL_AST + OP_BIND_SLOT_NAMED guard: a non-promoted builtin (reverse)
+; reading a let-local from a compiled body — the exact shape (user vec->list)
+; that broke when let-locals had NULL inline keys.
+(def rev-let (xs) (let ys xs (reverse ys)))
+(assert "compiled reverse of let-local"  (rev-let (list 1 2 3))   (list 3 2 1))
 
 ; 9. Phase-2 compiler — `with` (multi-binding).
 (assert "with 2 bindings"            (with (a 3 b 4) (+ a b))     7)
