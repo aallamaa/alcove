@@ -6670,10 +6670,13 @@ l_mod: {
       if (isnumber(a) && isnumber(b))                                          \
         r = FIX_VAL(a) intcmp FIX_VAL(b);                                      \
       else {                                                                   \
-        double da = TO_DOUBLE(a);                   \
-        double db = TO_DOUBLE(b);                   \
+        double da = TO_DOUBLE(a);                                              \
+        double db = TO_DOUBLE(b);                                              \
         r = da flcmp db;                                                       \
       }                                                                        \
+      /* a, b are known number-or-float here — skip the general dispatch. */   \
+      unref_number_or_float(a);                                                \
+      unref_number_or_float(b);                                                \
     } else {                                                                   \
       double d;                                                                \
       if (!alc_pair_cmp(a, b, &d)) {                                           \
@@ -6682,9 +6685,9 @@ l_mod: {
         RUNTIME_ERR("Illegal value in compare");                               \
       }                                                                        \
       r = d flcmp 0;                                                           \
+      unrefexp(a);                                                             \
+      unrefexp(b);                                                             \
     }                                                                          \
-    unrefexp(a);                                                               \
-    unrefexp(b);                                                               \
     PUSH(r ? TRUE_EXP : NIL_EXP);                                              \
   } while (0)
 
