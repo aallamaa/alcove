@@ -412,12 +412,20 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   if (slot_off < 0 || slot_off > 32760)
     return 0;
 
-  /* Tagged immediate for cmp: FIX(K1) = (K1<<3)|1. Must fit u12. */
+  /* Tagged compare limit: FIX(K1) = (K1<<3)|1. If it fits arm64's u12 cmp
+     immediate, compare against it directly; otherwise materialize it into a
+     scratch reg (x2) once before the loop and compare register-to-register.
+     This lifts the old "limit must be <= 511 (tagged <= 4095)" cap so a
+     count-up loop to any int16 limit JITs — the gap that left e.g.
+     (if (< n 1000) ...) on the VM path. Mirrors the wide-limit handling in
+     try_jit_float_acc_loop. Tagging is monotonic for signed order, so the
+     tagged compare equals the value compare in either form. */
   int64_t cmp_tagged_64 = ((int64_t)cmp_imm << 3) | 1;
-  if (cmp_tagged_64 < 0 || cmp_tagged_64 > 4095)
-    return 0;
+  int cmp_wide = (cmp_tagged_64 < 0 || cmp_tagged_64 > 4095);
 
-  /* Arithmetic delta is K2<<3 (preserves tag bit). Must fit u12 add/sub. */
+  /* Arithmetic delta is K2<<3 (preserves tag bit). Must fit u12 add/sub; a
+     wider or negative step (rare — real counter loops step by ±1) deopts to
+     the VM, which stays correct. */
   int arith_delta = ((int)arith_imm) << 3;
   if (arith_delta < 0 || arith_delta > 4095)
     return 0;
@@ -451,8 +459,14 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ldr_imm(1, 0, slot_off); /* ldr x1, [x0,#off] */
   int patch_tbz = n;
   out[n++] = 0; /* placeholder tbz x1,#0,deopt */
+  /* Hoist a wide tagged limit into x2 (loop-invariant). */
+  if (cmp_wide)
+    n += emit_mov64(out + n, 2, (uint64_t)cmp_tagged_64);
   int loop_top = n;
-  out[n++] = arm64_cmp_imm(1, (int)cmp_tagged_64); /* cmp x1, #FIX(K1) */
+  if (cmp_wide)
+    out[n++] = arm64_cmp_reg(1, 2); /* cmp x1, x2 (wide FIX(K1)) */
+  else
+    out[n++] = arm64_cmp_imm(1, (int)cmp_tagged_64); /* cmp x1, #FIX(K1) */
   int patch_bcond = n;
   out[n++] = 0; /* placeholder b.cond end */
   if (arith_op == OP_SLOT_SUB_FIX)
@@ -481,10 +495,11 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
   ARM64_EMIT_DEOPT();
 
-  /* Worst case: 12 instructions (load, tbz, cmp, b.cond, sub/add, str,
-     b loop, mov, ret, movz, ret + slack). Caller's buffer is uint32_t
-     insns[32] — comfortable margin. Trip if a future tweak overruns. */
-  JIT_GUARD(16);
+  /* Worst case: ~16 instructions (load, tbz, up-to-4 movz/movk for a wide
+     limit, cmp, b.cond, sub/add, str, b loop, mov, ret, movz, ret + slack).
+     Caller's buffer is uint32_t insns[128] — comfortable margin. Trip if a
+     future tweak overruns. */
+  JIT_GUARD(24);
   *outn = n;
   return 1;
 }
@@ -2439,70 +2454,77 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
      (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S)))))
    Iteratively: i, s untagged; loop while i <= n; s += K_step_s; i++. */
 static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 48)
+  /* 50-byte shape. Since commit 997ffbb the named let/for slots `s` and `i`
+     are bound with OP_BIND_SLOT_NAMED (3 bytes: op, slot, name_const) so
+     OP_EVAL_AST can resolve them by name inside the loop; only the unnamed
+     loop-limit temp stays a plain 2-byte OP_BIND_SLOT. That grew the body
+     48 -> 50 bytes and pushed every opcode from the limit load onward by +2
+     vs the original all-BIND_SLOT layout (the emitted code is unchanged —
+     only these parse offsets moved). */
+  if (bc->ncode != 50)
     return 0;
   uint8_t *c = bc->code;
 
   if (c[0] != OP_LOAD_FIX)
     return 0;
   int16_t K_init_s = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
-  if (c[3] != OP_BIND_SLOT)
+  if (c[3] != OP_BIND_SLOT_NAMED) /* s (named) */
     return 0;
-  if (c[5] != OP_LOAD_FIX)
+  if (c[6] != OP_LOAD_FIX)
     return 0;
-  int16_t K_init_i = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
-  if (c[8] != OP_BIND_SLOT)
+  int16_t K_init_i = (int16_t)((uint16_t)c[7] | ((uint16_t)c[8] << 8));
+  if (c[9] != OP_BIND_SLOT_NAMED) /* i (named) */
     return 0;
-  if (c[10] != OP_LOAD_SLOT)
+  if (c[12] != OP_LOAD_SLOT)
     return 0;
-  uint8_t slot_arg = c[11];
-  if (c[12] != OP_BIND_SLOT)
+  uint8_t slot_arg = c[13];
+  if (c[14] != OP_BIND_SLOT) /* loop-limit temp: unnamed, plain bind */
     return 0;
-  if (c[14] != OP_LOAD_CONST)
+  if (c[16] != OP_LOAD_CONST)
     return 0;
-  if (c[16] != OP_SLOT_LE_SLOT)
+  if (c[18] != OP_SLOT_LE_SLOT)
     return 0;
-  if (c[19] != OP_BR_IF_FALSE)
+  if (c[21] != OP_BR_IF_FALSE)
     return 0;
-  int16_t br_off = (int16_t)((uint16_t)c[20] | ((uint16_t)c[21] << 8));
+  int16_t br_off = (int16_t)((uint16_t)c[22] | ((uint16_t)c[23] << 8));
   if (br_off != 19)
     return 0;
-  if (c[22] != OP_POP)
+  if (c[24] != OP_POP)
     return 0;
 
-  uint8_t step_s_op = c[23];
+  uint8_t step_s_op = c[25];
   if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX)
     return 0;
-  int16_t K_step_s = (int16_t)((uint16_t)c[25] | ((uint16_t)c[26] << 8));
-  if (c[27] != OP_STORE_SLOT)
+  int16_t K_step_s = (int16_t)((uint16_t)c[27] | ((uint16_t)c[28] << 8));
+  if (c[29] != OP_STORE_SLOT)
     return 0;
 
-  if (c[29] != OP_LOAD_SLOT)
+  if (c[31] != OP_LOAD_SLOT)
     return 0;
-  if (c[31] != OP_LOAD_FIX)
+  if (c[33] != OP_LOAD_FIX)
     return 0;
-  int16_t K_step_i = (int16_t)((uint16_t)c[32] | ((uint16_t)c[33] << 8));
+  int16_t K_step_i = (int16_t)((uint16_t)c[34] | ((uint16_t)c[35] << 8));
   if (K_step_i != 1)
     return 0;
-  if (c[34] != OP_ADD)
+  if (c[36] != OP_ADD)
     return 0;
-  if (c[35] != OP_STORE_SLOT)
+  if (c[37] != OP_STORE_SLOT)
     return 0;
-  if (c[37] != OP_POP)
+  if (c[39] != OP_POP)
     return 0;
-  if (c[38] != OP_JUMP)
+  if (c[40] != OP_JUMP)
     return 0;
-  int16_t jmp_off = (int16_t)((uint16_t)c[39] | ((uint16_t)c[40] << 8));
+  int16_t jmp_off = (int16_t)((uint16_t)c[41] | ((uint16_t)c[42] << 8));
   if (jmp_off != -25)
     return 0;
 
-  if (c[41] != OP_UNBIND_SLOT)
-    return 0;
   if (c[43] != OP_UNBIND_SLOT)
     return 0;
   if (c[45] != OP_UNBIND_SLOT)
     return 0;
-  if (c[47] != OP_RET)
+  if (c[47] != OP_UNBIND_SLOT)
+    return 0;
+  if (c[49] != OP_RET)
     return 0;
   if (slot_arg >= ENV_INLINE_SLOTS)
     return 0;

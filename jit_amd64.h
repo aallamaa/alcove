@@ -2556,78 +2556,85 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
    We emit a tight native loop: untag n_max once, run i/s in untagged
    regs, retag s on exit. ~5 cycles per iteration. */
 static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 48)
+  /* 50-byte shape — see the arm64 twin for the full note. Since commit
+     997ffbb the named let/for slots `s` and `i` are bound with
+     OP_BIND_SLOT_NAMED (3 bytes: op, slot, name_const) instead of the plain
+     2-byte OP_BIND_SLOT, so OP_EVAL_AST can resolve them by name. Only the
+     unnamed loop-limit temp keeps a plain bind. That grew the body 48 -> 50
+     bytes and pushed every opcode from the limit load onward by +2; the
+     emitted native loop is unchanged, only these parse offsets moved. */
+  if (bc->ncode != 50)
     return 0;
   uint8_t *c = bc->code;
 
   if (c[0] != OP_LOAD_FIX)
     return 0;
   int16_t K_init_s = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
-  if (c[3] != OP_BIND_SLOT)
+  if (c[3] != OP_BIND_SLOT_NAMED) /* s (named) */
     return 0;
   uint8_t slot_s = c[4];
-  if (c[5] != OP_LOAD_FIX)
+  if (c[6] != OP_LOAD_FIX)
     return 0;
-  int16_t K_init_i = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
-  if (c[8] != OP_BIND_SLOT)
+  int16_t K_init_i = (int16_t)((uint16_t)c[7] | ((uint16_t)c[8] << 8));
+  if (c[9] != OP_BIND_SLOT_NAMED) /* i (named) */
     return 0;
-  uint8_t slot_i = c[9];
-  if (c[10] != OP_LOAD_SLOT)
+  uint8_t slot_i = c[10];
+  if (c[12] != OP_LOAD_SLOT)
     return 0;
-  uint8_t slot_arg = c[11];
-  if (c[12] != OP_BIND_SLOT)
+  uint8_t slot_arg = c[13];
+  if (c[14] != OP_BIND_SLOT) /* loop-limit temp: unnamed, plain bind */
     return 0;
-  uint8_t slot_n = c[13];
-  if (c[14] != OP_LOAD_CONST)
+  uint8_t slot_n = c[15];
+  if (c[16] != OP_LOAD_CONST)
     return 0;
-  if (c[16] != OP_SLOT_LE_SLOT)
+  if (c[18] != OP_SLOT_LE_SLOT)
     return 0;
-  if (c[17] != slot_i || c[18] != slot_n)
+  if (c[19] != slot_i || c[20] != slot_n)
     return 0;
-  if (c[19] != OP_BR_IF_FALSE)
+  if (c[21] != OP_BR_IF_FALSE)
     return 0;
   /* loop-exit branch offset: must land on first UNBIND. */
-  int16_t br_off = (int16_t)((uint16_t)c[20] | ((uint16_t)c[21] << 8));
+  int16_t br_off = (int16_t)((uint16_t)c[22] | ((uint16_t)c[23] << 8));
   if (br_off != 19)
     return 0;
-  if (c[22] != OP_POP)
+  if (c[24] != OP_POP)
     return 0;
 
-  uint8_t step_s_op = c[23];
+  uint8_t step_s_op = c[25];
   if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX)
     return 0;
-  if (c[24] != slot_s)
+  if (c[26] != slot_s)
     return 0;
-  int16_t K_step_s = (int16_t)((uint16_t)c[25] | ((uint16_t)c[26] << 8));
-  if (c[27] != OP_STORE_SLOT || c[28] != slot_s)
+  int16_t K_step_s = (int16_t)((uint16_t)c[27] | ((uint16_t)c[28] << 8));
+  if (c[29] != OP_STORE_SLOT || c[30] != slot_s)
     return 0;
 
-  if (c[29] != OP_LOAD_SLOT || c[30] != slot_i)
+  if (c[31] != OP_LOAD_SLOT || c[32] != slot_i)
     return 0;
-  if (c[31] != OP_LOAD_FIX)
+  if (c[33] != OP_LOAD_FIX)
     return 0;
-  int16_t K_step_i = (int16_t)((uint16_t)c[32] | ((uint16_t)c[33] << 8));
+  int16_t K_step_i = (int16_t)((uint16_t)c[34] | ((uint16_t)c[35] << 8));
   if (K_step_i != 1)
     return 0;
-  if (c[34] != OP_ADD)
+  if (c[36] != OP_ADD)
     return 0;
-  if (c[35] != OP_STORE_SLOT || c[36] != slot_i)
+  if (c[37] != OP_STORE_SLOT || c[38] != slot_i)
     return 0;
-  if (c[37] != OP_POP)
+  if (c[39] != OP_POP)
     return 0;
-  if (c[38] != OP_JUMP)
+  if (c[40] != OP_JUMP)
     return 0;
-  int16_t jmp_off = (int16_t)((uint16_t)c[39] | ((uint16_t)c[40] << 8));
+  int16_t jmp_off = (int16_t)((uint16_t)c[41] | ((uint16_t)c[42] << 8));
   if (jmp_off != -25)
     return 0;
 
-  if (c[41] != OP_UNBIND_SLOT)
-    return 0;
   if (c[43] != OP_UNBIND_SLOT)
     return 0;
   if (c[45] != OP_UNBIND_SLOT)
     return 0;
-  if (c[47] != OP_RET)
+  if (c[47] != OP_UNBIND_SLOT)
+    return 0;
+  if (c[49] != OP_RET)
     return 0;
   if (slot_arg >= ENV_INLINE_SLOTS)
     return 0;
