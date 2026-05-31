@@ -1,3 +1,13 @@
+# ====================================================================
+# GENERATED FILE - do not edit by hand.
+#   regenerate with:  make gen-test-adr   (or python3 gen_test_adr.py)
+# Source of truth:
+#   test.alc             - shared engine tests (transpiled via alc2adr.py)
+#   test_adder_extra.adr - adder-syntax-only tests (spliced before the
+#                          TEST RESULT summary)
+# Editing this file directly will be overwritten on the next regen.
+# ====================================================================
+
 setf _test_pass 0
 
 setf _test_fail 0
@@ -49,6 +59,392 @@ refute "assert detects inequality" 1 0
 assert "addition" 3 (+ 1 2)
 
 assert " (+) is 0" 0 (+)
+
+assert "int + variadic" (+ 1 2 3 4) 10
+
+assert "int - variadic" (- 10 3 2) 5
+
+assert "int * variadic" (* 2 3 4) 24
+
+assert "int * empty is 1" (*) 1
+
+assert "int / exact" (/ 100 5 2) 10
+
+assert "int / truncates" (/ 7 2) 3
+
+assert "int / neg truncates" (/ -7 2) -3
+
+assert "int + negatives" (+ -3 -4) -7
+
+assert "int * negative" (* -2 3) -6
+
+assert "mod positive" (mod 17 5) 2
+
+assert "mod neg dividend" (mod -7 3) -1
+
+assert "mod neg divisor" (mod 7 -3) 1
+
+assert "mod exact 0" (mod 9 3) 0
+
+assert "float +" (+ 1.5 2.5) 4.0
+
+assert "float -" (- 5.5 2.0) 3.5
+
+assert "float *" (* 1.5 2.0) 3.0
+
+assert "float /" (/ 7.0 2.0) 3.5
+
+assert "float + chain" (+ 0.5 0.5 0.5 0.5) 2.0
+
+assert "mixed + -> float" (+ 1 2.5) 3.5
+
+assert "mixed * -> float" (* 2 0.5) 1.0
+
+assert "mixed - -> float" (- 5 2.5) 2.5
+
+assert "mixed / -> float" (/ 7.0 2) 3.5
+
+assert "float mod" (mod 7.5 2.0) 1.5
+
+assert "lt int true" (< 1 2) t
+
+assert "lt int false" (< 2 1) nil
+
+assert "gt int" (> 3 2) t
+
+assert "le equal" (<= 2 2) t
+
+assert "ge false" (>= 2 3) nil
+
+assert "lt float" (< 1.5 2.5) t
+
+assert "lt mixed int<float" (< 1 1.5) t
+
+assert "lt mixed float<int" (< 2.5 3) t
+
+assert "gt mixed float>int" (> 2.5 2) t
+
+assert "le float equal" (<= 2.0 2.0) t
+
+assert "is fixnum eq" (is 5 5) t
+
+assert "is fixnum neq" (is 5 6) nil
+
+assert "is fixnum vs float" (is 5 5.0) nil
+
+assert "is char eq" (is #\a #\a) t
+
+assert "is char neq" (is #\a #\b) nil
+
+assert "is symbol eq" (is 'a 'a) t
+
+assert "is nil" (is nil nil) t
+
+assert "is t" (is t t) t
+
+assert "is string by content" (is "x" "x") t
+
+assert "is distinct pairs" (is (list 1) (list 1)) nil
+
+assert "iso fixnum vs float" (iso 5 5.0) nil
+
+assert "iso float eq" (iso 1.5 1.5) t
+
+assert "iso list deep" (iso (list 1 (list 2 3)) (list 1 (list 2 3))) t
+
+assert "iso vector deep" (iso (vector 1 2 3) (vector 1 2 3)) t
+
+assert "iso string" (iso "ab" "ab") t
+
+assert "iso unequal list" (iso (list 1 2) (list 1 3)) nil
+
+assert "abs neg" (abs -5) 5
+
+assert "abs pos" (abs 5) 5
+
+assert "abs zero" (abs 0) 0
+
+assert "abs neg float" (abs -5.5) 5.5
+
+assert "max 2-arg a>b" (max 7 3) 7
+
+assert "max 2-arg a<b" (max 3 7) 7
+
+assert "max negatives" (max -1 -5) -1
+
+assert "max variadic" (max 1 2 3 4 5) 5
+
+assert "max single" (max 5) 5
+
+assert "max equal" (max 3 3) 3
+
+assert "max picks float" (max 2 2.5) 2.5
+
+assert "min 2-arg" (min 3 7) 3
+
+assert "min negatives" (min -1 -5) -5
+
+assert "min variadic" (min 5 4 3 2 1) 1
+
+assert "min single" (min 5) 5
+
+assert "min picks int" (min 2 2.5) 2
+
+assert "and empty -> t" (and) t
+
+assert "or empty -> nil" (or) nil
+
+assert "and last truthy" (and 1 2 3) 3
+
+assert "and first falsy" (and 1 nil 3) nil
+
+assert "and single" (and 5) 5
+
+assert "or first truthy" (or nil 7) 7
+
+assert "or zero is falsy" (or nil 0 7) 7
+
+assert "or all falsy" (or nil nil) nil
+
+assert "and short-circuits" (and nil 'never) nil
+
+assert "or short-circuits" (or 1 'never) 1
+
+assert "cond empty" (cond) nil
+
+assert "cond first hit" (cond t 1) 1
+
+assert "cond second hit" (cond nil 1 t 2) 2
+
+assert "cond no hit no dflt" (cond nil 1 nil 2) nil
+
+assert "cond default" (cond nil 1 99) 99
+
+assert "case match" (case 5 1 "a" 5 "b" "d") "b"
+
+assert "case default" (case 9 1 "a" "d") "d"
+
+assert "case no match no dflt" (case 9 1 "a") nil
+
+assert "string-append n" (string-append "ab" "cd" "ef") "abcdef"
+
+assert "string-append empty" (string-append "") ""
+
+assert "length string" (length "hello") 5
+
+assert "length empty string" (length "") 0
+
+assert "substr" (substr "hello" 1 3) "el"
+
+assert "str of int" (str 42) "42"
+
+assert "str of float" (str 3.5) "3.5"
+
+assert "str of list" (str (list 1 2)) "(1 2)"
+
+assert "string-upcase" (string-upcase "aB") "AB"
+
+assert "string-downcase" (string-downcase "aB") "ab"
+
+assert "string-contains? yes" (string-contains? "hello" "ell") t
+
+assert "string-index" (string-index "hello" "l") 2
+
+assert "vec-len" (vec-len (vec 3 0)) 3
+
+assert "vec-len empty" (vec-len (vec 0 0)) 0
+
+assert "vec-ref init" (vec-ref (vec 3 7) 1) 7
+
+assert "vec-set! then ref" (let v (vec 2 0) (do (vec-set! v 0 5) (vec-ref v 0))):
+  5
+
+assert "vec-ref OOB errors" (try (vec-ref (vec 3 0) 9) (fn (e) 'oob)) 'oob
+
+assert "vec-ref neg errors" (try (vec-ref (vec 3 0) -1) (fn (e) 'neg)) 'neg
+
+assert "map" (map (fn (x) (* x x)) (list 1 2 3)) (list 1 4 9)
+
+assert "map empty" (map (fn (x) x) (list)) nil
+
+assert "filter" (filter (fn (x) (> x 1)) (list 1 2 3)) (list 2 3)
+
+assert "reduce" (reduce + 0 (list 1 2 3 4)) 10
+
+assert "reduce empty -> init" (reduce + 0 (list)) 0
+
+assert "reverse" (reverse (list 1 2 3)) (list 3 2 1)
+
+assert "reverse empty" (reverse (list)) nil
+
+assert "take" (take 2 (list 1 2 3)) (list 1 2)
+
+assert "take past end" (take 5 (list 1 2)) (list 1 2)
+
+assert "drop" (drop 2 (list 1 2 3)) (list 3)
+
+assert "range exclusive end" (range 0 3) (list 0 1 2)
+
+assert "nth" (nth 1 (list 10 20 30)) 20
+
+assert "append" (append (list 1 2) (list 3 4)) (list 1 2 3 4)
+
+assert "sort" (sort (list 3 1 2)) (list 1 2 3)
+
+assert "int truncates" (int 3.9) 3
+
+assert "float of int" (iso (float 3) 3.0) t
+
+assert "number? int" (number? 5) t
+
+assert "number? float" (number? 5.0) t
+
+assert "number? non" (number? "x") nil
+
+assert "string? yes" (string? "x") t
+
+assert "string? no" (string? 5) nil
+
+assert "list? yes" (list? (list 1)) t
+
+assert "null? nil" (null? nil) t
+
+assert "null? empty list" (null? (list)) t
+
+assert "null? non-empty" (null? (list 1)) nil
+
+assert "try catches div0" (try (/ 1 0) (fn (e) 'caught)) 'caught
+
+assert "try passes value" (try 42 (fn (e) 'x)) 42
+
+assert "error? on caught" (error? (try (/ 1 0) (fn (e) e))) t
+
+assert "error? on plain" (error? 5) nil
+
+assert "try catches mod0" (try (mod 5 0) (fn (e) 'mz)) 'mz
+
+assert "inner let shadows" (let x 1 (let x 2 x)) 2
+
+assert "outer let restored" (let x 1 (do (let x 2 x) x)) 1
+
+assert "let shadows param" ((fn (x) (let x 9 x)) 5) 9
+
+assert "let* sequential" (let* (a 1 b (+ a 1)) (+ a b)) 3
+
+assert "with multi-binding" (with (a 2 b 3) (* a b)) 6
+
+assert "mutate let slot" (let x 10 (do (setf x 20) x)) 20
+
+def e0d-shadow (v):
+  let v 7:
+    reverse (list v v)
+
+assert "compiled shadow+EVAL_AST" (e0d-shadow 0) (list 7 7)
+
+def e0d-adder (n):
+  fn (x):
+    + x n
+
+assert "closure captures param" ((e0d-adder 100) 5) 105
+
+defc e0d-find (n) (each x (list 1 2 3 4) (if (is x n) (return 'found))) 'no
+
+assert "defc return from each hit" (e0d-find 3) 'found
+
+assert "defc return from each miss" (e0d-find 9) 'no
+
+assert "rest params count" ((fn (a b . rest) (length rest)) 1 2 3 4 5) 3
+
+assert "rest params empty" ((fn (a . rest) (length rest)) 1) 0
+
+assert "dict get hit" (get (hash-map "a" 1 "b" 2) "a") 1
+
+assert "dict get miss -> nil" (get (hash-map "a" 1) "z") nil
+
+assert "dict count" (count (hash-map "a" 1 "b" 2)) 2
+
+assert "dict empty count" (count (hash-map)) 0
+
+assert "dict assoc! then get" (let d (hash-map) (do (assoc! d "k" 9) (get d "k"))):
+  9
+
+assert "dict assoc! overwrite" (let d (hash-map "k" 1) (do (assoc! d "k" 2) (get d "k"))):
+  2
+
+assert "dict contains? yes" (contains? (hash-map "a" 1) "a") t
+
+assert "dict contains? no" (contains? (hash-map "a" 1) "z") nil
+
+assert "dict dissoc!" (let d (hash-map "a" 1) (do (dissoc! d "a") (contains? d "a"))):
+  nil
+
+assert "dict keys count" (count (keys (hash-map "a" 1 "b" 2))) 2
+
+assert "dict? predicate" (dict? (hash-map)) t
+
+assert "set-has? yes" (set-has? (set 1 2 3) 2) t
+
+assert "set-has? no" (set-has? (set 1 2 3) 9) nil
+
+assert "set dedup count" (count (set 1 2 3 3 3)) 3
+
+assert "set empty count" (count (set)) 0
+
+assert "set-add!" (set-has? (set-add! (set 1) 5) 5) t
+
+assert "set-del!" (set-has? (set-del! (set 1 2) 1) 1) nil
+
+assert "set-intersection count" (count (set-intersection (set 1 2 3) (set 2 3 4))):
+  2
+
+assert "set-intersection memb" (set-has? (set-intersection (set 1 2 3) (set 2 3 4)) 2):
+  t
+
+assert "set-union count" (count (set-union (set 1 2) (set 2 3))) 3
+
+assert "set-difference count" (count (set-difference (set 1 2 3) (set 2))) 2
+
+assert "set? predicate" (set? (set 1)) t
+
+assert "hamt-get hit" (hamt-get (hamt-assoc (hamt "a" 1) "b" 2) "b") 2
+
+assert "hamt-get miss" (hamt-get (hamt "a" 1) "z") nil
+
+assert "hamt-contains?" (hamt-contains? (hamt "a" 1) "a") t
+
+assert "hamt-count" (hamt-count (hamt "a" 1 "b" 2)) 2
+
+assert "hamt persistent orig" (let h (hamt "a" 1) (do (hamt-assoc h "b" 2) (hamt-count h))):
+  1
+
+assert "hamt-assoc new map" (let h (hamt "a" 1) (hamt-count (hamt-assoc h "b" 2))):
+  2
+
+assert "hamt-dissoc" (hamt-count (hamt-dissoc (hamt "a" 1 "b" 2) "a")) 1
+
+assert "blob-len" (blob-len (string->blob "hello")) 5
+
+assert "blob roundtrip" (blob->string (string->blob "hi")) "hi"
+
+assert "blob-ref byte" (blob-ref (string->blob "A") 0) 65
+
+assert "blob empty len" (blob-len (string->blob "")) 0
+
+assert "blob? predicate" (blob? (string->blob "x")) t
+
+assert "deque push-left peek" (let q (deque) (do (push-right! q 1) (push-right! q 2) (push-left! q 0) (peek-left q))):
+  0
+
+assert "deque peek-right" (let q (deque) (do (push-right! q 1) (push-right! q 2) (peek-right q))):
+  2
+
+assert "deque pop-left" (let q (deque) (do (push-right! q 1) (push-right! q 2) (pop-left! q) (peek-left q))):
+  2
+
+assert "deque empty count" (count (deque)) 0
+
+assert "deque count after push" (let q (deque) (do (push-right! q 1) (push-right! q 2) (count q))):
+  2
 
 assert "cons test " (cons 'f '(a b)) '(f a b)
 
@@ -221,6 +617,83 @@ assert "tco through with" (tco-with 1000000) 'ok
 assert "tco through when" (tco-when 1000000) 'ok
 
 assert "tco through unless" (tco-unless 1000000) nil
+
+def tco-and (n a):
+  if (< n 1):
+    a
+    and t (tco-and (- n 1) (+ a 1))
+
+def tco-or (n a):
+  if (< n 1):
+    a
+    or nil (tco-or (- n 1) (+ a 1))
+
+def tco-cond (n a):
+  cond (< n 1) a t (tco-cond (- n 1) (+ a 1))
+
+def tco-case (n a):
+  case n:
+    0
+    a
+    tco-case (- n 1) (+ a 1)
+
+assert "tco through and" (tco-and 1000000 0) 1000000
+
+assert "tco through or" (tco-or 1000000 0) 1000000
+
+assert "tco through cond" (tco-cond 1000000 0) 1000000
+
+assert "tco through case" (tco-case 1000000 0) 1000000
+
+def tco-builtin (n a):
+  if (< n 1):
+    a
+    tco-builtin (- n 1) (max a 1)
+
+def tco-let-builtin (n a):
+  let b (abs a):
+    if (< n 1):
+      b
+      tco-let-builtin (- n 1) (+ a 1)
+
+assert "tco around builtin (max)" (tco-builtin 1000000 5) 5
+
+assert "tco around let-builtin" (tco-let-builtin 1000000 0) 1000000
+
+def rev-let (xs):
+  let ys xs:
+    reverse ys
+
+assert "compiled reverse of let-local" (rev-let (list 1 2 3)) (list 3 2 1)
+
+def is-cd (n):
+  if (is n 0):
+    'ok
+    is-cd (- n 1)
+
+def is-cdn (n):
+  if (is n 0):
+    n
+    is-cdn (- n 1)
+
+assert "is-fused tail loop (const base)" (is-cd 1000000) 'ok
+
+assert "is-fused tail loop (slot base)" (is-cdn 1000000) 0
+
+assert "is fixnum vs equal fixnum" (is-cdn 0) 0
+
+assert "is 5 5.0 → nil (no float coerce)" (is 5 5.0) nil
+
+assert "is 5 5   → t" (is 5 5) t
+
+def is-ack (m n):
+  if (is m 0):
+    + n 1
+    if (is n 0):
+      is-ack (- m 1) 1
+      is-ack (- m 1) (is-ack m (- n 1))
+
+assert "is-fused ackermann (jit shape)" (is-ack 3 6) 509
 
 assert "with 2 bindings" (with (a 3 b 4) (+ a b)) 7
 
@@ -803,20 +1276,51 @@ assert "cc payload list" (call/cc (fn (k) (k (list 1 2 3)))) (list 1 2 3)
 
 assert "cc ignored k" (call/cc (fn (k) (* 6 7))) 42
 
-# defc plus inline colon-body — the body nests correctly whether
-# parenthesized or not (regression for the colon-leak bug).
-defc adr-clamp (x lo hi):
-  if (< x lo): (return lo)
-  if (> x hi): return hi
-  x
-assert "defc inline clamp hi" (adr-clamp 99 0 10) 10
-assert "defc inline clamp lo" (adr-clamp -3 0 10) 0
-assert "defc inline clamp mid" (adr-clamp 5 0 10) 5
-defc adr-find (pred xs):
-  each x xs: (if (pred x) (return x))
-  nil
-assert "defc inline find hit" (adr-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
-assert "defc inline find miss" (adr-find (fn (n) (> n 9)) (list 1 2 3)) nil
+defc dc-clamp (x lo hi) (if (< x lo) (return lo)) (if (> x hi) (return hi)) x
+
+assert "defc clamp mid" (dc-clamp 5 0 10) 5
+
+assert "defc clamp low" (dc-clamp -3 0 10) 0
+
+assert "defc clamp high" (dc-clamp 99 0 10) 10
+
+defc dc-find (pred xs) (each x xs (if (pred x) (return x))) nil
+
+assert "defc find hit" (dc-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
+
+assert "defc find miss" (dc-find (fn (n) (> n 99)) (list 1 2 3)) nil
+
+defc dc-sumnn (xs):
+  let s 0:
+    do:
+      each x:
+        xs
+        if (< x 0):
+          return 0
+        setf s (+ s x)
+      s
+
+assert "defc sum nonneg ok" (dc-sumnn (list 3 4 5)) 12
+
+assert "defc sum nonneg bail" (dc-sumnn (list 3 -1 5)) 0
+
+defc dc-noesc (x) (+ x 1)
+
+assert "defc no escape" (dc-noesc 10) 11
+
+defc dc-zero (n) (if (is n 0) (return 0)) (* n n)
+
+assert "defc return 0 (falsy)" (dc-zero 0) 0
+
+assert "defc no-return path" (dc-zero 4) 16
+
+defc dc-nil () (return nil)
+
+assert "defc return nil" (dc-nil) nil
+
+defc dc-rest xs (return (length xs))
+
+assert "defc rest-param" (dc-rest 1 2 3) 3
 
 assert "msgpack int" (msgpack-decode (msgpack-encode 42)) 42
 
@@ -1054,6 +1558,189 @@ assert "jit? non-fn is nil" (jit? 42) nil
 
 assert "jit? implies compiled?" (if (jit? itest-add) (compiled? itest-add) t):
   t
+
+setf _jit_on (jit? itest-add)
+
+def assert-jits (label f):
+  assert label (if _jit_on (jit? f) (no (jit? f))) t
+
+def jc-const ():
+  42
+
+def jc-add (s):
+  + s 7
+
+def jc-mul (s):
+  * s 7
+
+def jc-lt (n):
+  if (< n 1000):
+    jc-lt (+ n 1)
+    n
+
+def jc-le (n):
+  if (<= n 1000):
+    jc-le (+ n 1)
+    n
+
+def jc-gt (n):
+  if (> n 0):
+    jc-gt (- n 1)
+    n
+
+def jc-ge (n):
+  if (>= n 1):
+    jc-ge (- n 1)
+    n
+
+def jc-fact (n):
+  if (< n 2):
+    1
+    * n (jc-fact (- n 1))
+
+def jc-fib (n):
+  if (< n 2):
+    n
+    + (jc-fib (- n 1)) (jc-fib (- n 2))
+
+def jc-ack (m n):
+  if (is m 0):
+    + n 1
+    if (is n 0):
+      jc-ack (- m 1) 1
+      jc-ack (- m 1) (jc-ack m (- n 1))
+
+def jc-tak (x y z):
+  if (no (< y x)):
+    z
+    jc-tak (jc-tak (- x 1) y z) (jc-tak (- y 1) z x) (jc-tak (- z 1) x y)
+
+def jc-loopcall (k):
+  if (> k 0):
+    do:
+      jc-fact 19
+      jc-loopcall (- k 1)
+    k
+
+def jc-forsum (n):
+  let s 0:
+    for i 1 n:
+      setf s (+ s 1)
+
+def jc-build (i n acc):
+  if (> i n):
+    acc
+    jc-build (+ i 1) n (cons i acc)
+
+def jc-markfrom (step j n marks):
+  if (> j n):
+    nil
+    do:
+      vec-set! marks j nil
+      jc-markfrom step (+ j step) n marks
+
+def jc-countprimes (i n marks acc):
+  if (> i n):
+    acc
+    jc-countprimes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc)
+
+def jc-isprime (acc i):
+  if (no acc):
+    t
+    if (is (mod i (car acc)) 0):
+      nil
+      jc-isprime (cdr acc) i
+
+def jc-safe (c qs offset):
+  if (no qs):
+    t
+    if (is c (car qs)):
+      nil
+      if (is (+ c offset) (car qs)):
+        nil
+        if (is (- c offset) (car qs)):
+          nil
+          jc-safe c (cdr qs) (+ offset 1)
+
+def jc-divides (a b):
+  is (mod a b) 0
+
+def jc-facc-add (n acc):
+  if (< n 100000):
+    jc-facc-add (+ n 1) (+ acc 0.5)
+    acc
+
+def jc-facc-sub (n acc):
+  if (< n 100000):
+    jc-facc-sub (+ n 1) (- acc 0.5)
+    acc
+
+def jc-facc-mul (n acc):
+  if (< n 40000):
+    jc-facc-mul (+ n 1) (* acc 2.0)
+    acc
+
+assert-jits "jit leaf: (fn () K)" jc-const
+
+assert-jits "jit leaf: (+ s K)" jc-add
+
+assert-jits "jit leaf: (* s K)" jc-mul
+
+assert-jits "jit loop: < (wide limit)" jc-lt
+
+assert-jits "jit loop: <= (wide limit)" jc-le
+
+assert-jits "jit loop: > countdown" jc-gt
+
+assert-jits "jit loop: >= countdown" jc-ge
+
+assert-jits "jit recurse: fact" jc-fact
+
+assert-jits "jit recurse: fib" jc-fib
+
+assert-jits "jit recurse: ackermann" jc-ack
+
+assert-jits "jit recurse: tak" jc-tak
+
+assert-jits "jit loop + inner call" jc-loopcall
+
+assert-jits "jit for-loop (forsum)" jc-forsum
+
+assert-jits "jit cons-builder (listsum)" jc-build
+
+assert-jits "jit sieve: mark-from" jc-markfrom
+
+assert-jits "jit sieve: count-primes" jc-countprimes
+
+assert-jits "jit sieve: is-prime-given" jc-isprime
+
+assert-jits "jit nqueens: safe?" jc-safe
+
+assert-jits "jit divides? (mod leaf)" jc-divides
+
+assert-jits "jit float-acc: +" jc-facc-add
+
+assert-jits "jit float-acc: -" jc-facc-sub
+
+assert-jits "jit float-acc: *" jc-facc-mul
+
+assert "jit loop < result" (jc-lt 0) 1000
+
+assert "jit countdown result" (jc-gt 1000000) 0
+
+assert "jit fact result" (jc-fact 10) 3628800
+
+assert "jit forsum result" (jc-forsum 100000) 100000
+
+assert "jit listsum-builder length" (length (jc-build 1 50 (list))) 50
+
+assert "jit float-acc result" (jc-facc-add 0 0.0) 50000.0
+
+assert "jit float-acc is float" (iso (jc-facc-add 0 0) 50000.0) t
+
+assert "jit float-acc 0-iter int" (iso (jc-facc-add 200000 7) 7) t
+
+assert "jit float-acc mul (2 iters)" (jc-facc-mul 39998 1.0) 4.0
 
 assert "str concatenates values" (str "a" 12 'b #\c) "a12bc"
 
@@ -2920,6 +3607,41 @@ def bm-tak (x y z):
 
 assert "bench tak 24 16 8" (bm-tak 24 16 8) 9
 
+def bm-faccadd (n acc):
+  if (< n 100000):
+    bm-faccadd (+ n 1) (+ acc 0.5)
+    acc
+
+def bm-faccsub (n acc):
+  if (< n 100000):
+    bm-faccsub (+ n 1) (- acc 0.5)
+    acc
+
+def bm-faccmul (n acc):
+  if (< n 64):
+    bm-faccmul (+ n 1) (* acc 2.0)
+    acc
+
+assert "facc add (float seed)" (bm-faccadd 0 0.0) 50000.0
+
+assert "facc add (int seed)" (bm-faccadd 0 0) 50000.0
+
+assert "facc add result is float" (iso (bm-faccadd 0 0) 50000.0) t
+
+assert "facc add result not int" (iso (bm-faccadd 0 0) 50000) nil
+
+assert "facc sub" (bm-faccsub 0 0.0) -50000.0
+
+assert "facc mul" (bm-faccmul 0 1.0) (** 2.0 64)
+
+assert "facc 0-iter int seed" (iso (bm-faccadd 200000 7) 7) t
+
+assert "facc 0-iter int not flt" (iso (bm-faccadd 200000 7) 7.0) nil
+
+assert "facc 0-iter float seed" (iso (bm-faccadd 200000 7.5) 7.5) t
+
+assert "facc negative seed" (bm-faccadd 0 -25000.0) 25000.0
+
 setf wh-n 0
 
 while (< wh-n 5):
@@ -4222,6 +4944,39 @@ assert-true "truthy: builtin" car
 assert-true "assert-true detects truthy" t
 
 assert-false "assert-false detects falsy" nil
+
+
+# ====================================================================
+# Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.
+#
+# Everything else in the generated test.adr comes from transpiling test.alc
+# (the shared engine suite) so adder runs the exact same corpus as alcove.
+# These tests can't live in test.alc because they exercise the adder FRONT
+# END itself — indentation/colon bodies, `return`, `each` — which the Lisp
+# reader has no equivalent for. gen_test_adr.py splices this block in just
+# before the TEST RESULT summary so the assertions are counted.
+#
+# assert / _test_pass / _test_fail are already defined by the transpiled
+# preamble that precedes this block.
+# ====================================================================
+
+assert "with colon-body pythagorean" (with (x 3 y 4) (sqrt (+ (expt x 2) (expt y 2)))):
+  5.0
+
+# defc plus inline colon-body — the body nests correctly whether
+# parenthesized or not (regression for the colon-leak bug).
+defc adr-clamp (x lo hi):
+  if (< x lo): (return lo)
+  if (> x hi): return hi
+  x
+assert "defc inline clamp hi" (adr-clamp 99 0 10) 10
+assert "defc inline clamp lo" (adr-clamp -3 0 10) 0
+assert "defc inline clamp mid" (adr-clamp 5 0 10) 5
+defc adr-find (pred xs):
+  each x xs: (if (pred x) (return x))
+  nil
+assert "defc inline find hit" (adr-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
+assert "defc inline find miss" (adr-find (fn (n) (> n 9)) (list 1 2 3)) nil
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 

@@ -170,6 +170,23 @@ endif
 	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
+# Regenerate test.adr from test.alc (shared engine suite, transpiled via
+# alc2adr.py) + test_adder_extra.adr (adder-syntax-only tests). Keeps the
+# adder test corpus in lockstep with alcove's instead of drifting as a
+# hand-maintained subset. The file rule fires only when a source is newer.
+test.adr: test.alc test_adder_extra.adr alc2adr.py gen_test_adr.py
+	python3 gen_test_adr.py
+gen-test-adr:
+	python3 gen_test_adr.py
+
+# Regenerate the wasm smoke-test battery (web/web_battery.js) from native
+# alcove/adder output over web/web_exprs_{lisp,adder}.txt. Builds the two
+# native binaries first so the expected values are current.
+gen-web-battery: jit adder
+	python3 gen_web_battery.py
+web/web_battery.js: web/web_exprs_lisp.txt web/web_exprs_adder.txt gen_web_battery.py
+	@$(MAKE) -s gen-web-battery
+
 # Backwards-compatible aliases for the old target names.
 als: adder
 alcoves: adder
@@ -240,6 +257,7 @@ test-all:
 	    *) echo "  FAILURES — $$res"; ok=0;; \
 	  esac; \
 	done; \
+	$(MAKE) -s test.adr; \
 	abin=/tmp/adder-test.$$$$; \
 	for spec in $(ALS_SPECS); do \
 	  aname=$${spec%%:*}; aflags=$${spec#*:}; \
@@ -473,4 +491,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves gen-test-adr install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

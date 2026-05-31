@@ -1,0 +1,31 @@
+# Adder-syntax expressions for the wasm adder build (same contract).
+# --- core battery ---
++ 1 2
+* 3 4
+vec-ref #[5 6 7] 0
+{:a 1, :b 2}
+get {:k 8} :k
+map (fn (x) (* x x)) (list 1 2 3)
+reduce + 0 (range 1 11)
+str "a" "b" "c"
+set-has? #{1 2 3} 2
+`(a ,(+ 1 2) ,@(list 4 5))
+# --- expanded coverage ---
++ 1.5 2.5
+* 3 1.5
+- 0 7
+sqrt 2.0
+map (fn (x) (* x x)) (range 1 6)
+filter (fn (x) (> x 2)) (list 1 2 3 4 5)
+reduce + 0 (range 1 101)
+vec-ref #[1.5 2.5 3.5] 2
+length #[1 2 3 4 5]
+string-append "ab" "cd"
+substr "hello" 1 4
+get {:a 1, :b 2} :b
+set-has? #{4 5 6} 5
+hamt-get (hamt-assoc (hamt) :k 9) :k
+msgpack-decode (msgpack-encode 3.5)
+let x 10 (* x x)
+do (+ 1 1) (* 3 3)
+apply + (list 10 20 30)

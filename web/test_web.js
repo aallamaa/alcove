@@ -38,103 +38,11 @@ async function run(coreFile, name, cases) {
   return fail;
 }
 
-// Core Lisp battery (alcove-core). Expected values match NATIVE ./alcove output
-// exactly — a divergence means the wasm/clang backend miscompiled something.
-// Battery auto-generated from NATIVE ./alcove + ./adder output (see
-// /tmp/gen_web_battery.py); each expected value IS the native result, so
+// Battery is GENERATED from native alcove/adder output by gen_web_battery.py
+// (sources: web/web_exprs_{lisp,adder}.txt). Regenerate: make gen-web-battery.
+// Each expected value IS the native result run through the same print code, so
 // any wasm divergence — success OR error path — is a backend miscompile.
-const LISP = [
-  ["(+ 1 2 3 4)", "10"],
-  ["(* 2 3 4)", "24"],
-  ["(- 10 3 2)", "5"],
-  ["(- 5)", "-5"],
-  ["(/ 100 5 2)", "10"],
-  ["(mod 17 5)", "2"],
-  ["(abs -9)", "9"],
-  ["(min 3 1 2)", "1"],
-  ["(max 3 1 2)", "3"],
-  ["(/ 7.0 2)", "3.5"],
-  ["(+ 0.1 0.2)", "0.3"],
-  ["(int 3.9)", "3"],
-  ["(float 4)", "4"],
-  ["(expt 2 10)", "1024"],
-  ["(sqrt-int 99)", "9"],
-  ["(< 1 2 3)", "t"],
-  ["(<= 2 2 3)", "t"],
-  ["(= 5 5)", "Error: Error invalid key in ="],
-  ["(> 9 1)", "t"],
-  ["(and t t nil)", "nil"],
-  ["(or nil 7)", "7"],
-  ["(not nil)", "Error: Error unbound variable not"],
-  ["(if (> 3 2) :yes :no)", ":yes"],
-  ["(str \"a\" 1 :k)", "\"a1:k\""],
-  ["(substr \"hello\" 1 4)", "\"ell\""],
-  ["(upper \"abc\")", "Error: Error unbound variable upper"],
-  ["(split \"a,b,c\" \",\")", "Error: Error unbound variable split"],
-  ["(join \"-\" (list \"x\" \"y\"))", "Error: Error unbound variable join"],
-  ["(replace \"aaa\" \"a\" \"b\")", "Error: Error unbound variable replace"],
-  ["(list 1 2 3)", "(1 2 3)"],
-  ["(length (list 1 2 3 4))", "4"],
-  ["(nth (list 'a 'b 'c) 1)", "nil"],
-  ["(reverse (list 1 2 3))", "(3 2 1)"],
-  ["(map (fn (x) (* x x)) (list 1 2 3))", "(1 4 9)"],
-  ["(filter (fn (x) (> x 2)) (list 1 2 3 4))", "(3 4)"],
-  ["(reduce + 0 (range 1 11))", "55"],
-  ["(sort (list 3 1 2))", "(1 2 3)"],
-  ["(append (list 1 2) (list 3 4))", "(1 2 3 4)"],
-  ["(range 0 5)", "(0 1 2 3 4)"],
-  ["(car (list 1 2))", "1"],
-  ["(cdr (list 1 2 3))", "(2 3)"],
-  ["(cons 0 (list 1 2))", "(0 1 2)"],
-  ["#[1 2 3]", "#[1 2 3]"],
-  ["(vec-ref #[10 20 30] 2)", "30"],
-  ["(vec-len #[1 2 3 4 5])", "5"],
-  ["(vec-dot #[1 2 3] #[4 5 6])", "32"],
-  ["(get {:a 1 :b 2} :a)", "1"],
-  ["(keys {:x 1})", "(:x)"],
-  ["(contains? {:k 9} :k)", "t"],
-  ["(set-has? #{1 2 3} 3)", "t"],
-  ["(set->list (set-union #{1} #{2}))", "(1 2)"],
-  ["(hamt-get (hamt-assoc (hamt) :k 42) :k)", "42"],
-  ["#b\"abc\"", "#b\"abc\""],
-  ["(blob-len #b\"abcd\")", "4"],
-  ["(blob->string (string->blob \"yo\"))", "\"yo\""],
-  ["(msgpack-decode (msgpack-encode 12345))", "12345"],
-  ["(blob->string (msgpack-encode \"x\"))", "Error: blob->string: invalid UTF-8 at offset 0"],
-  ["(cond ((> 1 2) :a) (t :b))", "t"],
-  ["(let ((x 5) (y 6)) (+ x y))", "Error: Error unbound variable x"],
-  ["(do (+ 1 1) (* 3 3))", "9"],
-  ["(case 2 (1 'one) (2 'two) (t 'other))", "t"],
-  ["((fn (n) (if (< n 2) 1 (* n ((fn (m) m) n)))) 5)", "25"],
-  ["(reduce + 0 (map (fn (x) (* x 2)) (range 1 6)))", "30"],
-  ["(num? 5)", "Error: Error unbound variable num?"],
-  ["(str? \"x\")", "Error: Error unbound variable str?"],
-  ["(list? (list 1))", "t"],
-  ["(vec? #[1])", "t"],
-  ["(blob? #b\"a\")", "t"],
-  ["(set? #{1})", "t"],
-  ["(dict? {:a 1})", "t"],
-  ["(nil? nil)", "Error: Error unbound variable nil?"],
-  ["'(1 2 3)", "(1 2 3)"],
-  ["(eval (list (quote +) 1 2))", "3"],
-  // deep non-tail recursion (~500 C frames) — guards the web build's
-  // -sSTACK_SIZE: emcc's 64KB default overflows the wasm stack here and traps
-  // with "memory access out of bounds"; native (8MB) and the fixed web build
-  // (8MB) return 500.
-  ["(do (= cnt (fn (n) (if (< n 1) 0 (+ 1 (cnt (- n 1)))))) (cnt 500))", "500"],
-];
-const ADDER = [
-  ["+ 1 2", "3"],
-  ["* 3 4", "12"],
-  ["vec-ref #[5 6 7] 0", "5"],
-  ["{:a 1, :b 2}", "{:a 1, :b 2}"],
-  ["get {:k 8} :k", "8"],
-  ["map (fn (x) (* x x)) (list 1 2 3)", "(1 4 9)"],
-  ["reduce + 0 (range 1 11)", "55"],
-  ["str \"a\" \"b\" \"c\"", "\"abc\""],
-  ["set-has? #{1 2 3} 2", "t"],
-  ["`(a ,(+ 1 2) ,@(list 4 5))", "(a 3 4 5)"],
-];
+const { LISP, ADDER } = require('./web_battery.js');
 
 (async () => {
   let fail = 0;

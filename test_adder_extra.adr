@@ -1,0 +1,31 @@
+# ====================================================================
+# Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.
+#
+# Everything else in the generated test.adr comes from transpiling test.alc
+# (the shared engine suite) so adder runs the exact same corpus as alcove.
+# These tests can't live in test.alc because they exercise the adder FRONT
+# END itself — indentation/colon bodies, `return`, `each` — which the Lisp
+# reader has no equivalent for. gen_test_adr.py splices this block in just
+# before the TEST RESULT summary so the assertions are counted.
+#
+# assert / _test_pass / _test_fail are already defined by the transpiled
+# preamble that precedes this block.
+# ====================================================================
+
+assert "with colon-body pythagorean" (with (x 3 y 4) (sqrt (+ (expt x 2) (expt y 2)))):
+  5.0
+
+# defc plus inline colon-body — the body nests correctly whether
+# parenthesized or not (regression for the colon-leak bug).
+defc adr-clamp (x lo hi):
+  if (< x lo): (return lo)
+  if (> x hi): return hi
+  x
+assert "defc inline clamp hi" (adr-clamp 99 0 10) 10
+assert "defc inline clamp lo" (adr-clamp -3 0 10) 0
+assert "defc inline clamp mid" (adr-clamp 5 0 10) 5
+defc adr-find (pred xs):
+  each x xs: (if (pred x) (return x))
+  nil
+assert "defc inline find hit" (adr-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
+assert "defc inline find miss" (adr-find (fn (n) (> n 9)) (list 1 2 3)) nil
