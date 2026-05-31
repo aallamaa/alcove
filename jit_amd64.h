@@ -2619,10 +2619,12 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
 }
 
 /* (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S))))) —
-   the forsum shape. 48-byte exact match for a `for`-loop accumulator
-   that increments by constant. Bytecode pattern:
-     LOAD_FIX K_INIT_S, BIND_SLOT slot_s
-     LOAD_FIX K_INIT_I, BIND_SLOT slot_i
+   the forsum shape. 50-byte exact match for a `for`-loop accumulator
+   that increments by constant. Bytecode pattern (the named let/for slots
+   s and i bind via OP_BIND_SLOT_NAMED, 3 bytes; the unnamed n via plain
+   OP_BIND_SLOT, 2 bytes — see commit 997ffbb / the matcher's cursor walk):
+     LOAD_FIX K_INIT_S, BIND_SLOT_NAMED slot_s
+     LOAD_FIX K_INIT_I, BIND_SLOT_NAMED slot_i
      LOAD_SLOT 0,       BIND_SLOT slot_n           ; n_max = arg
      LOAD_CONST C       (preroll, executed once)
      SLOT_LE_SLOT slot_i slot_n

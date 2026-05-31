@@ -352,12 +352,6 @@ static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
   return n;
 }
 
-/* TODO(arm64): port try_jit_tail_loop_with_call from the amd64 backend.
-   The amd64 path JITs (def lp (k) (if (cmp k K1) (do (g K) (lp (op k K2))) k))
-   by establishing a frame (x19 = env, save lr/fp), calling a C trampoline
-   via BLR for the inner global call, and propagating any error returned.
-   Until this lands, arm64 falls back to bytecode for that shape. */
-
 /* Try to JIT a self-tail-recursive counter loop body of the form:
      (def f (n) (if (cmp n K1) (f (op n K2)) n))
    where cmp ∈ {<, <=, >, >=}, op ∈ {+, -}, K1 fits the cmp's tagged
@@ -890,8 +884,8 @@ static int try_jit_wide_counter_loop(bytecode_t *bc, uint32_t *out, int *outn) {
    {K2,K3}={1,2}, the exponential call tree collapses to a 2-term linear
    iteration (Fibonacci recurrence). General two-call recursion (different
    K2/K3, ADD instead of SUB, or different callees) falls through to the
-   bytecode interpreter — porting that path requires the BLR-trampoline
-   infrastructure that try_jit_tail_loop_with_call (also TODO) needs. */
+   bytecode interpreter — it would need a value-returning two-call emitter
+   that saves the first result across the second callout. */
 static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
   uint8_t *c = bc->code;
 
@@ -2542,7 +2536,7 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
-/* 48-byte for-loop accumulator shape — forsum pattern.
+/* 50-byte for-loop accumulator shape — forsum pattern.
      (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S)))))
    Iteratively: i, s untagged; loop while i <= n; s += K_step_s; i++. */
 static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {

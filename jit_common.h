@@ -8,43 +8,48 @@
  * code). See the #include site in alcove.c. `make tidy` lints it via adder.c.
  */
 /* ---------------- JIT (arm64 + amd64 backends) ----------------
-   Recognizes a narrow set of lambda body shapes and emits native
-   machine code that bypasses the bytecode dispatch loop entirely.
+   Recognizes a narrow set of lambda body shapes and bypasses the bytecode
+   dispatch loop. Most shapes emit native machine code; a few complex ones
+   (build_inc_cons, nqueens_solve, predicate_cons_loop) point bc->jit at a C
+   kernel — predicate_cons_loop via a tiny machine-code trampoline that passes
+   bc to the shared kernel. Both backends are at parity: every shape one has,
+   the other has too.
 
-   Shapes handled by BOTH backends (leaf, no stack frame, no runtime
-   callouts — generalized to any slot < ENV_INLINE_SLOTS):
-     - LOAD_FIX K; RET                      →  constant      K
-     - LOAD_SLOT s; LOAD_FIX K; ADD; RET    →  (+ s K) for K in int16
-     - LOAD_SLOT s; LOAD_FIX K; SUB; RET    →  (- s K) for K in int16
-     - LOAD_SLOT s; LOAD_FIX K; MUL; RET    →  (* s K) via (t-1)*K + 1
-     - SLOT_ADD_FIX / SLOT_SUB_FIX leaf     →  same as above (fused form)
-     - 19-byte self-tail counter loop       →  try_jit_simple_tail_loop
+   SHAPE MATCHING: the try_jit_* matchers validate the bytecode with the BC_*
+   cursor (bc_oplen-driven walk, see below), NOT hardcoded c[N] byte offsets —
+   so a change to an opcode's length (e.g. BIND_SLOT -> BIND_SLOT_NAMED) shifts
+   the cursor instead of silently desyncing a matcher.
 
-   Both backends are now at parity (commits 83b06be..8b49473): every
-   shape that amd64 has, arm64 has too. The full list (ordered by ncode):
-     - 19-byte simple_tail_loop          countdown
-     - 24-byte recurse_mul_one           fact
-     - 26-byte tail_loop_with_call       generic loop + inner call
+   Leaf shapes (no frame/callout; any slot < ENV_INLINE_SLOTS):
+     - LOAD_FIX K; RET                      →  constant K
+     - (op s K) for op in {+,-,*}, K in i16 (plain + fused SLOT_*_FIX forms)
+     - 10-byte modeq_leaf                   →  (is (mod a b) K)  (divides?)
+
+   Loop / recursion shapes (ordered roughly by ncode):
+     - 19-byte simple_tail_loop          countdown / count-up (wide+neg limits)
+     - 20-byte wide_counter_loop         counter loop, const limit > i16
+     - 24-byte recurse_mul_one           fact (iterative)
+     - 25-byte float_acc_loop            unboxed-float accumulator loop
+     - 26-byte tail_loop_with_call       counter loop + one inner global call
+     - 27-byte build_inc_cons            listsum list builder (C kernel)
      - 28-byte recurse_add_two           fib (iterative fast path)
      - 35-byte mark_from                 sieve-fast inner loop
-     - 41-byte count_primes              sieve-fast outer counter
      - 37-byte is_prime_given            sieve list walk
-     - 48-byte for_loop_inc              forsum
-     - 27-byte build_inc_cons            listsum list builder
+     - 41-byte count_primes              sieve-fast outer counter
+     - 49-byte ackermann                 ack
+     - 50-byte for_loop_inc              forsum (BIND_SLOT_NAMED shape)
      - 50-byte tak                       Knuth's tak
-     - 53-byte ackermann                 ack
+     - 50-byte predicate_cons_loop       sieve primes-up-to (trampoline→kernel)
      - 71-byte safe_p                    nqueens conflict check
-     - 10-byte modeq_leaf                divides? leaf
+     - nqueens_solve                     nqueens list/vec solver (C kernel)
 
-   Anything else: jit_compile returns 0; the bytecode interpreter
-   handles the call.
+   Anything else: jit_compile returns 0; the bytecode interpreter handles it.
 
-   Calling convention: the JITted function takes one arg (env_t*) and
-   returns exp_t* (NULL signals deopt → caller falls back to vm_run).
-   On arm64 (AAPCS) that's x0 in / x0 out; on amd64 (System V) that's
-   rdi in / rax out. Leaf shapes never touch the stack or callee-saved
-   regs. The two amd64 "with runtime call" shapes establish a 16-aligned
-   frame (push rbx, optionally sub rsp, #pad) and restore on exit. */
+   Calling convention: the JITted function takes one arg (env_t*) and returns
+   exp_t* (NULL signals deopt → caller falls back to vm_run). arm64 (AAPCS):
+   x0 in / x0 out; amd64 (System V): rdi in / rax out. Leaf shapes never touch
+   the stack or callee-saved regs; the "with runtime call" shapes establish a
+   frame (arm64 stp x29/x30+x19; amd64 push rbx) and restore on exit. */
 
 static int64_t nq_count_bits(int n, int row, uint64_t all, uint64_t cols,
                              uint64_t ld, uint64_t rd) {
