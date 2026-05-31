@@ -1,59 +1,38 @@
-[TODO] arm64 (Apple Silicon) JIT for the scalar FLOAT-accumulator loop —
-       DO THIS ON A macOS arm64 HOST (it can't be written/verified on x86_64:
-       hand-written NEON machine code you can't execute must not be shipped).
-       To pick up in Claude Code on the Mac: `cd` into this repo, run `claude`,
-       and say "read TODO.lst and do the arm64 float-JIT task". Claude should
-       read this entry + the amd64 reference impl + run `make test-all` first.
-
-       SETUP (macOS arm64): `xcode-select --install` (clang+make);
-         optional `brew install readline libffi` (build works without them).
-         `make deps` shows what was auto-detected; arch is auto (uname -m),
-         jit_arm64.h is #included when __aarch64__.
-       BUILD/TEST: `make` (JIT on), `make nojit` (for jit-vs-VM diffing),
-         `make test-all` (the oracle). GREEN BASELINE before you start:
-         alcove 1366/0 x5 + adder 1154/0 x5 + wasm 74+10 = "ALL VARIANTS
-         PASSED". If red before you touch anything, stop and investigate.
-
-       TASK: mirror the amd64 fn `try_jit_float_acc_loop` (jit_amd64.h, commit
-         23c0fc4 — heavily commented) into the arm64 backend (jit_arm64.h),
-         using NEON. It JITs this 25-byte 2-slot self-tail shape:
-           LOAD_SLOT cnt; LOAD_CONST lim; <LT|GT|LE|GE>; BR_IF_FALSE;
-           SLOT_<ADD|SUB>_FIX cnt K;
-           LOAD_SLOT acc; LOAD_CONST <float>; <ADD|SUB|MUL>;
-           TAIL_SELF 2; JUMP; LOAD_SLOT acc; RET
-         CRITICAL static gate (copy exactly — stops it mis-firing on an
-         identically-shaped INTEGER loop):
-           if (!isnumber(lim) || !isfloat(fc)) return 0;
-         CODEGEN: counter in a GP x-reg, UNBOXED accumulator in d0, float const
-         in d1; fadd/fsub/fmul (double); scvtf to coerce an int seed to double
-         on entry; fmov/ldr to load the const + box/unbox; reuse the existing
-         arm64 integer counter step + cmp/b.<cc>. Box the result via make_floatf
-         ONCE on exit; keep env in a callee-saved reg across that callout
-         (mirror jit_arm64.h's existing shapes). Wire into the arm64 dispatch
-         list in the SAME order as amd64 (after simple_tail_loop). Verify every
-         emitted instruction against a disassembler.
-       SUBTLE EDGE (get right): 0-iteration loop returns the SEED UNCHANGED
-         (int seed stays int, float seed stays float) — do NOT box a spurious
-         float. DEOPT: guards before any mutation; return NULL -> vm_run reruns.
-       VALIDATION BAR (ALL must pass before commit — non-negotiable for machine
-         code): (a) `make test-all` ALL VARIANTS PASSED, 1366/0 (integer
-         benchmarks fib/fact/ack/tak/nqueens MUST still pass = you didn't break
-         existing arm64 shapes); (b) ASan+UBSan build of test.alc 1366/0, no
-         hits, + a float-loop churn stress; (c) jit-vs-nojit BYTE-IDENTICAL on
-         add/sub/mul x {int seed, float seed} x {neg, zero, large} + the 0-iter
-         passthrough; (d) time the 30M-iter loop jit vs nojit (amd64 saw ~37x);
-         (e) the existing "facc"/"bm-faccadd" asserts in test.alc stay green
-         (they now exercise the arm64 JIT path too). disasm's jit-status line is
-         unreliable — confirm JIT via TIMING.
-       COMMIT: `ALCOVE_SKIP_TIDY=1 git commit` (clang-tidy false-positives on
-         the NULL-guarded cadr/cddr macros); end the message with
-         `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-       FAIL-SAFE: if you can't PROVE the codegen correct, commit NOTHING and
-         report the blocker. A wrong byte = silent miscompile.
+[DONE] arm64 (Apple Silicon) JIT for the scalar FLOAT-accumulator loop
+       (2026-05-31, macOS arm64 / Darwin 25, clang -O3, commit 930ae43).
+       try_jit_float_acc_loop ported into the arm64 backend (jit_arm64.h) as a
+       faithful NEON mirror of the amd64 fn (commit 23c0fc4); both backends now
+       at parity for this shape. Wired into jit_compile right after
+       simple_tail_loop (same order as amd64).
+       IMPL: tagged counter in x1, UNBOXED accumulator in d0, float const in
+         d1, tagged limit materialized in x4 (no amd64 imm32 ceiling → any
+         61-bit fixnum limit JITs). fadd/fsub/fmul (double); scvtf coerces an
+         int seed; the float seed loads from box->f behind a tag(0)/non-null/
+         type==EXP_FLOAT guard. env held in callee-saved x19 across the two
+         exit callouts; loop folds to one b.cond back-edge (no per-iter
+         callout). Static gate copied exactly (isnumber(lim) && isfloat(fc)).
+         0-iter returns refexp(seed) UNCHANGED (int stays int, float stays
+         float — no spurious box); >=1-iter boxes d0 once via make_floatf.
+         Guards run before any slot mutation; deopt (NULL) re-runs the VM on an
+         untouched env. Added the scalar-double NEON encoders the shape needs
+         (ldr d, fmov d<-x, scvtf, fadd/fsub/fmul) + ldrh + and-#7; all verified
+         byte-identical against the system assembler. Step delta limited to a
+         u12 (only +1-style steps JIT; anything else deopts — VM stays correct).
+       VALIDATION (all green): (a) make test-all ALL VARIANTS PASSED — alcove
+         1366/0 x5 + adder 1154/0 x5 + wasm 74+10; fib/fact/ack/tak/nqueens
+         still pass (existing arm64 shapes intact). (b) ASan+UBSan run of
+         test.alc clean (1348/0 = 1366 − 18 FFI on the no-FFI build), zero
+         hits, + a 1.8M-call float-loop churn over every path (int/float/neg
+         seed, mul, 0-iter int & float) with flat RSS. (c) jit-vs-nojit
+         BYTE-IDENTICAL (msgpack-encoded, type+bit-exact) across add/sub/mul x
+         {int,float seed} x {neg,zero,large} + 0-iter passthrough. (d) 30M-iter
+         loop ~28x faster than the VM (amd64 saw ~37x). (e) the "facc"/
+         "bm-faccadd" asserts in test.alc are green and now exercise the arm64
+         JIT. The real emitted machine code was disassembled and audited
+         instruction by instruction (JIT confirmed via TIMING, not the
+         unreliable disasm jit-status line).
        REF: amd64 impl jit_amd64.h::try_jit_float_acc_loop (commit 23c0fc4);
-         the OP_SLOT_IS_FIX two-backend lockstep (commit 0f62963) is the model
-         for mirroring a shape change with full validation; perf commits
-         e26ff3b..c2292c4 (`git log --oneline`) are the campaign context.
+         OP_SLOT_IS_FIX two-backend lockstep (commit 0f62963) was the model.
 
 [DONE] LINUX/amd64 RUNTIME VERIFICATION (2026-05-29, Debian 13 / kernel
        6.12, x86_64, gcc, libffi 3.4.8 + libreadline). The 2026-05 feature
