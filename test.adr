@@ -1593,6 +1593,11 @@ def jc-ge (n):
     jc-ge (- n 1)
     n
 
+def jc-wide (n):
+  if (< n 5000000):
+    jc-wide (+ n 1)
+    n
+
 def jc-fact (n):
   if (< n 2):
     1
@@ -1651,6 +1656,13 @@ def jc-isprime (acc i):
       nil
       jc-isprime (cdr acc) i
 
+def jc-primes (i n acc):
+  if (> i n):
+    acc
+    if (jc-isprime acc i):
+      jc-primes (+ i 1) n (cons i acc)
+      jc-primes (+ i 1) n acc
+
 def jc-safe (c qs offset):
   if (no qs):
     t
@@ -1694,6 +1706,8 @@ assert-jits "jit loop: > countdown" jc-gt
 
 assert-jits "jit loop: >= countdown" jc-ge
 
+assert-jits "jit loop: wide (>i16) limit" jc-wide
+
 assert-jits "jit recurse: fact" jc-fact
 
 assert-jits "jit recurse: fib" jc-fib
@@ -1714,6 +1728,8 @@ assert-jits "jit sieve: count-primes" jc-countprimes
 
 assert-jits "jit sieve: is-prime-given" jc-isprime
 
+assert-jits "jit predicate-cons loop" jc-primes
+
 assert-jits "jit nqueens: safe?" jc-safe
 
 assert-jits "jit divides? (mod leaf)" jc-divides
@@ -1726,6 +1742,8 @@ assert-jits "jit float-acc: *" jc-facc-mul
 
 assert "jit loop < result" (jc-lt 0) 1000
 
+assert "jit wide-limit loop result" (jc-wide 4999990) 5000000
+
 assert "jit countdown result" (jc-gt 1000000) 0
 
 assert "jit fact result" (jc-fact 10) 3628800
@@ -1733,6 +1751,8 @@ assert "jit fact result" (jc-fact 10) 3628800
 assert "jit forsum result" (jc-forsum 100000) 100000
 
 assert "jit listsum-builder length" (length (jc-build 1 50 (list))) 50
+
+assert "jit predicate-cons result" (length (jc-primes 2 50 (list))) 15
 
 assert "jit float-acc result" (jc-facc-add 0 0.0) 50000.0
 
