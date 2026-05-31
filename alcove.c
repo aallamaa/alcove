@@ -145,28 +145,29 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("let", letcmd, doc_let),
     LISPCMD_TAIL("let*", letstar_cmd, doc_letstar),
     LISPCMD_TAIL("with", withcmd, doc_with),
-    /* Generators — gen-* names kept for compat; !-suffix are the preferred forms.
-       Convention: ! = operates in the stateful/mutable iterator domain;
+    /* Generators — gen-* names kept for compat; !-suffix are the preferred
+       forms. Convention: ! = operates in the stateful/mutable iterator domain;
                    ? = predicate; no suffix = pure eager list operations. */
     LISPCMD("*gen-done*", gendone_cmd, doc_gendone),
-    LISPCMD("*done*",     gendone_cmd, doc_gendone),    /* preferred short name */
-    LISPCMD("gen-done?",  gendonep_cmd, doc_gendonep),
-    LISPCMD("done?",      gendonep_cmd, doc_gendonep),  /* preferred */
-    LISPCMD("gen-list",   genlist_cmd, doc_genlist),
-    LISPCMD("iter!",      genlist_cmd, doc_genlist),    /* preferred */
-    LISPCMD("gen-range",  genrange_cmd, doc_genrange),
-    LISPCMD("range!",     genrange_cmd, doc_genrange),  /* preferred */
-    LISPCMD("gen-next!",  gennext_cmd, doc_gennext),
-    LISPCMD("next!",      gennext_cmd, doc_gennext),    /* preferred */
-    LISPCMD("gen-collect",gencollect_cmd, doc_gencollect),
-    LISPCMD("collect!",   gencollect_cmd, doc_gencollect), /* preferred */
-    LISPCMD("gen-map",    genmap_cmd, doc_genmap),
-    LISPCMD("map!",       genmap_cmd, doc_genmap),      /* preferred */
+    LISPCMD("*done*", gendone_cmd, doc_gendone), /* preferred short name */
+    LISPCMD("gen-done?", gendonep_cmd, doc_gendonep),
+    LISPCMD("done?", gendonep_cmd, doc_gendonep), /* preferred */
+    LISPCMD("gen-list", genlist_cmd, doc_genlist),
+    LISPCMD("iter!", genlist_cmd, doc_genlist), /* preferred */
+    LISPCMD("gen-range", genrange_cmd, doc_genrange),
+    LISPCMD("range!", genrange_cmd, doc_genrange), /* preferred */
+    LISPCMD("gen-next!", gennext_cmd, doc_gennext),
+    LISPCMD("next!", gennext_cmd, doc_gennext), /* preferred */
+    LISPCMD("gen-collect", gencollect_cmd, doc_gencollect),
+    LISPCMD("collect!", gencollect_cmd, doc_gencollect), /* preferred */
+    LISPCMD("gen-map", genmap_cmd, doc_genmap),
+    LISPCMD("map!", genmap_cmd, doc_genmap), /* preferred */
     LISPCMD("gen-filter", genfilter_cmd, doc_genfilter),
-    LISPCMD("filter!",    genfilter_cmd, doc_genfilter), /* preferred */
+    LISPCMD("filter!", genfilter_cmd, doc_genfilter), /* preferred */
     /* Comparison / equality */
     LISPCMD("=", equalcmd, doc_eq),
-    LISPCMD("setf", equalcmd, doc_setf), /* exact synonym of = (readable head) */
+    LISPCMD("setf", equalcmd,
+            doc_setf), /* exact synonym of = (readable head) */
     LISPCMD("<", cmpcmd, doc_lt),
     LISPCMD(">", cmpcmd, doc_gt),
     LISPCMD("<=", cmpcmd, doc_le),
@@ -251,6 +252,7 @@ lispProc lispProcList[] = {
     LISPCMD("def", defcmd, doc_def),
     LISPCMD("defn", defncmd, doc_defn),
     LISPCMD("fn", fncmd, doc_fn),
+    LISPCMD("defc", defccmd, doc_defc),
     LISPCMD("defmacro", defmacrocmd, doc_defmacro),
     LISPCMD("macroexpand-1", expandmacrocmd, doc_macroexpand),
     LISPCMD("eval", evalcmd, doc_eval),
@@ -1901,6 +1903,49 @@ exp_t *expandmacrocmd(exp_t *e, env_t *env) {
 finish:
   unrefexp(e);
   return tmpexp;
+}
+
+const char doc_defc[] =
+    "(defc name (params...) body...) — define a function whose body is wrapped "
+    "in (call/cc (fn (return) ...)). `return` is an escape continuation: "
+    "(return v) exits the function immediately with v. Sugar for "
+    "(def name (params) (call/cc (fn (return) body...))).";
+exp_t *defccmd(exp_t *e, env_t *env) {
+  /* e = (defc name params body...). Build the equivalent
+       (def name params (call/cc (fn (return) body...)))
+     and evaluate it, reusing def / fn / call/cc verbatim — so closure capture,
+     compilation, and the escape continuation behave exactly as the
+     hand-written form. `return` is intentionally captured into the body
+     (anaphoric), giving an imperative-style early return. */
+  exp_t *name_node = cdr(e);
+  exp_t *params_node = name_node ? name_node->next : NULL;
+  exp_t *body = params_node ? params_node->next : NULL;
+  if (!name_node || !params_node || !body) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env,
+                 "(defc name (params) body...)");
+  }
+  /* (fn (return) body...) — params list is the single symbol `return`. */
+  exp_t *fn_form = make_node(make_symbol("fn", 2));
+  fn_form->next = make_node(make_node(make_symbol("return", 6)));
+  exp_t *tail = fn_form->next;
+  for (exp_t *b = body; b; b = b->next) {
+    tail->next = make_node(refexp(b->content));
+    tail = tail->next;
+  }
+  /* (call/cc <fn_form>) */
+  exp_t *cc_form = make_node(make_symbol("call/cc", 7));
+  cc_form->next = make_node(fn_form);
+  /* (def name params <cc_form>) — name/params reused (refexp'd); params is
+     forwarded as-is, so both (defc f (a b) ...) and rest-form (defc f xs ...)
+     work exactly like def. */
+  exp_t *def_form = make_node(make_symbol("def", 3));
+  def_form->next = make_node(refexp(name_node->content));
+  def_form->next->next = make_node(refexp(params_node->content));
+  def_form->next->next->next = make_node(cc_form);
+  exp_t *ret = EVAL(def_form, env); /* consumes def_form */
+  unrefexp(e);
+  return ret;
 }
 
 const char doc_defmacro[] =
@@ -6023,7 +6068,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     if (kv && isinternal(kv->val)) {
       if ((kv->val->flags & FLAG_TAIL_AWARE) || !strcmp(s, "fn") ||
           !strcmp(s, "lambda") || !strcmp(s, "def") || !strcmp(s, "defn") ||
-          !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
+          !strcmp(s, "defc") || !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
         c->failed = 1;
         return;
       }

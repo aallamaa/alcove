@@ -49,7 +49,8 @@ exp_t *intcmd(exp_t *e, env_t *env);
 extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
 extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
 extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
-extern const char doc_def[], doc_defn[], doc_fn[], doc_defmacro[], doc_macroexpand[];
+extern const char doc_def[], doc_defn[], doc_fn[], doc_defc[], doc_defmacro[],
+    doc_macroexpand[];
 extern const char doc_eval[], doc_apply[], doc_setq[];
 extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
 extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];

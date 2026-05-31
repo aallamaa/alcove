@@ -1608,14 +1608,16 @@ equivalent</td>
 </tr>
 <tr class="odd">
 <td>Functions/macros/eval</td>
-<td><code>def</code>, <code>fn</code>, <code>defmacro</code>,
-<code>macroexpand-1</code>, <code>eval</code>, <code>apply</code>,
-<code>call/cc</code></td>
+<td><code>def</code>, <code>fn</code>, <code>defc</code>,
+<code>defmacro</code>, <code>macroexpand-1</code>, <code>eval</code>,
+<code>apply</code>, <code>call/cc</code></td>
 <td>Standard Lisp function and macro facilities, with syntax
 differences; <code>call/cc</code> is an escape (upward, one-shot)
 continuation — like Scheme's <code>call/ec</code>, not a full re-entrant
 <code>call/cc</code>: the captured <code>k</code> is valid only within the
-dynamic extent of the <code>call/cc</code> call</td>
+dynamic extent of the <code>call/cc</code> call. <code>defc</code> is sugar for
+<code>(def name (params) (call/cc (fn (return) body…)))</code> — defines a
+function with an imperative-style early <code>return</code></td>
 </tr>
 <tr class="even">
 <td>Higher order</td>

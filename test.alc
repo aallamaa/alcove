@@ -615,6 +615,35 @@
 (assert "cc payload list"    (call/cc (fn (k) (k (list 1 2 3))))   (list 1 2 3))
 (assert "cc ignored k"       (call/cc (fn (k) (* 6 7)))            42)
 
+; 20h-defc. `defc` sugars (def name params (call/cc (fn (return) body...))) —
+; re-implements the §20h idioms with `return` as the escape continuation and
+; asserts identical results, proving the expansion.
+(defc dc-clamp (x lo hi)
+  (if (< x lo) (return lo))
+  (if (> x hi) (return hi))
+  x)
+(assert "defc clamp mid"        (dc-clamp 5 0 10)                  5)
+(assert "defc clamp low"        (dc-clamp -3 0 10)                 0)
+(assert "defc clamp high"       (dc-clamp 99 0 10)                 10)
+(defc dc-find (pred xs)
+  (each x xs (if (pred x) (return x)))
+  nil)
+(assert "defc find hit"         (dc-find (fn (n) (> n 3)) (list 1 2 5 0 9))  5)
+(assert "defc find miss"        (dc-find (fn (n) (> n 99)) (list 1 2 3))     nil)
+(defc dc-sumnn (xs)
+  (let s 0 (do (each x xs (if (< x 0) (return 0)) (= s (+ s x))) s)))
+(assert "defc sum nonneg ok"    (dc-sumnn (list 3 4 5))            12)
+(assert "defc sum nonneg bail"  (dc-sumnn (list 3 -1 5))           0)
+(defc dc-noesc (x) (+ x 1))                          ; no escape → falls through
+(assert "defc no escape"        (dc-noesc 10)                      11)
+(defc dc-zero (n) (if (is n 0) (return 0)) (* n n))  ; escape with falsy 0
+(assert "defc return 0 (falsy)" (dc-zero 0)                        0)
+(assert "defc no-return path"   (dc-zero 4)                        16)
+(defc dc-nil () (return nil))
+(assert "defc return nil"       (dc-nil)                           nil)
+(defc dc-rest xs (return (length xs)))               ; rest-param form like def
+(assert "defc rest-param"       (dc-rest 1 2 3)                    3)
+
 ; 20i. MessagePack codec — round-trip the JSON-ish value subset.
 (assert "msgpack int"        (msgpack-decode (msgpack-encode 42))         42)
 (assert "msgpack neg fixint" (msgpack-decode (msgpack-encode -5))         -5)

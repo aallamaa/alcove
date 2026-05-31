@@ -246,6 +246,18 @@ test instead of matching a key):
 (clamp 99 0 10)                    ; → 10  (returns early, skips the rest)
 ```
 
+**`defc`** — sugar for that idiom: it defines a function whose body is wrapped
+in `(call/cc (fn (return) …))`, so `return` is an escape continuation — an
+imperative-style early exit without the boilerplate:
+
+```lisp
+(defc clamp (x lo hi)
+  (if (< x lo) (return lo))
+  (if (> x hi) (return hi))
+  x)
+(clamp 99 0 10)                    ; → 10
+```
+
 **Destructuring params** — any parameter slot may be a list pattern:
 
 ```lisp

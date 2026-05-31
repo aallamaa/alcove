@@ -864,6 +864,7 @@ exp_t *defcmd(exp_t *e, env_t *env);
 exp_t *defncmd(exp_t *e, env_t *env);
 exp_t *expandmacrocmd(exp_t *e, env_t *env);
 exp_t *defmacrocmd(exp_t *e, env_t *env);
+exp_t *defccmd(exp_t *e, env_t *env);
 exp_t *fncmd(exp_t *e, env_t *env);
 exp_t *conscmd(exp_t *e, env_t *env);
 exp_t *evalcmd(exp_t *e, env_t *env);

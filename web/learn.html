@@ -543,6 +543,22 @@ list (hamt-get m "a") (hamt-count m2) (hamt-get m "c" "none")`,
     + 1 (k 41)`,
     },
     {
+      title: "defc — early-return functions",
+      note: "(defc name params body...) wraps the body in (call/cc (fn (return) ...)), so `return` is an imperative-style early exit — sugar over the call/cc idiom.",
+      lisp: `(defc clamp (x lo hi)
+  (if (< x lo) (return lo))
+  (if (> x hi) (return hi))
+  x)
+(clamp 99 0 10)`,
+      adr: `defc clamp (x lo hi):
+  if (< x lo):
+    return lo
+  if (> x hi):
+    return hi
+  x
+clamp 99 0 10`,
+    },
+    {
       title: "MessagePack",
       note: "Compact binary serialization round-trips lists, dicts, numbers, strings, and blobs.",
       lisp: `(= packed (msgpack-encode (list 1 "two" 3.5)))

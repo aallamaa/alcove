@@ -137,6 +137,41 @@ The inner body can fire the inner *or* the outer continuation:
   (+ 1 (call/cc (fn (inner) (inner 100))))))  ; → 101  (inner returns 100 to the +)
 ```
 
+## `defc` — early-return functions without the boilerplate
+
+Most uses of `call/cc` are "define a function that can return early." `defc`
+captures exactly that: `(defc name (params…) body…)` is sugar for
+`(def name (params) (call/cc (fn (return) body…)))`, binding the escape
+continuation to `return`. So `(return v)` exits the function immediately with
+`v`:
+
+```lisp
+(defc clamp (x lo hi)
+  (if (< x lo) (return lo))
+  (if (> x hi) (return hi))
+  x)                                ; falls through to x if neither guard fires
+(clamp 99 0 10)                     ; → 10
+
+(defc find-first (pred xs)
+  (each x xs (if (pred x) (return x)))
+  nil)                              ; → nil if nothing matched
+```
+
+`return` is bound in the body (an anaphoric capture). The param list takes the
+same forms as `def` (list pattern, or a bare symbol for rest args), and
+`(return v)` accepts any `v` including the falsy `0`/`nil`. If `return` is
+never fired, the function returns its last body form. In Adder, the `:`-block
+form works too (use indented blocks, not inline `cond: expr`):
+
+```python
+defc clamp (x lo hi):
+  if (< x lo):
+    return lo
+  if (> x hi):
+    return hi
+  x
+```
+
 ## Notes
 
 - The escape value can be any alcove value, including a list or other

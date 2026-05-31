@@ -355,6 +355,26 @@ would need C-stack capture and are not provided. The escape rides the same
 value-propagation path as `try`, so it threads cleanly through `if`/`do`/
 `while`/`for`/recursion/`map`. See `docs/call_cc.md` for the full guide.
 
+### `defc` — define with an early-return continuation
+
+`(defc name (params…) body…)` defines a function whose body is wrapped in
+`(call/cc (fn (return) …))`, binding the escape continuation to `return`. It's
+exact sugar for `(def name (params) (call/cc (fn (return) body…)))`, so
+`(return v)` exits the function immediately with `v` — an imperative-style
+early return without the `call/cc`/`fn` boilerplate. The `clamp` above becomes:
+
+```lisp
+(defc clamp (x lo hi)
+  (if (< x lo) (return lo))
+  (if (> x hi) (return hi))
+  x)                           ; falls through to x if neither guard fires
+```
+
+`return` is intentionally bound in the body (an anaphoric capture). Like `def`,
+the param list may be a list pattern or a bare symbol for rest args
+(`(defc f xs …)`). `(return v)` works with any `v`, including the falsy `0` /
+`nil`. If the body never calls `return`, the function returns its last form.
+
 ### `for` is integer-only and inclusive
 
 `(for i 1 5 body)` binds `i` to 1, 2, 3, 4, 5 in turn. Empty range
