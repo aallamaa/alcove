@@ -748,6 +748,43 @@ static int unrefexp_free(exp_t *e, int ret) {
   }
 }
 
+/* ---- type-specialized releasers --------------------------------------------
+   At a call site where the object's type is statically known, these skip the
+   immortal-singleton checks AND the type switch the general unrefexp runs,
+   doing only the work that type needs. Implemented as inline functions (not
+   macros) so the argument is evaluated exactly once — call sites pass things
+   like POP() or cur->val, which a function-like macro would evaluate 2-3×.
+   Under -DALCOVE_SAFE=1 each asserts its type/refcount assumption; in a normal
+   build the asserts vanish and only the minimal release remains. */
+
+/* A number is a tagged-immediate fixnum: no heap, no refcount → pure no-op
+   (a known-fixnum result needs no release at all). */
+static inline void unref_number(exp_t *e) {
+  SAFE_ASSERT(isnumber(e));
+  (void)e;
+}
+
+/* A float is heap with no children and is never an immortal singleton, so its
+   release is just decrement-and-free — no is_immortal, no switch, no call. */
+static inline void unref_float(exp_t *e) {
+  SAFE_ASSERT(isfloat(e));
+  int ret = REFCOUNT_DEC(&e->nref);
+  SAFE_ASSERT(ret >= 0); /* double-free caught under ALCOVE_SAFE */
+  if (ret == 0) {
+    e->next = exp_freelist;
+    exp_freelist = e;
+  }
+}
+
+/* An arithmetic operand is one of the two numeric types: fixnum (immediate,
+   no-op) or float (the only heap numeric → unref_float). */
+static inline void unref_number_or_float(exp_t *e) {
+  if (is_ptr(e))
+    unref_float(e);
+  else
+    SAFE_ASSERT(isnumber(e));
+}
+
 /* env management*/
 
 /* ---------------- Environment stack arena ----------------
@@ -6552,7 +6589,7 @@ l_unbind_slot: {
       (out) = (double)FIX_VAL(v);                                              \
     else if (isfloat(v)) {                                                     \
       (out) = (v)->f;                                                          \
-      unrefexp(v);                                                             \
+      unref_float(v); /* v is known float here — skip the general dispatch */  \
     } else {                                                                   \
       unrefexp(a);                                                             \
       unrefexp(b);                                                             \
