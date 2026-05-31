@@ -209,7 +209,58 @@
 (assert "defc return from each miss" (e0d-find 9) 'no)
 (assert "rest params count"     ((fn (a b . rest) (length rest)) 1 2 3 4 5) 3)
 (assert "rest params empty"     ((fn (a . rest) (length rest)) 1) 0)
-(assert "cons test " 
+
+; ============================================================================
+; 0e. Containers — dict / set / hamt / blob / deque, with edge cases (missing
+;     keys, empty, dedup, mutation, persistence). Set/dict membership is tested
+;     via has?/count/get (order-independent), not printed-list order.
+; ============================================================================
+; --- hash-map (mutable dict) ---
+(assert "dict get hit"          (get (hash-map "a" 1 "b" 2) "a") 1)
+(assert "dict get miss -> nil"  (get (hash-map "a" 1) "z") nil)
+(assert "dict count"            (count (hash-map "a" 1 "b" 2)) 2)
+(assert "dict empty count"      (count (hash-map)) 0)
+(assert "dict assoc! then get"  (let d (hash-map) (do (assoc! d "k" 9) (get d "k"))) 9)
+(assert "dict assoc! overwrite" (let d (hash-map "k" 1) (do (assoc! d "k" 2) (get d "k"))) 2)
+(assert "dict contains? yes"    (contains? (hash-map "a" 1) "a") t)
+(assert "dict contains? no"     (contains? (hash-map "a" 1) "z") nil)
+(assert "dict dissoc!"          (let d (hash-map "a" 1) (do (dissoc! d "a") (contains? d "a"))) nil)
+(assert "dict keys count"       (count (keys (hash-map "a" 1 "b" 2))) 2)
+(assert "dict? predicate"       (dict? (hash-map)) t)
+; --- set ---
+(assert "set-has? yes"          (set-has? (set 1 2 3) 2) t)
+(assert "set-has? no"           (set-has? (set 1 2 3) 9) nil)
+(assert "set dedup count"       (count (set 1 2 3 3 3)) 3)
+(assert "set empty count"       (count (set)) 0)
+(assert "set-add!"              (set-has? (set-add! (set 1) 5) 5) t)
+(assert "set-del!"              (set-has? (set-del! (set 1 2) 1) 1) nil)
+(assert "set-intersection count"(count (set-intersection (set 1 2 3) (set 2 3 4))) 2)
+(assert "set-intersection memb" (set-has? (set-intersection (set 1 2 3) (set 2 3 4)) 2) t)
+(assert "set-union count"       (count (set-union (set 1 2) (set 2 3))) 3)
+(assert "set-difference count"  (count (set-difference (set 1 2 3) (set 2))) 2)
+(assert "set? predicate"        (set? (set 1)) t)
+; --- hamt (persistent / immutable map) ---
+(assert "hamt-get hit"          (hamt-get (hamt-assoc (hamt "a" 1) "b" 2) "b") 2)
+(assert "hamt-get miss"         (hamt-get (hamt "a" 1) "z") nil)
+(assert "hamt-contains?"        (hamt-contains? (hamt "a" 1) "a") t)
+(assert "hamt-count"            (hamt-count (hamt "a" 1 "b" 2)) 2)
+(assert "hamt persistent orig"  (let h (hamt "a" 1) (do (hamt-assoc h "b" 2) (hamt-count h))) 1)
+(assert "hamt-assoc new map"    (let h (hamt "a" 1) (hamt-count (hamt-assoc h "b" 2))) 2)
+(assert "hamt-dissoc"           (hamt-count (hamt-dissoc (hamt "a" 1 "b" 2) "a")) 1)
+; --- blob ---
+(assert "blob-len"              (blob-len (string->blob "hello")) 5)
+(assert "blob roundtrip"        (blob->string (string->blob "hi")) "hi")
+(assert "blob-ref byte"         (blob-ref (string->blob "A") 0) 65)
+(assert "blob empty len"        (blob-len (string->blob "")) 0)
+(assert "blob? predicate"       (blob? (string->blob "x")) t)
+; --- deque (doubly-linked) ---
+(assert "deque push-left peek"  (let q (deque) (do (push-right! q 1) (push-right! q 2) (push-left! q 0) (peek-left q))) 0)
+(assert "deque peek-right"      (let q (deque) (do (push-right! q 1) (push-right! q 2) (peek-right q))) 2)
+(assert "deque pop-left"        (let q (deque) (do (push-right! q 1) (push-right! q 2) (pop-left! q) (peek-left q))) 2)
+(assert "deque empty count"     (count (deque)) 0)
+(assert "deque count after push"(let q (deque) (do (push-right! q 1) (push-right! q 2) (count q))) 2)
+
+(assert "cons test "
         (cons 'f '(a b)) 
         '(f a b))
 (= x '(a b))
