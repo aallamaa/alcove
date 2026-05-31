@@ -1019,6 +1019,92 @@
 ;; Build-independent invariant: native code only exists for compiled bodies.
 (assert "jit? implies compiled?"       (if (jit? itest-add) (compiled? itest-add) t) t)
 
+;; ---------- JIT shape coverage (catches silent JIT regressions) ----------
+;; Every body shape the JIT is supposed to recognize is exercised here, so a
+;; matcher that silently stops firing (e.g. the for_loop_inc / forsum break
+;; when commit 997ffbb grew the let/for binds to OP_BIND_SLOT_NAMED) fails the
+;; suite instead of only showing up as a benchmark slowdown. The check is
+;; build-independent: `itest-add` (a leaf `(+ x 1)`) JITs iff this is a JIT
+;; build, so _jit_on gates the expectation — in a non-JIT variant every
+;; (jit? f) is nil and the implication holds trivially, keeping the assert
+;; count identical across all variants. assert-jits asserts the right
+;; expectation for the current build; the r:* asserts below pin the results
+;; (the JIT must match the VM exactly, in every build).
+(= _jit_on (jit? itest-add))
+(def assert-jits (label f) (assert label (if _jit_on (jit? f) (no (jit? f))) t))
+;; leaf shapes
+(def jc-const () 42)
+(def jc-add (s) (+ s 7))
+(def jc-mul (s) (* s 7))
+;; self-tail counter loops — all four compares, count up (wide tagged limit,
+;; exercises the materialize-limit-in-reg path) and down, plus `is`.
+(def jc-lt (n) (if (< n 1000) (jc-lt (+ n 1)) n))
+(def jc-le (n) (if (<= n 1000) (jc-le (+ n 1)) n))
+(def jc-gt (n) (if (> n 0) (jc-gt (- n 1)) n))
+(def jc-ge (n) (if (>= n 1) (jc-ge (- n 1)) n))
+;; recursion shapes
+(def jc-fact (n) (if (< n 2) 1 (* n (jc-fact (- n 1)))))
+(def jc-fib (n) (if (< n 2) n (+ (jc-fib (- n 1)) (jc-fib (- n 2)))))
+(def jc-ack (m n) (if (is m 0) (+ n 1)
+                      (if (is n 0) (jc-ack (- m 1) 1)
+                          (jc-ack (- m 1) (jc-ack m (- n 1))))))
+(def jc-tak (x y z) (if (no (< y x)) z
+                        (jc-tak (jc-tak (- x 1) y z) (jc-tak (- y 1) z x)
+                                (jc-tak (- z 1) x y))))
+;; loop with one inner global call (fact-wrapper shape)
+(def jc-loopcall (k) (if (> k 0) (do (jc-fact 19) (jc-loopcall (- k 1))) k))
+;; for-loop accumulator (the shape that regressed — see for_loop_inc)
+(def jc-forsum (n) (let s 0 (for i 1 n (= s (+ s 1)))))
+;; cons-builder (listsum) + sieve + nqueens + divides? + float-accumulator
+(def jc-build (i n acc) (if (> i n) acc (jc-build (+ i 1) n (cons i acc))))
+(def jc-markfrom (step j n marks)
+  (if (> j n) nil (do (vec-set! marks j nil) (jc-markfrom step (+ j step) n marks))))
+(def jc-countprimes (i n marks acc)
+  (if (> i n) acc (jc-countprimes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc))))
+(def jc-isprime (acc i)
+  (if (no acc) t (if (is (mod i (car acc)) 0) nil (jc-isprime (cdr acc) i))))
+(def jc-safe (c qs offset)
+  (if (no qs) t (if (is c (car qs)) nil (if (is (+ c offset) (car qs)) nil
+                    (if (is (- c offset) (car qs)) nil (jc-safe c (cdr qs) (+ offset 1)))))))
+(def jc-divides (a b) (is (mod a b) 0))
+(def jc-facc-add (n acc) (if (< n 100000) (jc-facc-add (+ n 1) (+ acc 0.5)) acc))
+(def jc-facc-sub (n acc) (if (< n 100000) (jc-facc-sub (+ n 1) (- acc 0.5)) acc))
+(def jc-facc-mul (n acc) (if (< n 40000)  (jc-facc-mul (+ n 1) (* acc 2.0)) acc))
+(assert-jits "jit leaf: (fn () K)"        jc-const)
+(assert-jits "jit leaf: (+ s K)"          jc-add)
+(assert-jits "jit leaf: (* s K)"          jc-mul)
+(assert-jits "jit loop: < (wide limit)"   jc-lt)
+(assert-jits "jit loop: <= (wide limit)"  jc-le)
+(assert-jits "jit loop: > countdown"      jc-gt)
+(assert-jits "jit loop: >= countdown"     jc-ge)
+(assert-jits "jit recurse: fact"          jc-fact)
+(assert-jits "jit recurse: fib"           jc-fib)
+(assert-jits "jit recurse: ackermann"     jc-ack)
+(assert-jits "jit recurse: tak"           jc-tak)
+(assert-jits "jit loop + inner call"      jc-loopcall)
+(assert-jits "jit for-loop (forsum)"      jc-forsum)
+(assert-jits "jit cons-builder (listsum)" jc-build)
+(assert-jits "jit sieve: mark-from"       jc-markfrom)
+(assert-jits "jit sieve: count-primes"    jc-countprimes)
+(assert-jits "jit sieve: is-prime-given"  jc-isprime)
+(assert-jits "jit nqueens: safe?"         jc-safe)
+(assert-jits "jit divides? (mod leaf)"    jc-divides)
+(assert-jits "jit float-acc: +"           jc-facc-add)
+(assert-jits "jit float-acc: -"           jc-facc-sub)
+(assert-jits "jit float-acc: *"           jc-facc-mul)
+;; result correctness — the JIT (when on) must match the VM byte-for-byte.
+(assert "jit loop < result"            (jc-lt 0)             1000)
+(assert "jit countdown result"         (jc-gt 1000000)       0)
+(assert "jit fact result"              (jc-fact 10)          3628800)
+(assert "jit forsum result"            (jc-forsum 100000)    100000)
+(assert "jit listsum-builder length"   (length (jc-build 1 50 (list)))  50)
+(assert "jit float-acc result"         (jc-facc-add 0 0.0)   50000.0)
+(assert "jit float-acc is float"       (iso (jc-facc-add 0 0) 50000.0)  t)
+(assert "jit float-acc 0-iter int"     (iso (jc-facc-add 200000 7) 7)   t)
+;; start the counter near the limit so a known, finite count of *2.0 runs
+;; (the full loop would be 2.0^40000 = inf — the limit is iterations, not exp).
+(assert "jit float-acc mul (2 iters)"  (jc-facc-mul 39998 1.0)  4.0)
+
 ;; ---------- string utilities ----------
 (assert "str concatenates values"      (str "a" 12 'b #\c)         "a12bc")
 (assert "string-append"                (string-append "ab" "cd" "") "abcd")
