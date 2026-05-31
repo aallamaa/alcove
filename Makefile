@@ -410,6 +410,17 @@ fuzz:
 	  $(JIT_FLAGS) -o parser_fuzz parser_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
 	./parser_fuzz $(FUZZ_ARGS)
 
+# JIT differential fuzzer. Generates randomized counter/leaf/float-acc shapes,
+# runs each under a JIT build and a non-JIT build, and asserts (1) results are
+# byte-identical jit==VM (msgpack-encoded, type+bit exact) and (2) every
+# shape that should JIT does (coverage map). Catches both miscompiles and
+# silent coverage regressions like the forsum/for_loop_inc drift. Builds its
+# own two binaries; pass options via JITFUZZ_ARGS (e.g. --seed N --count N).
+# The always-on guard is the self-gating JIT-coverage block in test.alc (run
+# by every test-all variant); this is the deeper opt-in differential check.
+jit-fuzz:
+	python3 jit_fuzz.py $(JITFUZZ_ARGS)
+
 # Adder transpiler (adr.h) tests. adr.h is self-contained string->string, so
 # this links nothing else. unit tests + bounded deterministic fuzz, under ASan.
 adr-test:
@@ -491,4 +502,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves gen-test-adr install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
