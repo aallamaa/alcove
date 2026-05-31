@@ -1685,8 +1685,10 @@ exp_t *fncmd(exp_t *e, env_t *env) {
          from the enclosing scope resolve correctly. For top-level fns
          env is global, so the capture is just an extra ref on global
          (cheap). */
-      if (env)
+      if (env) {
         val->next->meta = (struct keyval_t *)ref_env(env);
+        env->has_closure = 1;
+      }
       /* Compile both top-level fns and closures. Closures (a real captured
          scope, env->root != NULL) compile with no_gcache so free-var reads
          always re-resolve against the captured env (a closure that *mutates*
@@ -1753,8 +1755,10 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         val->type = EXP_LAMBDA;
         val->meta = (keyval_t *)strdup(exp_text(name));
         /* Closure: capture defining env (see fncmd for rationale). */
-        if (env)
+        if (env) {
           val->next->meta = (struct keyval_t *)ref_env(env);
+          env->has_closure = 1;
+        }
         /* Compile top-level defs and nested (closure) defs alike; closures
            get no_gcache (fresh free-var lookups against the captured env). */
         compile_lambda(val, env && env->root);
@@ -1922,8 +1926,10 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
         val->next = vali;
         val->type = EXP_MACRO;
         val->meta = (keyval_t *)strdup(exp_text(name));
-        if (env)
+        if (env) {
           val->next->meta = (struct keyval_t *)ref_env(env);
+          env->has_closure = 1;
+        }
         if (!(env->d))
           env->d = create_dict();
         set_get_keyval_dict(env->d, exp_text(name),

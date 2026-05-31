@@ -575,6 +575,11 @@ typedef struct env_t {
   dict_t *d;    /* lazy — used for let/with and inline-slot overflow */
   int nref;     /* refcount */
   int n_inline; /* number of filled inline slots */
+  /* Set when a lambda/macro captures THIS env as its closure scope (the only
+     way a self-closure cycle can form). destroy_env skips the cycle-breaker
+     scan when it's clear — the common case (no closure ever bound here), which
+     is otherwise a per-frame-teardown cost on all deep recursion. */
+  int has_closure;
   /* Inline bindings for function-invocation params. Keys BORROW from
      the lambda header symbol's ptr; caller (invoke) must hold a ref to
      the lambda while the env is live. Vals own a ref. */

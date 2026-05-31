@@ -111,7 +111,12 @@ inline void *destroy_env(env_t *env) {
        defined in this env can hold the env's only outstanding ref via a
        refcount cycle (see env_break_self_cycle); if so, sever it and fall
        through to free env. Otherwise honor the early-break. */
-    if (residual > 0 && !env_break_self_cycle(env, residual))
+    /* has_closure gates the scan: a self-closure can only exist if some
+       lambda/macro captured this env (the flag's set sites), so when it's
+       clear env_break_self_cycle would provably return 0 — skip it. This is
+       the common case on every non-closure frame teardown. */
+    if (residual > 0 &&
+        (!env->has_closure || !env_break_self_cycle(env, residual)))
       break;
     {
       int i;
@@ -128,6 +133,8 @@ inline void *destroy_env(env_t *env) {
        Heap-fallback envs return to free() — no scrub needed. */
     if (env >= sh->arena && env < sh->arena_end) {
       env->n_inline = 0;
+      env->has_closure =
+          0; /* scrub: make_env skips the memset, relies on this */
       env->d = NULL;
       env->callingfnc = NULL;
       if (env + 1 == sh->arena_sp)
