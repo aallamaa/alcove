@@ -265,7 +265,8 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
     return 0;
   uint8_t cmp_slot = c[1];
   int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
@@ -317,6 +318,9 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   case OP_SLOT_LE_FIX:
     inv_cc = 0x0F;
     break; /* !LE → jg  */
+  case OP_SLOT_IS_FIX:
+    inv_cc = 0x04;
+    break; /* base when (is slot K); loop exits on equal → je */
   default:
     return 0;
   }
@@ -389,7 +393,8 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
     return 0;
   uint8_t slot = c[1];
   if (slot >= ENV_INLINE_SLOTS)
@@ -449,6 +454,9 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
   case OP_SLOT_LE_FIX:
     inv_cc = 0x0F;
     break; /* !LE → jg  */
+  case OP_SLOT_IS_FIX:
+    inv_cc = 0x04;
+    break; /* base when (is slot K); loop exits on equal → je */
   default:
     return 0;
   }
@@ -552,7 +560,8 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
     return 0;
   uint8_t slot = c[1];
   if (slot >= ENV_INLINE_SLOTS)
@@ -624,6 +633,9 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   case OP_SLOT_LE_FIX:
     inv_cc = 0x0F;
     break; /* recurse on jg  */
+  case OP_SLOT_IS_FIX:
+    inv_cc = 0x05;
+    break; /* base when (is n K1); recurse on not-equal → jne */
   default:
     return 0;
   }
@@ -647,8 +659,12 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   int self_calls = bc->self_name && issymbol(ca) && issymbol(cb) &&
                    strcmp((const char *)exp_text(ca), bc->self_name) == 0 &&
                    strcmp((const char *)exp_text(cb), bc->self_name) == 0;
-  int is_fib_like = self_calls && op_a == OP_SLOT_SUB_FIX &&
-                    op_b == OP_SLOT_SUB_FIX &&
+  /* The iterative fold is a threshold iteration (loop while i < K1, seeds
+     f(K1-2)/f(K1-1)); it is only valid for an ORDERED base predicate.
+     `(is n K1)` is a point test, not a threshold, so exclude it — it falls
+     through to the general two-call recursive emission below. */
+  int is_fib_like = self_calls && cmp_op != OP_SLOT_IS_FIX &&
+                    op_a == OP_SLOT_SUB_FIX && op_b == OP_SLOT_SUB_FIX &&
                     ((K2 == 1 && K3 == 2) || (K2 == 2 && K3 == 1));
   if (is_fib_like) {
     /* untagged init values for the two fib seeds: a = f(K1-2), b = f(K1-1).
@@ -2010,7 +2026,7 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   return 1;
 }
 
-/* The Ackermann function: 53-byte exact-match shape.
+/* The Ackermann function: 49-byte exact-match shape.
      (def ack (m n)
        (if (is m 0) (+ n 1)
            (if (is n 0) (ack (- m 1) 1)
@@ -2023,74 +2039,77 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
        then tail-self with (m-1, result)
    Both tail self-calls become a `jmp entry` after writing new slot
    values — no env churn. The single non-tail call still goes through
-   the helper but everything else is native. */
+   the helper but everything else is native.
+
+   Both `(is m 0)` and `(is n 0)` fuse to OP_SLOT_IS_FIX (slot vs fixnum
+   immediate), so each base-case compare is one 4-byte op instead of the
+   old LOAD_SLOT+LOAD_FIX+IS (6 bytes); the shape is 4 bytes shorter than
+   the pre-fusion 53-byte form. The emission is offset-independent native
+   code (it only uses slot_m/slot_n/idx), so only the verify offsets and
+   ncode change. */
 static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 53)
+  if (bc->ncode != 49)
     return 0;
   uint8_t *c = bc->code;
 
   /* Strict shape verify. */
-  if (c[0] != OP_LOAD_SLOT)
+  if (c[0] != OP_SLOT_IS_FIX)
     return 0;
   uint8_t slot_m = c[1];
-  if (c[2] != OP_LOAD_FIX || c[3] != 0 || c[4] != 0)
+  if (c[2] != 0 || c[3] != 0) /* imm == 0 */
     return 0;
-  if (c[5] != OP_IS)
-    return 0;
-  if (c[6] != OP_BR_IF_FALSE)
+  if (c[4] != OP_BR_IF_FALSE)
     return 0;
 
-  if (c[9] != OP_SLOT_ADD_FIX)
+  if (c[7] != OP_SLOT_ADD_FIX)
     return 0;
-  uint8_t slot_n_check1 = c[10];
-  if (c[11] != 1 || c[12] != 0)
+  uint8_t slot_n_check1 = c[8];
+  if (c[9] != 1 || c[10] != 0)
     return 0;
-  if (c[13] != OP_JUMP)
+  if (c[11] != OP_JUMP)
     return 0;
 
-  if (c[16] != OP_LOAD_SLOT)
+  if (c[14] != OP_SLOT_IS_FIX)
     return 0;
-  uint8_t slot_n = c[17];
+  uint8_t slot_n = c[15];
   if (slot_n != slot_n_check1)
     return 0;
-  if (c[18] != OP_LOAD_FIX || c[19] != 0 || c[20] != 0)
+  if (c[16] != 0 || c[17] != 0) /* imm == 0 */
     return 0;
-  if (c[21] != OP_IS)
-    return 0;
-  if (c[22] != OP_BR_IF_FALSE)
+  if (c[18] != OP_BR_IF_FALSE)
     return 0;
 
-  if (c[25] != OP_SLOT_SUB_FIX || c[26] != slot_m)
+  if (c[21] != OP_SLOT_SUB_FIX || c[22] != slot_m)
     return 0;
-  if (c[27] != 1 || c[28] != 0)
+  if (c[23] != 1 || c[24] != 0)
     return 0;
-  if (c[29] != OP_LOAD_FIX || c[30] != 1 || c[31] != 0)
+  if (c[25] != OP_LOAD_FIX || c[26] != 1 || c[27] != 0)
     return 0;
-  if (c[32] != OP_TAIL_SELF || c[33] != 2)
+  if (c[28] != OP_TAIL_SELF || c[29] != 2)
     return 0;
-  if (c[34] != OP_JUMP)
+  if (c[30] != OP_JUMP)
     return 0;
 
-  if (c[37] != OP_SLOT_SUB_FIX || c[38] != slot_m)
+  if (c[33] != OP_SLOT_SUB_FIX || c[34] != slot_m)
     return 0;
-  if (c[39] != 1 || c[40] != 0)
+  if (c[35] != 1 || c[36] != 0)
     return 0;
-  if (c[41] != OP_LOAD_SLOT || c[42] != slot_m)
+  if (c[37] != OP_LOAD_SLOT || c[38] != slot_m)
     return 0;
-  if (c[43] != OP_SLOT_SUB_FIX || c[44] != slot_n)
+  if (c[39] != OP_SLOT_SUB_FIX || c[40] != slot_n)
     return 0;
-  if (c[45] != 1 || c[46] != 0)
+  if (c[41] != 1 || c[42] != 0)
     return 0;
-  if (c[47] != OP_CALL_GLOBAL)
+  if (c[43] != OP_CALL_GLOBAL)
     return 0;
-  uint8_t idx = c[48];
-  if (c[49] != 2)
+  uint8_t idx = c[44];
+  if (c[45] != 2)
     return 0;
   if (idx >= bc->nconsts)
     return 0;
-  if (c[50] != OP_TAIL_SELF || c[51] != 2)
+  if (c[46] != OP_TAIL_SELF || c[47] != 2)
     return 0;
-  if (c[52] != OP_RET)
+  if (c[48] != OP_RET)
     return 0;
   if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS)
     return 0;

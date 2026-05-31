@@ -354,6 +354,12 @@ typedef enum {
   OP_SLOT_LE_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */
   OP_SLOT_GT_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */
   OP_SLOT_GE_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */
+  OP_SLOT_IS_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] is imm).
+                      `is` (isequal) with a fixnum immediate is exactly a
+                      tagged-pointer bit compare: two fixnums are equal iff
+                      identical bits, and a non-fixnum slot value (float /
+                      char / heap ptr) can never bit-equal a fixnum, so it
+                      correctly yields nil. */
 
   /* Slot-vs-slot comparison — fuses LOAD_SLOT+LOAD_SLOT+<cmp> into one
      dispatch. Emitted by compile_for (hot path). */

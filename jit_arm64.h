@@ -325,7 +325,8 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
     return 0;
   uint8_t cmp_slot = c[1];
   int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
@@ -387,6 +388,9 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   case OP_SLOT_LE_FIX:
     cond = 12;
     break; /* !LE → GT */
+  case OP_SLOT_IS_FIX:
+    cond = 0;
+    break; /* base when (is slot K); loop exits on equal → EQ */
   default:
     return 0;
   }
@@ -1514,7 +1518,8 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
 
   uint8_t cmp_op = c[0];
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX)
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
     return 0;
   uint8_t slot = c[1];
   if (slot >= ENV_INLINE_SLOTS)
@@ -1579,6 +1584,9 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
   case OP_SLOT_LE_FIX:
     inv_cc = 12;
     break;
+  case OP_SLOT_IS_FIX:
+    inv_cc = 0;
+    break; /* base when (is slot K); loop exits on equal → EQ */
   default:
     return 0;
   }
@@ -1845,74 +1853,75 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
-/* The Ackermann function: 53-byte exact-match shape.
+/* The Ackermann function: 49-byte exact-match shape.
      (def ack (m n)
        (if (is m 0) (+ n 1)
            (if (is n 0) (ack (- m 1) 1)
                (ack (- m 1) (ack m (- n 1))))))
    m==0 and n==0 cases run inline (no frame); the general case opens a
    frame, recursive-CALLs the inner ack(m, n-1) via intra-buffer BL,
-   then tail-self's to ack(m-1, result). */
+   then tail-self's to ack(m-1, result).
+
+   Both `(is m 0)` / `(is n 0)` fuse to OP_SLOT_IS_FIX (4 bytes each vs the
+   old LOAD_SLOT+LOAD_FIX+IS = 6), so the shape is 4 bytes shorter than the
+   pre-fusion 53-byte form. The emission is offset-independent native code
+   (only uses slot_m/slot_n/idx_call); only the verify offsets/ncode move. */
 static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 53)
+  if (bc->ncode != 49)
     return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT)
+  if (c[0] != OP_SLOT_IS_FIX)
     return 0;
   uint8_t slot_m = c[1];
-  if (c[2] != OP_LOAD_FIX || c[3] != 0 || c[4] != 0)
+  if (c[2] != 0 || c[3] != 0) /* imm == 0 */
     return 0;
-  if (c[5] != OP_IS)
-    return 0;
-  if (c[6] != OP_BR_IF_FALSE)
+  if (c[4] != OP_BR_IF_FALSE)
     return 0;
 
-  if (c[9] != OP_SLOT_ADD_FIX)
+  if (c[7] != OP_SLOT_ADD_FIX)
     return 0;
-  uint8_t slot_n_check = c[10];
-  if (c[11] != 1 || c[12] != 0)
+  uint8_t slot_n_check = c[8];
+  if (c[9] != 1 || c[10] != 0)
     return 0;
-  if (c[13] != OP_JUMP)
+  if (c[11] != OP_JUMP)
     return 0;
 
-  if (c[16] != OP_LOAD_SLOT)
+  if (c[14] != OP_SLOT_IS_FIX)
     return 0;
-  uint8_t slot_n = c[17];
+  uint8_t slot_n = c[15];
   if (slot_n != slot_n_check)
     return 0;
-  if (c[18] != OP_LOAD_FIX || c[19] != 0 || c[20] != 0)
+  if (c[16] != 0 || c[17] != 0) /* imm == 0 */
     return 0;
-  if (c[21] != OP_IS)
-    return 0;
-  if (c[22] != OP_BR_IF_FALSE)
+  if (c[18] != OP_BR_IF_FALSE)
     return 0;
 
-  if (c[25] != OP_SLOT_SUB_FIX || c[26] != slot_m)
+  if (c[21] != OP_SLOT_SUB_FIX || c[22] != slot_m)
     return 0;
-  if (c[27] != 1 || c[28] != 0)
+  if (c[23] != 1 || c[24] != 0)
     return 0;
-  if (c[29] != OP_LOAD_FIX || c[30] != 1 || c[31] != 0)
+  if (c[25] != OP_LOAD_FIX || c[26] != 1 || c[27] != 0)
     return 0;
-  if (c[32] != OP_TAIL_SELF || c[33] != 2)
+  if (c[28] != OP_TAIL_SELF || c[29] != 2)
     return 0;
-  if (c[34] != OP_JUMP)
+  if (c[30] != OP_JUMP)
     return 0;
 
-  if (c[37] != OP_SLOT_SUB_FIX || c[38] != slot_m)
+  if (c[33] != OP_SLOT_SUB_FIX || c[34] != slot_m)
     return 0;
-  if (c[39] != 1 || c[40] != 0)
+  if (c[35] != 1 || c[36] != 0)
     return 0;
-  if (c[41] != OP_LOAD_SLOT || c[42] != slot_m)
+  if (c[37] != OP_LOAD_SLOT || c[38] != slot_m)
     return 0;
-  if (c[43] != OP_SLOT_SUB_FIX || c[44] != slot_n)
+  if (c[39] != OP_SLOT_SUB_FIX || c[40] != slot_n)
     return 0;
-  if (c[45] != 1 || c[46] != 0)
+  if (c[41] != 1 || c[42] != 0)
     return 0;
-  if (c[47] != OP_CALL_GLOBAL)
+  if (c[43] != OP_CALL_GLOBAL)
     return 0;
-  uint8_t idx_call = c[48];
-  if (c[49] != 2)
+  uint8_t idx_call = c[44];
+  if (c[45] != 2)
     return 0;
   /* CALL_GLOBAL must target THIS function (intra-buffer BL). */
   if (!bc->self_name || idx_call >= bc->nconsts)
@@ -1922,7 +1931,7 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
     return 0;
   if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
     return 0;
-  if (c[50] != OP_TAIL_SELF || c[51] != 2 || c[52] != OP_RET)
+  if (c[46] != OP_TAIL_SELF || c[47] != 2 || c[48] != OP_RET)
     return 0;
   if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS)
     return 0;

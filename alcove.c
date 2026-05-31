@@ -4650,6 +4650,8 @@ static const char *bc_opname(uint8_t op) {
     return "SLOT_GT_FIX";
   case OP_SLOT_GE_FIX:
     return "SLOT_GE_FIX";
+  case OP_SLOT_IS_FIX:
+    return "SLOT_IS_FIX";
   case OP_SLOT_LE_SLOT:
     return "SLOT_LE_SLOT";
   case OP_VEC_REF:
@@ -4747,7 +4749,8 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
   case OP_SLOT_LT_FIX:
   case OP_SLOT_LE_FIX:
   case OP_SLOT_GT_FIX:
-  case OP_SLOT_GE_FIX: {
+  case OP_SLOT_GE_FIX:
+  case OP_SLOT_IS_FIX: {
     int16_t imm =
         (int16_t)((uint16_t)code[pc + 2] | ((uint16_t)code[pc + 3] << 8));
     printf("  %04d  %s slot=%d imm=%d\n", pc, bc_opname(op), (int)code[pc + 1],
@@ -5051,6 +5054,8 @@ static int fuse_slot_fix(int op) {
     return OP_SLOT_GT_FIX;
   case OP_GE:
     return OP_SLOT_GE_FIX;
+  case OP_IS:
+    return OP_SLOT_IS_FIX;
   default:
     return 0;
   }
@@ -5075,8 +5080,8 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
   /* Canonicalize (+ K slot) → (+ slot K) for commutative ops so the
      slot-fix peephole and JIT shape matchers see the canonical form.
      Binary-only — the peephole below doesn't handle >2 args anyway. */
-  if (is_binary && (op == OP_ADD || op == OP_MUL) && isnumber(arg1) &&
-      issymbol(arg2)) {
+  if (is_binary && (op == OP_ADD || op == OP_MUL || op == OP_IS) &&
+      isnumber(arg1) && issymbol(arg2)) {
     exp_t *tmp = arg1;
     arg1 = arg2;
     arg2 = tmp;
@@ -6257,6 +6262,7 @@ tail_reentry:
       [OP_SLOT_LE_FIX] = &&l_slot_le_fix,
       [OP_SLOT_GT_FIX] = &&l_slot_gt_fix,
       [OP_SLOT_GE_FIX] = &&l_slot_ge_fix,
+      [OP_SLOT_IS_FIX] = &&l_slot_is_fix,
       [OP_SLOT_LE_SLOT] = &&l_slot_le_slot,
       [OP_VEC_REF] = &&l_vec_ref,
       [OP_VEC_SET] = &&l_vec_set,
@@ -6965,6 +6971,17 @@ l_slot_ge_fix:
   SLOT_FIX_NUMERIC(PUSH(FIX_VAL(a) >= imm ? TRUE_EXP : NIL_EXP),
                    PUSH(da >= (double)imm ? TRUE_EXP : NIL_EXP), ">=");
   NEXT;
+l_slot_is_fix: {
+  /* (is slot K) with a fixnum immediate is exactly a tagged-pointer bit
+     compare — no numeric coercion, no error path: a non-fixnum slot value
+     (float / char / heap ptr) simply isn't bit-equal to MAKE_FIX(imm) and
+     yields nil, matching isequal's fixnum-vs-other behavior. */
+  uint8_t idx = READ_U8;
+  int16_t imm = READ_I16;
+  exp_t *a = env->inline_vals[idx];
+  PUSH(a == MAKE_FIX((int64_t)imm) ? TRUE_EXP : NIL_EXP);
+  NEXT;
+}
 
 l_slot_le_slot: {
   /* Hot-path superinst for `for`: reads two slots, pushes t/nil for

@@ -201,6 +201,24 @@
 (def rev-let (xs) (let ys xs (reverse ys)))
 (assert "compiled reverse of let-local"  (rev-let (list 1 2 3))   (list 3 2 1))
 
+; 8g. OP_SLOT_IS_FIX — `(is slot K)` fuses to one superinstruction (and JITs
+;     as an equality compare). A 1e6-deep `is`-based tail loop must stay correct
+;     under the fusion AND the JIT shape matchers (simple_tail_loop / ackermann)
+;     that now accept the fused op. Catches a fusion or JIT-offset regression.
+(def is-cd (n)   (if (is n 0) 'ok (is-cd (- n 1))))        ; const base, fused is
+(def is-cdn (n)  (if (is n 0) n (is-cdn (- n 1))))         ; slot base → simple_tail_loop JIT shape
+(assert "is-fused tail loop (const base)"  (is-cd 1000000)   'ok)
+(assert "is-fused tail loop (slot base)"   (is-cdn 1000000)  0)
+; `is` immediate is a pure tagged-bit compare: only a fixnum can match.
+(assert "is fixnum vs equal fixnum"        (is-cdn 0)        0)
+(assert "is 5 5.0 → nil (no float coerce)" (is 5 5.0)        nil)
+(assert "is 5 5   → t"                     (is 5 5)          t)
+; Ackermann uses two fused `(is _ 0)` base cases — the re-derived JIT shape.
+(def is-ack (m n) (if (is m 0) (+ n 1)
+                      (if (is n 0) (is-ack (- m 1) 1)
+                          (is-ack (- m 1) (is-ack m (- n 1))))))
+(assert "is-fused ackermann (jit shape)"   (is-ack 3 6)      509)
+
 ; 9. Phase-2 compiler — `with` (multi-binding).
 (assert "with 2 bindings"            (with (a 3 b 4) (+ a b))     7)
 (assert "with shadows"               (let a 1 (with (a 9) a))     9)
