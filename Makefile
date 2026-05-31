@@ -257,7 +257,15 @@ test-all:
 	    *) echo "  FAILURES — $$res"; ok=0;; \
 	  esac; \
 	done; \
-	$(MAKE) -s test.adr; \
+	printf '\n=== test.adr freshness (generated from test.alc) ===\n'; \
+	gadr=/tmp/test.adr.check.$$$$; \
+	if python3 gen_test_adr.py -o "$$gadr" >/dev/null 2>&1 && \
+	   diff -q "$$gadr" test.adr >/dev/null 2>&1; then \
+	  echo "  OK — test.adr matches gen_test_adr.py(test.alc + extra)"; \
+	else \
+	  echo "  STALE — test.adr is out of sync; run 'make gen-test-adr' and commit"; \
+	  ok=0; \
+	fi; rm -f "$$gadr"; \
 	abin=/tmp/adder-test.$$$$; \
 	for spec in $(ALS_SPECS); do \
 	  aname=$${spec%%:*}; aflags=$${spec#*:}; \
