@@ -656,7 +656,31 @@ int64_t gettimeusec();
 /* memory management */
 exp_t *refexp(exp_t *e);
 void *memalloc(size_t count, size_t size);
-static int unrefexp(exp_t *e);
+
+/* ALCOVE_SAFE — opt-in runtime type assertions, INDEPENDENT of NDEBUG, so a
+   fully-optimized build can still be run with the checks on to validate the
+   "we statically know this object's type here" assumptions that the fast paths
+   below rely on. Off by default → SAFE_ASSERT compiles to nothing (zero cost).
+   Build a checked binary with `cc -DALCOVE_SAFE=1 …`. */
+#ifndef ALCOVE_SAFE
+#define ALCOVE_SAFE 0
+#endif
+#if ALCOVE_SAFE
+#include <assert.h>
+#define SAFE_ASSERT(c) assert(c)
+#else
+#define SAFE_ASSERT(c) ((void)0)
+#endif
+
+/* unrefexp fast path — the inline wrapper is defined just after the immortal
+   singletons it references (is_immortal). unrefexp runs on every value drop;
+   keeping the hot part inline (immediate/singleton skip + the live decrement)
+   and calling out only when a refcount actually reaches 0 avoids a function
+   call for the overwhelmingly common cases (drop a fixnum, or decrement a
+   still-shared object). unrefexp_free assumes ret<=0; SAFE_ASSERT verifies the
+   object invariants under -DALCOVE_SAFE=1. */
+static int unrefexp_free(exp_t *e, int ret);
+static inline int unrefexp(exp_t *e);
 
 /* env management and exception handling inside env*/
 env_t *ref_env(env_t *env);
@@ -716,6 +740,19 @@ extern exp_t *gen_done_singleton; /* generator exhaustion sentinel */
 #define TRUE_EXP (true_singleton)
 #define GEN_DONE (gen_done_singleton)
 #define isgen_done(e) ((e) == gen_done_singleton)
+
+/* unrefexp (see the forward decl above). is_immortal folds the immediate/NULL
+   and three-singleton skips into one test; a live object's decrement returns
+   inline; only an object whose count hits 0 (or a double-free, ret<0) reaches
+   the out-of-line unrefexp_free. */
+static inline int unrefexp(exp_t *e) {
+  if (is_immortal(e))
+    return is_ptr(e) ? 1 : 0;
+  int ret = REFCOUNT_DEC(&e->nref);
+  if (ret > 0)
+    return ret;
+  return unrefexp_free(e, ret);
+}
 exp_t *make_quote(exp_t *node);
 exp_t *make_integer(char *str);
 exp_t *make_integeri(int64_t i);

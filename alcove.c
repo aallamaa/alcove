@@ -608,15 +608,17 @@ static ALCOVE_TLS exp_t *exp_freelist = NULL;
 static ALCOVE_TLS exp_t *exp_bump_next = NULL;
 static ALCOVE_TLS int exp_bump_left = 0;
 
-/* Iterative over e->next; recurses for e->content and vector/list elements. */
-static inline int unrefexp(exp_t *e) {
-  int ret;
+/* Cold free path, reached from the inline unrefexp() ONLY once a refcount has
+   hit <= 0: ret == 0 → e is dead (free its payload, push to the freelist, and
+   walk e->next); ret < 0 → double-free. The hot cases — dropping an immediate/
+   singleton, and decrementing a still-shared object that stays > 0 — return
+   inline in the wrapper and never call here. e is always a heap object.
+   Recurses (through the wrapper, so immediate children are free) for e->content
+   and vector/list elements. */
+static int unrefexp_free(exp_t *e, int ret) {
+  SAFE_ASSERT(is_ptr(e)); /* wrapper's contract — checked under ALCOVE_SAFE */
   while (1) {
-    if (is_immortal(e))
-      return is_ptr(e) ? 1 : 0;
-    if ((ret = REFCOUNT_DEC(&e->nref)) > 0)
-      return ret;
-    /* Detect double-free: a refcount that goes negative means this exp_t
+    /* Detect double-free: a refcount that went negative means this exp_t
        was already freed and the caller holds a dangling pointer. Abort in
        debug builds; in production at least avoid spiralling into UB. */
     if (ret < 0) {
@@ -734,7 +736,15 @@ static inline int unrefexp(exp_t *e) {
 
     e->next = exp_freelist;
     exp_freelist = e;
+    /* Walk to the chain successor and decrement it; stop if it's still live,
+       or NULL / an immortal singleton (is_immortal covers both). Otherwise
+       loop to free it too (the ret < 0 guard at the top runs). */
     e = next;
+    if (is_immortal(e))
+      return is_ptr(e) ? 1 : 0;
+    ret = REFCOUNT_DEC(&e->nref);
+    if (ret > 0)
+      return ret;
   }
 }
 
