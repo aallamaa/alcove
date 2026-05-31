@@ -236,6 +236,64 @@ static int x64_add_reg_rsp(uint8_t *buf, int dst) {
   return 4;
 }
 
+/* ---- SSE2 scalar-double encoders (used by the float-accumulator loop) ----
+   We restrict ourselves to XMM0/XMM1 (no REX.B/REX.R extension needed) and
+   GP regs in the low 8. Byte patterns verified against the GNU assembler. */
+
+/* cvtsi2sd xmm, r64  →  F2 REX.W 0F 2A /r.  Signed int64 → double. */
+static int x64_cvtsi2sd_xmm_reg(uint8_t *buf, int xmm, int gp) {
+  buf[0] = 0xF2;
+  buf[1] = 0x48;
+  buf[2] = 0x0F;
+  buf[3] = 0x2A;
+  buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
+  return 5;
+}
+/* movsd xmm, [base + disp32]  →  F2 0F 10 /r disp32 (mod=10). */
+static int x64_movsd_xmm_mem(uint8_t *buf, int xmm, int base, int32_t disp) {
+  buf[0] = 0xF2;
+  buf[1] = 0x0F;
+  buf[2] = 0x10;
+  buf[3] = (uint8_t)(0x80 | ((xmm & 7) << 3) | (base & 7));
+  memcpy(buf + 4, &disp, 4);
+  return 8;
+}
+/* movq xmm, r64  →  66 REX.W 0F 6E /r.  Copy raw bits GP → xmm. */
+static int x64_movq_xmm_reg(uint8_t *buf, int xmm, int gp) {
+  buf[0] = 0x66;
+  buf[1] = 0x48;
+  buf[2] = 0x0F;
+  buf[3] = 0x6E;
+  buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
+  return 5;
+}
+/* addsd/subsd/mulsd xmm_dst, xmm_src  →  F2 0F {58,5C,59} /r (mod=11).
+   `op2` is the third opcode byte: 0x58 add, 0x5C sub, 0x59 mul. */
+static int x64_sse_arith_xmm(uint8_t *buf, uint8_t op2, int dst, int src) {
+  buf[0] = 0xF2;
+  buf[1] = 0x0F;
+  buf[2] = op2;
+  buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  return 4;
+}
+/* movzx r32, word [base + disp32]  →  0F B7 /r disp32 (mod=10).  Used to
+   read the 16-bit exp_t.type field for the float-box guard. */
+static int x64_movzx_reg_mem16(uint8_t *buf, int dst, int base, int32_t disp) {
+  buf[0] = 0x0F;
+  buf[1] = 0xB7;
+  buf[2] = (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7));
+  memcpy(buf + 3, &disp, 4);
+  return 7;
+}
+/* and r64, imm32 (sign-extended)  →  REX.W 0x81 /4 imm32 (mod=11). */
+static int x64_and_imm32(uint8_t *buf, int dst, int32_t imm) {
+  buf[0] = 0x48;
+  buf[1] = 0x81;
+  buf[2] = (uint8_t)(0xE0 | (dst & 7)); /* /4, mod=11 */
+  memcpy(buf + 3, &imm, 4);
+  return 7;
+}
+
 /* Patch the rel32 of a previously emitted forward branch.
    `branch_start` = byte offset of the branch's first byte.
    `branch_size`  = total size of the branch instruction (5 or 6).
@@ -363,6 +421,254 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Worst case ~55 bytes (load, test, jcc, cmp, jcc, sub/add, mov,
      jmp, mov, ret, xor, ret + slack). Caller's buffer is uint8_t buf[256]. */
   JIT_GUARD(80);
+  *outn = n;
+  return 1;
+}
+
+#define X64_XMM0 0
+#define X64_XMM1 1
+
+/* Float-accumulator self-tail loop. Two-slot shape (25 bytes), produced by:
+     (def f (n acc) (if (< n LIM) (f (+ n 1) (<fop> acc FC)) acc))
+   where n is an INTEGER counter slot, LIM a fixnum const that doesn't fit
+   in i16 (so the compare is the generic LOAD_SLOT/LOAD_CONST/LT triple, not
+   the fused SLOT_LT_FIX), and FC is a FLOAT const. fop ∈ {+, -, *}.
+
+   Bytecode:
+     [ 0] LOAD_SLOT  cslot           2   (integer counter)
+     [ 2] LOAD_CONST lim_idx         2   (consts[lim_idx] must be a fixnum)
+     [ 4] <cmp>                      1   (LT/GT/LE/GE)
+     [ 5] BR_IF_FALSE off            3
+     [ 8] SLOT_<op>_FIX cslot K      4   (counter step; op ∈ {ADD,SUB})
+     [12] LOAD_SLOT  aslot           2   (float accumulator)
+     [14] LOAD_CONST fc_idx          2   (consts[fc_idx] must be EXP_FLOAT)
+     [16] <fop>                      1   (ADD/SUB/MUL)
+     [17] TAIL_SELF 2                2
+     [19] JUMP off                   3   (unreachable; back-edge)
+     [22] LOAD_SLOT  aslot           2
+     [24] RET                        1
+
+   Codegen keeps the tagged counter in rcx and the UNBOXED accumulator in
+   xmm0 across iterations; the float const sits in xmm1. The whole self-tail
+   loop folds into one in-buffer back-edge (no per-iteration invoke()).
+
+   Two runtime callouts on exit (env in callee-saved rbx across both):
+     - 0 iterations  → return refexp(seed) UNCHANGED (matches the VM, which
+       returns the raw seed box — an int seed stays an int, a float stays a
+       float; we must NOT box a fresh float here).
+     - >=1 iteration → the acc is provably a float after the first
+       BIN_ARITH(... , FC) (int op float = float), so box the xmm0 result via
+       make_floatf, matching make_floatf(da op db) exactly (IEEE double).
+   All tag/type guards run before any slot mutation, and the loop body never
+   deopts, so a deopt always re-runs the VM on an untouched env. */
+static int try_jit_float_acc_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
+  if (bc->ncode != 25 || bc->nparams != 2)
+    return 0;
+  uint8_t *c = bc->code;
+
+  if (c[0] != OP_LOAD_SLOT)
+    return 0;
+  uint8_t cslot = c[1];
+  if (c[2] != OP_LOAD_CONST)
+    return 0;
+  uint8_t lim_idx = c[3];
+  uint8_t cmp_op = c[4];
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  if (c[5] != OP_BR_IF_FALSE)
+    return 0;
+
+  uint8_t step_op = c[8];
+  if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
+    return 0;
+  if (c[9] != cslot)
+    return 0;
+  int16_t step_imm = (int16_t)((uint16_t)c[10] | ((uint16_t)c[11] << 8));
+
+  if (c[12] != OP_LOAD_SLOT)
+    return 0;
+  uint8_t aslot = c[13];
+  if (c[14] != OP_LOAD_CONST)
+    return 0;
+  uint8_t fc_idx = c[15];
+  uint8_t fop = c[16];
+  if (fop != OP_ADD && fop != OP_SUB && fop != OP_MUL)
+    return 0;
+
+  if (c[17] != OP_TAIL_SELF || c[18] != 2)
+    return 0;
+  if (c[19] != OP_JUMP)
+    return 0;
+  if (c[22] != OP_LOAD_SLOT || c[23] != aslot)
+    return 0;
+  if (c[24] != OP_RET)
+    return 0;
+
+  /* slots must be distinct, in range, and consistent across the body */
+  if (cslot == aslot || cslot >= ENV_INLINE_SLOTS || aslot >= ENV_INLINE_SLOTS)
+    return 0;
+  if (lim_idx >= bc->nconsts || fc_idx >= bc->nconsts)
+    return 0;
+
+  /* The static type signals: the counter limit is a fixnum, the accumulator
+     const is a float. (A fixnum limit that fit in i16 would have compiled to
+     the fused SLOT_LT_FIX form — this matcher only sees the wide-limit case.)
+   */
+  exp_t *lim = bc->consts[lim_idx];
+  exp_t *fc = bc->consts[fc_idx];
+  if (!isnumber(lim) || !isfloat(fc))
+    return 0;
+
+  int64_t lim_val = FIX_VAL(lim);
+  /* The VM compares FIX_VAL(counter) <cmp> FIX_VAL(limit) on two fixnums.
+     We compare the TAGGED values (counter stays tagged in rcx): tagging is
+     (v<<3)|1, monotonic for signed order, so tagged compare == value compare.
+     Require limit<<3 to fit a sign-extended imm32. */
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+  int64_t lim_tagged64 = (lim_val << 3) | 1;
+  if (lim_tagged64 > INT32_MAX || lim_tagged64 < INT32_MIN)
+    return 0;
+  int32_t cmp_tagged = (int32_t)lim_tagged64;
+  int32_t step_delta = ((int32_t)step_imm) << 3;
+
+  int coff = (int)offsetof(env_t, inline_vals[0]) + (int)cslot * 8;
+  int aoff = (int)offsetof(env_t, inline_vals[0]) + (int)aslot * 8;
+  int foff = (int)offsetof(exp_t, f); /* unboxed double inside the box */
+  int toff = (int)offsetof(exp_t, type);
+
+  uint64_t fc_bits;
+  {
+    double d = fc->f;
+    memcpy(&fc_bits, &d, 8);
+  }
+
+  /* Continue-the-loop condition (compare is TRUE) — the back-edge cc.
+     x86 cc nibbles: jl=0x0C jge=0x0D jle=0x0E jg=0x0F.
+     Loop-exit (compare FALSE) is the inverse, taken on the first test. */
+  uint8_t cont_cc, exit_cc;
+  switch (cmp_op) {
+  case OP_LT:
+    cont_cc = 0x0C;
+    exit_cc = 0x0D;
+    break; /* <  : jl  / !< → jge */
+  case OP_GT:
+    cont_cc = 0x0F;
+    exit_cc = 0x0E;
+    break; /* >  : jg  / !> → jle */
+  case OP_LE:
+    cont_cc = 0x0E;
+    exit_cc = 0x0F;
+    break; /* <= : jle / !<=→ jg  */
+  case OP_GE:
+    cont_cc = 0x0D;
+    exit_cc = 0x0C;
+    break; /* >= : jge / !>=→ jl  */
+  default:
+    return 0;
+  }
+  uint8_t fop2 = (fop == OP_ADD) ? 0x58 : (fop == OP_SUB) ? 0x5C : 0x59;
+
+  int n = 0;
+
+  /* Entry guard: counter must be a fixnum. Deopt before any frame setup. */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, coff);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_deopt0 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt (no frame yet) */
+
+  /* Frame: push rbx (rsp → 16-aligned for the upcoming call); rbx = env. */
+  n += x64_push_reg(buf + n, X64_RBX);
+  n += x64_mov_reg_reg(buf + n, X64_RBX, X64_RDI);
+
+  /* First compare. If the loop won't run, return the seed UNCHANGED. */
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  int jcc_zero = n;
+  n += x64_jcc_rel32(buf + n, exit_cc, 0); /* exit-cc → zero_iter */
+
+  /* >=1 iteration: load + coerce the accumulator into xmm0.
+     acc may be a fixnum seed (coerce via cvtsi2sd) or a float box (load ->f).
+     Anything else → deopt (pop rbx first). */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RBX, aoff);
+  n += x64_mov_reg_reg(buf + n, X64_RDX, X64_RAX);
+  n += x64_and_imm32(buf + n, X64_RDX, 7); /* tag bits */
+  n += x64_cmp_imm32(buf + n, X64_RDX, 1); /* fixnum? */
+  int jne_float = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0); /* jne → check_float */
+  /* fixnum seed: untag (sar 3) then cvtsi2sd */
+  n += x64_sar_imm8(buf + n, X64_RAX, 3);
+  n += x64_cvtsi2sd_xmm_reg(buf + n, X64_XMM0, X64_RAX);
+  int jmp_ready = n;
+  n += x64_jmp_rel32(buf + n, 0); /* → acc_ready */
+  /* check_float: tag must be PTR(0), non-null, type==EXP_FLOAT */
+  int check_float_pc = n;
+  n += x64_test_reg_reg(buf + n, X64_RDX, X64_RDX); /* tag==0 ? */
+  int jnz_deopt1 = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);             /* jnz → deopt_framed */
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX); /* null ? */
+  int jz_deopt1 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz → deopt_framed */
+  n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX, toff);
+  n += x64_cmp_imm32(buf + n, X64_RDX, EXP_FLOAT);
+  int jne_deopt1 = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0); /* jne → deopt_framed */
+  n += x64_movsd_xmm_mem(buf + n, X64_XMM0, X64_RAX, foff); /* xmm0 = box->f */
+  int acc_ready_pc = n;
+
+  /* Load the float const bits into xmm1. */
+  n += x64_mov_imm64(buf + n, X64_RAX, fc_bits);
+  n += x64_movq_xmm_reg(buf + n, X64_XMM1, X64_RAX);
+
+  /* Loop body: acc <fop>= fc; counter += step; while (compare) loop. */
+  int loop_top = n;
+  n += x64_sse_arith_xmm(buf + n, fop2, X64_XMM0, X64_XMM1);
+  if (step_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, step_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, step_delta);
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  {
+    int jcc_start = n;
+    n += x64_jcc_rel32(buf + n, cont_cc, 0);
+    x64_patch_rel32(buf, jcc_start, 6, loop_top); /* back-edge */
+  }
+
+  /* >=1-iter exit: box the double in xmm0 via make_floatf (arg already in
+     xmm0 per SysV), tear down frame, return. */
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&make_floatf);
+  n += x64_call_reg(buf + n, X64_RAX);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* zero_iter: return refexp(seed) unchanged. */
+  int zero_iter_pc = n;
+  n += x64_mov_reg_mem(buf + n, X64_RDI, X64_RBX, aoff);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&refexp);
+  n += x64_call_reg(buf + n, X64_RAX);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* deopt_framed: a tag/type guard failed AFTER the frame was set up. */
+  int deopt_framed_pc = n;
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  /* deopt0: counter guard failed before the frame. */
+  int deopt0_pc = n;
+  X64_EMIT_DEOPT();
+
+  x64_patch_rel32(buf, jcc_zero, 6, zero_iter_pc);
+  x64_patch_rel32(buf, jne_float, 6, check_float_pc);
+  x64_patch_rel32(buf, jmp_ready, 5, acc_ready_pc);
+  x64_patch_rel32(buf, jnz_deopt1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jz_deopt1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jne_deopt1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jz_deopt0, 6, deopt0_pc);
+
+  /* Largest path ≈ 210 bytes (entry guard + frame + acc int/float coerce +
+     const load + loop body + 3 exits). Caller's buf is 512. */
+  JIT_GUARD(300);
   *outn = n;
   return 1;
 }
@@ -2700,6 +3006,8 @@ int jit_compile(bytecode_t *bc) {
 
   if (try_jit_simple_tail_loop(bc, buf, &n)) {
     JT("simple_tail_loop");
+  } else if (try_jit_float_acc_loop(bc, buf, &n)) {
+    JT("float_acc_loop");
   } else if (try_jit_tail_loop_with_call(bc, buf, &n)) {
     JT("tail_loop_with_call");
   } else if (try_jit_recurse_add_two(bc, buf, &n)) {

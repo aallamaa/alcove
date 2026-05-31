@@ -2213,6 +2213,34 @@
               (bm-tak (- z 1) x y))))
 (assert "bench tak 24 16 8"         (bm-tak 24 16 8)           9)
 
+;; ---------- float-accumulator self-tail loop (amd64 JIT shape) ----------
+;; Integer counter + UNBOXED float accumulator kept in xmm0 across the loop;
+;; matched by try_jit_float_acc_loop (jit_amd64.h). The limit is > i16 so the
+;; counter compare is the generic LOAD_SLOT/LOAD_CONST/LT triple (the JIT'd
+;; shape). Results must be byte-identical to the bytecode VM; in particular the
+;; ZERO-iteration case must return the SEED UNCHANGED (an int seed stays an int,
+;; a float seed stays a float — never a freshly boxed float). `iso` is
+;; type-strict, so it distinguishes 50000 (int) from 50000.0 (float).
+(def bm-faccadd (n acc) (if (< n 100000) (bm-faccadd (+ n 1) (+ acc 0.5)) acc))
+(def bm-faccsub (n acc) (if (< n 100000) (bm-faccsub (+ n 1) (- acc 0.5)) acc))
+(def bm-faccmul (n acc) (if (< n     64) (bm-faccmul (+ n 1) (* acc 2.0)) acc))
+;; +0.5 * 100000 = 50000.0, exactly representable
+(assert "facc add (float seed)"   (bm-faccadd 0 0.0)            50000.0)
+;; int seed coerces to double from iteration 1 → same float result
+(assert "facc add (int seed)"     (bm-faccadd 0 0)              50000.0)
+(assert "facc add result is float"(iso (bm-faccadd 0 0) 50000.0) t)
+(assert "facc add result not int" (iso (bm-faccadd 0 0) 50000)  nil)
+(assert "facc sub"                (bm-faccsub 0 0.0)            -50000.0)
+;; 2.0^64 — exact in double
+(assert "facc mul"                (bm-faccmul 0 1.0)            (** 2.0 64))
+;; zero-iteration passthrough: int seed must stay an INT (type-strict)
+(assert "facc 0-iter int seed"    (iso (bm-faccadd 200000 7) 7)   t)
+(assert "facc 0-iter int not flt" (iso (bm-faccadd 200000 7) 7.0) nil)
+;; zero-iteration passthrough: float seed must stay the SAME float
+(assert "facc 0-iter float seed"  (iso (bm-faccadd 200000 7.5) 7.5) t)
+;; negative accumulator survives
+(assert "facc negative seed"      (bm-faccadd 0 -25000.0)       25000.0)
+
 ;; ================================================================
 ;; Extended coverage — builtins not tested above
 ;; ================================================================
