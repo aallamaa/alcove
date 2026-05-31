@@ -1042,6 +1042,9 @@
 (def jc-le (n) (if (<= n 1000) (jc-le (+ n 1)) n))
 (def jc-gt (n) (if (> n 0) (jc-gt (- n 1)) n))
 (def jc-ge (n) (if (>= n 1) (jc-ge (- n 1)) n))
+;; counter loop whose limit exceeds i16 -> generic-compare triple, JIT'd by
+;; try_jit_wide_counter_loop (not the fused simple_tail_loop shape).
+(def jc-wide (n) (if (< n 5000000) (jc-wide (+ n 1)) n))
 ;; recursion shapes
 (def jc-fact (n) (if (< n 2) 1 (* n (jc-fact (- n 1)))))
 (def jc-fib (n) (if (< n 2) n (+ (jc-fib (- n 1)) (jc-fib (- n 2)))))
@@ -1077,6 +1080,7 @@
 (assert-jits "jit loop: <= (wide limit)"  jc-le)
 (assert-jits "jit loop: > countdown"      jc-gt)
 (assert-jits "jit loop: >= countdown"     jc-ge)
+(assert-jits "jit loop: wide (>i16) limit" jc-wide)
 (assert-jits "jit recurse: fact"          jc-fact)
 (assert-jits "jit recurse: fib"           jc-fib)
 (assert-jits "jit recurse: ackermann"     jc-ack)
@@ -1094,6 +1098,7 @@
 (assert-jits "jit float-acc: *"           jc-facc-mul)
 ;; result correctness — the JIT (when on) must match the VM byte-for-byte.
 (assert "jit loop < result"            (jc-lt 0)             1000)
+(assert "jit wide-limit loop result"   (jc-wide 4999990)     5000000)
 (assert "jit countdown result"         (jc-gt 1000000)       0)
 (assert "jit fact result"              (jc-fact 10)          3628800)
 (assert "jit forsum result"            (jc-forsum 100000)    100000)

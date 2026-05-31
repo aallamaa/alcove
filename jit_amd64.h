@@ -835,6 +835,110 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
   return 1;
 }
 
+/* Wide-limit integer counter loop — generic-compare twin of
+   try_jit_simple_tail_loop (see the arm64 version for the rationale). When the
+   limit is a fixnum that doesn't fit i16 the compiler emits the
+   LOAD_SLOT/LOAD_CONST/<cmp> triple instead of the fused SLOT_<cmp>_FIX, so
+   simple_tail_loop misses it. Identical emitted loop; the limit comes from a
+   const. 20-byte shape:
+     LOAD_SLOT slot ; LOAD_CONST lim ; <cmp LT|GT|LE|GE> ; BR_IF_FALSE ;
+     SLOT_<ADD|SUB>_FIX slot K ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET */
+static int try_jit_wide_counter_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_load0, at_lim, at_arith, at_tail, at_load1;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE(at_load0, OP_LOAD_SLOT);
+  uint8_t cmp_slot = BC_ARG(at_load0, 0);
+  BC_TAKE(at_lim, OP_LOAD_CONST);
+  uint8_t lim_idx = BC_ARG(at_lim, 0);
+  BC_EAT_ANY(cmp_op);
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_arith, arith_op);
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_arith, 0) != cmp_slot)
+    return 0;
+  int16_t arith_imm = BC_I16(at_arith, 1);
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load1, OP_LOAD_SLOT);
+  if (BC_ARG(at_load1, 0) != cmp_slot)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  if (cmp_slot >= ENV_INLINE_SLOTS || lim_idx >= bc->nconsts)
+    return 0;
+  exp_t *lim = bc->consts[lim_idx];
+  if (!isnumber(lim)) /* fixnum limit only */
+    return 0;
+  int64_t lim_val = FIX_VAL(lim);
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+  int64_t lim_tagged64 = (lim_val << 3) | 1;
+  /* keep the compare a single cmp imm32 (limits up to ~268M); wider deopts. */
+  if (lim_tagged64 > INT32_MAX || lim_tagged64 < INT32_MIN)
+    return 0;
+  int32_t cmp_tagged = (int32_t)lim_tagged64;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+
+  /* invert the compare for the loop-exit branch. x86: jl=0x0C jge=0x0D
+     jle=0x0E jg=0x0F. */
+  uint8_t inv_cc;
+  switch (cmp_op) {
+  case OP_LT:
+    inv_cc = 0x0D;
+    break; /* !< → jge */
+  case OP_GT:
+    inv_cc = 0x0E;
+    break; /* !> → jle */
+  case OP_LE:
+    inv_cc = 0x0F;
+    break; /* !<=→ jg  */
+  case OP_GE:
+    inv_cc = 0x0C;
+    break; /* !>=→ jl  */
+  default:
+    return 0;
+  }
+
+  int n = 0;
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, slot_off);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_start = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt */
+  int loop_top = n;
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  int jcc_end_start = n;
+  n += x64_jcc_rel32(buf + n, inv_cc, 0); /* j<inv> end */
+  if (arith_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, slot_off);
+  {
+    int jmp_start = n;
+    n += x64_jmp_rel32(buf + n, (int32_t)(loop_top - (jmp_start + 5)));
+  }
+  int end_pc = n;
+  n += x64_mov_reg_reg(buf + n, X64_RAX, X64_RCX);
+  n += x64_ret(buf + n);
+  int deopt_pc = n;
+  X64_EMIT_DEOPT();
+  x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
+  x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+
+  JIT_GUARD(80);
+  *outn = n;
+  return 1;
+}
+
 /* Two-call non-tail recursion (the fib shape). 28-byte body:
      (def f (n) (if (cmp n K1) n (+ (g (op n K2)) (g (op n K3)))))
    Bytecode:
@@ -2959,6 +3063,8 @@ int jit_compile(bytecode_t *bc) {
     JT("simple_tail_loop");
   } else if (try_jit_float_acc_loop(bc, buf, &n)) {
     JT("float_acc_loop");
+  } else if (try_jit_wide_counter_loop(bc, buf, &n)) {
+    JT("wide_counter_loop");
   } else if (try_jit_tail_loop_with_call(bc, buf, &n)) {
     JT("tail_loop_with_call");
   } else if (try_jit_recurse_add_two(bc, buf, &n)) {

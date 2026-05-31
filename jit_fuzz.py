@@ -60,10 +60,11 @@ def gen_counter_loop(rng, idx):
     cmp = rng.choice(CMPS)
     countup = cmp in ("<", "<=")
     step = rng.choice([1, 2, 3, 5])
-    # limit: mix small (fused-imm fast path) and wide (materialized-reg path).
-    limit = rng.choice([10, 100, 511, 512, 1000, 9999, 20000])
+    # limit: mix small (fused SLOT_*_FIX), mid (fused + materialized-reg cmp),
+    # and >i16 wide (the generic-triple try_jit_wide_counter_loop shape).
+    limit = rng.choice([10, 100, 511, 512, 1000, 9999, 20000, 40000, 5000000])
     if not countup:
-        limit = rng.choice([-1, 0, 1, 50, 500, 1000])
+        limit = rng.choice([-1, 0, 1, 50, 500, 1000, 40000, 3000000])
     op = "+" if countup else "-"
     body = f"(if ({cmp} n {limit}) ({name} ({op} n {step})) n)"
     defn = f"(def {name} (n) {body})"

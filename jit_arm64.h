@@ -771,6 +771,113 @@ static int try_jit_float_acc_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* Wide-limit integer counter loop — the generic-compare twin of
+   try_jit_simple_tail_loop. When the loop limit is a fixnum that doesn't fit
+   i16 the compiler emits LOAD_SLOT/LOAD_CONST/<cmp> (5 bytes) instead of the
+   fused SLOT_<cmp>_FIX (4 bytes), so simple_tail_loop's matcher misses it and
+   e.g. (if (< n 5000000) (f (+ n 1)) n) drops to the VM. Identical emitted
+   loop; only the limit comes from a const (a wide fixnum, always materialized
+   into a reg — same path simple_tail_loop already uses for >u12 limits).
+   20-byte shape:
+     LOAD_SLOT slot ; LOAD_CONST lim ; <cmp LT|GT|LE|GE> ; BR_IF_FALSE ;
+     SLOT_<ADD|SUB>_FIX slot K ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET */
+static int try_jit_wide_counter_loop(bytecode_t *bc, uint32_t *out, int *outn) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_load0, at_lim, at_arith, at_tail, at_load1;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE(at_load0, OP_LOAD_SLOT);
+  uint8_t cmp_slot = BC_ARG(at_load0, 0);
+  BC_TAKE(at_lim, OP_LOAD_CONST);
+  uint8_t lim_idx = BC_ARG(at_lim, 0);
+  BC_EAT_ANY(cmp_op);
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_arith, arith_op);
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_arith, 0) != cmp_slot)
+    return 0;
+  int16_t arith_imm = BC_I16(at_arith, 1);
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load1, OP_LOAD_SLOT);
+  if (BC_ARG(at_load1, 0) != cmp_slot)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  if (cmp_slot >= ENV_INLINE_SLOTS || lim_idx >= bc->nconsts)
+    return 0;
+  /* fixnum limit only — a float const would mis-compare against the tagged
+     integer counter (the VM would promote; we must not pretend it's a fix). */
+  exp_t *lim = bc->consts[lim_idx];
+  if (!isnumber(lim))
+    return 0;
+  int64_t lim_val = FIX_VAL(lim);
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+  int64_t lim_tagged = (lim_val << 3) | 1;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+  if (slot_off > 32760)
+    return 0;
+  int arith_delta = ((int)arith_imm) << 3;
+  if (arith_delta < 0 || arith_delta > 4095)
+    return 0;
+
+  /* exit (compare FALSE) cond — invert. GE=10 LT=11 GT=12 LE=13. */
+  int cond;
+  switch (cmp_op) {
+  case OP_LT:
+    cond = 10;
+    break; /* !< → GE */
+  case OP_GT:
+    cond = 13;
+    break; /* !> → LE */
+  case OP_LE:
+    cond = 12;
+    break; /* !<=→ GT */
+  case OP_GE:
+    cond = 11;
+    break; /* !>=→ LT */
+  default:
+    return 0;
+  }
+
+  int n = 0;
+  out[n++] = arm64_ldr_imm(1, 0, slot_off); /* x1 = counter */
+  int patch_tbz = n;
+  out[n++] = 0;                                /* tbz x1,#0,deopt */
+  n += emit_mov64(out + n, 2, (uint64_t)lim_tagged); /* x2 = tagged limit */
+  int loop_top = n;
+  out[n++] = arm64_cmp_reg(1, 2);
+  int patch_bcond = n;
+  out[n++] = 0; /* b.<exit_cc> end */
+  if (arith_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+  else
+    out[n++] = arm64_add_imm(1, 1, arith_delta);
+  out[n++] = arm64_str_imm(1, 0, slot_off);
+  {
+    int cur = n++;
+    out[cur] = arm64_b(loop_top - cur);
+  }
+  int end_pc = n;
+  out[patch_bcond] = arm64_b_cond(cond, end_pc - patch_bcond);
+  out[n++] = arm64_mov_reg(0, 1); /* x0 = final counter */
+  out[n++] = arm64_ret();
+  int deopt_pc = n;
+  PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  ARM64_EMIT_DEOPT();
+
+  JIT_GUARD(24);
+  *outn = n;
+  return 1;
+}
+
 /* 28-byte two-call recursion shape — fib pattern.
      (def f (n) (if (cmp n K1) n (+ (f (n op K2)) (f (n op K3)))))
    Only the iterative-fib fast path is implemented on arm64 today: when
@@ -2568,6 +2675,9 @@ int jit_compile(bytecode_t *bc) {
     /* matched — fall through to mmap+install */
   } else if (try_jit_float_acc_loop(bc, insns, &n)) {
     /* integer-counter + unboxed-float-accumulator self-tail loop */
+  } else if (try_jit_wide_counter_loop(bc, insns, &n)) {
+    /* counter loop with a wide (>i16) const limit — generic-compare twin
+       of simple_tail_loop */
   } else if (try_jit_tail_loop_with_call(bc, insns, &n)) {
     /* tail loop with one inner call — fall through */
   } else if (try_jit_recurse_add_two(bc, insns, &n)) {
