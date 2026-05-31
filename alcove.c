@@ -758,8 +758,11 @@ static int unrefexp_free(exp_t *e, int ret) {
    build the asserts vanish and only the minimal release remains. */
 
 /* A number is a tagged-immediate fixnum: no heap, no refcount → pure no-op
-   (a known-fixnum result needs no release at all). */
-static inline void unref_number(exp_t *e) {
+   (a known-fixnum result needs no release at all). Marked unused: it has no
+   call site today (releasing a known fixnum is a literal no-op, so callers
+   just skip it), but it's kept for symmetry with the unref_<type> family so a
+   known-fixnum site can stay uniform — same idiom as the jit_call_* helpers. */
+__attribute__((unused)) static inline void unref_number(exp_t *e) {
   SAFE_ASSERT(isnumber(e));
   (void)e;
 }
