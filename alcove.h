@@ -297,6 +297,10 @@ typedef enum {
   OP_POP,
   OP_DUP, /* duplicate top-of-stack (fresh ref). Used by compile_and/or/case
              to keep the tested value across a popping conditional branch. */
+  OP_EVAL_AST, /* u8 idx → push EVAL(consts[idx], env). Escape hatch: a
+                  non-tail-aware builtin call with no native opcode is stored as
+                  its raw form and run by the tree-walker, so the *enclosing*
+                  lambda still compiles (and keeps its tail call). */
 
   OP_LOAD_FIX,    /* int16 imm       → push MAKE_FIX(imm) */
   OP_LOAD_CONST,  /* u8 idx          → push refexp(consts[idx]) */

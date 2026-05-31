@@ -4560,6 +4560,8 @@ static const char *bc_opname(uint8_t op) {
     return "POP";
   case OP_DUP:
     return "DUP";
+  case OP_EVAL_AST:
+    return "EVAL_AST";
   case OP_LOAD_FIX:
     return "LOAD_FIX";
   case OP_LOAD_CONST:
@@ -4697,6 +4699,7 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
     return 3;
   }
   case OP_LOAD_CONST:
+  case OP_EVAL_AST:
   case OP_LOAD_SLOT:
   case OP_LOAD_GLOBAL:
   case OP_SETQ_DYN:
@@ -5925,13 +5928,39 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       compile_arith(c, e, op);
       return;
     }
-    /* Fail-closed: any head that resolves to an EXP_INTERNAL we haven't
-       whitelisted above is by definition a builtin the compiler doesn't
-       know how to handle — let the tree-walker run it. User lambdas
-       (not in reserved_symbol) fall through to compile_call. */
+    /* A head that resolves to an EXP_INTERNAL we haven't whitelisted above is a
+       builtin with no native opcode. Two sub-cases:
+         - TAIL_AWARE special forms (match, for-gen, …) and closure-creating
+           forms (fn/lambda/def/defn/defmacro/macro): keep the wholesale-AST
+           fallback. TAIL_AWARE forms need the tree-walker's own tail-marker
+           trampoline for their tail recursion; closure-creators would capture
+           THIS compiled frame's env (whose inline slots die on return) and
+           dangle. Both must run with the whole lambda as AST.
+         - everything else (max, abs, string-*, reverse, map, …): a value
+           sub-expression, never the tail. Emit OP_EVAL_AST so just THIS form
+           defers to the tree-walker while the enclosing lambda stays compiled
+           (and keeps its tail call). Fixes the deep-recursion segfault any
+           non-whitelisted builtin in a hot body used to cause.
+       Gate on nlet_depth == 0: OP_EVAL_AST resolves the sub-form's free vars by
+       NAME via the tree-walker, but let/with/for slots are bound with a NULL
+       inline_key (OP_BIND_SLOT) so they're invisible to symbolic lookup — only
+       params (param_keys), globals, and captures (parent chain) are
+       name-resolvable. Inside a let/with/for body we therefore keep the
+       wholesale-AST fallback (baseline behavior). User lambdas (not in
+       reserved_symbol) fall through to compile_call. */
     keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)s, NULL);
     if (kv && isinternal(kv->val)) {
-      c->failed = 1;
+      if ((kv->val->flags & FLAG_TAIL_AWARE) || c->nlet_depth != 0 ||
+          !strcmp(s, "fn") || !strcmp(s, "lambda") || !strcmp(s, "def") ||
+          !strcmp(s, "defn") || !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
+        c->failed = 1;
+        return;
+      }
+      int k = add_const(c, e);
+      if (c->failed)
+        return;
+      emit_u8(c, OP_EVAL_AST);
+      emit_u8(c, (uint8_t)k);
       return;
     }
     compile_call(c, e, tail);
@@ -6124,6 +6153,7 @@ tail_reentry:
       [OP_RET] = &&l_ret,
       [OP_POP] = &&l_pop,
       [OP_DUP] = &&l_dup,
+      [OP_EVAL_AST] = &&l_eval_ast,
       [OP_LOAD_FIX] = &&l_load_fix,
       [OP_LOAD_CONST] = &&l_load_const,
       [OP_LOAD_SLOT] = &&l_load_slot,
@@ -6203,6 +6233,32 @@ l_pop:
 l_dup: {
   exp_t *t = stack[sp - 1];
   PUSH(refexp(t));
+  NEXT;
+}
+
+l_eval_ast: {
+  /* Run one stored raw sub-form through the tree-walker — the escape hatch for
+     builtins with no native opcode. in_tail_position must be 0: the VM owns TCO
+     and this form is a value sub-expression (never the tail), so a stray tail
+     marker would be mis-handled. EVAL consumes the ref it's handed, so pass a
+     fresh one; the const keeps its own. lookup() walks inline slots + the
+     parent chain, so locals and captures resolve as in full-AST mode; nested
+     user-lambda calls re-enter the compiled path via invoke(). */
+  uint8_t idx = READ_U8;
+  int saved_tail = in_tail_position;
+  in_tail_position = 0;
+  exp_t *r = EVAL(refexp(consts[idx]), env);
+  in_tail_position = saved_tail;
+  if (r && iserror(r)) {
+    while (sp > 0)
+      unrefexp(POP());
+    if (fn_owned)
+      unrefexp(fn);
+    return r;
+  }
+  if (!r)
+    r = NIL_EXP;
+  PUSH(r);
   NEXT;
 }
 
