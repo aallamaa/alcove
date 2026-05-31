@@ -369,39 +369,37 @@ static int emit_mov64(uint32_t *out, int rd, uint64_t v) {
      [RET]                      1 byte
    = 19 bytes total. */
 static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 19)
-    return 0;
   uint8_t *c = bc->code;
 
-  uint8_t cmp_op = c[0];
+  /* Shape (19 bytes): a self-tail counter loop —
+       <cmp> slot K1 ; BR_IF_FALSE off ; <arith> slot K2 ; TAIL_SELF 1 ;
+       JUMP off ; LOAD_SLOT slot ; RET
+     Walk it with the BC_* cursor so the byte offsets are computed, not baked
+     in (see bc_oplen in jit_common.h). */
+  int pc = 0, at_cmp, at_arith, at_tail, at_load;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE_ANY(at_cmp, cmp_op);
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
       cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
       cmp_op != OP_SLOT_IS_FIX)
     return 0;
-  uint8_t cmp_slot = c[1];
-  int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
-
-  if (c[4] != OP_BR_IF_FALSE)
-    return 0;
-  /* Don't validate the inner offsets — we know the layout from the
-     compiler. The pattern check on op kinds + RET at the tail is
-     sufficient. */
-
-  uint8_t arith_op = c[7];
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_arith, arith_op);
   if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
     return 0;
-  uint8_t arith_slot = c[8];
-  int16_t arith_imm = (int16_t)((uint16_t)c[9] | ((uint16_t)c[10] << 8));
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  BC_EAT(OP_RET);
+  BC_END();
 
-  if (c[11] != OP_TAIL_SELF || c[12] != 1)
-    return 0;
-  if (c[13] != OP_JUMP)
-    return 0;
-  if (c[16] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t load_slot = c[17];
-  if (c[18] != OP_RET)
-    return 0;
+  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
+  int16_t cmp_imm = BC_I16(at_cmp, 1);
+  uint8_t arith_slot = BC_ARG(at_arith, 0);
+  int16_t arith_imm = BC_I16(at_arith, 1);
+  uint8_t load_slot = BC_ARG(at_load, 0);
 
   if (cmp_slot != arith_slot || cmp_slot != load_slot)
     return 0;
@@ -542,47 +540,46 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
    All tag/type guards run before any slot mutation, and the loop body never
    deopts, so a deopt always re-runs the VM on an untouched env. */
 static int try_jit_float_acc_loop(bytecode_t *bc, uint32_t *out, int *outn) {
-  if (bc->ncode != 25 || bc->nparams != 2)
+  if (bc->nparams != 2)
     return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t cslot = c[1];
-  if (c[2] != OP_LOAD_CONST)
-    return 0;
-  uint8_t lim_idx = c[3];
-  uint8_t cmp_op = c[4];
+  /* Walk the 25-byte shape with the BC_* cursor (offsets via bc_oplen):
+       LOAD_SLOT c ; LOAD_CONST lim ; <cmp> ; BR_IF_FALSE ;
+       SLOT_<ADD|SUB>_FIX c K ; LOAD_SLOT a ; LOAD_CONST fc ; <fop> ;
+       TAIL_SELF 2 ; JUMP ; LOAD_SLOT a ; RET */
+  int pc = 0, at_c, at_lim, at_step, at_a, at_fc, at_tail, at_a2;
+  uint8_t cmp_op, step_op, fop;
+  BC_TAKE(at_c, OP_LOAD_SLOT);
+  uint8_t cslot = BC_ARG(at_c, 0);
+  BC_TAKE(at_lim, OP_LOAD_CONST);
+  uint8_t lim_idx = BC_ARG(at_lim, 0);
+  BC_EAT_ANY(cmp_op);
   if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
     return 0;
-  if (c[5] != OP_BR_IF_FALSE)
-    return 0;
-
-  uint8_t step_op = c[8];
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_step, step_op);
   if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
     return 0;
-  if (c[9] != cslot)
+  if (BC_ARG(at_step, 0) != cslot)
     return 0;
-  int16_t step_imm = (int16_t)((uint16_t)c[10] | ((uint16_t)c[11] << 8));
-
-  if (c[12] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t aslot = c[13];
-  if (c[14] != OP_LOAD_CONST)
-    return 0;
-  uint8_t fc_idx = c[15];
-  uint8_t fop = c[16];
+  int16_t step_imm = BC_I16(at_step, 1);
+  BC_TAKE(at_a, OP_LOAD_SLOT);
+  uint8_t aslot = BC_ARG(at_a, 0);
+  BC_TAKE(at_fc, OP_LOAD_CONST);
+  uint8_t fc_idx = BC_ARG(at_fc, 0);
+  BC_EAT_ANY(fop);
   if (fop != OP_ADD && fop != OP_SUB && fop != OP_MUL)
     return 0;
-
-  if (c[17] != OP_TAIL_SELF || c[18] != 2)
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 2)
     return 0;
-  if (c[19] != OP_JUMP)
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_a2, OP_LOAD_SLOT);
+  if (BC_ARG(at_a2, 0) != aslot)
     return 0;
-  if (c[22] != OP_LOAD_SLOT || c[23] != aslot)
-    return 0;
-  if (c[24] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   /* slots must be distinct, in range, and consistent across the body */
   if (cslot == aslot || cslot >= ENV_INLINE_SLOTS || aslot >= ENV_INLINE_SLOTS)
@@ -1847,52 +1844,48 @@ static int try_jit_mark_from(bytecode_t *bc, uint32_t *out, int *outn) {
    jit_call_global1_drop for the inner call, propagate any error. */
 static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
                                        int *outn) {
-  if (bc->ncode != 26)
-    return 0;
   uint8_t *c = bc->code;
 
-  uint8_t cmp_op = c[0];
+  /* 26-byte tail-counter loop with one inner global call —
+       <cmp> slot K1 ; BR_IF_FALSE ; LOAD_FIX arg ; CALL_GLOBAL idx,1 ; POP ;
+       <arith> slot K2 ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET.
+     Walked via the BC_* cursor (offsets via bc_oplen). */
+  int pc = 0, at_cmp, at_arg, at_call, at_arith, at_tail, at_load;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE_ANY(at_cmp, cmp_op);
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
       cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
       cmp_op != OP_SLOT_IS_FIX)
     return 0;
-  uint8_t slot = c[1];
+  uint8_t slot = BC_ARG(at_cmp, 0);
   if (slot >= ENV_INLINE_SLOTS)
     return 0;
-  int16_t cmp_imm = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
-
-  if (c[4] != OP_BR_IF_FALSE)
-    return 0;
-  if (c[7] != OP_LOAD_FIX)
-    return 0;
-  int16_t arg_imm = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
-
-  if (c[10] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t const_idx = c[11];
-  if (c[12] != 1)
+  int16_t cmp_imm = BC_I16(at_cmp, 1);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_arg, OP_LOAD_FIX);
+  int16_t arg_imm = BC_I16(at_arg, 0);
+  BC_TAKE(at_call, OP_CALL_GLOBAL);
+  uint8_t const_idx = BC_ARG(at_call, 0);
+  if (BC_ARG(at_call, 1) != 1) /* nargs == 1 */
     return 0;
   if (const_idx >= bc->nconsts)
     return 0;
-
-  if (c[13] != OP_POP)
-    return 0;
-
-  uint8_t arith_op = c[14];
+  BC_EAT(OP_POP);
+  BC_TAKE_ANY(at_arith, arith_op);
   if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
     return 0;
-  if (c[15] != slot)
+  if (BC_ARG(at_arith, 0) != slot)
     return 0;
-  int16_t arith_imm = (int16_t)((uint16_t)c[16] | ((uint16_t)c[17] << 8));
-
-  if (c[18] != OP_TAIL_SELF || c[19] != 1)
+  int16_t arith_imm = BC_I16(at_arith, 1);
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
     return 0;
-  if (c[20] != OP_JUMP)
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  if (BC_ARG(at_load, 0) != slot)
     return 0;
-  if (c[23] != OP_LOAD_SLOT || c[24] != slot)
-    return 0;
-  if (c[25] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
   if (slot_off > 32760)
@@ -2454,78 +2447,56 @@ static int try_jit_modeq_leaf(bytecode_t *bc, uint32_t *out, int *outn) {
      (fn (n) (let s K_INIT_S (for i K_INIT_I n (= s (op s K_STEP_S)))))
    Iteratively: i, s untagged; loop while i <= n; s += K_step_s; i++. */
 static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
-  /* 50-byte shape. Since commit 997ffbb the named let/for slots `s` and `i`
-     are bound with OP_BIND_SLOT_NAMED (3 bytes: op, slot, name_const) so
-     OP_EVAL_AST can resolve them by name inside the loop; only the unnamed
-     loop-limit temp stays a plain 2-byte OP_BIND_SLOT. That grew the body
-     48 -> 50 bytes and pushed every opcode from the limit load onward by +2
-     vs the original all-BIND_SLOT layout (the emitted code is unchanged —
-     only these parse offsets moved). */
-  if (bc->ncode != 50)
-    return 0;
+  /* Walk the shape with the BC_* cursor so the 3-byte OP_BIND_SLOT_NAMED
+     binds for the named let/for slots `s` and `i` (commit 997ffbb) can't
+     silently desync the later offsets again — that drift dropped this shape
+     to the VM until the offsets were re-derived. The loop-limit temp is the
+     only unnamed (2-byte OP_BIND_SLOT) bind. The cursor adjusts to either
+     bind length automatically.
+       LOAD_FIX Ks ; BIND_SLOT_NAMED s ; LOAD_FIX Ki ; BIND_SLOT_NAMED i ;
+       LOAD_SLOT n ; BIND_SLOT lim ; LOAD_CONST ; SLOT_LE_SLOT i lim ;
+       BR_IF_FALSE 19 ; POP ; SLOT_<ADD|SUB>_FIX s Kstep ; STORE_SLOT s ;
+       LOAD_SLOT i ; LOAD_FIX 1 ; ADD ; STORE_SLOT i ; POP ; JUMP -25 ;
+       UNBIND_SLOT x3 ; RET */
   uint8_t *c = bc->code;
-
-  if (c[0] != OP_LOAD_FIX)
+  int pc = 0, at_is, at_ii, at_arg, at_br, at_step, at_ki, at_jmp;
+  uint8_t step_s_op;
+  BC_TAKE(at_is, OP_LOAD_FIX);
+  int16_t K_init_s = BC_I16(at_is, 0);
+  BC_EAT(OP_BIND_SLOT_NAMED); /* s (named) */
+  BC_TAKE(at_ii, OP_LOAD_FIX);
+  int16_t K_init_i = BC_I16(at_ii, 0);
+  BC_EAT(OP_BIND_SLOT_NAMED); /* i (named) */
+  BC_TAKE(at_arg, OP_LOAD_SLOT);
+  uint8_t slot_arg = BC_ARG(at_arg, 0);
+  BC_EAT(OP_BIND_SLOT); /* loop-limit temp (unnamed) */
+  BC_EAT(OP_LOAD_CONST);
+  BC_EAT(OP_SLOT_LE_SLOT);
+  BC_TAKE(at_br, OP_BR_IF_FALSE);
+  if (BC_I16(at_br, 0) != 19) /* exit branch must clear the loop body */
     return 0;
-  int16_t K_init_s = (int16_t)((uint16_t)c[1] | ((uint16_t)c[2] << 8));
-  if (c[3] != OP_BIND_SLOT_NAMED) /* s (named) */
-    return 0;
-  if (c[6] != OP_LOAD_FIX)
-    return 0;
-  int16_t K_init_i = (int16_t)((uint16_t)c[7] | ((uint16_t)c[8] << 8));
-  if (c[9] != OP_BIND_SLOT_NAMED) /* i (named) */
-    return 0;
-  if (c[12] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t slot_arg = c[13];
-  if (c[14] != OP_BIND_SLOT) /* loop-limit temp: unnamed, plain bind */
-    return 0;
-  if (c[16] != OP_LOAD_CONST)
-    return 0;
-  if (c[18] != OP_SLOT_LE_SLOT)
-    return 0;
-  if (c[21] != OP_BR_IF_FALSE)
-    return 0;
-  int16_t br_off = (int16_t)((uint16_t)c[22] | ((uint16_t)c[23] << 8));
-  if (br_off != 19)
-    return 0;
-  if (c[24] != OP_POP)
-    return 0;
-
-  uint8_t step_s_op = c[25];
+  BC_EAT(OP_POP);
+  BC_TAKE_ANY(at_step, step_s_op);
   if (step_s_op != OP_SLOT_ADD_FIX && step_s_op != OP_SLOT_SUB_FIX)
     return 0;
-  int16_t K_step_s = (int16_t)((uint16_t)c[27] | ((uint16_t)c[28] << 8));
-  if (c[29] != OP_STORE_SLOT)
+  int16_t K_step_s = BC_I16(at_step, 1);
+  BC_EAT(OP_STORE_SLOT);
+  BC_EAT(OP_LOAD_SLOT);
+  BC_TAKE(at_ki, OP_LOAD_FIX);
+  if (BC_I16(at_ki, 0) != 1) /* counter steps by +1 */
     return 0;
+  BC_EAT(OP_ADD);
+  BC_EAT(OP_STORE_SLOT);
+  BC_EAT(OP_POP);
+  BC_TAKE(at_jmp, OP_JUMP);
+  if (BC_I16(at_jmp, 0) != -25) /* back-edge to the compare */
+    return 0;
+  BC_EAT(OP_UNBIND_SLOT);
+  BC_EAT(OP_UNBIND_SLOT);
+  BC_EAT(OP_UNBIND_SLOT);
+  BC_EAT(OP_RET);
+  BC_END();
 
-  if (c[31] != OP_LOAD_SLOT)
-    return 0;
-  if (c[33] != OP_LOAD_FIX)
-    return 0;
-  int16_t K_step_i = (int16_t)((uint16_t)c[34] | ((uint16_t)c[35] << 8));
-  if (K_step_i != 1)
-    return 0;
-  if (c[36] != OP_ADD)
-    return 0;
-  if (c[37] != OP_STORE_SLOT)
-    return 0;
-  if (c[39] != OP_POP)
-    return 0;
-  if (c[40] != OP_JUMP)
-    return 0;
-  int16_t jmp_off = (int16_t)((uint16_t)c[41] | ((uint16_t)c[42] << 8));
-  if (jmp_off != -25)
-    return 0;
-
-  if (c[43] != OP_UNBIND_SLOT)
-    return 0;
-  if (c[45] != OP_UNBIND_SLOT)
-    return 0;
-  if (c[47] != OP_UNBIND_SLOT)
-    return 0;
-  if (c[49] != OP_RET)
-    return 0;
   if (slot_arg >= ENV_INLINE_SLOTS)
     return 0;
 

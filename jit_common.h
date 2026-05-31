@@ -395,3 +395,143 @@ static void jit_write_end(void *p, size_t sz) {
     if (n > (cap))                                                             \
       return 0; /* JIT buffer guard (was assert) */                            \
   } while (0)
+
+/* ---------------- shape-matcher cursor ----------------
+   Byte length of a bytecode instruction (opcode + operands), keyed by opcode.
+   The length-only twin of bc_disasm_one (which prints) — KEEP THE TWO IN
+   LOCKSTEP if opcodes change. Returns 0 for unknown/variable ops so a matcher
+   walking past one bails to the interpreter.
+
+   Shape matchers used to index fixed byte offsets into bc->code (c[16],
+   c[19], ...). That silently desynced whenever an opcode's length changed —
+   e.g. naming the let/for slots grew OP_BIND_SLOT (2 bytes) into
+   OP_BIND_SLOT_NAMED (3 bytes), shifting every later offset and quietly
+   dropping forsum's for_loop_inc shape to the VM (no test failure, only a
+   benchmark regression). The BC_* cursor macros below walk the stream by
+   bc_oplen so offsets are COMPUTED, not baked in: a length change just moves
+   the cursor, and the shape still matches. */
+static int bc_oplen(uint8_t op) {
+  switch (op) {
+  case OP_HALT:
+  case OP_RET:
+  case OP_POP:
+  case OP_DUP:
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_DIV:
+  case OP_MOD:
+  case OP_LT:
+  case OP_GT:
+  case OP_LE:
+  case OP_GE:
+  case OP_IS:
+  case OP_ISO:
+  case OP_NOT:
+  case OP_CONS:
+  case OP_CAR:
+  case OP_CDR:
+  case OP_VEC_REF:
+  case OP_VEC_SET:
+  case OP_VEC_LEN:
+  case OP_VEC_NEW:
+  case OP_SQRT_INT:
+  case OP_ABS:
+  case OP_NMAX:
+  case OP_NMIN:
+  case OP_LENGTH:
+    return 1;
+  case OP_LOAD_CONST:
+  case OP_EVAL_AST:
+  case OP_LOAD_SLOT:
+  case OP_LOAD_GLOBAL:
+  case OP_SETQ_DYN:
+  case OP_STORE_FREE:
+  case OP_STORE_SLOT:
+  case OP_BIND_SLOT:
+  case OP_UNBIND_SLOT:
+  case OP_CALL:
+  case OP_TAIL_SELF:
+  case OP_TAIL_CALL:
+  case OP_LIST:
+    return 2;
+  case OP_LOAD_FIX:
+  case OP_JUMP:
+  case OP_BR_IF_FALSE:
+  case OP_BR_IF_TRUE:
+  case OP_CALL_GLOBAL:
+  case OP_BIND_SLOT_NAMED:
+  case OP_SLOT_LE_SLOT:
+    return 3;
+  case OP_SLOT_ADD_FIX:
+  case OP_SLOT_SUB_FIX:
+  case OP_SLOT_LT_FIX:
+  case OP_SLOT_LE_FIX:
+  case OP_SLOT_GT_FIX:
+  case OP_SLOT_GE_FIX:
+  case OP_SLOT_IS_FIX:
+    return 4;
+  default:
+    return 0; /* unknown / variable — matcher bails */
+  }
+}
+
+/* BC_* cursor macros. Require `bytecode_t *bc`, `uint8_t *c` (= bc->code), and
+   `int pc` in scope; each `return 0`s (no JIT) on mismatch or overrun.
+     BC_TAKE(at, OP)      — require opcode OP at the cursor, store its byte
+                            offset in `at`, advance by its length.
+     BC_TAKE_ANY(at, op)  — accept whatever opcode is at the cursor: store its
+                            offset in `at` and the opcode in `op` (the caller
+                            validates membership); advance by its length.
+     BC_END()             — require the cursor landed exactly at ncode (the
+                            whole body matched — replaces the old ncode==N gate).
+   Operand accessors (read relative to an instruction's byte offset `at`;
+   operand byte 0 is the first byte after the opcode):
+     BC_ARG(at, k)  — operand byte k (uint8).
+     BC_I16(at, k)  — signed 16-bit LE from operand bytes k, k+1. */
+#define BC_TAKE(at, opcode)                                                    \
+  do {                                                                         \
+    if (pc >= bc->ncode || c[pc] != (uint8_t)(opcode))                         \
+      return 0;                                                                \
+    (at) = pc;                                                                 \
+    pc += bc_oplen((uint8_t)(opcode));                                         \
+  } while (0)
+/* Like BC_TAKE but for an opcode whose operands the matcher doesn't read —
+   just require it and advance (no offset captured, no unused-var warning). */
+#define BC_EAT(opcode)                                                         \
+  do {                                                                         \
+    if (pc >= bc->ncode || c[pc] != (uint8_t)(opcode))                         \
+      return 0;                                                                \
+    pc += bc_oplen((uint8_t)(opcode));                                         \
+  } while (0)
+#define BC_TAKE_ANY(at, op_out)                                                \
+  do {                                                                         \
+    if (pc >= bc->ncode)                                                       \
+      return 0;                                                                \
+    (at) = pc;                                                                 \
+    (op_out) = c[pc];                                                          \
+    int _bc_l = bc_oplen(c[pc]);                                               \
+    if (_bc_l == 0)                                                            \
+      return 0;                                                                \
+    pc += _bc_l;                                                               \
+  } while (0)
+/* Like BC_TAKE_ANY but for a choice-opcode whose operands the matcher doesn't
+   read — capture only the opcode into `op_out` and advance (no offset). */
+#define BC_EAT_ANY(op_out)                                                     \
+  do {                                                                         \
+    if (pc >= bc->ncode)                                                       \
+      return 0;                                                                \
+    (op_out) = c[pc];                                                          \
+    int _bc_l = bc_oplen(c[pc]);                                               \
+    if (_bc_l == 0)                                                            \
+      return 0;                                                                \
+    pc += _bc_l;                                                               \
+  } while (0)
+#define BC_END()                                                              \
+  do {                                                                         \
+    if (pc != bc->ncode)                                                       \
+      return 0;                                                                \
+  } while (0)
+#define BC_ARG(at, k) (c[(at) + 1 + (k)])
+#define BC_I16(at, k)                                                          \
+  ((int16_t)((uint16_t)c[(at) + 1 + (k)] | ((uint16_t)c[(at) + 2 + (k)] << 8)))
