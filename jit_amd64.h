@@ -855,61 +855,55 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
    result; on non-fixnum we tear down the frame and propagate rax as-is
    (errors surface naturally; NULL triggers a bytecode re-run). */
 static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 28)
-    return 0;
   uint8_t *c = bc->code;
 
-  uint8_t cmp_op = c[0];
+  /* 28-byte two-call recursion (fib shape) —
+       <cmp> slot K1 ; BR_IF_FALSE ; LOAD_SLOT slot ; JUMP ;
+       <op_a> slot K2 ; CALL_GLOBAL idx_a,1 ; <op_b> slot K3 ;
+       CALL_GLOBAL idx_b,1 ; ADD ; RET.  Walked via the BC_* cursor. */
+  int pc = 0, at_cmp, at_load, at_a, at_ca, at_b, at_cb;
+  uint8_t cmp_op, op_a, op_b;
+  BC_TAKE_ANY(at_cmp, cmp_op);
   if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
       cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
       cmp_op != OP_SLOT_IS_FIX)
     return 0;
-  uint8_t slot = c[1];
+  uint8_t slot = BC_ARG(at_cmp, 0);
   if (slot >= ENV_INLINE_SLOTS)
     return 0;
-  int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
-
-  if (c[4] != OP_BR_IF_FALSE)
+  int16_t K1 = BC_I16(at_cmp, 1);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  if (BC_ARG(at_load, 0) != slot)
     return 0;
-  if (c[7] != OP_LOAD_SLOT || c[8] != slot)
-    return 0;
-  if (c[9] != OP_JUMP)
-    return 0;
-
-  uint8_t op_a = c[12];
+  BC_EAT(OP_JUMP);
+  BC_TAKE_ANY(at_a, op_a);
   if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX)
     return 0;
-  if (c[13] != slot)
+  if (BC_ARG(at_a, 0) != slot)
     return 0;
-  int16_t K2 = (int16_t)((uint16_t)c[14] | ((uint16_t)c[15] << 8));
-
-  if (c[16] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t idx_a = c[17];
-  if (c[18] != 1)
+  int16_t K2 = BC_I16(at_a, 1);
+  BC_TAKE(at_ca, OP_CALL_GLOBAL);
+  uint8_t idx_a = BC_ARG(at_ca, 0);
+  if (BC_ARG(at_ca, 1) != 1)
     return 0;
   if (idx_a >= bc->nconsts)
     return 0;
-
-  uint8_t op_b = c[19];
+  BC_TAKE_ANY(at_b, op_b);
   if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX)
     return 0;
-  if (c[20] != slot)
+  if (BC_ARG(at_b, 0) != slot)
     return 0;
-  int16_t K3 = (int16_t)((uint16_t)c[21] | ((uint16_t)c[22] << 8));
-
-  if (c[23] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t idx_b = c[24];
-  if (c[25] != 1)
+  int16_t K3 = BC_I16(at_b, 1);
+  BC_TAKE(at_cb, OP_CALL_GLOBAL);
+  uint8_t idx_b = BC_ARG(at_cb, 0);
+  if (BC_ARG(at_cb, 1) != 1)
     return 0;
   if (idx_b >= bc->nconsts)
     return 0;
-
-  if (c[26] != OP_ADD)
-    return 0;
-  if (c[27] != OP_RET)
-    return 0;
+  BC_EAT(OP_ADD);
+  BC_EAT(OP_RET);
+  BC_END();
 
   int32_t slot_off =
       (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
@@ -1189,89 +1183,80 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
    ~25 cycles per element (vs ~100 in bytecode dispatch). Refcount
    handling for the cdr walk is inline, same as is-prime-given. */
 static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 71)
-    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT)
+  /* 71-byte nqueens safe? — three conflict checks (column, +diag, -diag)
+     walking the placed-queens list, then recurse on the cdr. Cursor-walked. */
+  int pc = 0, at_qs, at_t, at_c, at_qs2, at_n1, at_c2, at_off, at_qs3, at_n2;
+  int at_c3, at_off2, at_qs4, at_n3, at_c4, at_qs5, at_addoff, at_tail;
+  BC_TAKE(at_qs, OP_LOAD_SLOT);
+  uint8_t s_qs = BC_ARG(at_qs, 0);
+  BC_EAT(OP_NOT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_t, OP_LOAD_GLOBAL);
+  uint8_t idx_t = BC_ARG(at_t, 0);
+  BC_EAT(OP_JUMP);
+  /* column conflict */
+  BC_TAKE(at_c, OP_LOAD_SLOT);
+  uint8_t s_c = BC_ARG(at_c, 0);
+  BC_TAKE(at_qs2, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs2, 0) != s_qs)
     return 0;
-  uint8_t s_qs = c[1];
-  if (c[2] != OP_NOT)
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_n1, OP_LOAD_GLOBAL);
+  uint8_t idx_nil1 = BC_ARG(at_n1, 0);
+  BC_EAT(OP_JUMP);
+  /* +diagonal conflict */
+  BC_TAKE(at_c2, OP_LOAD_SLOT);
+  if (BC_ARG(at_c2, 0) != s_c)
     return 0;
-  if (c[3] != OP_BR_IF_FALSE)
+  BC_TAKE(at_off, OP_LOAD_SLOT);
+  uint8_t s_off = BC_ARG(at_off, 0);
+  BC_EAT(OP_ADD);
+  BC_TAKE(at_qs3, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs3, 0) != s_qs)
     return 0;
-  if (c[6] != OP_LOAD_GLOBAL)
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_n2, OP_LOAD_GLOBAL);
+  uint8_t idx_nil2 = BC_ARG(at_n2, 0);
+  BC_EAT(OP_JUMP);
+  /* -diagonal conflict */
+  BC_TAKE(at_c3, OP_LOAD_SLOT);
+  if (BC_ARG(at_c3, 0) != s_c)
     return 0;
-  uint8_t idx_t = c[7];
-  if (c[8] != OP_JUMP)
+  BC_TAKE(at_off2, OP_LOAD_SLOT);
+  if (BC_ARG(at_off2, 0) != s_off)
     return 0;
-  if (c[11] != OP_LOAD_SLOT)
+  BC_EAT(OP_SUB);
+  BC_TAKE(at_qs4, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs4, 0) != s_qs)
     return 0;
-  uint8_t s_c = c[12];
-  if (c[13] != OP_LOAD_SLOT || c[14] != s_qs)
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_n3, OP_LOAD_GLOBAL);
+  uint8_t idx_nil3 = BC_ARG(at_n3, 0);
+  BC_EAT(OP_JUMP);
+  /* recurse on the cdr with offset+1 */
+  BC_TAKE(at_c4, OP_LOAD_SLOT);
+  if (BC_ARG(at_c4, 0) != s_c)
     return 0;
-  if (c[15] != OP_CAR)
+  BC_TAKE(at_qs5, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs5, 0) != s_qs)
     return 0;
-  if (c[16] != OP_IS)
+  BC_EAT(OP_CDR);
+  BC_TAKE(at_addoff, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at_addoff, 0) != s_off || BC_I16(at_addoff, 1) != 1)
     return 0;
-  if (c[17] != OP_BR_IF_FALSE)
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 3)
     return 0;
-  if (c[20] != OP_LOAD_GLOBAL)
-    return 0;
-  uint8_t idx_nil1 = c[21];
-  if (c[22] != OP_JUMP)
-    return 0;
-  if (c[25] != OP_LOAD_SLOT || c[26] != s_c)
-    return 0;
-  if (c[27] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t s_off = c[28];
-  if (c[29] != OP_ADD)
-    return 0;
-  if (c[30] != OP_LOAD_SLOT || c[31] != s_qs)
-    return 0;
-  if (c[32] != OP_CAR)
-    return 0;
-  if (c[33] != OP_IS)
-    return 0;
-  if (c[34] != OP_BR_IF_FALSE)
-    return 0;
-  if (c[37] != OP_LOAD_GLOBAL)
-    return 0;
-  uint8_t idx_nil2 = c[38];
-  if (c[39] != OP_JUMP)
-    return 0;
-  if (c[42] != OP_LOAD_SLOT || c[43] != s_c)
-    return 0;
-  if (c[44] != OP_LOAD_SLOT || c[45] != s_off)
-    return 0;
-  if (c[46] != OP_SUB)
-    return 0;
-  if (c[47] != OP_LOAD_SLOT || c[48] != s_qs)
-    return 0;
-  if (c[49] != OP_CAR)
-    return 0;
-  if (c[50] != OP_IS)
-    return 0;
-  if (c[51] != OP_BR_IF_FALSE)
-    return 0;
-  if (c[54] != OP_LOAD_GLOBAL)
-    return 0;
-  uint8_t idx_nil3 = c[55];
-  if (c[56] != OP_JUMP)
-    return 0;
-  if (c[59] != OP_LOAD_SLOT || c[60] != s_c)
-    return 0;
-  if (c[61] != OP_LOAD_SLOT || c[62] != s_qs)
-    return 0;
-  if (c[63] != OP_CDR)
-    return 0;
-  if (c[64] != OP_SLOT_ADD_FIX || c[65] != s_off || c[66] != 1 || c[67] != 0)
-    return 0;
-  if (c[68] != OP_TAIL_SELF || c[69] != 3)
-    return 0;
-  if (c[70] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   if (idx_t >= bc->nconsts)
     return 0;
@@ -1509,52 +1494,49 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
    refcount of every list cell is held by primes-up-to too, so the
    deopt path effectively never fires. */
 static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 37)
-    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT)
+  /* 37-byte sieve is-prime-given (list walk, cursor-walked) —
+       LOAD_SLOT acc ; NOT ; BR_IF_FALSE ; LOAD_GLOBAL t ; JUMP ;
+       LOAD_SLOT i ; LOAD_SLOT acc ; CAR ; MOD ; LOAD_FIX 0 ; IS ;
+       BR_IF_FALSE ; LOAD_GLOBAL nil ; JUMP ; LOAD_SLOT acc ; CDR ;
+       LOAD_SLOT i ; TAIL_SELF 2 ; RET. */
+  int pc = 0, at_acc0, at_t, at_i, at_acc1, at_k, at_nil, at_acc2, at_i2;
+  int at_tail;
+  BC_TAKE(at_acc0, OP_LOAD_SLOT);
+  uint8_t s_acc = BC_ARG(at_acc0, 0);
+  BC_EAT(OP_NOT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_t, OP_LOAD_GLOBAL);
+  uint8_t idx_t = BC_ARG(at_t, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_i, OP_LOAD_SLOT);
+  uint8_t s_i = BC_ARG(at_i, 0);
+  BC_TAKE(at_acc1, OP_LOAD_SLOT);
+  if (BC_ARG(at_acc1, 0) != s_acc)
     return 0;
-  uint8_t s_acc = c[1];
-  if (c[2] != OP_NOT)
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_MOD);
+  BC_TAKE(at_k, OP_LOAD_FIX);
+  if (BC_I16(at_k, 0) != 0)
     return 0;
-  if (c[3] != OP_BR_IF_FALSE)
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_nil, OP_LOAD_GLOBAL);
+  uint8_t idx_nil = BC_ARG(at_nil, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_acc2, OP_LOAD_SLOT);
+  if (BC_ARG(at_acc2, 0) != s_acc)
     return 0;
-  if (c[6] != OP_LOAD_GLOBAL)
+  BC_EAT(OP_CDR);
+  BC_TAKE(at_i2, OP_LOAD_SLOT);
+  if (BC_ARG(at_i2, 0) != s_i)
     return 0;
-  uint8_t idx_t = c[7];
-  if (c[8] != OP_JUMP)
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 2)
     return 0;
-  if (c[11] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t s_i = c[12];
-  if (c[13] != OP_LOAD_SLOT || c[14] != s_acc)
-    return 0;
-  if (c[15] != OP_CAR)
-    return 0;
-  if (c[16] != OP_MOD)
-    return 0;
-  if (c[17] != OP_LOAD_FIX || c[18] != 0 || c[19] != 0)
-    return 0;
-  if (c[20] != OP_IS)
-    return 0;
-  if (c[21] != OP_BR_IF_FALSE)
-    return 0;
-  if (c[24] != OP_LOAD_GLOBAL)
-    return 0;
-  uint8_t idx_nil = c[25];
-  if (c[26] != OP_JUMP)
-    return 0;
-  if (c[29] != OP_LOAD_SLOT || c[30] != s_acc)
-    return 0;
-  if (c[31] != OP_CDR)
-    return 0;
-  if (c[32] != OP_LOAD_SLOT || c[33] != s_i)
-    return 0;
-  if (c[34] != OP_TAIL_SELF || c[35] != 2)
-    return 0;
-  if (c[36] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts)
     return 0;
@@ -1746,54 +1728,52 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
    work entirely: marks[i] for sieve-fast is always nil_singleton or
    true_singleton (refcount ops are no-ops on singletons). */
 static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 41)
-    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT)
+  /* 41-byte sieve count-primes outer loop (cursor-walked) —
+       LOAD_SLOT i ; LOAD_SLOT n ; GT ; BR_IF_FALSE ; LOAD_SLOT acc ; JUMP ;
+       SLOT_ADD_FIX i 1 ; LOAD_SLOT n ; LOAD_SLOT marks ; LOAD_SLOT marks ;
+       LOAD_SLOT i ; VEC_REF ; BR_IF_FALSE ; SLOT_ADD_FIX acc 1 ; JUMP ;
+       LOAD_SLOT acc ; TAIL_SELF 4 ; RET. */
+  int pc = 0, at_i, at_n, at_acc0, at_addi, at_n2, at_m1, at_m2, at_i2;
+  int at_addacc, at_acc1, at_tail;
+  BC_TAKE(at_i, OP_LOAD_SLOT);
+  uint8_t s_i = BC_ARG(at_i, 0);
+  BC_TAKE(at_n, OP_LOAD_SLOT);
+  uint8_t s_n = BC_ARG(at_n, 0);
+  BC_EAT(OP_GT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_acc0, OP_LOAD_SLOT);
+  uint8_t s_acc = BC_ARG(at_acc0, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_addi, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at_addi, 0) != s_i || BC_I16(at_addi, 1) != 1)
     return 0;
-  uint8_t s_i = c[1];
-  if (c[2] != OP_LOAD_SLOT)
+  BC_TAKE(at_n2, OP_LOAD_SLOT);
+  if (BC_ARG(at_n2, 0) != s_n)
     return 0;
-  uint8_t s_n = c[3];
-  if (c[4] != OP_GT)
+  BC_TAKE(at_m1, OP_LOAD_SLOT);
+  uint8_t s_marks = BC_ARG(at_m1, 0);
+  BC_TAKE(at_m2, OP_LOAD_SLOT);
+  if (BC_ARG(at_m2, 0) != s_marks)
     return 0;
-  if (c[5] != OP_BR_IF_FALSE)
+  BC_TAKE(at_i2, OP_LOAD_SLOT);
+  if (BC_ARG(at_i2, 0) != s_i)
     return 0;
-  if (c[8] != OP_LOAD_SLOT)
+  BC_EAT(OP_VEC_REF);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_addacc, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at_addacc, 0) != s_acc || BC_I16(at_addacc, 1) != 1)
     return 0;
-  uint8_t s_acc = c[9];
-  if (c[10] != OP_JUMP)
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_acc1, OP_LOAD_SLOT);
+  if (BC_ARG(at_acc1, 0) != s_acc)
     return 0;
-  if (c[13] != OP_SLOT_ADD_FIX || c[14] != s_i)
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 4)
     return 0;
-  if (c[15] != 1 || c[16] != 0)
-    return 0;
-  if (c[17] != OP_LOAD_SLOT || c[18] != s_n)
-    return 0;
-  if (c[19] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t s_marks = c[20];
-  if (c[21] != OP_LOAD_SLOT || c[22] != s_marks)
-    return 0;
-  if (c[23] != OP_LOAD_SLOT || c[24] != s_i)
-    return 0;
-  if (c[25] != OP_VEC_REF)
-    return 0;
-  if (c[26] != OP_BR_IF_FALSE)
-    return 0;
-  if (c[29] != OP_SLOT_ADD_FIX || c[30] != s_acc)
-    return 0;
-  if (c[31] != 1 || c[32] != 0)
-    return 0;
-  if (c[33] != OP_JUMP)
-    return 0;
-  if (c[36] != OP_LOAD_SLOT || c[37] != s_acc)
-    return 0;
-  if (c[38] != OP_TAIL_SELF || c[39] != 4)
-    return 0;
-  if (c[40] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   if (s_i >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
       s_acc >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS)
@@ -1916,56 +1896,53 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
    for singletons (the common case in sieve-fast); falls through to a
    helper call only if refcount actually hits 0. */
 static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 35)
-    return 0;
   uint8_t *c = bc->code;
 
-  if (c[0] != OP_LOAD_SLOT)
+  /* 35-byte sieve mark-from inner loop (cursor-walked) —
+       LOAD_SLOT j ; LOAD_SLOT n ; GT ; BR_IF_FALSE ; LOAD_GLOBAL nil ; JUMP ;
+       LOAD_SLOT marks ; LOAD_SLOT j ; LOAD_GLOBAL nil ; VEC_SET ; POP ;
+       LOAD_SLOT step ; LOAD_SLOT j ; LOAD_SLOT step ; ADD ; LOAD_SLOT n ;
+       LOAD_SLOT marks ; TAIL_SELF 4 ; RET. */
+  int pc = 0, at_j, at_n, at_nil1, at_m, at_j2, at_nil2, at_step, at_j3;
+  int at_step2, at_n2, at_m2, at_tail;
+  BC_TAKE(at_j, OP_LOAD_SLOT);
+  uint8_t s_j = BC_ARG(at_j, 0);
+  BC_TAKE(at_n, OP_LOAD_SLOT);
+  uint8_t s_n = BC_ARG(at_n, 0);
+  BC_EAT(OP_GT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_nil1, OP_LOAD_GLOBAL);
+  uint8_t idx_nil1 = BC_ARG(at_nil1, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_m, OP_LOAD_SLOT);
+  uint8_t s_marks = BC_ARG(at_m, 0);
+  BC_TAKE(at_j2, OP_LOAD_SLOT);
+  if (BC_ARG(at_j2, 0) != s_j)
     return 0;
-  uint8_t s_j = c[1];
-  if (c[2] != OP_LOAD_SLOT)
+  BC_TAKE(at_nil2, OP_LOAD_GLOBAL);
+  uint8_t idx_nil2 = BC_ARG(at_nil2, 0);
+  BC_EAT(OP_VEC_SET);
+  BC_EAT(OP_POP);
+  BC_TAKE(at_step, OP_LOAD_SLOT);
+  uint8_t s_step = BC_ARG(at_step, 0);
+  BC_TAKE(at_j3, OP_LOAD_SLOT);
+  if (BC_ARG(at_j3, 0) != s_j)
     return 0;
-  uint8_t s_n = c[3];
-  if (c[4] != OP_GT)
+  BC_TAKE(at_step2, OP_LOAD_SLOT);
+  if (BC_ARG(at_step2, 0) != s_step)
     return 0;
-  if (c[5] != OP_BR_IF_FALSE)
+  BC_EAT(OP_ADD);
+  BC_TAKE(at_n2, OP_LOAD_SLOT);
+  if (BC_ARG(at_n2, 0) != s_n)
     return 0;
-  if (c[8] != OP_LOAD_GLOBAL)
+  BC_TAKE(at_m2, OP_LOAD_SLOT);
+  if (BC_ARG(at_m2, 0) != s_marks)
     return 0;
-  uint8_t idx_nil1 = c[9];
-  if (c[10] != OP_JUMP)
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 4)
     return 0;
-
-  if (c[13] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t s_marks = c[14];
-  if (c[15] != OP_LOAD_SLOT || c[16] != s_j)
-    return 0;
-  if (c[17] != OP_LOAD_GLOBAL)
-    return 0;
-  uint8_t idx_nil2 = c[18];
-  if (c[19] != OP_VEC_SET)
-    return 0;
-  if (c[20] != OP_POP)
-    return 0;
-
-  if (c[21] != OP_LOAD_SLOT)
-    return 0;
-  uint8_t s_step = c[22];
-  if (c[23] != OP_LOAD_SLOT || c[24] != s_j)
-    return 0;
-  if (c[25] != OP_LOAD_SLOT || c[26] != s_step)
-    return 0;
-  if (c[27] != OP_ADD)
-    return 0;
-  if (c[28] != OP_LOAD_SLOT || c[29] != s_n)
-    return 0;
-  if (c[30] != OP_LOAD_SLOT || c[31] != s_marks)
-    return 0;
-  if (c[32] != OP_TAIL_SELF || c[33] != 4)
-    return 0;
-  if (c[34] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   /* Both LOAD_GLOBALs must resolve to nil. The const at those indices
      is the symbol "nil"; we check by string. */
@@ -2103,66 +2080,71 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
    jmp entry for the outer tail call. ~250 bytes of native, ~5x faster
    than the bytecode VM on tak(24,16,8). */
 static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 50)
-    return 0;
   uint8_t *c = bc->code;
 
-  /* Verify exact shape. Slots 0,1,2 = x,y,z. */
-  if (c[0] != OP_LOAD_SLOT)
+  /* 50-byte tak — (if (no (< y x)) z (tak (tak x-1 y z) (tak y-1 z x)
+     (tak z-1 x y))). Three self-calls then a tail-self. Cursor-walked.
+       LOAD_SLOT y ; LOAD_SLOT x ; LT ; NOT ; BR_IF_FALSE ; LOAD_SLOT z ; JUMP ;
+       SLOT_SUB_FIX x 1 ; LOAD_SLOT y ; LOAD_SLOT z ; CALL_GLOBAL a,3 ;
+       SLOT_SUB_FIX y 1 ; LOAD_SLOT z ; LOAD_SLOT x ; CALL_GLOBAL b,3 ;
+       SLOT_SUB_FIX z 1 ; LOAD_SLOT x ; LOAD_SLOT y ; CALL_GLOBAL c,3 ;
+       TAIL_SELF 3 ; RET. */
+  int pc = 0, at_y, at_x, at_z0, at_sx, at_y2, at_z2, at_ca, at_sy, at_z3;
+  int at_x2, at_cb, at_sz, at_x3, at_y3, at_cc, at_tail;
+  BC_TAKE(at_y, OP_LOAD_SLOT);
+  uint8_t s_y = BC_ARG(at_y, 0);
+  BC_TAKE(at_x, OP_LOAD_SLOT);
+  uint8_t s_x = BC_ARG(at_x, 0);
+  BC_EAT(OP_LT);
+  BC_EAT(OP_NOT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_z0, OP_LOAD_SLOT);
+  uint8_t s_z = BC_ARG(at_z0, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_sx, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_sx, 0) != s_x || BC_I16(at_sx, 1) != 1)
     return 0;
-  uint8_t s_y = c[1];
-  if (c[2] != OP_LOAD_SLOT)
+  BC_TAKE(at_y2, OP_LOAD_SLOT);
+  if (BC_ARG(at_y2, 0) != s_y)
     return 0;
-  uint8_t s_x = c[3];
-  if (c[4] != OP_LT)
+  BC_TAKE(at_z2, OP_LOAD_SLOT);
+  if (BC_ARG(at_z2, 0) != s_z)
     return 0;
-  if (c[5] != OP_NOT)
+  BC_TAKE(at_ca, OP_CALL_GLOBAL);
+  uint8_t idx_a = BC_ARG(at_ca, 0);
+  if (BC_ARG(at_ca, 1) != 3)
     return 0;
-  if (c[6] != OP_BR_IF_FALSE)
+  BC_TAKE(at_sy, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_sy, 0) != s_y || BC_I16(at_sy, 1) != 1)
     return 0;
-  if (c[9] != OP_LOAD_SLOT)
+  BC_TAKE(at_z3, OP_LOAD_SLOT);
+  if (BC_ARG(at_z3, 0) != s_z)
     return 0;
-  uint8_t s_z = c[10];
-  if (c[11] != OP_JUMP)
+  BC_TAKE(at_x2, OP_LOAD_SLOT);
+  if (BC_ARG(at_x2, 0) != s_x)
     return 0;
-
-  if (c[14] != OP_SLOT_SUB_FIX || c[15] != s_x || c[16] != 1 || c[17] != 0)
+  BC_TAKE(at_cb, OP_CALL_GLOBAL);
+  uint8_t idx_b = BC_ARG(at_cb, 0);
+  if (BC_ARG(at_cb, 1) != 3)
     return 0;
-  if (c[18] != OP_LOAD_SLOT || c[19] != s_y)
+  BC_TAKE(at_sz, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_sz, 0) != s_z || BC_I16(at_sz, 1) != 1)
     return 0;
-  if (c[20] != OP_LOAD_SLOT || c[21] != s_z)
+  BC_TAKE(at_x3, OP_LOAD_SLOT);
+  if (BC_ARG(at_x3, 0) != s_x)
     return 0;
-  if (c[22] != OP_CALL_GLOBAL)
+  BC_TAKE(at_y3, OP_LOAD_SLOT);
+  if (BC_ARG(at_y3, 0) != s_y)
     return 0;
-  uint8_t idx_a = c[23];
-  if (c[24] != 3)
+  BC_TAKE(at_cc, OP_CALL_GLOBAL);
+  uint8_t idx_c = BC_ARG(at_cc, 0);
+  if (BC_ARG(at_cc, 1) != 3)
     return 0;
-
-  if (c[25] != OP_SLOT_SUB_FIX || c[26] != s_y || c[27] != 1 || c[28] != 0)
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 3)
     return 0;
-  if (c[29] != OP_LOAD_SLOT || c[30] != s_z)
-    return 0;
-  if (c[31] != OP_LOAD_SLOT || c[32] != s_x)
-    return 0;
-  if (c[33] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t idx_b = c[34];
-  if (c[35] != 3)
-    return 0;
-
-  if (c[36] != OP_SLOT_SUB_FIX || c[37] != s_z || c[38] != 1 || c[39] != 0)
-    return 0;
-  if (c[40] != OP_LOAD_SLOT || c[41] != s_x)
-    return 0;
-  if (c[42] != OP_LOAD_SLOT || c[43] != s_y)
-    return 0;
-  if (c[44] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t idx_c = c[45];
-  if (c[46] != 3)
-    return 0;
-  if (c[47] != OP_TAIL_SELF || c[48] != 3 || c[49] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
 
   /* All three calls must target THIS function: the emission below issues
      a direct CALL to our own entry_pc, so a non-self callee would be
@@ -2349,69 +2331,62 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
    code (it only uses slot_m/slot_n/idx), so only the verify offsets and
    ncode change. */
 static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 49)
-    return 0;
   uint8_t *c = bc->code;
 
-  /* Strict shape verify. */
-  if (c[0] != OP_SLOT_IS_FIX)
+  /* 49-byte ackermann (cursor-walked) — see the arm64 twin for the shape.
+       SLOT_IS_FIX m 0 ; BR_IF_FALSE ; SLOT_ADD_FIX n 1 ; JUMP ;
+       SLOT_IS_FIX n 0 ; BR_IF_FALSE ;
+       SLOT_SUB_FIX m 1 ; LOAD_FIX 1 ; TAIL_SELF 2 ; JUMP ;
+       SLOT_SUB_FIX m 1 ; LOAD_SLOT m ; SLOT_SUB_FIX n 1 ; CALL_GLOBAL idx,2 ;
+       TAIL_SELF 2 ; RET. */
+  int pc = 0, at_mis, at_nadd, at_nis, at_subm1, at_lf1, at_t1, at_subm2;
+  int at_loadm, at_subn, at_call, at_t2;
+  BC_TAKE(at_mis, OP_SLOT_IS_FIX);
+  uint8_t slot_m = BC_ARG(at_mis, 0);
+  if (BC_I16(at_mis, 1) != 0)
     return 0;
-  uint8_t slot_m = c[1];
-  if (c[2] != 0 || c[3] != 0) /* imm == 0 */
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_nadd, OP_SLOT_ADD_FIX);
+  uint8_t slot_n_check1 = BC_ARG(at_nadd, 0);
+  if (BC_I16(at_nadd, 1) != 1)
     return 0;
-  if (c[4] != OP_BR_IF_FALSE)
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_nis, OP_SLOT_IS_FIX);
+  uint8_t slot_n = BC_ARG(at_nis, 0);
+  if (slot_n != slot_n_check1 || BC_I16(at_nis, 1) != 0)
     return 0;
-
-  if (c[7] != OP_SLOT_ADD_FIX)
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_subm1, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_subm1, 0) != slot_m || BC_I16(at_subm1, 1) != 1)
     return 0;
-  uint8_t slot_n_check1 = c[8];
-  if (c[9] != 1 || c[10] != 0)
+  BC_TAKE(at_lf1, OP_LOAD_FIX);
+  if (BC_I16(at_lf1, 0) != 1)
     return 0;
-  if (c[11] != OP_JUMP)
+  BC_TAKE(at_t1, OP_TAIL_SELF);
+  if (BC_ARG(at_t1, 0) != 2)
     return 0;
-
-  if (c[14] != OP_SLOT_IS_FIX)
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_subm2, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_subm2, 0) != slot_m || BC_I16(at_subm2, 1) != 1)
     return 0;
-  uint8_t slot_n = c[15];
-  if (slot_n != slot_n_check1)
+  BC_TAKE(at_loadm, OP_LOAD_SLOT);
+  if (BC_ARG(at_loadm, 0) != slot_m)
     return 0;
-  if (c[16] != 0 || c[17] != 0) /* imm == 0 */
+  BC_TAKE(at_subn, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_subn, 0) != slot_n || BC_I16(at_subn, 1) != 1)
     return 0;
-  if (c[18] != OP_BR_IF_FALSE)
-    return 0;
-
-  if (c[21] != OP_SLOT_SUB_FIX || c[22] != slot_m)
-    return 0;
-  if (c[23] != 1 || c[24] != 0)
-    return 0;
-  if (c[25] != OP_LOAD_FIX || c[26] != 1 || c[27] != 0)
-    return 0;
-  if (c[28] != OP_TAIL_SELF || c[29] != 2)
-    return 0;
-  if (c[30] != OP_JUMP)
-    return 0;
-
-  if (c[33] != OP_SLOT_SUB_FIX || c[34] != slot_m)
-    return 0;
-  if (c[35] != 1 || c[36] != 0)
-    return 0;
-  if (c[37] != OP_LOAD_SLOT || c[38] != slot_m)
-    return 0;
-  if (c[39] != OP_SLOT_SUB_FIX || c[40] != slot_n)
-    return 0;
-  if (c[41] != 1 || c[42] != 0)
-    return 0;
-  if (c[43] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t idx = c[44];
-  if (c[45] != 2)
+  BC_TAKE(at_call, OP_CALL_GLOBAL);
+  uint8_t idx = BC_ARG(at_call, 0);
+  if (BC_ARG(at_call, 1) != 2)
     return 0;
   if (idx >= bc->nconsts)
     return 0;
-  if (c[46] != OP_TAIL_SELF || c[47] != 2)
+  BC_TAKE(at_t2, OP_TAIL_SELF);
+  if (BC_ARG(at_t2, 0) != 2)
     return 0;
-  if (c[48] != OP_RET)
-    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
   if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS)
     return 0;
 
@@ -2699,49 +2674,43 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
    terminate — overflow on tagged fixnum (>2^60) is identical to the
    recursive version. */
 static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 24)
-    return 0;
   uint8_t *c = bc->code;
 
-  /* base-case predicate */
-  uint8_t cmp_op = c[0];
+  /* 24-byte iterative-fact shape (cursor-walked) —
+       <cmp> slot K1 ; BR_IF_FALSE ; LOAD_FIX BASE ; JUMP ;
+       LOAD_SLOT slot ; <step> slot K2 ; CALL_GLOBAL idx,1 ; MUL ; RET. */
+  int pc = 0, at_cmp, at_base, at_load, at_step, at_call;
+  uint8_t cmp_op, step_op;
+  BC_TAKE_ANY(at_cmp, cmp_op);
   if (cmp_op != OP_SLOT_LT_FIX && cmp_op != OP_SLOT_GT_FIX &&
       cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX)
     return 0;
-  uint8_t slot = c[1];
+  uint8_t slot = BC_ARG(at_cmp, 0);
   if (slot >= ENV_INLINE_SLOTS)
     return 0;
-  int16_t K1 = (int16_t)((uint16_t)c[2] | ((uint16_t)c[3] << 8));
-
-  if (c[4] != OP_BR_IF_FALSE)
+  int16_t K1 = BC_I16(at_cmp, 1);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_base, OP_LOAD_FIX);
+  int16_t BASE = BC_I16(at_base, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  if (BC_ARG(at_load, 0) != slot)
     return 0;
-  if (c[7] != OP_LOAD_FIX)
-    return 0;
-  int16_t BASE = (int16_t)((uint16_t)c[8] | ((uint16_t)c[9] << 8));
-  if (c[10] != OP_JUMP)
-    return 0;
-
-  /* recurse arm */
-  if (c[13] != OP_LOAD_SLOT || c[14] != slot)
-    return 0;
-  uint8_t step_op = c[15];
+  BC_TAKE_ANY(at_step, step_op);
   if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX)
     return 0;
-  if (c[16] != slot)
+  if (BC_ARG(at_step, 0) != slot)
     return 0;
-  int16_t K2 = (int16_t)((uint16_t)c[17] | ((uint16_t)c[18] << 8));
-
-  if (c[19] != OP_CALL_GLOBAL)
-    return 0;
-  uint8_t idx = c[20];
-  if (c[21] != 1)
+  int16_t K2 = BC_I16(at_step, 1);
+  BC_TAKE(at_call, OP_CALL_GLOBAL);
+  uint8_t idx = BC_ARG(at_call, 0);
+  if (BC_ARG(at_call, 1) != 1)
     return 0;
   if (idx >= bc->nconsts)
     return 0;
-  if (c[22] != OP_MUL)
-    return 0;
-  if (c[23] != OP_RET)
-    return 0;
+  BC_EAT(OP_MUL);
+  BC_EAT(OP_RET);
+  BC_END();
 
   /* Self-name guard (see try_jit_recurse_add_two): the iterative-fact
      emission below elides the call entirely, so a non-self callee would
@@ -2886,25 +2855,27 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
    compares the underlying value bits). Return TRUE_EXP/NIL_EXP via
    cmovz. Avoids vm_invoke_values entirely — saves ~200ns/call. */
 static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->ncode != 10)
-    return 0;
   uint8_t *c = bc->code;
-  if (c[0] != OP_LOAD_SLOT || c[1] >= ENV_INLINE_SLOTS)
+  /* 10-byte (is (mod a b) K) leaf (cursor-walked) —
+       LOAD_SLOT a ; LOAD_SLOT b ; MOD ; LOAD_FIX K ; IS ; RET. */
+  int pc = 0, at_a, at_b, at_k;
+  BC_TAKE(at_a, OP_LOAD_SLOT);
+  if (BC_ARG(at_a, 0) >= ENV_INLINE_SLOTS)
     return 0;
-  if (c[2] != OP_LOAD_SLOT || c[3] >= ENV_INLINE_SLOTS)
+  BC_TAKE(at_b, OP_LOAD_SLOT);
+  if (BC_ARG(at_b, 0) >= ENV_INLINE_SLOTS)
     return 0;
-  if (c[4] != OP_MOD)
-    return 0;
-  if (c[5] != OP_LOAD_FIX)
-    return 0;
-  int16_t K = (int16_t)((uint16_t)c[6] | ((uint16_t)c[7] << 8));
-  if (c[8] != OP_IS)
-    return 0;
-  if (c[9] != OP_RET)
-    return 0;
+  BC_EAT(OP_MOD);
+  BC_TAKE(at_k, OP_LOAD_FIX);
+  int16_t K = BC_I16(at_k, 0);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_RET);
+  BC_END();
 
-  int32_t off_a = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[1] * 8;
-  int32_t off_b = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)c[3] * 8;
+  int32_t off_a =
+      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)BC_ARG(at_a, 0) * 8;
+  int32_t off_b =
+      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)BC_ARG(at_b, 0) * 8;
   int32_t k_shifted = ((int32_t)K) << 3; /* compare against (K<<3) */
 
   int n = 0;
