@@ -358,6 +358,28 @@ def fib (n):                 # ladder all the way down
         - n 2
 ```
 
+**`if` / `elif` / `else`.** Python-style multi-way branching desugars to
+Alcove's flat Arc-style `cond` — each `elif`/`else` is appended to the *same*
+`if` node as another test/expr pair, so `if t1 / elif t2 / else` becomes
+`(if t1 e1 t2 (do e2) (do e3))`:
+
+```python
+def grade (n):
+  if (>= n 90):
+    'A
+  elif (>= n 80):
+    'B
+  else:
+    'F
+```
+
+The one constraint: **`elif`/`else` must be indented at the same column as the
+`if` they extend** — they attach to the nearest preceding `if` at their own
+indent level. Nesting an `elif` *under* the `if`'s body (deeper indent) detaches
+it, and the chain silently won't behave as written. (Same rule as Python: the
+`elif`/`else` keyword lines up with `if`.) An `if` with no `elif`/`else` is just
+the two-armed `(if cond then [else])`.
+
 **The REPL is block-aware** — continuation prompt, auto-indent after
 `:`, blank line submits, live syntax highlighting + history. And
 `(source f)` prints the definition *back as Adder*, normalised

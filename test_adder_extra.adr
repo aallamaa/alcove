@@ -29,3 +29,19 @@ defc adr-find (pred xs):
   nil
 assert "defc inline find hit" (adr-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
 assert "defc inline find miss" (adr-find (fn (n) (> n 9)) (list 1 2 3)) nil
+
+# if / elif / else -> Arc-style flat cond. elif/else must align with the `if`
+# they extend (same indent column); each is appended to the same if node.
+def adr-grade (n):
+  if (>= n 90):
+    'A
+  elif (>= n 80):
+    'B
+  elif (>= n 70):
+    'C
+  else:
+    'F
+assert "if/elif/else first arm" (adr-grade 95) 'A
+assert "if/elif/else 2nd arm"   (adr-grade 85) 'B
+assert "if/elif/else 3rd arm"   (adr-grade 72) 'C
+assert "if/elif/else else arm"  (adr-grade 50) 'F
