@@ -2450,6 +2450,10 @@ exp_t *persistcmd(exp_t *e, env_t *env) {
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
+  if (!cur->d) { /* no global dict allocated yet → nothing bound to persist */
+    unrefexp(tmpkey);
+    return NIL_EXP;
+  }
   ret = set_keyval_dict_timestamp(cur->d, exp_text(tmpkey), gettimeusec());
   unrefexp(tmpkey);
   return ret;
@@ -2469,6 +2473,10 @@ exp_t *ispersistentcmd(exp_t *e, env_t *env) {
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
+  if (!cur->d) { /* no global dict yet → not persistent */
+    unrefexp(tmpkey);
+    return NIL_EXP;
+  }
   ret = get_keyval_dict_timestamp(cur->d, exp_text(tmpkey));
   unrefexp(tmpkey);
   /* Only positive timestamps are persist marks. Negative values encode
@@ -2523,6 +2531,10 @@ exp_t *unpersistcmd(exp_t *e, env_t *env) {
   env_t *cur = env;
   while (cur->root)
     cur = cur->root;
+  if (!cur->d) { /* no global dict yet → nothing to unpersist */
+    unrefexp(tmpkey);
+    return NIL_EXP;
+  }
   ret = set_keyval_dict_timestamp(cur->d, exp_text(tmpkey), 0);
   unrefexp(tmpkey);
   return ret;

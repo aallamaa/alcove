@@ -1638,12 +1638,19 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
       cur1n = cur1;
       cur2n = cur2;
       ret = 1;
-      do {
-        ret *= isoequal(car(cur1n), car(cur2n));
+      /* Walk both lists in lockstep WHILE BOTH ARE PAIRS, comparing cars.
+         Advance via ->next only after confirming a pair, so an improper
+         (dotted) tail — e.g. (cons 1 2), whose ->next is a non-pointer
+         fixnum immediate — is never dereferenced as a pair (was a segv). */
+      while (ret && ispair(cur1n) && ispair(cur2n)) {
+        ret = isoequal(cur1n->content, cur2n->content);
         cur1n = cur1n->next;
         cur2n = cur2n->next;
-      } while (ret && cur1n && cur2n);
-      ret *= (cur1n == cur2n);
+      }
+      /* Compare the tails: NULL/NULL for proper lists, or the dotted
+         final values for improper lists (e.g. the 2 in (cons 1 2)). */
+      if (ret)
+        ret = isoequal(cur1n, cur2n);
     } else if (isvector(cur1)) {
       /* Element-wise deep equality — doc_iso promises vector recursion.
          vec_get_boxed returns an owned ref, so release each after compare. */

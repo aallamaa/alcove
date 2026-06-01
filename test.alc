@@ -1318,6 +1318,77 @@
 (assert "hamt persistence nested val"  (iso (hamt-get persisted-hamt "nums") (list 10 20)) t)
 (forget 'persisted-hamt)
 
+;; ============================================================
+;; persistence: EVERY structure type survives savedb/loaddb.
+;; Scalars (number/float/string/symbol/char), blob, pair, cons-list,
+;; vector (numeric + GEN + deeply nested), deque, dict, set, hamt,
+;; lambda, macro. Guards the full dump/load type registration so a
+;; future type without a dump/load fn (or a nested-element regression)
+;; can't slip through. iso deep-compares scalars/pair/list/vector/blob;
+;; dict/set/deque/hamt are compared via accessors (iso is identity-only).
+;; ============================================================
+(= ps-num 42)
+(= ps-flt 3.5)
+(= ps-str "héllo世")
+(= ps-sym 'somesym)
+(= ps-chr #\Z)
+(= ps-blob (string->blob "bytes"))
+(= ps-pair (cons 1 2))
+(= ps-list (list 1 2 3))
+(= ps-vec (vector 1 2 3))
+(= ps-genvec (vector nil t "s" 9))
+(= ps-nest (vector (set 2 3) (hash-map "k" (deque 7 8)) (hamt "z" 9) (list 1 (vector "x"))))
+(= ps-deque (deque 10 20 30))
+(= ps-dict (hash-map "a" 7 "b" 8))
+(= ps-set (set 1 2 3))
+(= ps-hamt (hamt "p" 1 "q" 2))
+(= ps-lam (fn (a b) (+ a b)))
+(defmacro ps-mac (x) (list 'quote x))
+(persist 'ps-num) (persist 'ps-flt) (persist 'ps-str) (persist 'ps-sym)
+(persist 'ps-chr) (persist 'ps-blob) (persist 'ps-pair) (persist 'ps-list)
+(persist 'ps-vec) (persist 'ps-genvec) (persist 'ps-nest) (persist 'ps-deque)
+(persist 'ps-dict) (persist 'ps-set) (persist 'ps-hamt) (persist 'ps-lam)
+(persist 'ps-mac)
+(savedb "/tmp/alcove-test-allstruct.db")
+(forget 'ps-num) (forget 'ps-flt) (forget 'ps-str) (forget 'ps-sym)
+(forget 'ps-chr) (forget 'ps-blob) (forget 'ps-pair) (forget 'ps-list)
+(forget 'ps-vec) (forget 'ps-genvec) (forget 'ps-nest) (forget 'ps-deque)
+(forget 'ps-dict) (forget 'ps-set) (forget 'ps-hamt) (forget 'ps-lam)
+(loaddb "/tmp/alcove-test-allstruct.db")
+(assert "persist number"     ps-num                              42)
+(assert "persist float"      ps-flt                              3.5)
+(assert "persist string"     ps-str                              "héllo世")
+(assert "persist symbol"     ps-sym                              'somesym)
+(assert "persist char"       (iso ps-chr #\Z)                    t)
+(assert "persist blob"       (iso ps-blob (string->blob "bytes")) t)
+(assert "persist pair"       (iso ps-pair (cons 1 2))            t)
+(assert "persist cons-list"  (iso ps-list (list 1 2 3))          t)
+(assert "persist vector"     (iso ps-vec (vector 1 2 3))         t)
+(assert "persist GEN vector" (iso ps-genvec (vector nil t "s" 9)) t)
+(assert "persist nested vec set"  (set-has? (vec-ref ps-nest 0) 3)            t)
+(assert "persist nested vec dict" (count (vec-ref ps-nest 1))                 1)
+(assert "persist nested vec deque"(count (get (vec-ref ps-nest 1) "k"))       2)
+(assert "persist nested vec hamt" (hamt-get (vec-ref ps-nest 2) "z")          9)
+(assert "persist nested vec list" (iso (vec-ref ps-nest 3) (list 1 (vector "x"))) t)
+(assert "persist deque count"     (count ps-deque)                            3)
+(assert "persist dict get"        (get ps-dict "a")                           7)
+(assert "persist dict count"      (count ps-dict)                             2)
+(assert "persist set member"      (set-has? ps-set 2)                         t)
+(assert "persist set count"       (count ps-set)                              3)
+(assert "persist hamt get"        (hamt-get ps-hamt "q")                      2)
+(assert "persist hamt count"      (hamt-count ps-hamt)                        2)
+(assert "persist lambda call"     (ps-lam 3 4)                                7)
+(assert "persist macro use"       (ps-mac hello)                              'hello)
+(forget 'ps-num) (forget 'ps-flt) (forget 'ps-str) (forget 'ps-sym)
+(forget 'ps-chr) (forget 'ps-blob) (forget 'ps-pair) (forget 'ps-list)
+(forget 'ps-vec) (forget 'ps-genvec) (forget 'ps-nest) (forget 'ps-deque)
+(forget 'ps-dict) (forget 'ps-set) (forget 'ps-hamt) (forget 'ps-lam)
+;; persist/unpersist/ispersistent of an unbound symbol must not crash
+;; (regression: persistcmd derefed a NULL global dict → segfault).
+(assert "persist unbound no-crash"     (do (persist 'ps-unbound-xyz) 1)      1)
+(assert "ispersistent unbound"         (ispersistent 'ps-unbound-xyz2)       nil)
+(assert "unpersist unbound no-crash"   (do (unpersist 'ps-unbound-xyz3) 1)   1)
+
 ;; savedb optional-path error path -- bad type causes error; execution
 ;; continues in file mode (the error propagates to the top level, which resumes).
 (savedb 42)
