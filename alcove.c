@@ -111,6 +111,33 @@ struct env_t *g_global_env = NULL;
    strictly call-site reentrant state. */
 static ALCOVE_TLS int in_tail_position = 0;
 
+/* ---- RESP user-callback read-only guard -----------------------------------
+   `alcove -r --threads N` (N>1) runs N reactor pthreads that serve RESP
+   concurrently. User commands (redis-defcmd) run their lambda on a reactor
+   thread against the SHARED global Lisp env. A callback that mutates a global
+   binding — (def ...), (= global ...), (persist ...), registering more
+   commands — would race on the shared env dict (non-atomic refcounts, dict
+   rehash). Rather than serialize all callbacks (which would kill the
+   multi-thread throughput that --threads exists for), we REFUSE the
+   global-mutating operations with a clear error while a callback runs under
+   multiple reactors. Keyspace-only callbacks (lfkv.c is lock-free + epoch
+   safe) stay fully parallel.
+
+   g_resp_cb_guard is per-reactor-thread (TLS): set while that thread is inside
+   a user callback AND we are multi-reactor. g_resp_multi is set once at server
+   start, true iff >1 reactor. In mono builds ALCOVE_TLS is empty and both are
+   plain globals left at 0 — the guard is never set, so zero behavioural
+   change.
+
+   KNOWN LIMITS: the guard catches global def/=/persist/forget/unpersist and
+   command (un)registration. It does NOT catch in-place mutation of a shared
+   object the callback reaches (e.g. mutating a container stored in a captured
+   closure var) nor reassignment of a captured closure var that lives outside
+   the callback's own frame — those remain the caller's responsibility and are
+   documented in doc_redis_defcmd. */
+static ALCOVE_TLS int g_resp_cb_guard = 0;
+static int g_resp_multi = 0;
+
 /* ---- VM handler stack (try in tail position) ------------------------------
    `try` is value-based and not tail-aware, so the AST evaluator (trycmd) must
    regain control after the body to inspect the result / run the handler — which
@@ -633,6 +660,15 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
+
+/* Raised by global-mutating special forms when invoked from a RESP user
+   callback running under multiple reactors (see g_resp_cb_guard above). */
+static exp_t *resp_cb_readonly_error(env_t *env) {
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "this RESP command callback is read-only w.r.t. Lisp globals "
+               "(callbacks run concurrently under --threads); mutate the "
+               "keyspace, not global defs/vars");
+}
 
 /* MEMORY MANAGEMENT FUNCTIONS */
 /*
@@ -1609,6 +1645,14 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
         if (cur->d) {
           keyval_t *kv = set_get_keyval_dict(cur->d, exp_text(keyv), NULL);
           if (kv) {
+            /* Refuse mutating a GLOBAL binding (root env) from a concurrent
+               RESP callback. Local/closure bindings (cur->root != NULL) are
+               per-invocation env and stay writable. */
+            if (g_resp_cb_guard && cur->root == NULL) {
+              unrefexp(keyv);
+              unrefexp(val);
+              return resp_cb_readonly_error(env);
+            }
             /* Bump gen BEFORE the unref. The reverse order is a TOCTOU:
                under threading (or even under a JIT callout that re-enters
                and reads bc->gcache while we're between the unref and the
@@ -1626,7 +1670,14 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
         cur = cur->root;
       }
     }
-    /* No existing binding anywhere — create in current env. */
+    /* No existing binding anywhere — create in current env. When env is the
+       global env (no root), this is a global write: refuse under the RESP
+       callback guard. */
+    if (g_resp_cb_guard && env->root == NULL) {
+      unrefexp(keyv);
+      unrefexp(val);
+      return resp_cb_readonly_error(env);
+    }
     if (!(env->d))
       env->d = create_dict();
     ret = set_get_keyval_dict(env->d, exp_text(keyv), val);
@@ -1853,6 +1904,11 @@ const char doc_def[] =
     "(def name (params...) body...) — define a named function. Body that uses "
     "only supported forms compiles to bytecode (sometimes JIT'd).";
 exp_t *defcmd(exp_t *e, env_t *env) {
+  /* def installs a global binding — refuse from a concurrent RESP callback. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *val;
   exp_t *vali;
   exp_t *name;
@@ -2097,6 +2153,11 @@ const char doc_defmacro[] =
     "(defmacro name (params...) body) — define a macro. Body returns a code "
     "form that replaces the call site at expansion time.";
 exp_t *defmacrocmd(exp_t *e, env_t *env) {
+  /* defmacro installs a global binding — refuse from a concurrent callback. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *val;
   exp_t *vali;
   exp_t *name;
@@ -2336,7 +2397,9 @@ static exp_t *setq_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
    VAL — consumes neither; the caller keeps VAL on the VM stack as the result.
    This is what lets mutable closures like make-counter compile to bytecode
    instead of falling back to AST. */
-static void assign_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
+/* Returns 1 if it REFUSED a GLOBAL write under the RESP callback guard
+   (binding NOT written — caller must clean up val's ref), 0 otherwise. */
+static int assign_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
   env_t *cur = env;
   while (cur) {
     for (int i = 0; i < cur->n_inline; i++) {
@@ -2344,24 +2407,33 @@ static void assign_store_symbol(exp_t *sym, env_t *env, exp_t *val) {
       if (k && strcmp(k, exp_text(sym)) == 0) {
         unrefexp(cur->inline_vals[i]);
         cur->inline_vals[i] = refexp(val);
-        return;
+        return 0;
       }
     }
     if (cur->d) {
       keyval_t *kv = set_get_keyval_dict(cur->d, exp_text(sym), NULL);
       if (kv) {
+        /* Global binding (root env)? Refuse under the concurrent-callback
+           guard before mutating. Local/closure bindings stay writable. */
+        if (g_resp_cb_guard && cur->root == NULL)
+          return 1;
         GEN_BUMP();
         unrefexp(kv->val);
         kv->val = refexp(val);
-        return;
+        return 0;
       }
     }
     cur = cur->root;
   }
+  /* Create in current env. If that is the global env, this is a global
+     write: refuse under the guard before allocating/writing. */
+  if (g_resp_cb_guard && env->root == NULL)
+    return 1;
   if (!(env->d))
     env->d = create_dict();
   set_get_keyval_dict(env->d, exp_text(sym), val);
   GEN_BUMP();
+  return 0;
 }
 
 const char doc_setq[] =
@@ -2437,6 +2509,11 @@ exp_t *equalcmd(exp_t *e, env_t *env) {
 const char doc_persist[] = "(persist sym) — mark sym's top-level binding so it "
                            "survives savedb / loaddb (db.dump).";
 exp_t *persistcmd(exp_t *e, env_t *env) {
+  /* persist marks a global binding — refuse from a concurrent callback. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
   if (!issymbol(tmpkey)) {
@@ -2495,6 +2572,11 @@ const char doc_forget[] =
     "(forget sym) — remove sym's binding entirely. After this, sym is unbound. "
     "Use (unpersist sym) if you only want to stop saving it.";
 exp_t *forgetcmd(exp_t *e, env_t *env) {
+  /* forget removes a global binding — refuse from a concurrent callback. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *tmpkey = refexp(cadr(e));
   if (!issymbol(tmpkey)) {
     tmpkey = evaluate(tmpkey, env);
@@ -2520,6 +2602,11 @@ const char doc_unpersist[] =
     "(unpersist sym) — clear sym's persistence mark; the binding stays live "
     "but won't be written by (savedb).";
 exp_t *unpersistcmd(exp_t *e, env_t *env) {
+  /* unpersist clears a global persist mark — refuse from a concurrent cb. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *tmpkey = refexp(cadr(e));
   exp_t *ret = NULL;
   if (!issymbol(tmpkey)) {
@@ -6984,8 +7071,20 @@ l_store_free: {
       VM_RETURN(_rerr);
     });
   }
-  /* Borrows v (refexp into the binding); our popped ref is the result. */
-  assign_store_symbol(consts[idx], env, v);
+  /* Borrows v (refexp into the binding); our popped ref is the result.
+     Returns 1 if it REFUSED a global write under the RESP callback guard —
+     in that case the binding was NOT written, so v's ref is still ours to
+     drop, and we raise the read-only error (same unwind shape as
+     REJECT_RESERVED_ASSIGN above). */
+  if (assign_store_symbol(consts[idx], env, v)) {
+    exp_t *_rerr = resp_cb_readonly_error(env);
+    unrefexp(v);
+    for (int _i = 0; _i < sp; _i++)
+      unrefexp(stack[_i]);
+    if (fn_owned)
+      unrefexp(fn);
+    VM_RETURN(_rerr);
+  }
   PUSH(v);
   NEXT;
 }
@@ -9481,6 +9580,11 @@ int respN_serve(int port, int nthreads) {
     sh->arena_end = arena + ENV_ARENA_SLOTS;
     shards[i] = sh;
   }
+  /* More than one reactor → arm the RESP callback read-only guard so that
+     global-mutating special forms refuse rather than race on the shared
+     global env. (Single-reactor / mono paths return early above, leaving
+     g_resp_multi = 0 and callbacks free to mutate globals.) */
+  g_resp_multi = (nthreads > 1);
   /* Spawn workers 1..N-1; main thread runs worker 0. */
   printf(ALCOVE_PROGNAME ": spawning %d reactor threads on port %d\n", nthreads, port);
   fflush(stdout);

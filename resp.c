@@ -3189,15 +3189,33 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
   }
   exp_t *fn_ref = refexp(fn);
   exp_t *vargv[1] = {arglist};
+  /* Arm the read-only guard for the duration of this callback iff we are
+     running under multiple reactors (g_resp_multi). The guard makes global-
+     mutating special forms (def, = on a global, persist/forget/unpersist,
+     redis-(un)defcmd) refuse with resp_cb_readonly_error instead of racing on
+     the shared global Lisp env. Keyspace operations (lfkv.c) are unaffected
+     and stay fully parallel. save/restore lets any nested vm invocation
+     behave correctly. KNOWN LIMITS: this does NOT prevent in-place mutation
+     of a shared object the callback reaches, nor reassignment of a captured
+     closure var living outside the callback frame — see doc_redis_defcmd. */
+  int _save = g_resp_cb_guard;
+  g_resp_cb_guard = g_resp_multi;
   exp_t *ret = vm_invoke_values(fn_ref, 1, vargv, resp_user_env);
+  g_resp_cb_guard = _save;
   unrefexp(fn_ref);
   resp_user_encode(c, ret);
   if (ret) unrefexp(ret);
   return 1;
 }
 
-const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of blobs (nil if none). Returns t.";
+const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of blobs (nil if none). Returns t. Under --threads N the callback runs concurrently; it must be READ-ONLY w.r.t. Lisp globals (no def/=/persist of globals — those error) and must not mutate state shared across invocations (captured closure vars, in-place container mutation); operate on the keyspace, which is concurrency-safe.";
 exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
+  /* Registering a command mutates the shared command table + resp_user_env —
+     refuse from a concurrent RESP callback. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *nx = EVAL(cadr(e), env);
   if (iserror(nx)) { unrefexp(e); return nx; }
   if (!isstring(nx) && !isblob(nx)) {
@@ -3226,6 +3244,11 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
 
 const char doc_redis_undefcmd[] = "(redis-undefcmd \"NAME\") — remove a previously registered Redis command. Returns t if removed, nil if not found.";
 exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
+  /* Unregistering mutates the shared command table — refuse from a cb. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
   exp_t *nx = EVAL(cadr(e), env);
   if (iserror(nx)) { unrefexp(e); return nx; }
   if (!isstring(nx) && !isblob(nx)) {
