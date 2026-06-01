@@ -1982,8 +1982,15 @@ typedef struct {
 #endif
 } resp_backend_t;
 
+#if !ALCOVE_SINGLE_THREADED
+/* Sentinel objects whose ADDRESSES (never their values) tag the listener
+   socket and the wakeup pipe in epoll/kqueue event data, compared by
+   pointer identity against real connection pointers. Only the
+   multi-threaded serve path references them, so guard the definitions to
+   avoid an unused-variable warning in single-threaded (mono) builds. */
 static char resp_listener_marker;
 static char resp_wake_marker;
+#endif
 
 /* resp_backend_init/close and resp_ready_add are only called from resp_serve's
    multi-threaded branch — compile them out in single-threaded builds. */
