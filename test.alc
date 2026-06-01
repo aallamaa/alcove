@@ -1389,6 +1389,20 @@
 (assert "ispersistent unbound"         (ispersistent 'ps-unbound-xyz2)       nil)
 (assert "unpersist unbound no-crash"   (do (unpersist 'ps-unbound-xyz3) 1)   1)
 
+;; "did you mean?" — unbound-variable errors carry an edit-distance suggestion
+;; when a close builtin/global exists, and stay quiet when nothing is close.
+;; Covers both the AST/top-level path and the compiled (VM) free-var path.
+(assert "did-you-mean: hint present"
+  (string-contains? (error-message (try revrse (fn (e) e))) "did you mean")  t)
+(assert "did-you-mean: names the right builtin"
+  (string-contains? (error-message (try revrse (fn (e) e))) "reverse")       t)
+(assert "did-you-mean: quiet for unrelated name"
+  (string-contains? (error-message (try zqzqxqwq (fn (e) e))) "did you mean") nil)
+(assert "did-you-mean: compiled (VM) free-var path"
+  (string-contains?
+    (error-message (try (do (def _dym_q (x) (lenght x)) (_dym_q 1)) (fn (e) e)))
+    "length") t)
+
 ;; savedb optional-path error path -- bad type causes error; execution
 ;; continues in file mode (the error propagates to the top level, which resumes).
 (savedb 42)

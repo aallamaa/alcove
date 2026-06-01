@@ -6579,6 +6579,85 @@ static exp_t *vm_unwind_handlers(exp_t *v, int handler_base) {
   return v ? v : NIL_EXP;
 }
 
+/* Bounded Levenshtein edit distance between `a` and `b`. Early-exits with
+   `max+1` once a whole row exceeds `max` (or the length gap alone does), so
+   the common "not close" case is cheap. Names are short; bail on long ones. */
+static int alc_edit_distance(const char *a, const char *b, int max) {
+  int la = (int)strlen(a), lb = (int)strlen(b);
+  int gap = la > lb ? la - lb : lb - la;
+  if (gap > max)
+    return max + 1;
+  if (lb >= 64 || la >= 64)
+    return max + 1;
+  int prev[64], cur[64];
+  for (int j = 0; j <= lb; j++)
+    prev[j] = j;
+  for (int i = 1; i <= la; i++) {
+    cur[0] = i;
+    int rowmin = cur[0];
+    for (int j = 1; j <= lb; j++) {
+      int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+      int del = prev[j] + 1, ins = cur[j - 1] + 1, sub = prev[j - 1] + cost;
+      int m = del < ins ? del : ins;
+      if (sub < m)
+        m = sub;
+      cur[j] = m;
+      if (m < rowmin)
+        rowmin = m;
+    }
+    if (rowmin > max)
+      return max + 1;
+    memcpy(prev, cur, sizeof(int) * (lb + 1));
+  }
+  return prev[lb];
+}
+
+/* "did you mean?" support: scan the builtins (reserved_symbol) + the global
+   env chain for the symbol name closest to `name` by edit distance, within a
+   small length-scaled threshold. Returns a BORROWED pointer to the best
+   candidate's stored key (stable for the process), or NULL if nothing close.
+   Exact (distance-0) matches are skipped — they wouldn't be "unbound". */
+static const char *alc_suggest_symbol(const char *name, env_t *env) {
+  if (!name)
+    return NULL;
+  int nl = (int)strlen(name);
+  if (nl <= 2)
+    return NULL; /* too short — suggestions would be noise */
+  int thr = (nl <= 4) ? 1 : 2;
+  int best = thr + 1;
+  const char *bestname = NULL;
+#define ALC_CONSIDER(K)                                                        \
+  do {                                                                         \
+    const char *_k = (K);                                                      \
+    if (_k && *_k) {                                                           \
+      int _d = alc_edit_distance(name, _k, thr);                               \
+      if (_d >= 1 && _d < best) {                                              \
+        best = _d;                                                             \
+        bestname = _k;                                                         \
+      }                                                                        \
+    }                                                                          \
+  } while (0)
+  /* builtins */
+  if (reserved_symbol) {
+    for (unsigned h = 0; h < 2; h++)
+      for (unsigned j = 0; j < reserved_symbol->ht[h].size; j++)
+        for (keyval_t *kv = reserved_symbol->ht[h].table[j]; kv; kv = kv->next)
+          ALC_CONSIDER((const char *)kv->key);
+  }
+  /* global env chain (inline slots + dict at each frame) */
+  for (env_t *cur = env; cur; cur = cur->root) {
+    for (int i = 0; i < cur->n_inline; i++)
+      ALC_CONSIDER(cur->inline_keys[i]);
+    if (cur->d)
+      for (unsigned h = 0; h < 2; h++)
+        for (unsigned j = 0; j < cur->d->ht[h].size; j++)
+          for (keyval_t *kv = cur->d->ht[h].table[j]; kv; kv = kv->next)
+            ALC_CONSIDER((const char *)kv->key);
+  }
+#undef ALC_CONSIDER
+  return (best <= thr) ? bestname : NULL;
+}
+
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
@@ -6610,6 +6689,24 @@ tail_reentry:
 #define RUNTIME_ERR(msg)                                                       \
   do {                                                                         \
     exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, msg);                    \
+    int _i;                                                                    \
+    for (_i = 0; _i < sp; _i++)                                                \
+      unrefexp(stack[_i]);                                                     \
+    if (fn_owned)                                                              \
+      unrefexp(fn);                                                            \
+    return vm_unwind_handlers(_err, handler_base);                             \
+  } while (0)
+/* Like RUNTIME_ERR but for an unbound symbol: names the symbol and appends a
+   "did you mean 'X'?" hint when a near-match exists. `symexp` is the symbol. */
+#define RUNTIME_ERR_UNBOUND(symexp)                                            \
+  do {                                                                         \
+    const char *_nm = (const char *)exp_text(symexp);                          \
+    const char *_sg = alc_suggest_symbol(_nm, env);                            \
+    exp_t *_err =                                                              \
+        _sg ? error(ERROR_UNBOUND_VARIABLE, fn, env,                           \
+                    "Unbound variable %s (did you mean '%s'?)", _nm, _sg)      \
+            : error(ERROR_UNBOUND_VARIABLE, fn, env, "Unbound variable %s",    \
+                    _nm);                                                      \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
       unrefexp(stack[_i]);                                                     \
@@ -6819,7 +6916,7 @@ l_load_global: {
     int is_global;
     exp_t *v = lookup_scoped(consts[idx], env, &is_global);
     if (!v)
-      RUNTIME_ERR("Unbound variable");
+      RUNTIME_ERR_UNBOUND(consts[idx]);
     /* Only memoize truly-global resolutions. A local free var (OP_STORE_FREE
        target read back via OP_LOAD_GLOBAL) must NOT be cached — the gcache is
        keyed by global-gen and would serve it stale to a later call. */
@@ -7163,7 +7260,7 @@ l_call_global: {
     int is_global;
     callee = lookup_scoped(consts[idx], env, &is_global);
     if (!callee)
-      RUNTIME_ERR("Unbound variable");
+      RUNTIME_ERR_UNBOUND(consts[idx]);
     /* Only cache global resolutions (see OP_LOAD_GLOBAL): a locally-bound
        callee must not be memoized against the global generation. */
     if (!bc->no_gcache && is_global) {
@@ -8099,8 +8196,13 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         unrefexp(e);
         return tmpexp;
       } else {
-        ret = error(ERROR_UNBOUND_VARIABLE, e, env, "Error unbound variable %s",
-                    exp_text(e));
+        const char *_nm = (const char *)exp_text(e);
+        const char *_sg = alc_suggest_symbol(_nm, env);
+        ret = _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
+                          "Error unbound variable %s (did you mean '%s'?)", _nm,
+                          _sg)
+                  : error(ERROR_UNBOUND_VARIABLE, e, env,
+                          "Error unbound variable %s", _nm);
         unrefexp(e);
         return ret;
       }
@@ -8232,8 +8334,13 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             goto finisht;
           }
         } else {
-          ret = error(ERROR_UNBOUND_VARIABLE, e, env,
-                      "Error unbound variable %s", exp_text(tmpexp));
+          const char *_nm = (const char *)exp_text(tmpexp);
+          const char *_sg = alc_suggest_symbol(_nm, env);
+          ret = _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
+                            "Error unbound variable %s (did you mean '%s'?)",
+                            _nm, _sg)
+                    : error(ERROR_UNBOUND_VARIABLE, e, env,
+                            "Error unbound variable %s", _nm);
           goto finish;
         }
         ret = e; // what is happening here?
