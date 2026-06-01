@@ -437,22 +437,37 @@ static inline int resp_client_drain_write(resp_client_t *c) {
   return 0;
 }
 
-static void resp_write_simple(resp_client_t *c, const char *s) {
-  size_t n = strlen(s);
+/* Emit a single-line reply: <lead><s>CRLF, where lead is '+' (simple
+   string) or '-' (error). Both wrappers below are byte-identical except
+   the lead char; kept inlinable so PONG/OK framing gains no call overhead. */
+static inline void resp_write_line(resp_client_t *c, char lead,
+                                   const char *s, size_t n) {
   char *dst = resp_write_reserve(c, n + 3);
-  dst[0] = '+';
+  dst[0] = lead;
   memcpy(dst + 1, s, n);
   dst[n + 1] = '\r';
   dst[n + 2] = '\n';
 }
 
+static void resp_write_simple(resp_client_t *c, const char *s) {
+  resp_write_line(c, '+', s, strlen(s));
+}
+
 static void resp_write_err(resp_client_t *c, const char *s) {
-  size_t n = strlen(s);
-  char *dst = resp_write_reserve(c, n + 3);
-  dst[0] = '-';
-  memcpy(dst + 1, s, n);
-  dst[n + 1] = '\r';
-  dst[n + 2] = '\n';
+  resp_write_line(c, '-', s, strlen(s));
+}
+
+/* The "-ERR <fmt>\r\n" framing idiom: format into a fixed buffer (clamped
+   on overflow, matching prior snprintf behaviour) and emit as an error line. */
+static inline void resp_write_err_fmt(resp_client_t *c, const char *fmt, ...) {
+  char buf[512];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof buf, fmt, ap);
+  va_end(ap);
+  if (n < 0) n = 0;
+  if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+  resp_write_line(c, '-', buf, (size_t)n);
 }
 
 /* Fast unsigned-to-decimal — snprintf was the #1 hotspot under load
@@ -950,6 +965,30 @@ static void resp_bgsave_poll(void) {
   atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
 }
 
+/* Write the unified dump to a .tmp file (no rename — the caller renames it
+   over the live file once it is fully fsync'd). Shared by the synchronous
+   SAVE path and the BGSAVE child. Returns:
+     0 success — tmp holds a complete, fsync'd dump
+     1 fopen(tmp) failed (tmp untouched)
+     2 dump/write failed (tmp unlinked)
+   The codes line up with the BGSAVE child's _exit() contract. On the open
+   failure the caller may inspect errno for a richer message. */
+static int resp_dump_to_tmp(const char *tmp) {
+  FILE *stream = fopen(tmp, "w");
+  if (!stream) return 1;
+  int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
+  if (ok) {
+    fflush(stream);
+    fsync(fileno(stream));
+  }
+  fclose(stream);
+  if (!ok) {
+    unlink(tmp);
+    return 2;
+  }
+  return 0;
+}
+
 static void cmd_bgsave(resp_client_t *c, char **argv, long *argl, int argc) {
   (void)argv; (void)argl;
   ARGN(1);
@@ -985,14 +1024,9 @@ static void cmd_bgsave(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   if (pid == 0) {
     /* Child: COW gives us a frozen view of the parent's heap. Walk
-       g_resp_kv (and the env, if reachable) and write the dump. */
-    FILE *stream = fopen(tmp, "w");
-    if (!stream) _exit(1);
-    int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
-    if (ok) { fflush(stream); fsync(fileno(stream)); }
-    fclose(stream);
-    if (!ok) { unlink(tmp); _exit(2); }
-    _exit(0);
+       g_resp_kv (and the env, if reachable) and write the dump. The
+       helper's return codes match this _exit() contract exactly. */
+    _exit(resp_dump_to_tmp(tmp));
   }
   /* Parent: stash the paths and pid for the reactor poll to pick up. */
   resp_bgsave_tmp = tmp;
@@ -1014,8 +1048,13 @@ static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
   if (!tmp) { resp_write_err(c, "ERR SAVE: out of memory"); return; }
   memcpy(tmp, path, plen);
   memcpy(tmp + plen, ".tmp", 5);
-  FILE *stream = fopen(tmp, "w");
-  if (!stream) {
+  /* Pass NULL for the env (inside resp_dump_to_tmp): in RESP-only mode the
+     Lisp env isn't interesting to persist. (The Lisp `(savedb)` builtin
+     still walks the env it was called from.) Section L emits an empty
+     record stream — the file still has the section header so the loader
+     stays format-compatible. */
+  int rc = resp_dump_to_tmp(tmp);
+  if (rc == 1) { /* fopen(tmp) failed — errno is still set */
     char msg[256];
     snprintf(msg, sizeof msg, "ERR SAVE: cannot open %s: %s",
              tmp, strerror(errno));
@@ -1023,19 +1062,7 @@ static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
     resp_write_err(c, msg);
     return;
   }
-  /* Pass NULL for the env: in RESP-only mode the Lisp env isn't
-     interesting to persist. (The Lisp `(savedb)` builtin still walks
-     the env it was called from.) Section L emits an empty record
-     stream — the file still has the section header so the loader
-     stays format-compatible. */
-  int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
-  if (ok) {
-    fflush(stream);
-    fsync(fileno(stream));
-  }
-  fclose(stream);
-  if (!ok) {
-    unlink(tmp);
+  if (rc == 2) { /* dump/write failed — resp_dump_to_tmp already unlinked */
     free(tmp);
     resp_write_err(c, "ERR SAVE: write failed");
     return;
@@ -1762,9 +1789,7 @@ static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
                    cmd);
   if (n < 0) n = 0;
   if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
-  resp_write(c, "-", 1);
-  resp_write(c, buf, n);
-  resp_write(c, "\r\n", 2);
+  resp_write_line(c, '-', buf, (size_t)n);
 }
 
 static void resp_process_input(resp_client_t *c) {
@@ -2754,15 +2779,23 @@ exp_t *rediskeyscmd(exp_t *e, env_t *env) {
   return ctx.head ? ctx.head : NIL_EXP;
 }
 
+/* Evaluate (cadr e) into a fresh exp_t `kx` and validate it as a key:
+   propagate an evaluation error, or reject a non-string/non-blob with the
+   per-command "<who>: key must be a string or blob" message. On any reject
+   path the macro returns from the enclosing builtin (releasing kx and e).
+   `who` is the command name string literal (e.g. "redis-type"). */
+#define RESP_EVAL_KEY(kx, e, env, who)                                        \
+  exp_t *kx = EVAL(cadr(e), env);                                             \
+  if (iserror(kx)) { unrefexp(e); return kx; }                               \
+  if (!isstring(kx) && !isblob(kx)) {                                         \
+    unrefexp(kx); unrefexp(e);                                                \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
+                 who ": key must be a string or blob");                      \
+  }
+
 const char doc_redis_type[] = "(redis-type k) — RESP type of key k as a string: \"string\", \"list\", \"hash\", \"vector\", or \"none\".";
 exp_t *redistypecmd(exp_t *e, env_t *env) {
-  exp_t *kx = EVAL(cadr(e), env);
-  if (iserror(kx)) { unrefexp(e); return kx; }
-  if (!isstring(kx) && !isblob(kx)) {
-    unrefexp(kx); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "redis-type: key must be a string or blob");
-  }
+  RESP_EVAL_KEY(kx, e, env, "redis-type");
   const char *ks; size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
@@ -2775,13 +2808,7 @@ exp_t *redistypecmd(exp_t *e, env_t *env) {
 
 const char doc_redis_get[] = "(redis-get k) — Redis-string value of key k as a blob. Non-string containers return nil; use redis-val for raw exp_t containers.";
 exp_t *redisgetcmd(exp_t *e, env_t *env) {
-  exp_t *kx = EVAL(cadr(e), env);
-  if (iserror(kx)) { unrefexp(e); return kx; }
-  if (!isstring(kx) && !isblob(kx)) {
-    unrefexp(kx); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "redis-get: key must be a string or blob");
-  }
+  RESP_EVAL_KEY(kx, e, env, "redis-get");
   const char *ks; size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
@@ -2889,13 +2916,7 @@ const char doc_redis_val[] =
     "(redis-val k) — copy the raw exp_t value stored in the RESP db. "
     "Returns blobs, deques, hash-maps, vectors, or nil when missing.";
 exp_t *redisvalcmd(exp_t *e, env_t *env) {
-  exp_t *kx = EVAL(cadr(e), env);
-  if (iserror(kx)) { unrefexp(e); return kx; }
-  if (!isstring(kx) && !isblob(kx)) {
-    unrefexp(kx); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "redis-val: key must be a string or blob");
-  }
+  RESP_EVAL_KEY(kx, e, env, "redis-val");
   const char *ks; size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
@@ -2982,13 +3003,7 @@ const char doc_redis_set[] =
     "list; hash-map becomes a Redis hash; vector stays an Alcove vector. "
     "Deque/hash members are normalized to blobs.";
 exp_t *redissetcmd(exp_t *e, env_t *env) {
-  exp_t *kx = EVAL(cadr(e), env);
-  if (iserror(kx)) { unrefexp(e); return kx; }
-  if (!isstring(kx) && !isblob(kx)) {
-    unrefexp(kx); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "redis-set: key must be a string or blob");
-  }
+  RESP_EVAL_KEY(kx, e, env, "redis-set");
   exp_t *vx = EVAL(caddr(e), env);
   if (iserror(vx)) { unrefexp(kx); unrefexp(e); return vx; }
   exp_t *stored = resp_lisp_to_store_value(vx);
@@ -3009,13 +3024,7 @@ exp_t *redissetcmd(exp_t *e, env_t *env) {
 const char doc_redis_del[] =
     "(redis-del k) — delete key k from the RESP db. Returns 1 if removed, 0 otherwise.";
 exp_t *redisdelcmd(exp_t *e, env_t *env) {
-  exp_t *kx = EVAL(cadr(e), env);
-  if (iserror(kx)) { unrefexp(e); return kx; }
-  if (!isstring(kx) && !isblob(kx)) {
-    unrefexp(kx); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "redis-del: key must be a string or blob");
-  }
+  RESP_EVAL_KEY(kx, e, env, "redis-del");
   const char *ks; size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   int removed = resp_kv_del(ks, klen);
@@ -3082,14 +3091,8 @@ static void resp_user_encode(resp_client_t *c, exp_t *v) {
     return;
   }
   if (iserror(v)) {
-    char buf[512];
     const char *msg = (v->ptr) ? (const char *)v->ptr : "user command error";
-    int n = snprintf(buf, sizeof buf, "ERR %s", msg);
-    if (n < 0) n = 0;
-    if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
-    resp_write(c, "-", 1);
-    resp_write(c, buf, n);
-    resp_write(c, "\r\n", 2);
+    resp_write_err_fmt(c, "ERR %s", msg);
     return;
   }
   if (isstring(v)) {
@@ -3202,12 +3205,10 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-defcmd: second arg must be a lambda");
   }
-  const char *raw = isstring(nx) ? (char *)exp_text(nx)
-                                 : ((alc_blob_t *)nx->ptr)->bytes;
-  long rawlen = (long)(isstring(nx) ? strlen(raw)
-                                    : ((alc_blob_t *)nx->ptr)->len);
+  const char *raw; size_t rawlen;
+  resp_key_bytes(nx, &raw, &rawlen);
   char name[256];
-  resp_user_upper(raw, rawlen, name, sizeof name);
+  resp_user_upper(raw, (long)rawlen, name, sizeof name);
   if (!resp_user_commands)
     resp_user_commands = memalloc(1, sizeof(dict_t));
   resp_user_env = env;
@@ -3225,12 +3226,10 @@ exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-undefcmd: command name must be a string or blob");
   }
-  const char *raw = isstring(nx) ? (char *)exp_text(nx)
-                                 : ((alc_blob_t *)nx->ptr)->bytes;
-  long rawlen = (long)(isstring(nx) ? strlen(raw)
-                                    : ((alc_blob_t *)nx->ptr)->len);
+  const char *raw; size_t rawlen;
+  resp_key_bytes(nx, &raw, &rawlen);
   char name[256];
-  resp_user_upper(raw, rawlen, name, sizeof name);
+  resp_user_upper(raw, (long)rawlen, name, sizeof name);
   exp_t *ret = NIL_EXP;
   if (resp_user_commands && resp_user_commands->ht[0].size) {
     keyval_t *k = set_get_keyval_dict(resp_user_commands, name, NULL);
