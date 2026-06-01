@@ -156,6 +156,12 @@ enum {
 #define isinternal(e) (is_ptr(e) && (e)->type == EXP_INTERNAL)
 #define ismacro(e) (is_ptr(e) && (e)->type == EXP_MACRO)
 #define iserror(e) (is_ptr(e) && (e)->type == EXP_ERROR)
+/* A call/cc escape token in flight: an EXP_ERROR whose flags ==
+   ERROR_CONT_ESCAPE. It is NOT a catchable error — it belongs to the matching
+   call/cc frame and must pass through try/handler/finally untouched. Defined
+   here (not in builtins_stdlib.h) so the bytecode VM in alcove.c can route on
+   it too. */
+#define is_cont_escape(e) (iserror(e) && (e)->flags == ERROR_CONT_ESCAPE)
 #define isffi(e) (is_ptr(e) && (e)->type == EXP_FFI)
 #define isblob(e) (is_ptr(e) && (e)->type == EXP_BLOB)
 #define isdict(e) (is_ptr(e) && (e)->type == EXP_DICT)
@@ -377,14 +383,22 @@ typedef enum {
   OP_NMAX,     /* pop b, pop a    → push numeric max (value-preserving) */
   OP_NMIN,     /* pop b, pop a    → push numeric min (value-preserving) */
   OP_LENGTH,   /* pop list        → push (length list) — walk cons chain */
-  OP_SETQ_DYN, /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
-                  env, v) — nearest existing binding else top-level;
-                  push v back (setq returns the assigned value) */
-  OP_STORE_FREE, /* u8 idx (symbol) → pop v; assign_store_symbol(consts[idx],
-                    env, v) — `=`/`setf` to a non-slot (captured free var or
-                    global): nearest existing binding else CURRENT env (this
-                    is how it differs from SETQ_DYN, matching updatebang);
-                    push v back (`=` returns the assigned value) */
+  OP_PUSH_HANDLER, /* u8 handler_idx, u8 finally_idx → push a try handler entry
+                      onto the heap handler stack. handler_idx/finally_idx index
+                      the const pool; the sentinel index 0xff means "none" (nil
+                      handler = no-catch; absent finally). Emitted by
+                      compile_try ONLY for a try in tail position, whose body is
+                      then compiled in tail position so it trampolines. The
+                      handler/finally run at error-time / OP_RET-time (see
+                      vm_run). */
+  OP_SETQ_DYN,     /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
+                      env, v) — nearest existing binding else top-level;
+                      push v back (setq returns the assigned value) */
+  OP_STORE_FREE,   /* u8 idx (symbol) → pop v; assign_store_symbol(consts[idx],
+                      env, v) — `=`/`setf` to a non-slot (captured free var or
+                      global): nearest existing binding else CURRENT env (this
+                      is how it differs from SETQ_DYN, matching updatebang);
+                      push v back (`=` returns the assigned value) */
 
   OP_MAX
 } alc_op;

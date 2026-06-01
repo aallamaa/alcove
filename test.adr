@@ -4579,6 +4579,74 @@ assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0) 42
 
 assert "try nil handler propagates error" (error? (try (/ 1 0) nil)) t
 
+setf _tc 0
+
+def _tc_reset ():
+  setf _tc 0
+
+def _tc_bump ():
+  setf _tc (+ _tc 1)
+
+def _tc_count ():
+  _tc
+
+assert "call/cc escapes through try" (call/cc (fn (k) (try (k 42) (fn (e) 99)))):
+  42
+
+assert "try body no escape value" (call/cc (fn (k) (try 7 (fn (e) 99)))) 7
+
+_tc_reset()
+
+assert "call/cc escape runs finally" (do (call/cc (fn (k) (try (k 5) (fn (e) 99) (_tc_bump)))) (_tc_count)):
+  1
+
+def _try_deep (n a):
+  try (if (< n 1) a (_try_deep (- n 1) (+ a 1))) (fn (e) -1)
+
+assert "deep try-per-level 1e6" (_try_deep 1000000 0) 1000000
+
+def _try_catch (n):
+  try (if (< n 1) (/ 1 0) (_try_catch (- n 1))) (fn (e) n)
+
+assert "deep try catch innermost" (_try_catch 5) 0
+
+assert "deep try catch innermost big" (_try_catch 100000) 0
+
+def _try_lvl (n):
+  try (if (< n 1) (/ 1 0) (_try_lvl (- n 1))) (fn (e) n) nil
+
+assert "tail-try handler sees own n" (_try_lvl 3) 0
+
+_tc_reset()
+
+def _try_finc (n):
+  try (if (< n 1) 0 (_try_finc (- n 1))) (fn (e) -1) (_tc_bump)
+
+assert "tail-try finally runs n times" (do (_try_finc 4) (_tc_count)) 5
+
+_tc_reset()
+
+def _try_fin2 (n):
+  try (if (< n 1) (/ 1 0) (_try_fin2 (- n 1))) (fn (e) 0) (_tc_bump)
+
+assert "tail-try finally on caught" (do (_try_fin2 4) (_tc_count)) 5
+
+_tc_reset()
+
+def _try_reraise (n):
+  try (if (< n 1) (/ 1 0) (_try_reraise (- n 1))) nil (_tc_bump)
+
+assert "tail-try reraise propagates" (error? (_try_reraise 3)) t
+
+assert "tail-try reraise ran finally" (_tc_count) 4
+
+def _try_hraise (n):
+  if (is n 0):
+    try (/ 1 0) (fn (e) (/ 1 0))
+    try (_try_hraise (- n 1)) (fn (e) 'outer-caught)
+
+assert "tail-try handler-error caught next-out" (_try_hraise 2) 'outer-caught
+
 assert "filter on (cdr 1-elem) = empty" (filter (fn (x) (> x 3)) (cdr (list 6))):
   nil
 

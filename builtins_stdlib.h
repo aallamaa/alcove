@@ -1273,6 +1273,11 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   exp_t *ret;
   if (!result || !iserror(result)) {
     ret = result ? result : NIL_EXP;
+  } else if (is_cont_escape(result)) {
+    /* A call/cc escape passing through this try: it belongs to the matching
+       call/cc frame, NOT to this handler. Do NOT run the handler — propagate
+       the token unchanged. (finally still runs below, on every exit path.) */
+    ret = result;
   } else {
     /* Error path: evaluate the handler, then apply it to the error value.
        Only a literal nil handler means "no catch" — NOT any falsey value.
@@ -1336,7 +1341,8 @@ static exp_t *make_cont_escape(int64_t id, exp_t *payload, env_t *env) {
   unrefexp(payload);
   return tok;
 }
-#define is_cont_escape(e) (iserror(e) && (e)->flags == ERROR_CONT_ESCAPE)
+/* is_cont_escape() is defined in alcove.h (next to iserror) so the bytecode VM
+   can route escape tokens through try handlers too. */
 
 /* Invoke continuation `cont` with `arg` (consumed) → an escape token. */
 static exp_t *apply_cont(exp_t *cont, exp_t *arg, env_t *env) {

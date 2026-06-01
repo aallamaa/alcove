@@ -111,6 +111,101 @@ struct env_t *g_global_env = NULL;
    strictly call-site reentrant state. */
 static ALCOVE_TLS int in_tail_position = 0;
 
+/* ---- VM handler stack (try in tail position) ------------------------------
+   `try` is value-based and not tail-aware, so the AST evaluator (trycmd) must
+   regain control after the body to inspect the result / run the handler — which
+   keeps a C frame alive per level and blows the C stack on try-per-level deep
+   recursion. To keep TCO, a compiled `try` IN TAIL POSITION instead pushes its
+   {handler-form, finally-form, env} onto this heap stack (OP_PUSH_HANDLER) and
+   compiles its body in tail position, so the body's recursive call trampolines
+   (OP_TAIL_SELF/OP_TAIL_CALL) with O(1) C stack. Handlers legitimately
+   ACCUMULATE O(n) for a try-per-level recursion (each is live until its
+   protected body completes) — that O(n) is inherent and now lives on the heap,
+   not the C stack.
+
+   Each vm_run records the stack depth at entry (handler_base) and owns only the
+   handlers pushed above it; on its final OP_RET it unwinds back to that depth,
+   running each popped try's finally. Innermost (top) handler catches first; a
+   handler that re-raises is caught by the next-out. is_cont_escape tokens are
+   NEVER caught — they pass through (finally still runs).
+
+   Per-level env state: a try-per-level self-recursion uses OP_TAIL_SELF, which
+   DESTRUCTIVELY reuses the one env (rebinding its inline slots in place each
+   trampoline hop). So storing the env pointer would make every level's handler/
+   finally see only the LAST (base-case) param values. Instead each entry
+   SNAPSHOTS the env's inline slots (values + keys + count) at push time, plus a
+   ref on the root chain (the root is stable — self-tail-call keeps the same
+   env, top-level defs root at the global env). At eval time we rebuild a
+   short-lived env from the snapshot. The O(n) snapshots are the inherent O(n)
+   cost of a try-per-level recursion — now on the heap handler stack, not the C
+   stack.
+
+   __thread: each evaluator stack is per-thread, like in_tail_position. */
+typedef struct {
+  exp_t *handler_form; /* raw AST of the handler expr (NULL = no-catch try);
+                          evaluated lazily on the error path, like trycmd */
+  exp_t *finally_form; /* raw AST of the finally expr, or NULL */
+  env_t *root;         /* OWNED ref on the snapshot env's parent chain */
+  int n_inline;        /* snapshotted inline-slot count */
+  /* Borrowed pointers into the param symbols' ->ptr. Safe because
+     OP_PUSH_HANDLER only runs on a TAIL-position try, and a cross-function tail
+     call uses the in-place env-rebind (which would free the old fn) ONLY for
+     compiled targets that captured the GLOBAL env — i.e. top-level defs, whose
+     param symbols are held alive by the permanent global binding for the
+     program's lifetime. Local closures take the vm_invoke_values fallback
+     (their own vm_run, own handler_base), so their snapshots are consumed
+     before the closure can die. */
+  char *inline_keys[ENV_INLINE_SLOTS];
+  exp_t *inline_vals[ENV_INLINE_SLOTS]; /* OWNED refs (snapshot) */
+} vm_handler_t;
+static ALCOVE_TLS vm_handler_t *g_handlers = NULL;
+static ALCOVE_TLS int g_handler_sp = 0;  /* live entries */
+static ALCOVE_TLS int g_handler_cap = 0; /* allocated entries */
+
+/* Push a handler entry, SNAPSHOTTING env's inline slots so the handler/finally
+   see this try's bindings even after OP_TAIL_SELF mutates the env in place.
+   forms are borrowed (const-pool, outlive the call). Returns 0 on OOM (no entry
+   pushed, no refs taken). */
+static int vm_handler_push(exp_t *handler_form, exp_t *finally_form,
+                           env_t *env) {
+  if (g_handler_sp >= g_handler_cap) {
+    int ncap = g_handler_cap ? g_handler_cap * 2 : 16;
+    vm_handler_t *nh = realloc(g_handlers, (size_t)ncap * sizeof(*nh));
+    if (!nh)
+      return 0;
+    g_handlers = nh;
+    g_handler_cap = ncap;
+  }
+  vm_handler_t *h = &g_handlers[g_handler_sp];
+  h->handler_form = handler_form;
+  h->finally_form = finally_form;
+  h->root = ref_env(env->root); /* root is stable across the trampoline */
+  int n = env->n_inline;
+  if (n > ENV_INLINE_SLOTS)
+    n = ENV_INLINE_SLOTS; /* d-overflow bindings resolve via root/dict */
+  h->n_inline = n;
+  for (int i = 0; i < n; i++) {
+    h->inline_keys[i] = env->inline_keys[i];
+    h->inline_vals[i] = refexp(env->inline_vals[i]);
+  }
+  g_handler_sp++;
+  return 1;
+}
+
+/* Build a short-lived env from a handler entry's snapshot. Caller must
+   destroy_env it. Kept separate so handler-eval-and-apply can happen within one
+   temp-env scope (a handler/finally closure captures this env; it must outlive
+   the apply, then be torn down LIFO-correctly). */
+static env_t *vm_handler_make_env(const vm_handler_t *h) {
+  env_t *e = make_env(h->root); /* takes its own ref on root */
+  e->n_inline = h->n_inline;
+  for (int i = 0; i < h->n_inline; i++) {
+    e->inline_keys[i] = h->inline_keys[i];
+    e->inline_vals[i] = refexp(h->inline_vals[i]);
+  }
+  return e;
+}
+
 /* Builtin registration. `arity` and `level` are reserved fields (the
    first for future per-call arity checks, the second for sandbox tiers);
    nothing reads them today. `doc` is a one-line help string colocated
@@ -5739,6 +5834,62 @@ static void compile_for(compiler_t *c, exp_t *form, int tail) {
   /* Result left on top of stack by the last iteration (or the seed nil). */
 }
 
+/* Sentinel const index meaning "no handler" / "no finally" in OP_PUSH_HANDLER.
+ */
+#define HANDLER_NONE 0xff
+
+/* (try body handler [finally]) compiled to the heap-handler-stack model — ONLY
+   when the try is in TAIL POSITION of the compiled lambda. We emit:
+       OP_PUSH_HANDLER handler_idx finally_idx
+       <body, compiled in tail position>
+   The body's value (or tail call) flows out; OP_RET / the VM's error router
+   runs the handler and/or finally and unwinds the handler stack (see vm_run).
+   Because the try is in tail position there is no code after the body in this
+   lambda, so no explicit pop is needed — OP_RET unwinds. The handler and
+   finally forms are stored in the const pool and evaluated LAZILY by the VM
+   (matching trycmd's AST semantics: a nil-literal handler means no-catch;
+   handler/finally eval can itself error and that surfaces).
+
+   NOT in tail position → return 0 so compile_expr bails the whole lambda to AST
+   (trycmd). That keeps the risky path narrow: only tail-position try (the deep-
+   recursion shape) uses the new machinery; every other try keeps today's exact,
+   already-correct behavior. */
+static int compile_try(compiler_t *c, exp_t *form, int tail) {
+  if (!tail)
+    return 0; /* non-tail try → bail to AST */
+  /* (try body handler [finally]) — need at least body + handler. */
+  exp_t *body = cadr(form);
+  exp_t *handler = caddr(form);
+  if (!form->next || !form->next->next)
+    return 0; /* malformed → let trycmd report it */
+  exp_t *finally = cdddr(form) ? cadddr(form) : NULL;
+  if (cdddr(form) && cdr(cdddr(form)))
+    return 0; /* too many args → AST path reports / handles */
+
+  /* Store handler form in the const pool. A literal nil handler = no-catch;
+     encode it as the nil const so the VM applies the same rule as trycmd. */
+  int h_idx = add_const(c, handler ? handler : nil_singleton);
+  if (c->failed || h_idx >= HANDLER_NONE)
+    return 0;
+  int f_idx = HANDLER_NONE;
+  if (finally) {
+    f_idx = add_const(c, finally);
+    if (c->failed || f_idx >= HANDLER_NONE)
+      return 0;
+  }
+  emit_u8(c, OP_PUSH_HANDLER);
+  emit_u8(c, (uint8_t)h_idx);
+  emit_u8(c, (uint8_t)f_idx);
+  /* Committed to the VM path now (OP_PUSH_HANDLER emitted). Body in TAIL
+     position: its tail call trampolines, so deep try-per-level recursion runs
+     in O(1) C stack. If the body fails to compile, c->failed is set and we
+     return 1 anyway — the caller must NOT fall through to OP_EVAL_AST (that
+     would leave a dangling OP_PUSH_HANDLER); c->failed bails the whole lambda
+     to the AST path, which is correct and safe. */
+  compile_expr(c, body, 1);
+  return 1;
+}
+
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (c->failed)
     return;
@@ -5800,6 +5951,15 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     if (!strcmp(s, "if")) {
       compile_if(c, e, tail);
       return;
+    }
+    if (!strcmp(s, "try")) {
+      /* Only tail-position try uses the handler-stack VM path. A non-tail try
+         (compile_try returns 0) falls through to the reserved-symbol
+         OP_EVAL_AST path below — just THAT sub-form defers to trycmd while the
+         enclosing lambda stays compiled (and keeps its own tail call), exactly
+         as before this change. So non-tail try keeps today's exact behavior. */
+      if (compile_try(c, e, tail))
+        return;
     }
     if (!strcmp(s, "let")) {
       compile_let(c, e, tail);
@@ -6270,6 +6430,91 @@ static exp_t *index_get(exp_t *c, int64_t i) {
              : NULL;
 }
 
+/* Run one popped try's finally form (entry) in its snapshot env. Returns the
+   finally's OWNED error value if it errored or escaped (so the caller can let
+   it take priority), else NULL (normal finally value is discarded — like
+   trycmd). */
+static exp_t *vm_run_finally(const vm_handler_t *entry) {
+  if (!entry->finally_form)
+    return NULL;
+  env_t *e = vm_handler_make_env(entry);
+  exp_t *fret = EVAL(entry->finally_form, e);
+  destroy_env(e);
+  if (fret && iserror(fret))
+    return fret; /* error OR escape token — let caller decide priority */
+  if (fret)
+    unrefexp(fret);
+  return NULL;
+}
+
+/* Release a popped handler entry's snapshot refs (root chain + slot values). */
+static void vm_handler_release(vm_handler_t *h) {
+  for (int i = 0; i < h->n_inline; i++)
+    unrefexp(h->inline_vals[i]);
+  if (h->root)
+    destroy_env(h->root);
+}
+
+/* Unwind the heap handler stack from its current top down to `handler_base`,
+   resolving an in-flight value `v` (OWNED). Two regimes, both running every
+   popped try's finally exactly once:
+     - while v is a REAL error (catchable): each popped try gets to catch it —
+       run its handler form (nil handler = no-catch → propagate; handler that
+       re-raises → its error continues to the next-out handler). Once a handler
+       returns a normal value, v becomes that value and we switch to the
+       finally-only regime for the remaining (outer) handlers, whose protected
+       bodies completed normally with v.
+     - while v is normal OR an is_cont_escape token: handlers are NOT run (no
+       catchable error reached them); only their finally runs. An escape token
+       passes straight through to handler_base. A finally that itself errors/
+       escapes takes priority over v (matches trycmd's finally rule).
+   Returns the resolved OWNED value to hand back to the VM (which either returns
+   it to its C caller, or — if still an error and handler_base is this vm_run's
+   entry depth — propagates it out). Each entry's handler/finally run in a
+   short-lived env rebuilt from that try's snapshotted bindings. */
+static exp_t *vm_unwind_handlers(exp_t *v, int handler_base) {
+  while (g_handler_sp > handler_base) {
+    vm_handler_t *entry = &g_handlers[g_handler_sp - 1];
+    if (v && iserror(v) && !is_cont_escape(v)) {
+      /* Catchable error: this try may handle it. Evaluate the handler form
+         lazily (a nil-literal handler means no-catch), exactly like trycmd.
+         Eval AND apply within one temp-env scope: the handler closure captures
+         this env, so it must outlive the apply, then tear down LIFO. */
+      env_t *he = vm_handler_make_env(entry);
+      exp_t *handler = EVAL(entry->handler_form, he);
+      if (!handler || handler == NIL_EXP) {
+        /* no-catch: propagate v past this try (finally still runs) */
+        if (handler)
+          unrefexp(handler);
+      } else if (iserror(handler)) {
+        /* handler eval itself failed/escaped — that replaces v */
+        unrefexp(v);
+        v = handler;
+      } else {
+        exp_t *res = alc_apply1(handler, v, he);
+        unrefexp(handler);
+        unrefexp(v);
+        v = res ? res : NIL_EXP;
+        /* v is now whatever the handler produced: a normal value (caught), or
+           a re-raised error (continues to the next-out handler). */
+      }
+      destroy_env(he);
+    }
+    /* finally runs on EVERY path (normal, caught, re-raised, escape-through).
+     */
+    exp_t *ferr = vm_run_finally(entry);
+    if (ferr) {
+      /* finally errored/escaped: it takes priority over the current value. */
+      if (v)
+        unrefexp(v);
+      v = ferr;
+    }
+    vm_handler_release(entry);
+    g_handler_sp--;
+  }
+  return v ? v : NIL_EXP;
+}
+
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
@@ -6284,6 +6529,12 @@ exp_t *vm_run(exp_t *fn, env_t *env) {
   int sp;
   int pc;
   int fn_owned = 0;
+  /* This vm_run owns only handlers pushed at or above this depth. On final
+     return (OP_RET / error / escape) it unwinds back to here, running each
+     popped try's finally. Set ONCE at entry — NOT reset on tail_reentry, so
+     handlers pushed by a try-per-level recursion accumulate across trampolines
+     (correct: they're all live until the base case returns). */
+  int handler_base = g_handler_sp;
 
 tail_reentry:
   bc = fn->bc;
@@ -6300,7 +6551,7 @@ tail_reentry:
       unrefexp(stack[_i]);                                                     \
     if (fn_owned)                                                              \
       unrefexp(fn);                                                            \
-    return _err;                                                               \
+    return vm_unwind_handlers(_err, handler_base);                             \
   } while (0)
 #define PUSH(v)                                                                \
   do {                                                                         \
@@ -6309,6 +6560,13 @@ tail_reentry:
     stack[sp++] = (v);                                                         \
   } while (0)
 #define POP() (stack[--sp])
+/* Return `v` (OWNED) from this vm_run, routing it through any handlers this run
+   accumulated (catch / finally / escape-through). Cheap no-handler fast path.
+ */
+#define VM_RETURN(v)                                                           \
+  return ((g_handler_sp > handler_base)                                        \
+              ? vm_unwind_handlers((v), handler_base)                          \
+              : (v))
 #define READ_U8 (code[pc++])
 #define READ_I16 (pc += 2, (int16_t)(code[pc - 2] | (code[pc - 1] << 8)))
 
@@ -6372,6 +6630,7 @@ tail_reentry:
       [OP_LENGTH] = &&l_length,
       [OP_SETQ_DYN] = &&l_setq_dyn,
       [OP_STORE_FREE] = &&l_store_free,
+      [OP_PUSH_HANDLER] = &&l_push_handler,
   };
 #ifndef NDEBUG
   /* Catches "added an opcode but forgot to initialize dispatch[]" —
@@ -6396,6 +6655,11 @@ l_ret: {
     unrefexp(POP());
   if (fn_owned)
     unrefexp(fn);
+  /* Normal completion: unwind any handlers this vm_run accumulated (running
+     each try's finally) before returning the value. For a try-per-level
+     recursion every level's finally runs here as the base value flows out. */
+  if (g_handler_sp > handler_base)
+    return vm_unwind_handlers(r, handler_base);
   return r;
 }
 
@@ -6427,11 +6691,37 @@ l_eval_ast: {
       unrefexp(POP());
     if (fn_owned)
       unrefexp(fn);
+    /* Route through this vm_run's handler stack (catchable error or
+       escape-through). No active handler → returns r unchanged. */
+    if (g_handler_sp > handler_base)
+      return vm_unwind_handlers(r, handler_base);
     return r;
   }
   if (!r)
     r = NIL_EXP;
   PUSH(r);
+  NEXT;
+}
+
+l_push_handler: {
+  /* Push a try handler entry: {handler-form, finally-form, env}. The forms live
+     in the const pool (borrowed, outlive the call). Index 0xff = none. Emitted
+     only for a tail-position try (compile_try); the protected body follows in
+     tail position and trampolines, so handlers accumulate on this heap stack
+     (O(n) for try-per-level recursion) instead of the C stack. The VM's error
+     router (RUNTIME_ERR / OP_CALL* / OP_EVAL_AST error paths) and OP_RET unwind
+     these via vm_unwind_handlers. */
+  uint8_t h_idx = READ_U8;
+  uint8_t f_idx = READ_U8;
+  exp_t *hform =
+      consts[h_idx]; /* nil_singleton encodes a nil (no-catch) handler */
+  exp_t *fform = (f_idx == HANDLER_NONE) ? NULL : consts[f_idx];
+  if (!vm_handler_push(hform, fform, env)) {
+    /* OOM growing the handler stack: surface as a (catchable) runtime error,
+       but there's no room to register THIS handler — route through whatever is
+       already active. */
+    RUNTIME_ERR("try: out of memory growing handler stack");
+  }
   NEXT;
 }
 
@@ -6505,7 +6795,7 @@ l_setq_dyn: {
         unrefexp(stack[_i]);
       if (fn_owned)
         unrefexp(fn);
-      return _rerr;
+      VM_RETURN(_rerr);
     });
   }
   /* setq_store_symbol takes its own ref on v (refexp into the binding)
@@ -6530,7 +6820,7 @@ l_store_free: {
         unrefexp(stack[_i]);
       if (fn_owned)
         unrefexp(fn);
-      return _rerr;
+      VM_RETURN(_rerr);
     });
   }
   /* Borrows v (refexp into the binding); our popped ref is the result. */
@@ -6787,7 +7077,7 @@ l_call: {
       unrefexp(POP());
     if (fn_owned)
       unrefexp(fn);
-    return ret;
+    VM_RETURN(ret);
   }
   if (!ret)
     ret = NIL_EXP;
@@ -6828,7 +7118,7 @@ l_call_global: {
       unrefexp(POP());
     if (fn_owned)
       unrefexp(fn);
-    return ret;
+    VM_RETURN(ret);
   }
   if (!ret)
     ret = NIL_EXP;
@@ -6869,7 +7159,7 @@ l_tail_call: {
       unrefexp(POP());
     if (fn_owned)
       unrefexp(fn);
-    return ret;
+    VM_RETURN(ret);
   }
   if (!islambda(new_fn)) {
     /* Release the n argument values above base before shrinking sp,
@@ -6900,7 +7190,7 @@ l_tail_call: {
       unrefexp(POP());
     if (fn_owned)
       unrefexp(fn);
-    return ret;
+    VM_RETURN(ret);
   }
 
   if (n != new_fn->bc->nparams)
@@ -6953,7 +7243,7 @@ l_tail_call: {
                              "OP_TAIL_CALL: bad param");
       if (fn_owned)
         unrefexp(fn);
-      return _tc_err;
+      VM_RETURN(_tc_err);
     }
     if (env->n_inline < ENV_INLINE_SLOTS) {
       env->inline_keys[env->n_inline] = (char *)exp_text(p->content);

@@ -3003,6 +3003,60 @@
 (assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0)   42)
 (assert "try nil handler propagates error"  (error? (try (/ 1 0) nil))    t)
 
+;; --- try in TAIL position: handler-stack VM path (decouples handler lifetime
+;;     from the C stack so deep try-per-level recursion doesn't blow it). ---
+;; side-effect counter (proves finally runs the right number of times).
+(= _tc 0)
+(def _tc_reset () (= _tc 0))
+(def _tc_bump  () (= _tc (+ _tc 1)))
+(def _tc_count () _tc)
+;; call/cc escape passing THROUGH a try must NOT be caught by the handler — it
+;; belongs to the matching call/cc frame. (Was wrongly caught → returned 99.)
+(assert "call/cc escapes through try"  (call/cc (fn (k) (try (k 42) (fn (e) 99))))  42)
+;; ...but a try with no escape in the body still returns the body value.
+(assert "try body no escape value"     (call/cc (fn (k) (try 7 (fn (e) 99))))       7)
+;; finally still runs when an escape passes through (Scheme-style unwind).
+(_tc_reset)
+(assert "call/cc escape runs finally"
+        (do (call/cc (fn (k) (try (k 5) (fn (e) 99) (_tc_bump)))) (_tc_count)) 1)
+
+;; Deep try-per-level recursion: the try wraps each recursive call. Each level
+;; pushes a handler; they accumulate on the heap (O(n)), NOT the C stack — so no
+;; segfault. (Pre-fix: SEGV around depth 50000.)
+(def _try_deep (n a) (try (if (< n 1) a (_try_deep (- n 1) (+ a 1))) (fn (e) -1)))
+(assert "deep try-per-level 1e6"       (_try_deep 1000000 0)   1000000)
+
+;; An error thrown at the base is caught by the INNERMOST handler; its value
+;; propagates up through every (now-normal) outer try.
+(def _try_catch (n) (try (if (< n 1) (/ 1 0) (_try_catch (- n 1))) (fn (e) n)))
+(assert "deep try catch innermost"     (_try_catch 5)      0)
+(assert "deep try catch innermost big" (_try_catch 100000) 0)
+
+;; The innermost handler sees its OWN level's bindings (env snapshot), even
+;; though OP_TAIL_SELF reuses the env in place across the recursion.
+(def _try_lvl (n) (try (if (< n 1) (/ 1 0) (_try_lvl (- n 1))) (fn (e) n) nil))
+(assert "tail-try handler sees own n"  (_try_lvl 3)        0)
+
+;; finally runs exactly once per try on every path: normal, caught, re-raised.
+(_tc_reset)
+(def _try_finc (n) (try (if (< n 1) 0 (_try_finc (- n 1))) (fn (e) -1) (_tc_bump)))
+(assert "tail-try finally runs n times" (do (_try_finc 4) (_tc_count)) 5)
+(_tc_reset)
+;; caught path: base raises, caught at base, value flows up; finally at all levels.
+(def _try_fin2 (n) (try (if (< n 1) (/ 1 0) (_try_fin2 (- n 1))) (fn (e) 0) (_tc_bump)))
+(assert "tail-try finally on caught"    (do (_try_fin2 4) (_tc_count)) 5)
+;; re-raise: nil handler at every level re-propagates; finally still runs each.
+(_tc_reset)
+(def _try_reraise (n) (try (if (< n 1) (/ 1 0) (_try_reraise (- n 1))) nil (_tc_bump)))
+(assert "tail-try reraise propagates"   (error? (_try_reraise 3)) t)
+(assert "tail-try reraise ran finally"  (_tc_count) 4)
+;; a handler that itself errors is caught by the NEXT-OUT handler.
+(def _try_hraise (n)
+  (if (is n 0)
+      (try (/ 1 0) (fn (e) (/ 1 0)))            ; innermost: handler re-errors
+      (try (_try_hraise (- n 1)) (fn (e) 'outer-caught))))
+(assert "tail-try handler-error caught next-out" (_try_hraise 2) 'outer-caught)
+
 ;; --- higher-order builtins: a NULL list arg = empty list, not an error ---
 ;; (cdr <1-elem>) yields C NULL (not NIL_EXP); filter/map/reduce/any?/all?/
 ;; sort-by used to reject it as "(... pred list)" missing-param and error,
