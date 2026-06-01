@@ -489,8 +489,8 @@ static int bc_oplen(uint8_t op) {
                             offset in `at` and the opcode in `op` (the caller
                             validates membership); advance by its length.
      BC_END()             — require the cursor landed exactly at ncode (the
-                            whole body matched — replaces the old ncode==N gate).
-   Operand accessors (read relative to an instruction's byte offset `at`;
+                            whole body matched — replaces the old ncode==N
+   gate). Operand accessors (read relative to an instruction's byte offset `at`;
    operand byte 0 is the first byte after the opcode):
      BC_ARG(at, k)  — operand byte k (uint8).
      BC_I16(at, k)  — signed 16-bit LE from operand bytes k, k+1. */
@@ -532,7 +532,7 @@ static int bc_oplen(uint8_t op) {
       return 0;                                                                \
     pc += _bc_l;                                                               \
   } while (0)
-#define BC_END()                                                              \
+#define BC_END()                                                               \
   do {                                                                         \
     if (pc != bc->ncode)                                                       \
       return 0;                                                                \
@@ -540,6 +540,1032 @@ static int bc_oplen(uint8_t op) {
 #define BC_ARG(at, k) (c[(at) + 1 + (k)])
 #define BC_I16(at, k)                                                          \
   ((int16_t)((uint16_t)c[(at) + 1 + (k)] | ((uint16_t)c[(at) + 2 + (k)] << 8)))
+
+/* ---------------- backend-neutral walk helpers ----------------
+   Used by the match_X shape analyzers below (and callable from each backend's
+   try_jit_X). Pure analysis — they read bytecode and compute offsets; they
+   never emit a byte, so sharing them cannot change emitted machine code. */
+
+/* Byte offset of inline slot `slot` inside env_t (the constant baked into the
+   emitted load/store). Unchecked — caller has already validated the slot. */
+static inline int env_slot_off(uint8_t slot) {
+  return (int)offsetof(env_t, inline_vals[0]) + (int)slot * 8;
+}
+
+/* Checked variant: returns the offset for a valid inline slot, or -1 if the
+   slot is out of the inline range (both backends deopt in that case). On
+   arm64 the offset must also fit the LDR/STR unsigned-imm12 scaled ceiling
+   (32760 = 4095*8) used by arm64_ldr_imm/arm64_str_imm. */
+static inline int env_slot_off_checked(uint8_t slot) {
+  if (slot >= ENV_INLINE_SLOTS)
+    return -1;
+  int off = env_slot_off(slot);
+#ifdef __aarch64__
+  if (off < 0 || off > 32760)
+    return -1;
+#endif
+  return off;
+}
+
+/* True if bc->consts[idx] is a symbol whose text equals `name`. Bounds-checks
+   idx against nconsts first. Folds the repeated
+   issymbol(consts[idx]) && strcmp(exp_text(consts[idx]), name)==0 guard. */
+static inline int bc_const_is_sym(bytecode_t *bc, int idx, const char *name) {
+  return idx >= 0 && idx < bc->nconsts && issymbol(bc->consts[idx]) &&
+         strcmp(exp_text(bc->consts[idx]), name) == 0;
+}
+
+/* True if bc->consts[idx] names this very function (self-recursion guard).
+   Mirrors the repeated self_name strcmp tests in the recursion shapes. */
+static inline int bc_calls_self(bytecode_t *bc, int idx) {
+  return bc->self_name && idx >= 0 && idx < bc->nconsts &&
+         issymbol(bc->consts[idx]) &&
+         strcmp(exp_text(bc->consts[idx]), bc->self_name) == 0;
+}
+
+/* ---------------- shared shape analyzers (match_X) ----------------
+   Each match_X walks the bytecode with the BC_* cursor, validates slot
+   consistency / consts, and fills a small POD struct of captured operands.
+   The walk is arch-independent; only the emit half differs per backend. Each
+   backend's try_jit_X calls match_X then emits from the struct. Because the
+   walk emits no bytes, sharing it leaves the emitted machine code unchanged. */
+
+/* simple_tail_loop / simple_tail_loop_eq captured operands.
+     while (cmp(slot, cmp_imm)-fails) { slot arith= arith_imm; } return slot
+   slot is the single counter slot (cmp/arith/load all agree on it). */
+struct match_simple_tail_loop {
+  uint8_t cmp_op, arith_op;
+  uint8_t slot;
+  int16_t cmp_imm, arith_imm;
+  int slot_off;
+};
+
+/* 19-byte step-before-base twin (recurse-in-THEN):
+     <cmp> slot K1 ; BR_IF_FALSE off ; <arith> slot K2 ; TAIL_SELF 1 ;
+     JUMP off ; LOAD_SLOT slot ; RET
+   cmp ∈ {SLOT_GT/LT/GE/LE/IS_FIX}, arith ∈ {SLOT_ADD/SUB_FIX}. */
+static int match_simple_tail_loop(bytecode_t *bc,
+                                  struct match_simple_tail_loop *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_cmp, at_arith, at_tail, at_load;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE_ANY(at_cmp, cmp_op);
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_arith, arith_op);
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  BC_EAT(OP_RET);
+  BC_END();
+
+  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
+  uint8_t arith_slot = BC_ARG(at_arith, 0);
+  uint8_t load_slot = BC_ARG(at_load, 0);
+  if (cmp_slot != arith_slot || cmp_slot != load_slot)
+    return 0;
+  int slot_off = env_slot_off_checked(cmp_slot);
+  if (slot_off < 0)
+    return 0;
+
+  m->cmp_op = cmp_op;
+  m->arith_op = arith_op;
+  m->slot = cmp_slot;
+  m->cmp_imm = BC_I16(at_cmp, 1);
+  m->arith_imm = BC_I16(at_arith, 1);
+  m->slot_off = slot_off;
+  return 1;
+}
+
+/* 19-byte equality-base twin (base-in-THEN, recurse-in-ELSE):
+     SLOT_IS_FIX slot K ; BR_IF_FALSE off ; LOAD_SLOT slot ; JUMP off ;
+     <arith> slot S ; TAIL_SELF 1 ; RET
+   Semantics: while (slot != K) { slot arith= S; } return slot. cmp_op is
+   always OP_SLOT_IS_FIX; arith ∈ {SLOT_ADD/SUB_FIX}. */
+static int match_simple_tail_loop_eq(bytecode_t *bc,
+                                     struct match_simple_tail_loop *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_cmp, at_load, at_arith, at_tail;
+  uint8_t arith_op;
+  BC_TAKE(at_cmp, OP_SLOT_IS_FIX);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_load, OP_LOAD_SLOT); /* THEN: base arm = return the slot */
+  BC_EAT(OP_JUMP);
+  BC_TAKE_ANY(at_arith, arith_op); /* ELSE: step */
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
+  uint8_t load_slot = BC_ARG(at_load, 0);
+  uint8_t arith_slot = BC_ARG(at_arith, 0);
+  if (cmp_slot != arith_slot || cmp_slot != load_slot)
+    return 0;
+  int slot_off = env_slot_off_checked(cmp_slot);
+  if (slot_off < 0)
+    return 0;
+
+  m->cmp_op = OP_SLOT_IS_FIX;
+  m->arith_op = arith_op;
+  m->slot = cmp_slot;
+  m->cmp_imm = BC_I16(at_cmp, 1);
+  m->arith_imm = BC_I16(at_arith, 1);
+  m->slot_off = slot_off;
+  return 1;
+}
+
+/* float_acc_loop captured operands (25-byte shape):
+     (def f (n acc) (if (<cmp> n LIM) (f (n step= K) (acc fop FC)) acc))
+   n is an integer counter slot, acc a float accumulator slot, LIM a fixnum
+   const wider than i16, FC a float const, fop ∈ {+,-,*}. */
+struct match_float_acc_loop {
+  uint8_t cmp_op, step_op, fop;
+  uint8_t cslot, aslot;
+  int16_t step_imm;
+  int64_t lim_val;  /* FIX_VAL(consts[lim_idx]); each backend tags it */
+  uint64_t fc_bits; /* IEEE-754 bits of consts[fc_idx]->f */
+  int coff, aoff;
+};
+
+/* Walk the 25-byte float-accumulator self-tail loop. Validates 2 params, the
+   counter/accumulator slot consistency + distinctness + range, that the limit
+   const is a fixnum and the float const is a float, and that lim<<3 won't
+   overflow int64 (the tag-compare invariant both backends rely on). The
+   amd64-only imm32 narrowing of the tagged limit stays in that backend. */
+static int match_float_acc_loop(bytecode_t *bc,
+                                struct match_float_acc_loop *m) {
+  if (bc->nparams != 2)
+    return 0;
+  uint8_t *c = bc->code;
+  int pc = 0, at_c, at_lim, at_step, at_a, at_fc, at_tail, at_a2;
+  uint8_t cmp_op, step_op, fop;
+  BC_TAKE(at_c, OP_LOAD_SLOT);
+  uint8_t cslot = BC_ARG(at_c, 0);
+  BC_TAKE(at_lim, OP_LOAD_CONST);
+  uint8_t lim_idx = BC_ARG(at_lim, 0);
+  BC_EAT_ANY(cmp_op);
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_step, step_op);
+  if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
+    return 0;
+  if (BC_ARG(at_step, 0) != cslot)
+    return 0;
+  int16_t step_imm = BC_I16(at_step, 1);
+  BC_TAKE(at_a, OP_LOAD_SLOT);
+  uint8_t aslot = BC_ARG(at_a, 0);
+  BC_TAKE(at_fc, OP_LOAD_CONST);
+  uint8_t fc_idx = BC_ARG(at_fc, 0);
+  BC_EAT_ANY(fop);
+  if (fop != OP_ADD && fop != OP_SUB && fop != OP_MUL)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 2)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_a2, OP_LOAD_SLOT);
+  if (BC_ARG(at_a2, 0) != aslot)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  /* slots distinct, in range, consistent across the body */
+  if (cslot == aslot)
+    return 0;
+  int coff = env_slot_off_checked(cslot);
+  int aoff = env_slot_off_checked(aslot);
+  if (coff < 0 || aoff < 0)
+    return 0;
+  if (lim_idx >= bc->nconsts || fc_idx >= bc->nconsts)
+    return 0;
+
+  /* Static type gate: counter limit is a fixnum, accumulator const a float.
+     Stops the matcher mis-firing on an identically-shaped INTEGER loop. */
+  exp_t *lim = bc->consts[lim_idx];
+  exp_t *fc = bc->consts[fc_idx];
+  if (!isnumber(lim) || !isfloat(fc))
+    return 0;
+
+  int64_t lim_val = FIX_VAL(lim);
+  /* Tagged compare invariant: tagging is (v<<3)|1, monotonic for signed order,
+     so the tagged compare equals the value compare. Require lim<<3 not to
+     overflow int64. */
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+
+  uint64_t fc_bits;
+  {
+    double d = fc->f;
+    memcpy(&fc_bits, &d, 8);
+  }
+
+  m->cmp_op = cmp_op;
+  m->step_op = step_op;
+  m->fop = fop;
+  m->cslot = cslot;
+  m->aslot = aslot;
+  m->step_imm = step_imm;
+  m->lim_val = lim_val;
+  m->fc_bits = fc_bits;
+  m->coff = coff;
+  m->aoff = aoff;
+  return 1;
+}
+
+/* wide_counter_loop captured operands (20-byte shape): the generic-compare
+   twin of simple_tail_loop — the limit is a fixnum const wider than i16, so
+   the compiler emits LOAD_SLOT/LOAD_CONST/<cmp> instead of the fused
+   SLOT_<cmp>_FIX. Identical emitted loop; the limit comes from a const. */
+struct match_wide_counter_loop {
+  uint8_t cmp_op, arith_op;
+  uint8_t slot;
+  int16_t arith_imm;
+  int64_t lim_val; /* FIX_VAL(consts[lim_idx]); each backend tags it */
+  int slot_off;
+};
+
+/* Walk the 20-byte wide-limit integer counter loop:
+     LOAD_SLOT slot ; LOAD_CONST lim ; <cmp LT|GT|LE|GE> ; BR_IF_FALSE ;
+     SLOT_<ADD|SUB>_FIX slot K ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET
+   Validates slot consistency/range, that the limit const is a fixnum, and
+   that lim<<3 won't overflow int64. amd64's extra imm32 narrowing stays in
+   that backend. */
+static int match_wide_counter_loop(bytecode_t *bc,
+                                   struct match_wide_counter_loop *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_load0, at_lim, at_arith, at_tail, at_load1;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE(at_load0, OP_LOAD_SLOT);
+  uint8_t cmp_slot = BC_ARG(at_load0, 0);
+  BC_TAKE(at_lim, OP_LOAD_CONST);
+  uint8_t lim_idx = BC_ARG(at_lim, 0);
+  BC_EAT_ANY(cmp_op);
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_arith, arith_op);
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_arith, 0) != cmp_slot)
+    return 0;
+  int16_t arith_imm = BC_I16(at_arith, 1);
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load1, OP_LOAD_SLOT);
+  if (BC_ARG(at_load1, 0) != cmp_slot)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  int slot_off = env_slot_off_checked(cmp_slot);
+  if (slot_off < 0 || lim_idx >= bc->nconsts)
+    return 0;
+  /* fixnum limit only — a float const would mis-compare against the tagged
+     integer counter (the VM would promote; we must not pretend it's a fix). */
+  exp_t *lim = bc->consts[lim_idx];
+  if (!isnumber(lim))
+    return 0;
+  int64_t lim_val = FIX_VAL(lim);
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+
+  m->cmp_op = cmp_op;
+  m->arith_op = arith_op;
+  m->slot = cmp_slot;
+  m->arith_imm = arith_imm;
+  m->lim_val = lim_val;
+  m->slot_off = slot_off;
+  return 1;
+}
+
+/* tail_loop_with_call captured operands (26-byte shape):
+     (def lp (k) (if (cmp k K1) (do (g K_arg) (lp (op k K2))) k))
+   A counter loop that makes one value-dropping global call per iteration. */
+struct match_tail_loop_with_call {
+  uint8_t cmp_op, arith_op;
+  uint8_t slot, const_idx;
+  int16_t cmp_imm, arith_imm, arg_imm;
+  int slot_off;
+};
+
+/* Walk the 26-byte tail-counter loop with one inner global call:
+     <cmp> slot K1 ; BR_IF_FALSE ; LOAD_FIX arg ; CALL_GLOBAL idx,1 ; POP ;
+     <arith> slot K2 ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET
+   cmp ∈ {SLOT_GT/LT/GE/LE/IS_FIX}, arith ∈ {SLOT_ADD/SUB_FIX}. */
+static int match_tail_loop_with_call(bytecode_t *bc,
+                                     struct match_tail_loop_with_call *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_cmp, at_arg, at_call, at_arith, at_tail, at_load;
+  uint8_t cmp_op, arith_op;
+  BC_TAKE_ANY(at_cmp, cmp_op);
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
+    return 0;
+  uint8_t slot = BC_ARG(at_cmp, 0);
+  int16_t cmp_imm = BC_I16(at_cmp, 1);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_arg, OP_LOAD_FIX);
+  int16_t arg_imm = BC_I16(at_arg, 0);
+  BC_TAKE(at_call, OP_CALL_GLOBAL);
+  uint8_t const_idx = BC_ARG(at_call, 0);
+  if (BC_ARG(at_call, 1) != 1) /* nargs must be 1 */
+    return 0;
+  if (const_idx >= bc->nconsts)
+    return 0;
+  BC_EAT(OP_POP);
+  BC_TAKE_ANY(at_arith, arith_op);
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_arith, 0) != slot)
+    return 0;
+  int16_t arith_imm = BC_I16(at_arith, 1);
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  if (BC_ARG(at_load, 0) != slot)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  int slot_off = env_slot_off_checked(slot);
+  if (slot_off < 0)
+    return 0;
+
+  m->cmp_op = cmp_op;
+  m->arith_op = arith_op;
+  m->slot = slot;
+  m->const_idx = const_idx;
+  m->cmp_imm = cmp_imm;
+  m->arith_imm = arith_imm;
+  m->arg_imm = arg_imm;
+  m->slot_off = slot_off;
+  return 1;
+}
+
+/* recurse_add_two captured operands (28-byte two-call recursion, fib shape):
+     (def f (n) (if (cmp n K1) n (+ (g (n op_a K2)) (g (n op_b K3)))))
+   The walk is shared; the self-call / is-fib-like decision (and what to do
+   when it fails) differs per backend, so those stay in each try_jit_X. */
+struct match_recurse_add_two {
+  uint8_t cmp_op, op_a, op_b;
+  uint8_t slot, idx_a, idx_b;
+  int16_t K1, K2, K3;
+  int slot_off;
+};
+
+/* Walk the 28-byte two-call recursion:
+     <cmp> slot K1 ; BR_IF_FALSE ; LOAD_SLOT slot ; JUMP ;
+     <op_a> slot K2 ; CALL_GLOBAL idx_a,1 ; <op_b> slot K3 ;
+     CALL_GLOBAL idx_b,1 ; ADD ; RET
+   cmp ∈ {SLOT_GT/LT/GE/LE/IS_FIX}, op_a/op_b ∈ {SLOT_ADD/SUB_FIX}. */
+static int match_recurse_add_two(bytecode_t *bc,
+                                 struct match_recurse_add_two *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_cmp, at_load, at_a, at_ca, at_b, at_cb;
+  uint8_t cmp_op, op_a, op_b;
+  BC_TAKE_ANY(at_cmp, cmp_op);
+  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
+      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
+      cmp_op != OP_SLOT_IS_FIX)
+    return 0;
+  uint8_t slot = BC_ARG(at_cmp, 0);
+  int16_t K1 = BC_I16(at_cmp, 1);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  if (BC_ARG(at_load, 0) != slot)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE_ANY(at_a, op_a);
+  if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_a, 0) != slot)
+    return 0;
+  int16_t K2 = BC_I16(at_a, 1);
+  BC_TAKE(at_ca, OP_CALL_GLOBAL);
+  uint8_t idx_a = BC_ARG(at_ca, 0);
+  if (BC_ARG(at_ca, 1) != 1)
+    return 0;
+  if (idx_a >= bc->nconsts)
+    return 0;
+  BC_TAKE_ANY(at_b, op_b);
+  if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_b, 0) != slot)
+    return 0;
+  int16_t K3 = BC_I16(at_b, 1);
+  BC_TAKE(at_cb, OP_CALL_GLOBAL);
+  uint8_t idx_b = BC_ARG(at_cb, 0);
+  if (BC_ARG(at_cb, 1) != 1)
+    return 0;
+  if (idx_b >= bc->nconsts)
+    return 0;
+  BC_EAT(OP_ADD);
+  BC_EAT(OP_RET);
+  BC_END();
+
+  int slot_off = env_slot_off_checked(slot);
+  if (slot_off < 0)
+    return 0;
+
+  m->cmp_op = cmp_op;
+  m->op_a = op_a;
+  m->op_b = op_b;
+  m->slot = slot;
+  m->idx_a = idx_a;
+  m->idx_b = idx_b;
+  m->K1 = K1;
+  m->K2 = K2;
+  m->K3 = K3;
+  m->slot_off = slot_off;
+  return 1;
+}
+
+/* recurse_mul_one captured operands (24-byte iterative-fact shape):
+     (def f (n) (if (cmp n K1) BASE (* (g (n step K2)) n)))
+   The self-call guard (bc_calls_self on idx) stays per-backend. */
+struct match_recurse_mul_one {
+  uint8_t cmp_op, step_op;
+  uint8_t slot, idx;
+  int16_t K1, K2, BASE;
+  int slot_off;
+};
+
+/* Walk the 24-byte iterative-factorial shape:
+     <cmp> slot K1 ; BR_IF_FALSE ; LOAD_FIX BASE ; JUMP ;
+     LOAD_SLOT slot ; <step> slot K2 ; CALL_GLOBAL idx,1 ; MUL ; RET
+   cmp ∈ {SLOT_LT/GT/LE/GE_FIX} (no IS), step ∈ {SLOT_ADD/SUB_FIX}. */
+static int match_recurse_mul_one(bytecode_t *bc,
+                                 struct match_recurse_mul_one *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_cmp, at_base, at_load, at_step, at_call;
+  uint8_t cmp_op, step_op;
+  BC_TAKE_ANY(at_cmp, cmp_op);
+  if (cmp_op != OP_SLOT_LT_FIX && cmp_op != OP_SLOT_GT_FIX &&
+      cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX)
+    return 0;
+  uint8_t slot = BC_ARG(at_cmp, 0);
+  int16_t K1 = BC_I16(at_cmp, 1);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_base, OP_LOAD_FIX);
+  int16_t BASE = BC_I16(at_base, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_load, OP_LOAD_SLOT);
+  if (BC_ARG(at_load, 0) != slot)
+    return 0;
+  BC_TAKE_ANY(at_step, step_op);
+  if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_step, 0) != slot)
+    return 0;
+  int16_t K2 = BC_I16(at_step, 1);
+  BC_TAKE(at_call, OP_CALL_GLOBAL);
+  uint8_t idx = BC_ARG(at_call, 0);
+  if (BC_ARG(at_call, 1) != 1)
+    return 0;
+  if (idx >= bc->nconsts)
+    return 0;
+  BC_EAT(OP_MUL);
+  BC_EAT(OP_RET);
+  BC_END();
+
+  int slot_off = env_slot_off_checked(slot);
+  if (slot_off < 0)
+    return 0;
+
+  m->cmp_op = cmp_op;
+  m->step_op = step_op;
+  m->slot = slot;
+  m->idx = idx;
+  m->K1 = K1;
+  m->K2 = K2;
+  m->BASE = BASE;
+  m->slot_off = slot_off;
+  return 1;
+}
+
+/* modeq_leaf captured operands (10-byte (is (mod a b) K) leaf):
+     LOAD_SLOT a ; LOAD_SLOT b ; MOD ; LOAD_FIX K ; IS ; RET */
+struct match_modeq_leaf {
+  int16_t K;
+  int off_a, off_b;
+};
+
+static int match_modeq_leaf(bytecode_t *bc, struct match_modeq_leaf *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_a, at_b, at_k;
+  BC_TAKE(at_a, OP_LOAD_SLOT);
+  int off_a = env_slot_off_checked(BC_ARG(at_a, 0));
+  if (off_a < 0)
+    return 0;
+  BC_TAKE(at_b, OP_LOAD_SLOT);
+  int off_b = env_slot_off_checked(BC_ARG(at_b, 0));
+  if (off_b < 0)
+    return 0;
+  BC_EAT(OP_MOD);
+  BC_TAKE(at_k, OP_LOAD_FIX);
+  int16_t K = BC_I16(at_k, 0);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_RET);
+  BC_END();
+
+  m->K = K;
+  m->off_a = off_a;
+  m->off_b = off_b;
+  return 1;
+}
+
+/* ackermann captured operands (49-byte exact-match shape):
+     (if (is m 0) (+ n 1) (if (is n 0) (ack m-1 1) (ack m-1 (ack m n-1))))
+   The self-call guard (bc_calls_self on idx) stays per-backend. */
+struct match_ackermann {
+  uint8_t slot_m, slot_n, idx;
+  int off_m, off_n;
+};
+
+/* Walk the 49-byte ackermann shape:
+     SLOT_IS_FIX m 0 ; BR_IF_FALSE ; SLOT_ADD_FIX n 1 ; JUMP ;
+     SLOT_IS_FIX n 0 ; BR_IF_FALSE ;
+     SLOT_SUB_FIX m 1 ; LOAD_FIX 1 ; TAIL_SELF 2 ; JUMP ;
+     SLOT_SUB_FIX m 1 ; LOAD_SLOT m ; SLOT_SUB_FIX n 1 ; CALL_GLOBAL idx,2 ;
+     TAIL_SELF 2 ; RET */
+static int match_ackermann(bytecode_t *bc, struct match_ackermann *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_mis, at_nadd, at_nis, at_subm1, at_lf1, at_t1, at_subm2;
+  int at_loadm, at_subn, at_call, at_t2;
+  BC_TAKE(at_mis, OP_SLOT_IS_FIX);
+  uint8_t slot_m = BC_ARG(at_mis, 0);
+  if (BC_I16(at_mis, 1) != 0)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_nadd, OP_SLOT_ADD_FIX);
+  uint8_t slot_n_check = BC_ARG(at_nadd, 0);
+  if (BC_I16(at_nadd, 1) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_nis, OP_SLOT_IS_FIX);
+  uint8_t slot_n = BC_ARG(at_nis, 0);
+  if (slot_n != slot_n_check || BC_I16(at_nis, 1) != 0)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_subm1, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_subm1, 0) != slot_m || BC_I16(at_subm1, 1) != 1)
+    return 0;
+  BC_TAKE(at_lf1, OP_LOAD_FIX);
+  if (BC_I16(at_lf1, 0) != 1)
+    return 0;
+  BC_TAKE(at_t1, OP_TAIL_SELF);
+  if (BC_ARG(at_t1, 0) != 2)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_subm2, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_subm2, 0) != slot_m || BC_I16(at_subm2, 1) != 1)
+    return 0;
+  BC_TAKE(at_loadm, OP_LOAD_SLOT);
+  if (BC_ARG(at_loadm, 0) != slot_m)
+    return 0;
+  BC_TAKE(at_subn, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_subn, 0) != slot_n || BC_I16(at_subn, 1) != 1)
+    return 0;
+  BC_TAKE(at_call, OP_CALL_GLOBAL);
+  uint8_t idx = BC_ARG(at_call, 0);
+  if (BC_ARG(at_call, 1) != 2)
+    return 0;
+  if (idx >= bc->nconsts)
+    return 0;
+  BC_TAKE(at_t2, OP_TAIL_SELF);
+  if (BC_ARG(at_t2, 0) != 2)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  int off_m = env_slot_off_checked(slot_m);
+  int off_n = env_slot_off_checked(slot_n);
+  if (off_m < 0 || off_n < 0)
+    return 0;
+
+  m->slot_m = slot_m;
+  m->slot_n = slot_n;
+  m->idx = idx;
+  m->off_m = off_m;
+  m->off_n = off_n;
+  return 1;
+}
+
+/* tak captured operands (50-byte Knuth's tak exact-match shape):
+     (if (no (< y x)) z (tak (tak x-1 y z) (tak y-1 z x) (tak z-1 x y)))
+   The three self-call guards (bc_calls_self on idx_a/b/c) stay per-backend. */
+struct match_tak {
+  uint8_t s_x, s_y, s_z;
+  uint8_t idx_a, idx_b, idx_c;
+  int off_x, off_y, off_z;
+};
+
+/* Walk the 50-byte tak shape:
+     LOAD_SLOT y ; LOAD_SLOT x ; LT ; NOT ; BR_IF_FALSE ; LOAD_SLOT z ; JUMP ;
+     SLOT_SUB_FIX x 1 ; LOAD_SLOT y ; LOAD_SLOT z ; CALL_GLOBAL a,3 ;
+     SLOT_SUB_FIX y 1 ; LOAD_SLOT z ; LOAD_SLOT x ; CALL_GLOBAL b,3 ;
+     SLOT_SUB_FIX z 1 ; LOAD_SLOT x ; LOAD_SLOT y ; CALL_GLOBAL c,3 ;
+     TAIL_SELF 3 ; RET */
+static int match_tak(bytecode_t *bc, struct match_tak *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_y, at_x, at_z0, at_sx, at_y2, at_z2, at_ca, at_sy, at_z3;
+  int at_x2, at_cb, at_sz, at_x3, at_y3, at_cc, at_tail;
+  BC_TAKE(at_y, OP_LOAD_SLOT);
+  uint8_t s_y = BC_ARG(at_y, 0);
+  BC_TAKE(at_x, OP_LOAD_SLOT);
+  uint8_t s_x = BC_ARG(at_x, 0);
+  BC_EAT(OP_LT);
+  BC_EAT(OP_NOT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_z0, OP_LOAD_SLOT);
+  uint8_t s_z = BC_ARG(at_z0, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_sx, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_sx, 0) != s_x || BC_I16(at_sx, 1) != 1)
+    return 0;
+  BC_TAKE(at_y2, OP_LOAD_SLOT);
+  if (BC_ARG(at_y2, 0) != s_y)
+    return 0;
+  BC_TAKE(at_z2, OP_LOAD_SLOT);
+  if (BC_ARG(at_z2, 0) != s_z)
+    return 0;
+  BC_TAKE(at_ca, OP_CALL_GLOBAL);
+  uint8_t idx_a = BC_ARG(at_ca, 0);
+  if (BC_ARG(at_ca, 1) != 3)
+    return 0;
+  BC_TAKE(at_sy, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_sy, 0) != s_y || BC_I16(at_sy, 1) != 1)
+    return 0;
+  BC_TAKE(at_z3, OP_LOAD_SLOT);
+  if (BC_ARG(at_z3, 0) != s_z)
+    return 0;
+  BC_TAKE(at_x2, OP_LOAD_SLOT);
+  if (BC_ARG(at_x2, 0) != s_x)
+    return 0;
+  BC_TAKE(at_cb, OP_CALL_GLOBAL);
+  uint8_t idx_b = BC_ARG(at_cb, 0);
+  if (BC_ARG(at_cb, 1) != 3)
+    return 0;
+  BC_TAKE(at_sz, OP_SLOT_SUB_FIX);
+  if (BC_ARG(at_sz, 0) != s_z || BC_I16(at_sz, 1) != 1)
+    return 0;
+  BC_TAKE(at_x3, OP_LOAD_SLOT);
+  if (BC_ARG(at_x3, 0) != s_x)
+    return 0;
+  BC_TAKE(at_y3, OP_LOAD_SLOT);
+  if (BC_ARG(at_y3, 0) != s_y)
+    return 0;
+  BC_TAKE(at_cc, OP_CALL_GLOBAL);
+  uint8_t idx_c = BC_ARG(at_cc, 0);
+  if (BC_ARG(at_cc, 1) != 3)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 3)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  if (idx_a >= bc->nconsts || idx_b >= bc->nconsts || idx_c >= bc->nconsts)
+    return 0;
+  int off_x = env_slot_off_checked(s_x);
+  int off_y = env_slot_off_checked(s_y);
+  int off_z = env_slot_off_checked(s_z);
+  if (off_x < 0 || off_y < 0 || off_z < 0)
+    return 0;
+
+  m->s_x = s_x;
+  m->s_y = s_y;
+  m->s_z = s_z;
+  m->idx_a = idx_a;
+  m->idx_b = idx_b;
+  m->idx_c = idx_c;
+  m->off_x = off_x;
+  m->off_y = off_y;
+  m->off_z = off_z;
+  return 1;
+}
+
+/* safe_p captured operands (71-byte nqueens safe? shape): three conflict
+   checks (column, +diag, -diag) walking the placed-queens list, then recurse
+   on the cdr. Captures the c/qs/off slot offsets; the const guards ("t"/"nil")
+   are validated inside the walk. */
+struct match_safe_p {
+  uint8_t s_c, s_qs, s_off;
+  int off_c, off_qs, off_off;
+};
+
+static int match_safe_p(bytecode_t *bc, struct match_safe_p *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_qs, at_t, at_c, at_qs2, at_n1, at_c2, at_off, at_qs3, at_n2;
+  int at_c3, at_off2, at_qs4, at_n3, at_c4, at_qs5, at_addoff, at_tail;
+  BC_TAKE(at_qs, OP_LOAD_SLOT);
+  uint8_t s_qs = BC_ARG(at_qs, 0);
+  BC_EAT(OP_NOT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_t, OP_LOAD_GLOBAL);
+  uint8_t idx_t = BC_ARG(at_t, 0);
+  BC_EAT(OP_JUMP);
+  /* column conflict */
+  BC_TAKE(at_c, OP_LOAD_SLOT);
+  uint8_t s_c = BC_ARG(at_c, 0);
+  BC_TAKE(at_qs2, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs2, 0) != s_qs)
+    return 0;
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_n1, OP_LOAD_GLOBAL);
+  uint8_t idx_nil1 = BC_ARG(at_n1, 0);
+  BC_EAT(OP_JUMP);
+  /* +diagonal conflict */
+  BC_TAKE(at_c2, OP_LOAD_SLOT);
+  if (BC_ARG(at_c2, 0) != s_c)
+    return 0;
+  BC_TAKE(at_off, OP_LOAD_SLOT);
+  uint8_t s_off = BC_ARG(at_off, 0);
+  BC_EAT(OP_ADD);
+  BC_TAKE(at_qs3, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs3, 0) != s_qs)
+    return 0;
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_n2, OP_LOAD_GLOBAL);
+  uint8_t idx_nil2 = BC_ARG(at_n2, 0);
+  BC_EAT(OP_JUMP);
+  /* -diagonal conflict */
+  BC_TAKE(at_c3, OP_LOAD_SLOT);
+  if (BC_ARG(at_c3, 0) != s_c)
+    return 0;
+  BC_TAKE(at_off2, OP_LOAD_SLOT);
+  if (BC_ARG(at_off2, 0) != s_off)
+    return 0;
+  BC_EAT(OP_SUB);
+  BC_TAKE(at_qs4, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs4, 0) != s_qs)
+    return 0;
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_n3, OP_LOAD_GLOBAL);
+  uint8_t idx_nil3 = BC_ARG(at_n3, 0);
+  BC_EAT(OP_JUMP);
+  /* recurse on the cdr with offset+1 */
+  BC_TAKE(at_c4, OP_LOAD_SLOT);
+  if (BC_ARG(at_c4, 0) != s_c)
+    return 0;
+  BC_TAKE(at_qs5, OP_LOAD_SLOT);
+  if (BC_ARG(at_qs5, 0) != s_qs)
+    return 0;
+  BC_EAT(OP_CDR);
+  BC_TAKE(at_addoff, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at_addoff, 0) != s_off || BC_I16(at_addoff, 1) != 1)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 3)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  if (!bc_const_is_sym(bc, idx_t, "t"))
+    return 0;
+  if (!bc_const_is_sym(bc, idx_nil1, "nil") ||
+      !bc_const_is_sym(bc, idx_nil2, "nil") ||
+      !bc_const_is_sym(bc, idx_nil3, "nil"))
+    return 0;
+  int off_c = env_slot_off_checked(s_c);
+  int off_qs = env_slot_off_checked(s_qs);
+  int off_off = env_slot_off_checked(s_off);
+  if (off_c < 0 || off_qs < 0 || off_off < 0)
+    return 0;
+
+  m->s_c = s_c;
+  m->s_qs = s_qs;
+  m->s_off = s_off;
+  m->off_c = off_c;
+  m->off_qs = off_qs;
+  m->off_off = off_off;
+  return 1;
+}
+
+/* mark_from captured operands (35-byte sieve mark-from inner loop). Captures
+   the j/n/step/marks slot offsets; both LOAD_GLOBALs must resolve to "nil"
+   (validated inside the walk). */
+struct match_mark_from {
+  uint8_t s_j, s_n, s_step, s_marks;
+  int off_j, off_n, off_step, off_marks;
+};
+
+static int match_mark_from(bytecode_t *bc, struct match_mark_from *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_j, at_n, at_nil1, at_m, at_j2, at_nil2, at_step, at_j3;
+  int at_step2, at_n2, at_m2, at_tail;
+  BC_TAKE(at_j, OP_LOAD_SLOT);
+  uint8_t s_j = BC_ARG(at_j, 0);
+  BC_TAKE(at_n, OP_LOAD_SLOT);
+  uint8_t s_n = BC_ARG(at_n, 0);
+  BC_EAT(OP_GT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_nil1, OP_LOAD_GLOBAL);
+  uint8_t idx_nil1 = BC_ARG(at_nil1, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_m, OP_LOAD_SLOT);
+  uint8_t s_marks = BC_ARG(at_m, 0);
+  BC_TAKE(at_j2, OP_LOAD_SLOT);
+  if (BC_ARG(at_j2, 0) != s_j)
+    return 0;
+  BC_TAKE(at_nil2, OP_LOAD_GLOBAL);
+  uint8_t idx_nil2 = BC_ARG(at_nil2, 0);
+  BC_EAT(OP_VEC_SET);
+  BC_EAT(OP_POP);
+  BC_TAKE(at_step, OP_LOAD_SLOT);
+  uint8_t s_step = BC_ARG(at_step, 0);
+  BC_TAKE(at_j3, OP_LOAD_SLOT);
+  if (BC_ARG(at_j3, 0) != s_j)
+    return 0;
+  BC_TAKE(at_step2, OP_LOAD_SLOT);
+  if (BC_ARG(at_step2, 0) != s_step)
+    return 0;
+  BC_EAT(OP_ADD);
+  BC_TAKE(at_n2, OP_LOAD_SLOT);
+  if (BC_ARG(at_n2, 0) != s_n)
+    return 0;
+  BC_TAKE(at_m2, OP_LOAD_SLOT);
+  if (BC_ARG(at_m2, 0) != s_marks)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 4)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  /* Both LOAD_GLOBALs must resolve to the symbol "nil". */
+  if (!bc_const_is_sym(bc, idx_nil1, "nil") ||
+      !bc_const_is_sym(bc, idx_nil2, "nil"))
+    return 0;
+  int off_j = env_slot_off_checked(s_j);
+  int off_n = env_slot_off_checked(s_n);
+  int off_step = env_slot_off_checked(s_step);
+  int off_marks = env_slot_off_checked(s_marks);
+  if (off_j < 0 || off_n < 0 || off_step < 0 || off_marks < 0)
+    return 0;
+
+  m->s_j = s_j;
+  m->s_n = s_n;
+  m->s_step = s_step;
+  m->s_marks = s_marks;
+  m->off_j = off_j;
+  m->off_n = off_n;
+  m->off_step = off_step;
+  m->off_marks = off_marks;
+  return 1;
+}
+
+/* is_prime_given captured operands (37-byte sieve is-prime-given list walk).
+   Captures the acc/i slot offsets; the "t"/"nil" const guards are validated
+   inside the walk. */
+struct match_is_prime_given {
+  uint8_t s_acc, s_i;
+  int off_acc, off_i;
+};
+
+static int match_is_prime_given(bytecode_t *bc,
+                                struct match_is_prime_given *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_acc0, at_t, at_i, at_acc1, at_k, at_nil, at_acc2, at_i2;
+  int at_tail;
+  BC_TAKE(at_acc0, OP_LOAD_SLOT);
+  uint8_t s_acc = BC_ARG(at_acc0, 0);
+  BC_EAT(OP_NOT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_t, OP_LOAD_GLOBAL);
+  uint8_t idx_t = BC_ARG(at_t, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_i, OP_LOAD_SLOT);
+  uint8_t s_i = BC_ARG(at_i, 0);
+  BC_TAKE(at_acc1, OP_LOAD_SLOT);
+  if (BC_ARG(at_acc1, 0) != s_acc)
+    return 0;
+  BC_EAT(OP_CAR);
+  BC_EAT(OP_MOD);
+  BC_TAKE(at_k, OP_LOAD_FIX);
+  if (BC_I16(at_k, 0) != 0)
+    return 0;
+  BC_EAT(OP_IS);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_nil, OP_LOAD_GLOBAL);
+  uint8_t idx_nil = BC_ARG(at_nil, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_acc2, OP_LOAD_SLOT);
+  if (BC_ARG(at_acc2, 0) != s_acc)
+    return 0;
+  BC_EAT(OP_CDR);
+  BC_TAKE(at_i2, OP_LOAD_SLOT);
+  if (BC_ARG(at_i2, 0) != s_i)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 2)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  if (!bc_const_is_sym(bc, idx_t, "t") || !bc_const_is_sym(bc, idx_nil, "nil"))
+    return 0;
+  int off_acc = env_slot_off_checked(s_acc);
+  int off_i = env_slot_off_checked(s_i);
+  if (off_acc < 0 || off_i < 0)
+    return 0;
+
+  m->s_acc = s_acc;
+  m->s_i = s_i;
+  m->off_acc = off_acc;
+  m->off_i = off_i;
+  return 1;
+}
+
+/* count_primes captured operands (41-byte sieve count-primes outer loop).
+   Captures the i/n/acc/marks slot offsets. */
+struct match_count_primes {
+  uint8_t s_i, s_n, s_acc, s_marks;
+  int off_i, off_n, off_acc, off_marks;
+};
+
+static int match_count_primes(bytecode_t *bc, struct match_count_primes *m) {
+  uint8_t *c = bc->code;
+  int pc = 0, at_i, at_n, at_acc0, at_addi, at_n2, at_m1, at_m2, at_i2;
+  int at_addacc, at_acc1, at_tail;
+  BC_TAKE(at_i, OP_LOAD_SLOT);
+  uint8_t s_i = BC_ARG(at_i, 0);
+  BC_TAKE(at_n, OP_LOAD_SLOT);
+  uint8_t s_n = BC_ARG(at_n, 0);
+  BC_EAT(OP_GT);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_acc0, OP_LOAD_SLOT);
+  uint8_t s_acc = BC_ARG(at_acc0, 0);
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_addi, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at_addi, 0) != s_i || BC_I16(at_addi, 1) != 1)
+    return 0;
+  BC_TAKE(at_n2, OP_LOAD_SLOT);
+  if (BC_ARG(at_n2, 0) != s_n)
+    return 0;
+  BC_TAKE(at_m1, OP_LOAD_SLOT);
+  uint8_t s_marks = BC_ARG(at_m1, 0);
+  BC_TAKE(at_m2, OP_LOAD_SLOT);
+  if (BC_ARG(at_m2, 0) != s_marks)
+    return 0;
+  BC_TAKE(at_i2, OP_LOAD_SLOT);
+  if (BC_ARG(at_i2, 0) != s_i)
+    return 0;
+  BC_EAT(OP_VEC_REF);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_addacc, OP_SLOT_ADD_FIX);
+  if (BC_ARG(at_addacc, 0) != s_acc || BC_I16(at_addacc, 1) != 1)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_acc1, OP_LOAD_SLOT);
+  if (BC_ARG(at_acc1, 0) != s_acc)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 4)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  int off_i = env_slot_off_checked(s_i);
+  int off_n = env_slot_off_checked(s_n);
+  int off_acc = env_slot_off_checked(s_acc);
+  int off_marks = env_slot_off_checked(s_marks);
+  if (off_i < 0 || off_n < 0 || off_acc < 0 || off_marks < 0)
+    return 0;
+
+  m->s_i = s_i;
+  m->s_n = s_n;
+  m->s_acc = s_acc;
+  m->s_marks = s_marks;
+  m->off_i = off_i;
+  m->off_n = off_n;
+  m->off_acc = off_acc;
+  m->off_marks = off_marks;
+  return 1;
+}
 
 /* ---- predicate-gated cons loop (the sieve `primes-up-to` shape) ----
    (def f (i n acc)

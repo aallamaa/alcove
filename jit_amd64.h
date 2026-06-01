@@ -323,48 +323,19 @@ static void x64_patch_rel32(uint8_t *buf, int branch_start, int branch_size,
    compare + arith on a single param slot. See the arm64 version's
    comment block above for the bytecode layout (19 bytes total). */
 static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 19-byte self-tail counter loop —
-       <cmp> slot K1 ; BR_IF_FALSE off ; <arith> slot K2 ; TAIL_SELF 1 ;
-       JUMP off ; LOAD_SLOT slot ; RET. Walk with the BC_* cursor (offsets
-       computed via bc_oplen, not baked in — see jit_common.h). */
-  int pc = 0, at_cmp, at_arith, at_tail, at_load;
-  uint8_t cmp_op, arith_op;
-  BC_TAKE_ANY(at_cmp, cmp_op);
-  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
-      cmp_op != OP_SLOT_IS_FIX)
-    return 0;
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE_ANY(at_arith, arith_op);
-  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 1)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_load, OP_LOAD_SLOT);
-  BC_EAT(OP_RET);
-  BC_END();
-
-  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
-  int16_t cmp_imm = BC_I16(at_cmp, 1);
-  uint8_t arith_slot = BC_ARG(at_arith, 0);
-  int16_t arith_imm = BC_I16(at_arith, 1);
-  uint8_t load_slot = BC_ARG(at_load, 0);
-
-  if (cmp_slot != arith_slot || cmp_slot != load_slot)
-    return 0;
-  if (cmp_slot >= ENV_INLINE_SLOTS)
+  /* 19-byte self-tail counter loop — shape walk shared with the arm64 backend
+     via match_simple_tail_loop (jit_common.h); we emit only. */
+  struct match_simple_tail_loop m;
+  if (!match_simple_tail_loop(bc, &m))
     return 0;
 
-  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+  uint8_t cmp_op = m.cmp_op, arith_op = m.arith_op;
+  int slot_off = m.slot_off;
 
   /* int16<<3 fits comfortably as sign-extended imm32 — no narrow imm12
      limit like arm64. */
-  int32_t cmp_tagged = ((int32_t)cmp_imm << 3) | 1;
-  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+  int32_t cmp_tagged = ((int32_t)m.cmp_imm << 3) | 1;
+  int32_t arith_delta = ((int32_t)m.arith_imm) << 3;
 
   /* Invert the bytecode comparison for "branch out of the loop on the
      failing case". x86 cc nibbles: jl=0x0C jge=0x0D jle=0x0E jg=0x0F. */
@@ -458,37 +429,15 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
    twin. No new bytes shift since SLOT_IS_FIX fusion already shipped. */
 static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint8_t *buf,
                                        int *outn) {
-  uint8_t *c = bc->code;
-
-  int pc = 0, at_cmp, at_load, at_arith, at_tail;
-  uint8_t arith_op;
-  BC_TAKE(at_cmp, OP_SLOT_IS_FIX);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_load, OP_LOAD_SLOT); /* THEN: base arm = return the slot */
-  BC_EAT(OP_JUMP);
-  BC_TAKE_ANY(at_arith, arith_op); /* ELSE: step */
-  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+  /* shape walk shared with the arm64 backend via match_simple_tail_loop_eq
+     (jit_common.h); we emit only. */
+  struct match_simple_tail_loop m;
+  if (!match_simple_tail_loop_eq(bc, &m))
     return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 1)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
-  int16_t cmp_imm = BC_I16(at_cmp, 1);
-  uint8_t load_slot = BC_ARG(at_load, 0);
-  uint8_t arith_slot = BC_ARG(at_arith, 0);
-  int16_t arith_imm = BC_I16(at_arith, 1);
-
-  if (cmp_slot != arith_slot || cmp_slot != load_slot)
-    return 0;
-  if (cmp_slot >= ENV_INLINE_SLOTS)
-    return 0;
-
-  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
-  int32_t cmp_tagged = ((int32_t)cmp_imm << 3) | 1;
-  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+  uint8_t arith_op = m.arith_op;
+  int slot_off = m.slot_off;
+  int32_t cmp_tagged = ((int32_t)m.cmp_imm << 3) | 1;
+  int32_t arith_delta = ((int32_t)m.arith_imm) << 3;
 
   /* Equality-exit: loop runs while n != K, returns the slot when n == K.
      x86 cc nibble je = 0x04. */
@@ -571,85 +520,28 @@ static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint8_t *buf,
    All tag/type guards run before any slot mutation, and the loop body never
    deopts, so a deopt always re-runs the VM on an untouched env. */
 static int try_jit_float_acc_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
-  if (bc->nparams != 2)
-    return 0;
-  uint8_t *c = bc->code;
-
-  /* Walk the 25-byte shape with the BC_* cursor (offsets via bc_oplen):
-       LOAD_SLOT c ; LOAD_CONST lim ; <cmp> ; BR_IF_FALSE ;
-       SLOT_<ADD|SUB>_FIX c K ; LOAD_SLOT a ; LOAD_CONST fc ; <fop> ;
-       TAIL_SELF 2 ; JUMP ; LOAD_SLOT a ; RET */
-  int pc = 0, at_c, at_lim, at_step, at_a, at_fc, at_tail, at_a2;
-  uint8_t cmp_op, step_op, fop;
-  BC_TAKE(at_c, OP_LOAD_SLOT);
-  uint8_t cslot = BC_ARG(at_c, 0);
-  BC_TAKE(at_lim, OP_LOAD_CONST);
-  uint8_t lim_idx = BC_ARG(at_lim, 0);
-  BC_EAT_ANY(cmp_op);
-  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
-    return 0;
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE_ANY(at_step, step_op);
-  if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
-    return 0;
-  if (BC_ARG(at_step, 0) != cslot)
-    return 0;
-  int16_t step_imm = BC_I16(at_step, 1);
-  BC_TAKE(at_a, OP_LOAD_SLOT);
-  uint8_t aslot = BC_ARG(at_a, 0);
-  BC_TAKE(at_fc, OP_LOAD_CONST);
-  uint8_t fc_idx = BC_ARG(at_fc, 0);
-  BC_EAT_ANY(fop);
-  if (fop != OP_ADD && fop != OP_SUB && fop != OP_MUL)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 2)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_a2, OP_LOAD_SLOT);
-  if (BC_ARG(at_a2, 0) != aslot)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  /* slots must be distinct, in range, and consistent across the body */
-  if (cslot == aslot || cslot >= ENV_INLINE_SLOTS || aslot >= ENV_INLINE_SLOTS)
-    return 0;
-  if (lim_idx >= bc->nconsts || fc_idx >= bc->nconsts)
+  /* 25-byte float-accumulator self-tail loop — shape walk shared with the
+     arm64 backend via match_float_acc_loop (jit_common.h); we emit only. */
+  struct match_float_acc_loop m;
+  if (!match_float_acc_loop(bc, &m))
     return 0;
 
-  /* The static type signals: the counter limit is a fixnum, the accumulator
-     const is a float. (A fixnum limit that fit in i16 would have compiled to
-     the fused SLOT_LT_FIX form — this matcher only sees the wide-limit case.)
-   */
-  exp_t *lim = bc->consts[lim_idx];
-  exp_t *fc = bc->consts[fc_idx];
-  if (!isnumber(lim) || !isfloat(fc))
-    return 0;
+  uint8_t cmp_op = m.cmp_op, fop = m.fop;
+  uint8_t step_op = m.step_op;
+  int coff = m.coff, aoff = m.aoff;
+  uint64_t fc_bits = m.fc_bits;
 
-  int64_t lim_val = FIX_VAL(lim);
-  /* The VM compares FIX_VAL(counter) <cmp> FIX_VAL(limit) on two fixnums.
-     We compare the TAGGED values (counter stays tagged in rcx): tagging is
-     (v<<3)|1, monotonic for signed order, so tagged compare == value compare.
-     Require limit<<3 to fit a sign-extended imm32. */
-  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
-    return 0;
-  int64_t lim_tagged64 = (lim_val << 3) | 1;
+  /* amd64-only: compare the TAGGED counter (kept in rcx) against the tagged
+     limit, which must fit a sign-extended imm32. arm64 materializes the full
+     64-bit tagged limit into a register instead. */
+  int64_t lim_tagged64 = (m.lim_val << 3) | 1;
   if (lim_tagged64 > INT32_MAX || lim_tagged64 < INT32_MIN)
     return 0;
   int32_t cmp_tagged = (int32_t)lim_tagged64;
-  int32_t step_delta = ((int32_t)step_imm) << 3;
+  int32_t step_delta = ((int32_t)m.step_imm) << 3;
 
-  int coff = (int)offsetof(env_t, inline_vals[0]) + (int)cslot * 8;
-  int aoff = (int)offsetof(env_t, inline_vals[0]) + (int)aslot * 8;
   int foff = (int)offsetof(exp_t, f); /* unboxed double inside the box */
   int toff = (int)offsetof(exp_t, type);
-
-  uint64_t fc_bits;
-  {
-    double d = fc->f;
-    memcpy(&fc_bits, &d, 8);
-  }
 
   /* Continue-the-loop condition (compare is TRUE) — the back-edge cc.
      x86 cc nibbles: jl=0x0C jge=0x0D jle=0x0E jg=0x0F.
@@ -801,54 +693,19 @@ static int try_jit_float_acc_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
    tag-check failure path is just `xor eax,eax; ret`. */
 static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
                                        int *outn) {
-  uint8_t *c = bc->code;
+  /* 26-byte tail-counter loop with one inner global call — shape walk shared
+     with the arm64 backend via match_tail_loop_with_call (jit_common.h); we
+     emit only. */
+  struct match_tail_loop_with_call m;
+  if (!match_tail_loop_with_call(bc, &m))
+    return 0;
 
-  /* 26-byte tail-counter loop with one inner global call —
-       <cmp> slot K1 ; BR_IF_FALSE ; LOAD_FIX arg ; CALL_GLOBAL idx,1 ; POP ;
-       <arith> slot K2 ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET.
-     Walked via the BC_* cursor (offsets via bc_oplen). */
-  int pc = 0, at_cmp, at_arg, at_call, at_arith, at_tail, at_load;
-  uint8_t cmp_op, arith_op;
-  BC_TAKE_ANY(at_cmp, cmp_op);
-  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
-      cmp_op != OP_SLOT_IS_FIX)
-    return 0;
-  uint8_t slot = BC_ARG(at_cmp, 0);
-  if (slot >= ENV_INLINE_SLOTS)
-    return 0;
-  int16_t cmp_imm = BC_I16(at_cmp, 1);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_arg, OP_LOAD_FIX);
-  int16_t arg_imm = BC_I16(at_arg, 0);
-  BC_TAKE(at_call, OP_CALL_GLOBAL);
-  uint8_t const_idx = BC_ARG(at_call, 0);
-  if (BC_ARG(at_call, 1) != 1) /* nargs must be 1 */
-    return 0;
-  if (const_idx >= bc->nconsts)
-    return 0;
-  BC_EAT(OP_POP);
-  BC_TAKE_ANY(at_arith, arith_op);
-  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
-    return 0;
-  if (BC_ARG(at_arith, 0) != slot)
-    return 0;
-  int16_t arith_imm = BC_I16(at_arith, 1);
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 1)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_load, OP_LOAD_SLOT);
-  if (BC_ARG(at_load, 0) != slot)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  int32_t slot_off =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
-  int32_t cmp_tagged = ((int32_t)cmp_imm << 3) | 1;
-  int32_t arith_delta = ((int32_t)arith_imm) << 3;
-  int64_t tagged_arg = ((int64_t)arg_imm << 3) | 1;
+  uint8_t cmp_op = m.cmp_op, arith_op = m.arith_op;
+  uint8_t const_idx = m.const_idx;
+  int32_t slot_off = (int32_t)m.slot_off;
+  int32_t cmp_tagged = ((int32_t)m.cmp_imm << 3) | 1;
+  int32_t arith_delta = ((int32_t)m.arith_imm) << 3;
+  int64_t tagged_arg = ((int64_t)m.arg_imm << 3) | 1;
 
   uint8_t inv_cc;
   switch (cmp_op) {
@@ -953,49 +810,21 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
      LOAD_SLOT slot ; LOAD_CONST lim ; <cmp LT|GT|LE|GE> ; BR_IF_FALSE ;
      SLOT_<ADD|SUB>_FIX slot K ; TAIL_SELF 1 ; JUMP ; LOAD_SLOT slot ; RET */
 static int try_jit_wide_counter_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-  int pc = 0, at_load0, at_lim, at_arith, at_tail, at_load1;
-  uint8_t cmp_op, arith_op;
-  BC_TAKE(at_load0, OP_LOAD_SLOT);
-  uint8_t cmp_slot = BC_ARG(at_load0, 0);
-  BC_TAKE(at_lim, OP_LOAD_CONST);
-  uint8_t lim_idx = BC_ARG(at_lim, 0);
-  BC_EAT_ANY(cmp_op);
-  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+  /* 20-byte wide-limit counter loop — shape walk shared with the arm64 backend
+     via match_wide_counter_loop (jit_common.h); we emit only. */
+  struct match_wide_counter_loop m;
+  if (!match_wide_counter_loop(bc, &m))
     return 0;
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE_ANY(at_arith, arith_op);
-  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
-    return 0;
-  if (BC_ARG(at_arith, 0) != cmp_slot)
-    return 0;
-  int16_t arith_imm = BC_I16(at_arith, 1);
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 1)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_load1, OP_LOAD_SLOT);
-  if (BC_ARG(at_load1, 0) != cmp_slot)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
 
-  if (cmp_slot >= ENV_INLINE_SLOTS || lim_idx >= bc->nconsts)
-    return 0;
-  exp_t *lim = bc->consts[lim_idx];
-  if (!isnumber(lim)) /* fixnum limit only */
-    return 0;
-  int64_t lim_val = FIX_VAL(lim);
-  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
-    return 0;
-  int64_t lim_tagged64 = (lim_val << 3) | 1;
+  uint8_t cmp_op = m.cmp_op, arith_op = m.arith_op;
+  int slot_off = m.slot_off;
+
+  int64_t lim_tagged64 = (m.lim_val << 3) | 1;
   /* keep the compare a single cmp imm32 (limits up to ~268M); wider deopts. */
   if (lim_tagged64 > INT32_MAX || lim_tagged64 < INT32_MIN)
     return 0;
   int32_t cmp_tagged = (int32_t)lim_tagged64;
-
-  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
-  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+  int32_t arith_delta = ((int32_t)m.arith_imm) << 3;
 
   /* invert the compare for the loop-exit branch. x86: jl=0x0C jge=0x0D
      jle=0x0E jg=0x0F. */
@@ -1068,58 +897,18 @@ static int try_jit_wide_counter_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
    result; on non-fixnum we tear down the frame and propagate rax as-is
    (errors surface naturally; NULL triggers a bytecode re-run). */
 static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
+  /* 28-byte two-call recursion (fib shape) — shape walk shared with the arm64
+     backend via match_recurse_add_two (jit_common.h); we emit only. The
+     self-call / is-fib-like decision below is amd64-specific (amd64 also has a
+     general two-call recursive emission when the fast path doesn't apply). */
+  struct match_recurse_add_two mm;
+  if (!match_recurse_add_two(bc, &mm))
+    return 0;
 
-  /* 28-byte two-call recursion (fib shape) —
-       <cmp> slot K1 ; BR_IF_FALSE ; LOAD_SLOT slot ; JUMP ;
-       <op_a> slot K2 ; CALL_GLOBAL idx_a,1 ; <op_b> slot K3 ;
-       CALL_GLOBAL idx_b,1 ; ADD ; RET.  Walked via the BC_* cursor. */
-  int pc = 0, at_cmp, at_load, at_a, at_ca, at_b, at_cb;
-  uint8_t cmp_op, op_a, op_b;
-  BC_TAKE_ANY(at_cmp, cmp_op);
-  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
-      cmp_op != OP_SLOT_IS_FIX)
-    return 0;
-  uint8_t slot = BC_ARG(at_cmp, 0);
-  if (slot >= ENV_INLINE_SLOTS)
-    return 0;
-  int16_t K1 = BC_I16(at_cmp, 1);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_load, OP_LOAD_SLOT);
-  if (BC_ARG(at_load, 0) != slot)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE_ANY(at_a, op_a);
-  if (op_a != OP_SLOT_SUB_FIX && op_a != OP_SLOT_ADD_FIX)
-    return 0;
-  if (BC_ARG(at_a, 0) != slot)
-    return 0;
-  int16_t K2 = BC_I16(at_a, 1);
-  BC_TAKE(at_ca, OP_CALL_GLOBAL);
-  uint8_t idx_a = BC_ARG(at_ca, 0);
-  if (BC_ARG(at_ca, 1) != 1)
-    return 0;
-  if (idx_a >= bc->nconsts)
-    return 0;
-  BC_TAKE_ANY(at_b, op_b);
-  if (op_b != OP_SLOT_SUB_FIX && op_b != OP_SLOT_ADD_FIX)
-    return 0;
-  if (BC_ARG(at_b, 0) != slot)
-    return 0;
-  int16_t K3 = BC_I16(at_b, 1);
-  BC_TAKE(at_cb, OP_CALL_GLOBAL);
-  uint8_t idx_b = BC_ARG(at_cb, 0);
-  if (BC_ARG(at_cb, 1) != 1)
-    return 0;
-  if (idx_b >= bc->nconsts)
-    return 0;
-  BC_EAT(OP_ADD);
-  BC_EAT(OP_RET);
-  BC_END();
-
-  int32_t slot_off =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
+  uint8_t cmp_op = mm.cmp_op, op_a = mm.op_a, op_b = mm.op_b;
+  uint8_t idx_a = mm.idx_a, idx_b = mm.idx_b;
+  int16_t K1 = mm.K1, K2 = mm.K2, K3 = mm.K3;
+  int32_t slot_off = (int32_t)mm.slot_off;
   int32_t K1_tagged = ((int32_t)K1 << 3) | 1;
   int32_t K2_delta = ((int32_t)K2) << 3;
   int32_t K3_delta = ((int32_t)K3) << 3;
@@ -1162,11 +951,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
      correct if both go back to THIS function. String-compare against
      bc->self_name (the bytecode compiler doesn't dedupe symbol consts,
      so idx_a == idx_b isn't reliable). */
-  exp_t *ca = bc->consts[idx_a];
-  exp_t *cb = bc->consts[idx_b];
-  int self_calls = bc->self_name && issymbol(ca) && issymbol(cb) &&
-                   strcmp((const char *)exp_text(ca), bc->self_name) == 0 &&
-                   strcmp((const char *)exp_text(cb), bc->self_name) == 0;
+  int self_calls = bc_calls_self(bc, idx_a) && bc_calls_self(bc, idx_b);
   /* The iterative fold is a threshold iteration (loop while i < K1, seeds
      f(K1-2)/f(K1-1)); it is only valid for an ORDERED base predicate.
      `(is n K1)` is a point test, not a threshold, so exclude it — it falls
@@ -1283,7 +1068,6 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     (void)K2_delta;
     (void)K3_delta;
     (void)inv_cc;
-    (void)slot;
 
     JIT_GUARD(200);
     *outn = n;
@@ -1396,102 +1180,15 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
    ~25 cycles per element (vs ~100 in bytecode dispatch). Refcount
    handling for the cdr walk is inline, same as is-prime-given. */
 static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 71-byte nqueens safe? — three conflict checks (column, +diag, -diag)
-     walking the placed-queens list, then recurse on the cdr. Cursor-walked. */
-  int pc = 0, at_qs, at_t, at_c, at_qs2, at_n1, at_c2, at_off, at_qs3, at_n2;
-  int at_c3, at_off2, at_qs4, at_n3, at_c4, at_qs5, at_addoff, at_tail;
-  BC_TAKE(at_qs, OP_LOAD_SLOT);
-  uint8_t s_qs = BC_ARG(at_qs, 0);
-  BC_EAT(OP_NOT);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_t, OP_LOAD_GLOBAL);
-  uint8_t idx_t = BC_ARG(at_t, 0);
-  BC_EAT(OP_JUMP);
-  /* column conflict */
-  BC_TAKE(at_c, OP_LOAD_SLOT);
-  uint8_t s_c = BC_ARG(at_c, 0);
-  BC_TAKE(at_qs2, OP_LOAD_SLOT);
-  if (BC_ARG(at_qs2, 0) != s_qs)
-    return 0;
-  BC_EAT(OP_CAR);
-  BC_EAT(OP_IS);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_n1, OP_LOAD_GLOBAL);
-  uint8_t idx_nil1 = BC_ARG(at_n1, 0);
-  BC_EAT(OP_JUMP);
-  /* +diagonal conflict */
-  BC_TAKE(at_c2, OP_LOAD_SLOT);
-  if (BC_ARG(at_c2, 0) != s_c)
-    return 0;
-  BC_TAKE(at_off, OP_LOAD_SLOT);
-  uint8_t s_off = BC_ARG(at_off, 0);
-  BC_EAT(OP_ADD);
-  BC_TAKE(at_qs3, OP_LOAD_SLOT);
-  if (BC_ARG(at_qs3, 0) != s_qs)
-    return 0;
-  BC_EAT(OP_CAR);
-  BC_EAT(OP_IS);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_n2, OP_LOAD_GLOBAL);
-  uint8_t idx_nil2 = BC_ARG(at_n2, 0);
-  BC_EAT(OP_JUMP);
-  /* -diagonal conflict */
-  BC_TAKE(at_c3, OP_LOAD_SLOT);
-  if (BC_ARG(at_c3, 0) != s_c)
-    return 0;
-  BC_TAKE(at_off2, OP_LOAD_SLOT);
-  if (BC_ARG(at_off2, 0) != s_off)
-    return 0;
-  BC_EAT(OP_SUB);
-  BC_TAKE(at_qs4, OP_LOAD_SLOT);
-  if (BC_ARG(at_qs4, 0) != s_qs)
-    return 0;
-  BC_EAT(OP_CAR);
-  BC_EAT(OP_IS);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_n3, OP_LOAD_GLOBAL);
-  uint8_t idx_nil3 = BC_ARG(at_n3, 0);
-  BC_EAT(OP_JUMP);
-  /* recurse on the cdr with offset+1 */
-  BC_TAKE(at_c4, OP_LOAD_SLOT);
-  if (BC_ARG(at_c4, 0) != s_c)
-    return 0;
-  BC_TAKE(at_qs5, OP_LOAD_SLOT);
-  if (BC_ARG(at_qs5, 0) != s_qs)
-    return 0;
-  BC_EAT(OP_CDR);
-  BC_TAKE(at_addoff, OP_SLOT_ADD_FIX);
-  if (BC_ARG(at_addoff, 0) != s_off || BC_I16(at_addoff, 1) != 1)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 3)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  if (idx_t >= bc->nconsts)
-    return 0;
-  exp_t *ct = bc->consts[idx_t];
-  if (!issymbol(ct) || strcmp((const char *)exp_text(ct), "t") != 0)
-    return 0;
-  for (int k = 0; k < 3; k++) {
-    uint8_t idx = (k == 0) ? idx_nil1 : (k == 1) ? idx_nil2 : idx_nil3;
-    if (idx >= bc->nconsts)
-      return 0;
-    exp_t *cn = bc->consts[idx];
-    if (!issymbol(cn) || strcmp((const char *)exp_text(cn), "nil") != 0)
-      return 0;
-  }
-  if (s_c >= ENV_INLINE_SLOTS || s_qs >= ENV_INLINE_SLOTS ||
-      s_off >= ENV_INLINE_SLOTS)
+  /* 71-byte nqueens safe? — shape walk shared with the arm64 backend via
+     match_safe_p (jit_common.h); we emit only. */
+  struct match_safe_p m;
+  if (!match_safe_p(bc, &m))
     return 0;
 
-  int32_t off_c = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_c * 8;
-  int32_t off_qs = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_qs * 8;
-  int32_t off_off =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_off * 8;
+  int32_t off_c = (int32_t)m.off_c;
+  int32_t off_qs = (int32_t)m.off_qs;
+  int32_t off_off = (int32_t)m.off_off;
   int32_t off_cont = (int32_t)offsetof(struct exp_t, content);
   int32_t off_next = (int32_t)offsetof(struct exp_t, next);
   int32_t off_nref = (int32_t)offsetof(struct exp_t, nref);
@@ -1707,63 +1404,14 @@ static int try_jit_safe_p(bytecode_t *bc, uint8_t *buf, int *outn) {
    refcount of every list cell is held by primes-up-to too, so the
    deopt path effectively never fires. */
 static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 37-byte sieve is-prime-given (list walk, cursor-walked) —
-       LOAD_SLOT acc ; NOT ; BR_IF_FALSE ; LOAD_GLOBAL t ; JUMP ;
-       LOAD_SLOT i ; LOAD_SLOT acc ; CAR ; MOD ; LOAD_FIX 0 ; IS ;
-       BR_IF_FALSE ; LOAD_GLOBAL nil ; JUMP ; LOAD_SLOT acc ; CDR ;
-       LOAD_SLOT i ; TAIL_SELF 2 ; RET. */
-  int pc = 0, at_acc0, at_t, at_i, at_acc1, at_k, at_nil, at_acc2, at_i2;
-  int at_tail;
-  BC_TAKE(at_acc0, OP_LOAD_SLOT);
-  uint8_t s_acc = BC_ARG(at_acc0, 0);
-  BC_EAT(OP_NOT);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_t, OP_LOAD_GLOBAL);
-  uint8_t idx_t = BC_ARG(at_t, 0);
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_i, OP_LOAD_SLOT);
-  uint8_t s_i = BC_ARG(at_i, 0);
-  BC_TAKE(at_acc1, OP_LOAD_SLOT);
-  if (BC_ARG(at_acc1, 0) != s_acc)
-    return 0;
-  BC_EAT(OP_CAR);
-  BC_EAT(OP_MOD);
-  BC_TAKE(at_k, OP_LOAD_FIX);
-  if (BC_I16(at_k, 0) != 0)
-    return 0;
-  BC_EAT(OP_IS);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_nil, OP_LOAD_GLOBAL);
-  uint8_t idx_nil = BC_ARG(at_nil, 0);
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_acc2, OP_LOAD_SLOT);
-  if (BC_ARG(at_acc2, 0) != s_acc)
-    return 0;
-  BC_EAT(OP_CDR);
-  BC_TAKE(at_i2, OP_LOAD_SLOT);
-  if (BC_ARG(at_i2, 0) != s_i)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 2)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  if (idx_t >= bc->nconsts || idx_nil >= bc->nconsts)
-    return 0;
-  exp_t *ct = bc->consts[idx_t], *cnil = bc->consts[idx_nil];
-  if (!issymbol(ct) || strcmp((const char *)exp_text(ct), "t") != 0)
-    return 0;
-  if (!issymbol(cnil) || strcmp((const char *)exp_text(cnil), "nil") != 0)
-    return 0;
-  if (s_acc >= ENV_INLINE_SLOTS || s_i >= ENV_INLINE_SLOTS)
+  /* 37-byte sieve is-prime-given list walk — shape walk shared with the arm64
+     backend via match_is_prime_given (jit_common.h); we emit only. */
+  struct match_is_prime_given m;
+  if (!match_is_prime_given(bc, &m))
     return 0;
 
-  int32_t off_acc =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_acc * 8;
-  int32_t off_i = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_i * 8;
+  int32_t off_acc = (int32_t)m.off_acc;
+  int32_t off_i = (int32_t)m.off_i;
   int32_t off_cont = (int32_t)offsetof(struct exp_t, content);
   int32_t off_next = (int32_t)offsetof(struct exp_t, next);
   int32_t off_nref = (int32_t)offsetof(struct exp_t, nref);
@@ -1941,63 +1589,16 @@ static int try_jit_is_prime_given(bytecode_t *bc, uint8_t *buf, int *outn) {
    work entirely: marks[i] for sieve-fast is always nil_singleton or
    true_singleton (refcount ops are no-ops on singletons). */
 static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 41-byte sieve count-primes outer loop (cursor-walked) —
-       LOAD_SLOT i ; LOAD_SLOT n ; GT ; BR_IF_FALSE ; LOAD_SLOT acc ; JUMP ;
-       SLOT_ADD_FIX i 1 ; LOAD_SLOT n ; LOAD_SLOT marks ; LOAD_SLOT marks ;
-       LOAD_SLOT i ; VEC_REF ; BR_IF_FALSE ; SLOT_ADD_FIX acc 1 ; JUMP ;
-       LOAD_SLOT acc ; TAIL_SELF 4 ; RET. */
-  int pc = 0, at_i, at_n, at_acc0, at_addi, at_n2, at_m1, at_m2, at_i2;
-  int at_addacc, at_acc1, at_tail;
-  BC_TAKE(at_i, OP_LOAD_SLOT);
-  uint8_t s_i = BC_ARG(at_i, 0);
-  BC_TAKE(at_n, OP_LOAD_SLOT);
-  uint8_t s_n = BC_ARG(at_n, 0);
-  BC_EAT(OP_GT);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_acc0, OP_LOAD_SLOT);
-  uint8_t s_acc = BC_ARG(at_acc0, 0);
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_addi, OP_SLOT_ADD_FIX);
-  if (BC_ARG(at_addi, 0) != s_i || BC_I16(at_addi, 1) != 1)
-    return 0;
-  BC_TAKE(at_n2, OP_LOAD_SLOT);
-  if (BC_ARG(at_n2, 0) != s_n)
-    return 0;
-  BC_TAKE(at_m1, OP_LOAD_SLOT);
-  uint8_t s_marks = BC_ARG(at_m1, 0);
-  BC_TAKE(at_m2, OP_LOAD_SLOT);
-  if (BC_ARG(at_m2, 0) != s_marks)
-    return 0;
-  BC_TAKE(at_i2, OP_LOAD_SLOT);
-  if (BC_ARG(at_i2, 0) != s_i)
-    return 0;
-  BC_EAT(OP_VEC_REF);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_addacc, OP_SLOT_ADD_FIX);
-  if (BC_ARG(at_addacc, 0) != s_acc || BC_I16(at_addacc, 1) != 1)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_acc1, OP_LOAD_SLOT);
-  if (BC_ARG(at_acc1, 0) != s_acc)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 4)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  if (s_i >= ENV_INLINE_SLOTS || s_n >= ENV_INLINE_SLOTS ||
-      s_acc >= ENV_INLINE_SLOTS || s_marks >= ENV_INLINE_SLOTS)
+  /* 41-byte sieve count-primes outer loop — shape walk shared with the arm64
+     backend via match_count_primes (jit_common.h); we emit only. */
+  struct match_count_primes m;
+  if (!match_count_primes(bc, &m))
     return 0;
 
-  int32_t off_i = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_i * 8;
-  int32_t off_n = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_n * 8;
-  int32_t off_acc =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_acc * 8;
-  int32_t off_marks =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_marks * 8;
+  int32_t off_i = (int32_t)m.off_i;
+  int32_t off_n = (int32_t)m.off_n;
+  int32_t off_acc = (int32_t)m.off_acc;
+  int32_t off_marks = (int32_t)m.off_marks;
   int32_t off_ptr = (int32_t)offsetof(struct exp_t, ptr);
   uint64_t nil_addr = (uint64_t)(uintptr_t)nil_singleton;
 
@@ -2109,78 +1710,16 @@ static int try_jit_count_primes(bytecode_t *bc, uint8_t *buf, int *outn) {
    for singletons (the common case in sieve-fast); falls through to a
    helper call only if refcount actually hits 0. */
 static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 35-byte sieve mark-from inner loop (cursor-walked) —
-       LOAD_SLOT j ; LOAD_SLOT n ; GT ; BR_IF_FALSE ; LOAD_GLOBAL nil ; JUMP ;
-       LOAD_SLOT marks ; LOAD_SLOT j ; LOAD_GLOBAL nil ; VEC_SET ; POP ;
-       LOAD_SLOT step ; LOAD_SLOT j ; LOAD_SLOT step ; ADD ; LOAD_SLOT n ;
-       LOAD_SLOT marks ; TAIL_SELF 4 ; RET. */
-  int pc = 0, at_j, at_n, at_nil1, at_m, at_j2, at_nil2, at_step, at_j3;
-  int at_step2, at_n2, at_m2, at_tail;
-  BC_TAKE(at_j, OP_LOAD_SLOT);
-  uint8_t s_j = BC_ARG(at_j, 0);
-  BC_TAKE(at_n, OP_LOAD_SLOT);
-  uint8_t s_n = BC_ARG(at_n, 0);
-  BC_EAT(OP_GT);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_nil1, OP_LOAD_GLOBAL);
-  uint8_t idx_nil1 = BC_ARG(at_nil1, 0);
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_m, OP_LOAD_SLOT);
-  uint8_t s_marks = BC_ARG(at_m, 0);
-  BC_TAKE(at_j2, OP_LOAD_SLOT);
-  if (BC_ARG(at_j2, 0) != s_j)
-    return 0;
-  BC_TAKE(at_nil2, OP_LOAD_GLOBAL);
-  uint8_t idx_nil2 = BC_ARG(at_nil2, 0);
-  BC_EAT(OP_VEC_SET);
-  BC_EAT(OP_POP);
-  BC_TAKE(at_step, OP_LOAD_SLOT);
-  uint8_t s_step = BC_ARG(at_step, 0);
-  BC_TAKE(at_j3, OP_LOAD_SLOT);
-  if (BC_ARG(at_j3, 0) != s_j)
-    return 0;
-  BC_TAKE(at_step2, OP_LOAD_SLOT);
-  if (BC_ARG(at_step2, 0) != s_step)
-    return 0;
-  BC_EAT(OP_ADD);
-  BC_TAKE(at_n2, OP_LOAD_SLOT);
-  if (BC_ARG(at_n2, 0) != s_n)
-    return 0;
-  BC_TAKE(at_m2, OP_LOAD_SLOT);
-  if (BC_ARG(at_m2, 0) != s_marks)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 4)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  /* Both LOAD_GLOBALs must resolve to nil. The const at those indices
-     is the symbol "nil"; we check by string. */
-  if (idx_nil1 >= bc->nconsts || idx_nil2 >= bc->nconsts)
-    return 0;
-  exp_t *cn1 = bc->consts[idx_nil1], *cn2 = bc->consts[idx_nil2];
-  if (!issymbol(cn1) || strcmp((const char *)exp_text(cn1), "nil") != 0)
-    return 0;
-  if (!issymbol(cn2) || strcmp((const char *)exp_text(cn2), "nil") != 0)
-    return 0;
-  if (s_j >= ENV_INLINE_SLOTS)
-    return 0;
-  if (s_n >= ENV_INLINE_SLOTS)
-    return 0;
-  if (s_step >= ENV_INLINE_SLOTS)
-    return 0;
-  if (s_marks >= ENV_INLINE_SLOTS)
+  /* 35-byte sieve mark-from inner loop — shape walk shared with the arm64
+     backend via match_mark_from (jit_common.h); we emit only. */
+  struct match_mark_from m;
+  if (!match_mark_from(bc, &m))
     return 0;
 
-  int32_t off_j = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_j * 8;
-  int32_t off_n = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_n * 8;
-  int32_t off_step =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_step * 8;
-  int32_t off_marks =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_marks * 8;
+  int32_t off_j = (int32_t)m.off_j;
+  int32_t off_n = (int32_t)m.off_n;
+  int32_t off_step = (int32_t)m.off_step;
+  int32_t off_marks = (int32_t)m.off_marks;
   int32_t off_ptr = (int32_t)offsetof(struct exp_t, ptr);
   int32_t off_nref = (int32_t)offsetof(struct exp_t, nref);
   uint64_t nil_addr = (uint64_t)(uintptr_t)nil_singleton;
@@ -2293,95 +1832,22 @@ static int try_jit_mark_from(bytecode_t *bc, uint8_t *buf, int *outn) {
    jmp entry for the outer tail call. ~250 bytes of native, ~5x faster
    than the bytecode VM on tak(24,16,8). */
 static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 50-byte tak — (if (no (< y x)) z (tak (tak x-1 y z) (tak y-1 z x)
-     (tak z-1 x y))). Three self-calls then a tail-self. Cursor-walked.
-       LOAD_SLOT y ; LOAD_SLOT x ; LT ; NOT ; BR_IF_FALSE ; LOAD_SLOT z ; JUMP ;
-       SLOT_SUB_FIX x 1 ; LOAD_SLOT y ; LOAD_SLOT z ; CALL_GLOBAL a,3 ;
-       SLOT_SUB_FIX y 1 ; LOAD_SLOT z ; LOAD_SLOT x ; CALL_GLOBAL b,3 ;
-       SLOT_SUB_FIX z 1 ; LOAD_SLOT x ; LOAD_SLOT y ; CALL_GLOBAL c,3 ;
-       TAIL_SELF 3 ; RET. */
-  int pc = 0, at_y, at_x, at_z0, at_sx, at_y2, at_z2, at_ca, at_sy, at_z3;
-  int at_x2, at_cb, at_sz, at_x3, at_y3, at_cc, at_tail;
-  BC_TAKE(at_y, OP_LOAD_SLOT);
-  uint8_t s_y = BC_ARG(at_y, 0);
-  BC_TAKE(at_x, OP_LOAD_SLOT);
-  uint8_t s_x = BC_ARG(at_x, 0);
-  BC_EAT(OP_LT);
-  BC_EAT(OP_NOT);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_z0, OP_LOAD_SLOT);
-  uint8_t s_z = BC_ARG(at_z0, 0);
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_sx, OP_SLOT_SUB_FIX);
-  if (BC_ARG(at_sx, 0) != s_x || BC_I16(at_sx, 1) != 1)
+  /* 50-byte tak — shape walk shared with the arm64 backend via match_tak
+     (jit_common.h); we emit only. */
+  struct match_tak m;
+  if (!match_tak(bc, &m))
     return 0;
-  BC_TAKE(at_y2, OP_LOAD_SLOT);
-  if (BC_ARG(at_y2, 0) != s_y)
-    return 0;
-  BC_TAKE(at_z2, OP_LOAD_SLOT);
-  if (BC_ARG(at_z2, 0) != s_z)
-    return 0;
-  BC_TAKE(at_ca, OP_CALL_GLOBAL);
-  uint8_t idx_a = BC_ARG(at_ca, 0);
-  if (BC_ARG(at_ca, 1) != 3)
-    return 0;
-  BC_TAKE(at_sy, OP_SLOT_SUB_FIX);
-  if (BC_ARG(at_sy, 0) != s_y || BC_I16(at_sy, 1) != 1)
-    return 0;
-  BC_TAKE(at_z3, OP_LOAD_SLOT);
-  if (BC_ARG(at_z3, 0) != s_z)
-    return 0;
-  BC_TAKE(at_x2, OP_LOAD_SLOT);
-  if (BC_ARG(at_x2, 0) != s_x)
-    return 0;
-  BC_TAKE(at_cb, OP_CALL_GLOBAL);
-  uint8_t idx_b = BC_ARG(at_cb, 0);
-  if (BC_ARG(at_cb, 1) != 3)
-    return 0;
-  BC_TAKE(at_sz, OP_SLOT_SUB_FIX);
-  if (BC_ARG(at_sz, 0) != s_z || BC_I16(at_sz, 1) != 1)
-    return 0;
-  BC_TAKE(at_x3, OP_LOAD_SLOT);
-  if (BC_ARG(at_x3, 0) != s_x)
-    return 0;
-  BC_TAKE(at_y3, OP_LOAD_SLOT);
-  if (BC_ARG(at_y3, 0) != s_y)
-    return 0;
-  BC_TAKE(at_cc, OP_CALL_GLOBAL);
-  uint8_t idx_c = BC_ARG(at_cc, 0);
-  if (BC_ARG(at_cc, 1) != 3)
-    return 0;
-  BC_TAKE(at_tail, OP_TAIL_SELF);
-  if (BC_ARG(at_tail, 0) != 3)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
 
   /* All three calls must target THIS function: the emission below issues
      a direct CALL to our own entry_pc, so a non-self callee would be
      silently rewritten as self-recursion. */
-  if (!bc->self_name)
-    return 0;
-  if (idx_a >= bc->nconsts || idx_b >= bc->nconsts || idx_c >= bc->nconsts)
-    return 0;
-  exp_t *ca = bc->consts[idx_a];
-  exp_t *cb = bc->consts[idx_b];
-  exp_t *cc = bc->consts[idx_c];
-  if (!issymbol(ca) || !issymbol(cb) || !issymbol(cc))
-    return 0;
-  if (strcmp((const char *)exp_text(ca), bc->self_name) != 0 ||
-      strcmp((const char *)exp_text(cb), bc->self_name) != 0 ||
-      strcmp((const char *)exp_text(cc), bc->self_name) != 0)
-    return 0;
-  if (s_x >= ENV_INLINE_SLOTS || s_y >= ENV_INLINE_SLOTS ||
-      s_z >= ENV_INLINE_SLOTS)
+  if (!(bc_calls_self(bc, m.idx_a) && bc_calls_self(bc, m.idx_b) &&
+        bc_calls_self(bc, m.idx_c)))
     return 0;
 
-  int32_t off_x = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_x * 8;
-  int32_t off_y = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_y * 8;
-  int32_t off_z = (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)s_z * 8;
+  int32_t off_x = (int32_t)m.off_x;
+  int32_t off_y = (int32_t)m.off_y;
+  int32_t off_z = (int32_t)m.off_z;
 
   int n = 0;
 
@@ -2544,80 +2010,20 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
    code (it only uses slot_m/slot_n/idx), so only the verify offsets and
    ncode change. */
 static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-
-  /* 49-byte ackermann (cursor-walked) — see the arm64 twin for the shape.
-       SLOT_IS_FIX m 0 ; BR_IF_FALSE ; SLOT_ADD_FIX n 1 ; JUMP ;
-       SLOT_IS_FIX n 0 ; BR_IF_FALSE ;
-       SLOT_SUB_FIX m 1 ; LOAD_FIX 1 ; TAIL_SELF 2 ; JUMP ;
-       SLOT_SUB_FIX m 1 ; LOAD_SLOT m ; SLOT_SUB_FIX n 1 ; CALL_GLOBAL idx,2 ;
-       TAIL_SELF 2 ; RET. */
-  int pc = 0, at_mis, at_nadd, at_nis, at_subm1, at_lf1, at_t1, at_subm2;
-  int at_loadm, at_subn, at_call, at_t2;
-  BC_TAKE(at_mis, OP_SLOT_IS_FIX);
-  uint8_t slot_m = BC_ARG(at_mis, 0);
-  if (BC_I16(at_mis, 1) != 0)
-    return 0;
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_nadd, OP_SLOT_ADD_FIX);
-  uint8_t slot_n_check1 = BC_ARG(at_nadd, 0);
-  if (BC_I16(at_nadd, 1) != 1)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_nis, OP_SLOT_IS_FIX);
-  uint8_t slot_n = BC_ARG(at_nis, 0);
-  if (slot_n != slot_n_check1 || BC_I16(at_nis, 1) != 0)
-    return 0;
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_subm1, OP_SLOT_SUB_FIX);
-  if (BC_ARG(at_subm1, 0) != slot_m || BC_I16(at_subm1, 1) != 1)
-    return 0;
-  BC_TAKE(at_lf1, OP_LOAD_FIX);
-  if (BC_I16(at_lf1, 0) != 1)
-    return 0;
-  BC_TAKE(at_t1, OP_TAIL_SELF);
-  if (BC_ARG(at_t1, 0) != 2)
-    return 0;
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_subm2, OP_SLOT_SUB_FIX);
-  if (BC_ARG(at_subm2, 0) != slot_m || BC_I16(at_subm2, 1) != 1)
-    return 0;
-  BC_TAKE(at_loadm, OP_LOAD_SLOT);
-  if (BC_ARG(at_loadm, 0) != slot_m)
-    return 0;
-  BC_TAKE(at_subn, OP_SLOT_SUB_FIX);
-  if (BC_ARG(at_subn, 0) != slot_n || BC_I16(at_subn, 1) != 1)
-    return 0;
-  BC_TAKE(at_call, OP_CALL_GLOBAL);
-  uint8_t idx = BC_ARG(at_call, 0);
-  if (BC_ARG(at_call, 1) != 2)
-    return 0;
-  if (idx >= bc->nconsts)
-    return 0;
-  BC_TAKE(at_t2, OP_TAIL_SELF);
-  if (BC_ARG(at_t2, 0) != 2)
-    return 0;
-  BC_EAT(OP_RET);
-  BC_END();
-
-  if (slot_m >= ENV_INLINE_SLOTS || slot_n >= ENV_INLINE_SLOTS)
+  /* 49-byte ackermann — shape walk shared with the arm64 backend via
+     match_ackermann (jit_common.h); we emit only. */
+  struct match_ackermann m;
+  if (!match_ackermann(bc, &m))
     return 0;
 
   /* Self-name guard (see try_jit_recurse_add_two): the nested call emits
      a direct CALL to our own entry_pc, so a non-self callee would be
      silently rewritten as self-recursion. */
-  if (!bc->self_name)
-    return 0;
-  exp_t *callee = bc->consts[idx];
-  if (!issymbol(callee))
-    return 0;
-  if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
+  if (!bc_calls_self(bc, m.idx))
     return 0;
 
-  int32_t off_m =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot_m * 8;
-  int32_t off_n =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot_n * 8;
+  int32_t off_m = (int32_t)m.off_m;
+  int32_t off_n = (int32_t)m.off_n;
 
   int n = 0;
 
@@ -2889,57 +2295,23 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
    terminate — overflow on tagged fixnum (>2^60) is identical to the
    recursive version. */
 static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
+  /* 24-byte iterative-fact shape — shape walk shared with the arm64 backend
+     via match_recurse_mul_one (jit_common.h); we emit only. */
+  struct match_recurse_mul_one mm;
+  if (!match_recurse_mul_one(bc, &mm))
+    return 0;
 
-  /* 24-byte iterative-fact shape (cursor-walked) —
-       <cmp> slot K1 ; BR_IF_FALSE ; LOAD_FIX BASE ; JUMP ;
-       LOAD_SLOT slot ; <step> slot K2 ; CALL_GLOBAL idx,1 ; MUL ; RET. */
-  int pc = 0, at_cmp, at_base, at_load, at_step, at_call;
-  uint8_t cmp_op, step_op;
-  BC_TAKE_ANY(at_cmp, cmp_op);
-  if (cmp_op != OP_SLOT_LT_FIX && cmp_op != OP_SLOT_GT_FIX &&
-      cmp_op != OP_SLOT_LE_FIX && cmp_op != OP_SLOT_GE_FIX)
-    return 0;
-  uint8_t slot = BC_ARG(at_cmp, 0);
-  if (slot >= ENV_INLINE_SLOTS)
-    return 0;
-  int16_t K1 = BC_I16(at_cmp, 1);
-  BC_EAT(OP_BR_IF_FALSE);
-  BC_TAKE(at_base, OP_LOAD_FIX);
-  int16_t BASE = BC_I16(at_base, 0);
-  BC_EAT(OP_JUMP);
-  BC_TAKE(at_load, OP_LOAD_SLOT);
-  if (BC_ARG(at_load, 0) != slot)
-    return 0;
-  BC_TAKE_ANY(at_step, step_op);
-  if (step_op != OP_SLOT_SUB_FIX && step_op != OP_SLOT_ADD_FIX)
-    return 0;
-  if (BC_ARG(at_step, 0) != slot)
-    return 0;
-  int16_t K2 = BC_I16(at_step, 1);
-  BC_TAKE(at_call, OP_CALL_GLOBAL);
-  uint8_t idx = BC_ARG(at_call, 0);
-  if (BC_ARG(at_call, 1) != 1)
-    return 0;
-  if (idx >= bc->nconsts)
-    return 0;
-  BC_EAT(OP_MUL);
-  BC_EAT(OP_RET);
-  BC_END();
+  uint8_t cmp_op = mm.cmp_op, step_op = mm.step_op;
+  uint8_t idx = mm.idx;
+  int16_t K1 = mm.K1, K2 = mm.K2, BASE = mm.BASE;
 
   /* Self-name guard (see try_jit_recurse_add_two): the iterative-fact
      emission below elides the call entirely, so a non-self callee would
      be silently rewritten as iterative factorial. */
-  if (!bc->self_name)
-    return 0;
-  exp_t *callee = bc->consts[idx];
-  if (!issymbol(callee))
-    return 0;
-  if (strcmp((const char *)exp_text(callee), bc->self_name) != 0)
+  if (!bc_calls_self(bc, idx))
     return 0;
 
-  int32_t slot_off =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)slot * 8;
+  int32_t slot_off = (int32_t)mm.slot_off;
   int32_t K1_tagged = ((int32_t)K1 << 3) | 1;
   int32_t K2_delta = ((int32_t)K2) << 3;
   uint64_t BASE_tag = ((uint64_t)(int64_t)BASE << 3) | 1;
@@ -3070,28 +2442,15 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
    compares the underlying value bits). Return TRUE_EXP/NIL_EXP via
    cmovz. Avoids vm_invoke_values entirely — saves ~200ns/call. */
 static int try_jit_modeq_leaf(bytecode_t *bc, uint8_t *buf, int *outn) {
-  uint8_t *c = bc->code;
-  /* 10-byte (is (mod a b) K) leaf (cursor-walked) —
-       LOAD_SLOT a ; LOAD_SLOT b ; MOD ; LOAD_FIX K ; IS ; RET. */
-  int pc = 0, at_a, at_b, at_k;
-  BC_TAKE(at_a, OP_LOAD_SLOT);
-  if (BC_ARG(at_a, 0) >= ENV_INLINE_SLOTS)
+  /* 10-byte (is (mod a b) K) leaf — shape walk shared with the arm64 backend
+     via match_modeq_leaf (jit_common.h); we emit only. */
+  struct match_modeq_leaf m;
+  if (!match_modeq_leaf(bc, &m))
     return 0;
-  BC_TAKE(at_b, OP_LOAD_SLOT);
-  if (BC_ARG(at_b, 0) >= ENV_INLINE_SLOTS)
-    return 0;
-  BC_EAT(OP_MOD);
-  BC_TAKE(at_k, OP_LOAD_FIX);
-  int16_t K = BC_I16(at_k, 0);
-  BC_EAT(OP_IS);
-  BC_EAT(OP_RET);
-  BC_END();
 
-  int32_t off_a =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)BC_ARG(at_a, 0) * 8;
-  int32_t off_b =
-      (int32_t)offsetof(env_t, inline_vals[0]) + (int32_t)BC_ARG(at_b, 0) * 8;
-  int32_t k_shifted = ((int32_t)K) << 3; /* compare against (K<<3) */
+  int32_t off_a = (int32_t)m.off_a;
+  int32_t off_b = (int32_t)m.off_b;
+  int32_t k_shifted = ((int32_t)m.K) << 3; /* compare against (K<<3) */
 
   int n = 0;
 
@@ -3160,7 +2519,7 @@ static int try_jit_predicate_cons_loop(bytecode_t *bc, uint8_t *buf,
   if (!match_predicate_cons_loop(bc))
     return 0;
   int n = 0;
-  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RDI); /* rsi = env */
+  n += x64_mov_reg_reg(buf + n, X64_RSI, X64_RDI);               /* rsi = env */
   n += x64_mov_imm64(buf + n, X64_RDI, (uint64_t)(uintptr_t)bc); /* rdi = bc */
   n += x64_mov_imm64(buf + n, X64_RAX,
                      (uint64_t)(uintptr_t)&jit_predicate_cons_loop);
