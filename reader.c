@@ -140,6 +140,17 @@ scanned:
 }
 #undef ATOM_NUM_RETURN
 
+/* Cold parse-time error sites that repeat verbatim ~a dozen times across
+   escapereader()/reader(); these macros name them once. The caller still does
+   any freetoken() it needs before invoking them. The illegal-char message
+   historically reports `x` (the lead byte) even from the continuation paths
+   that read `y` — preserved here on purpose. */
+#define READER_EOF_ERR()                                                       \
+  error(EXP_ERROR_PARSING_EOF, NULL, NULL, "End of file reached while parsing")
+#define READER_ILLEGAL_CHAR_ERR(ch)                                            \
+  error(EXP_ERROR_PARSING_ILLEGAL_CHAR, NULL, NULL, "Error illegal char %d",   \
+        (ch))
+
 exp_t *callmacrochar(FILE *stream, unsigned char x) {
   exp_t *lnode = NULL; // Initial List Node
   exp_t *vnode = NULL; // Val Node
@@ -276,14 +287,12 @@ exp_t *escapereader(FILE *stream, token_t **ptoken, int lastchar) {
     zchar = schrmap[lastchar];
   } else if (lastchar == 'x') {
     if ((nchar = getc(stream)) == EOF)
-      return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                   "End of file reached while parsing");
+      return READER_EOF_ERR();
     if (chr2hex[nchar] < 0)
       goto error;
     zchar = chr2hex[nchar] * 16;
     if ((nchar = getc(stream)) == EOF)
-      return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                   "End of file reached while parsing");
+      return READER_EOF_ERR();
     if (chr2hex[nchar] < 0)
       goto error;
     zchar += chr2hex[nchar];
@@ -300,6 +309,43 @@ error:
                "invalid escape %c unkown!", nchar);
 }
 
+/* Consume the continuation bytes (0x80..0xBF) of a multi-byte UTF-8 sequence
+   into `token`, stopping at the first non-continuation byte (pushed back) or
+   EOF. Returns NULL on success, or an EOF error (having freed `token`) — the
+   caller returns that straight through. Verbatim-shared by the lead-byte and
+   in-token UTF-8 paths. */
+static exp_t *reader_consume_utf8_tail(FILE *stream, token_t *token) {
+  int y;
+  do {
+    if ((y = getc(stream)) != EOF) {
+      if ((y < 192) && (y > 127))
+        tokenadd(token, y);
+    } else {
+      freetoken(token);
+      return READER_EOF_ERR();
+    }
+  } while ((y < 192) && (y > 127));
+  ungetc(y, stream);
+  return NULL;
+}
+
+/* Build a literal-collecting list `(head elem elem …)` by reading forms until
+   the matching `close` delimiter. Shared by the #[ vector and #{ set readers,
+   which differ only in `head` symbol and `close`. On a sub-form error the
+   partial list is freed and the error propagated. */
+static exp_t *reader_collect(FILE *stream, unsigned char close, exp_t *head) {
+  exp_t *cur = head;
+  exp_t *v;
+  while ((v = reader(stream, close, 0))) {
+    if (iserror(v)) {
+      unrefexp(head);
+      return v;
+    }
+    cur = cur->next = make_node(v);
+  }
+  return head;
+}
+
 exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
   int x, y, z;
   token_t *token = NULL;
@@ -312,20 +358,10 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
     escape = 0;
     if (x > 127) { /* UTF-8 SUPPORT */
       token = tokenize(x);
-      do {
-        if ((y = getc(stream)) != EOF) {
-          if ((y < 192) && (y > 127))
-            tokenadd(token, y);
-        } else {
-          freetoken(token);
-          return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                       "End of file reached while parsing");
-        }
-      } while ((y < 192) && (y > 127));
-      ungetc(y, stream);
+      if ((ret = reader_consume_utf8_tail(stream, token)))
+        return ret;
     } else if ((x < 0) || (x > 255) || !chrmap[x])
-      return error(EXP_ERROR_PARSING_ILLEGAL_CHAR, NULL, NULL,
-                   "Error illegal char %d", x);
+      return READER_ILLEGAL_CHAR_ERR(x);
 
     else if (ISWHITESPACE & chrmap[x])
       continue;
@@ -353,25 +389,15 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             if ((z = getc(stream)) != EOF) {
               return make_char(utf8_decode_stream(z, stream));
             } else
-              return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                           "End of file reached while parsing");
+              return READER_EOF_ERR();
 
           } else if (y == '[') {
             /* Vector literal: #[1 2 3] → (vector 1 2 3). The plain
                `[...]` form is reserved for Arc-lambda; we use the `#`
                prefix (Scheme/EDN convention) so the two don't collide.
                `vec` is the n-ary allocator, `vector` is the populator. */
-            exp_t *vlnode = make_node(make_symbol("vector", 6));
-            exp_t *vcnode = vlnode;
-            exp_t *vvnode;
-            while ((vvnode = reader(stream, ']', 0))) {
-              if (iserror(vvnode)) {
-                unrefexp(vlnode);
-                return vvnode;
-              }
-              vcnode = vcnode->next = make_node(vvnode);
-            }
-            return vlnode;
+            return reader_collect(stream, ']',
+                                  make_node(make_symbol("vector", 6)));
           } else if (y == 'b') {
             /* Blob literal: #b"..." → an EXP_BLOB holding the string's bytes.
                This is the form the printer emits for a printable blob, so the
@@ -397,23 +423,13 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             /* Set literal: #{1 2 3} → (hash-set 1 2 3). This is the form the
                printer emits for an EXP_SET, so a printed set re-reads as the
                same value. (Plain `{...}` is the hash-map literal.) */
-            exp_t *slnode = make_node(make_symbol("hash-set", 8));
-            exp_t *scnode = slnode;
-            exp_t *svnode;
-            while ((svnode = reader(stream, '}', 0))) {
-              if (iserror(svnode)) {
-                unrefexp(slnode);
-                return svnode;
-              }
-              scnode = scnode->next = make_node(svnode);
-            }
-            return slnode;
+            return reader_collect(stream, '}',
+                                  make_node(make_symbol("hash-set", 8)));
           } else
             return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
                          "call to dispatch macro char %c unkown!", y);
         } else
-          return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                       "End of file reached while parsing");
+          return READER_EOF_ERR();
       }
       if ((ret = callmacrochar(stream, x)))
         return ret;
@@ -427,8 +443,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
           return ret;
         }
       } else
-        return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                     "End of file reached while parsing");
+        return READER_EOF_ERR();
 
     } else if (ISMULTIPLEESCAPE & chrmap[x]) {
       token = tokenize(-1);
@@ -442,21 +457,11 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         if ((y = getc(stream)) != EOF) {
           if (y > 127) {
             tokenadd(token, y);
-            do {
-              if ((y = getc(stream)) != EOF) {
-                if ((y < 192) && (y > 127))
-                  tokenadd(token, y);
-              } else {
-                freetoken(token);
-                return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                             "End of file reached while parsing");
-              }
-            } while ((y < 192) && (y > 127));
-            ungetc(y, stream);
+            if ((ret = reader_consume_utf8_tail(stream, token)))
+              return ret;
           } else if ((y < 0) || (y > 255) || !chrmap[y]) {
             freetoken(token);
-            return error(EXP_ERROR_PARSING_ILLEGAL_CHAR, NULL, NULL,
-                         "Error illegal char %d", x);
+            return READER_ILLEGAL_CHAR_ERR(x);
           } else if ((ISCONSTITUENT | ISNTERMMACRO) & chrmap[y]) {
             tokenadd(token, y);
             continue;
@@ -470,8 +475,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
               }
             } else {
               freetoken(token);
-              return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                           "End of file reached while parsing");
+              return READER_EOF_ERR();
             }
           } else if (ISMULTIPLEESCAPE & chrmap[y]) {
             pushtoken = 1;
@@ -500,21 +504,11 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         if ((y = getc(stream)) != EOF) {
           if (y > 127) {
             tokenadd(token, y);
-            do {
-              if ((y = getc(stream)) != EOF) {
-                if ((y < 192) && (y > 127))
-                  tokenadd(token, y);
-              } else {
-                freetoken(token);
-                return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                             "End of file reached while parsing");
-              }
-            } while ((y < 192) && (y > 127));
-            ungetc(y, stream);
+            if ((ret = reader_consume_utf8_tail(stream, token)))
+              return ret;
           } else if ((y < 0) || (y > 255)) {
             freetoken(token);
-            return error(EXP_ERROR_PARSING_ILLEGAL_CHAR, NULL, NULL,
-                         "Error illegal char %d", x);
+            return READER_ILLEGAL_CHAR_ERR(x);
           } else if ((ISWHITESPACE | ISCONSTITUENT | ISTERMMACRO |
                       ISNTERMMACRO) &
                      chrmap[y])
@@ -529,8 +523,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
               }
             } else {
               freetoken(token);
-              return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                           "End of file reached while parsing");
+              return READER_EOF_ERR();
             }
           } else if (ISMULTIPLEESCAPE & chrmap[y]) {
             ret = make_string_from_token(token, 0, token->size);
@@ -541,8 +534,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
 
         } else {
           freetoken(token);
-          return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                       "End of file reached while parsing");
+          return READER_EOF_ERR();
         }
       }
     }
@@ -556,8 +548,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
   }
 
   if (x == EOF) {
-    return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
-                 "End of file reached while parsing");
+    return READER_EOF_ERR();
     // END OF FILE PROCESSING TO BE DONE STEP 1
   }
   return NULL;

@@ -109,30 +109,51 @@ static int load_strn(char **pptr, size_t *plen, FILE *stream) {
   return 1;
 }
 
+/* Container (de)serializer prologues. The set/dict/deque dumps all write the
+   type tag then a size_t element count, recurse per element with the same
+   dumpability guard, and their loads all discard the placeholder, read a
+   size_t count, and reject a corrupt/oversized count against the same cap.
+   These macros factor that shared boilerplate; blob and vec keep their own
+   headers (different wire shape: vec writes a kind byte + u32, blob a 512 MiB
+   byte cap) so their exact bytes are untouched. */
+#define DUMP_HEADER(e, n)                                                      \
+  do {                                                                         \
+    if (dumptype(stream, &(e)->type) <= 0)                                     \
+      return NULL;                                                             \
+    if (dumpsize_t(stream, &(n)) <= 0)                                         \
+      return NULL;                                                             \
+  } while (0)
+#define DUMP_ELEM(v, stream)                                                   \
+  do {                                                                         \
+    if (!(v) || !__DUMPABLE__(v) || !__DUMP__((v), stream))                    \
+      return NULL;                                                             \
+  } while (0)
+#define LOAD_DISCARD_AND_COUNT(e, n, cap)                                      \
+  do {                                                                         \
+    if (e)                                                                     \
+      unrefexp(e);                                                             \
+    (n) = 0;                                                                   \
+    if (loadsize_t(stream, &(n)) <= 0 || (n) > (size_t)(cap))                  \
+      return NULL;                                                             \
+  } while (0)
+
 exp_t *dump_set(exp_t *e, FILE *stream) {
-  if (dumptype(stream, &e->type) <= 0)
-    return NULL;
   dict_t *d = (dict_t *)e->ptr;
   size_t n = d ? (size_t)d->ht[0].used : 0;
-  if (dumpsize_t(stream, &n) <= 0)
-    return NULL;
+  DUMP_HEADER(e, n);
   if (!d)
     return e;
   for (unsigned int i = 0; i < d->ht[0].size; i++) {
     for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
-      if (!k->val || !__DUMPABLE__(k->val) || !__DUMP__(k->val, stream))
-        return NULL;
+      DUMP_ELEM(k->val, stream);
     }
   }
   return e;
 }
 
 exp_t *load_set(exp_t *e, FILE *stream) {
-  if (e)
-    unrefexp(e);
-  size_t n = 0;
-  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
-    return NULL;
+  size_t n;
+  LOAD_DISCARD_AND_COUNT(e, n, 1u << 28);
   exp_t *ret = make_set_exp();
   dict_t *d = (dict_t *)ret->ptr;
   for (size_t i = 0; i < n; i++) {
@@ -156,30 +177,23 @@ exp_t *load_set(exp_t *e, FILE *stream) {
    pre-checks dumpability recursively, so values here are dumpable; the
    per-value __DUMPABLE__ guard is defense in depth (matches dump_set). */
 exp_t *dump_dict_value(exp_t *e, FILE *stream) {
-  if (dumptype(stream, &e->type) <= 0)
-    return NULL;
   dict_t *d = (dict_t *)e->ptr;
   size_t n = d ? (size_t)d->ht[0].used : 0;
-  if (dumpsize_t(stream, &n) <= 0)
-    return NULL;
+  DUMP_HEADER(e, n);
   if (!d)
     return e;
   for (unsigned int i = 0; i < d->ht[0].size; i++)
     for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
       if (!dump_str(k->key, stream))
         return NULL;
-      if (!k->val || !__DUMPABLE__(k->val) || !__DUMP__(k->val, stream))
-        return NULL;
+      DUMP_ELEM(k->val, stream);
     }
   return e;
 }
 
 exp_t *load_dict_value(exp_t *e, FILE *stream) {
-  if (e)
-    unrefexp(e);
-  size_t n = 0;
-  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
-    return NULL;
+  size_t n;
+  LOAD_DISCARD_AND_COUNT(e, n, 1u << 28);
   exp_t *ret = make_dict_exp();
   dict_t *d = (dict_t *)ret->ptr;
   for (size_t i = 0; i < n; i++) {
@@ -207,26 +221,19 @@ exp_t *load_dict_value(exp_t *e, FILE *stream) {
    element (__DUMP__) in head->tail order. Load rebuilds with
    alc_list_push_right (appends to tail), preserving order. */
 exp_t *dump_deque_value(exp_t *e, FILE *stream) {
-  if (dumptype(stream, &e->type) <= 0)
-    return NULL;
   alc_list_t *l = (alc_list_t *)e->ptr;
   size_t n = l ? (size_t)l->len : 0;
-  if (dumpsize_t(stream, &n) <= 0)
-    return NULL;
+  DUMP_HEADER(e, n);
   if (!l)
     return e;
   for (alc_listnode_t *node = l->head; node; node = node->next)
-    if (!node->val || !__DUMPABLE__(node->val) || !__DUMP__(node->val, stream))
-      return NULL;
+    DUMP_ELEM(node->val, stream);
   return e;
 }
 
 exp_t *load_deque_value(exp_t *e, FILE *stream) {
-  if (e)
-    unrefexp(e);
-  size_t n = 0;
-  if (loadsize_t(stream, &n) <= 0 || n > (size_t)(1u << 28))
-    return NULL;
+  size_t n;
+  LOAD_DISCARD_AND_COUNT(e, n, 1u << 28);
   exp_t *ret = make_list_exp();
   alc_list_t *l = (alc_list_t *)ret->ptr;
   for (size_t i = 0; i < n; i++) {
@@ -387,7 +394,11 @@ exp_t *load_pair(exp_t *e, FILE *stream) {
    enclosing global env). Recursive references resolve fine because the
    loader installs the lambda into the global env under its persisted
    name before the body is ever called. */
-exp_t *dump_lambda(exp_t *e, FILE *stream) {
+/* dump_lambda ≡ dump_macro (byte-identical) and load_lambda/load_macro differ
+   only in the trailing compile_lambda. dump_callable / load_callable hold that
+   shared body; the thin per-type wrappers below stay so the exp_tfuncList
+   dispatch table still has one fn per type. */
+static exp_t *dump_callable(exp_t *e, FILE *stream) {
   if (dumptype(stream, &e->type) <= 0)
     return NULL;
   /* Name (empty string for anonymous fns; preserves shape on the wire). */
@@ -409,7 +420,9 @@ exp_t *dump_lambda(exp_t *e, FILE *stream) {
     return NULL;
   return e;
 }
-exp_t *load_lambda(exp_t *e, FILE *stream) {
+/* compile != 0 → compile_lambda after rebuild (lambdas → bytecode VM/JIT);
+   compile == 0 → leave AST-only (macros, run by the macro expander). */
+static exp_t *load_callable(exp_t *e, FILE *stream, int compile) {
   char *name = NULL;
   if (!load_str(&name, stream)) {
     unrefexp(e); /* release placeholder on read failure */
@@ -436,8 +449,25 @@ exp_t *load_lambda(exp_t *e, FILE *stream) {
   /* Silent fallback to AST eval if compile_lambda can't compile (e.g.,
      body uses an unsupported form). The lambda still works either way.
      Persisted lambdas are top-level (no captured env survives a dump). */
-  compile_lambda(e, 0);
+  if (compile)
+    compile_lambda(e, 0);
   return e;
+}
+
+/* EXP_LAMBDA — persisted as source: name + params tree + body tree.
+   On load we reconstruct the lambda exp_t with the same shape defcmd
+   builds, then call compile_lambda so the bytecode VM (and JIT, where
+   the shape matches) sees the function. JIT pages don't survive a
+   restart but get re-installed at compile time on the new arch.
+
+   Limitations: closures over locals don't survive (alcove doesn't seem
+   to support lexical closures over let/with bindings beyond the
+   enclosing global env). Recursive references resolve fine because the
+   loader installs the lambda into the global env under its persisted
+   name before the body is ever called. */
+exp_t *dump_lambda(exp_t *e, FILE *stream) { return dump_callable(e, stream); }
+exp_t *load_lambda(exp_t *e, FILE *stream) {
+  return load_callable(e, stream, 1);
 }
 
 /* EXP_MACRO — same on-wire shape as EXP_LAMBDA (defmacrocmd builds an
@@ -445,53 +475,9 @@ exp_t *load_lambda(exp_t *e, FILE *stream) {
    side difference is that macros are AST-evaluated, so we skip
    compile_lambda. Source-form persistence: the macro body is preserved
    exactly and re-installed at load time. */
-exp_t *dump_macro(exp_t *e, FILE *stream) {
-  /* Identical wire format to dump_lambda (sans the type tag we write
-     here) so a future refactor could share the body. */
-  if (dumptype(stream, &e->type) <= 0)
-    return NULL;
-  const char *name = e->meta ? (const char *)e->meta : "";
-  if (!dump_str((char *)name, stream))
-    return NULL;
-  exp_t *params = lambda_params(e);
-  uint8_t flags = 0;
-  if (params)
-    flags |= 1;
-  if (e->next && e->next->content)
-    flags |= 2;
-  if (fwrite(&flags, 1, 1, stream) != 1)
-    return NULL;
-  if ((flags & 1) && !__DUMP__(params, stream))
-    return NULL;
-  if ((flags & 2) && !__DUMP__(e->next->content, stream))
-    return NULL;
-  return e;
-}
+exp_t *dump_macro(exp_t *e, FILE *stream) { return dump_callable(e, stream); }
 exp_t *load_macro(exp_t *e, FILE *stream) {
-  char *name = NULL;
-  if (!load_str(&name, stream)) {
-    unrefexp(e); /* release placeholder on read failure */
-    return NULL;
-  }
-  uint8_t flags;
-  if (fread(&flags, 1, 1, stream) != 1) {
-    free(name);
-    unrefexp(e);
-    return NULL;
-  }
-  exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
-  exp_t *body = (flags & 2) ? load_exp_t(stream) : NULL;
-  e->content = params;
-  e->next = make_node(body);
-  if (name && name[0]) {
-    e->meta = (keyval_t *)name;
-  } else {
-    free(name);
-    e->meta = NULL;
-  }
-  /* No compile_lambda — macros are AST-evaluated by the macro
-     expander, not the bytecode VM. */
-  return e;
+  return load_callable(e, stream, 0);
 }
 
 /* Forward decls for the vec helpers defined alongside make_vector. */

@@ -47,6 +47,26 @@ static int mp_put_be(mp_buf *m, uint64_t v, int nbytes) {
       return 0;
   return 1;
 }
+/* Emit a MessagePack length prefix for a container/string. The 4 length-
+   prefixed kinds (str, bin, array, map) share one big-endian cascade that
+   differs only in which tiers exist and the tag bytes:
+     - fix tier:   if n < fixlim, emit a single byte (fixmask | n).
+                   fixlim==0 disables it (bin has no fix tier).
+     - 1-byte tier: if n <= 0xff, emit tag8 then a 1-byte length.
+                   tag8==0 disables it (array/map have no 8-bit tier).
+     - 2-byte tier: if n <= 0xffff, emit tag16 then a 2-byte length.
+     - 4-byte tier: otherwise emit tag32 then a 4-byte length.
+   Emits exactly the same bytes the open-coded cascades did. */
+static int mp_put_sized(mp_buf *m, uint8_t fixmask, size_t fixlim, uint8_t tag8,
+                        uint8_t tag16, uint8_t tag32, size_t n) {
+  if (fixlim && n < fixlim)
+    return mp_put1(m, (uint8_t)(fixmask | n));
+  if (tag8 && n <= 0xff)
+    return mp_put1(m, tag8) && mp_put_be(m, n, 1);
+  if (n <= 0xffff)
+    return mp_put1(m, tag16) && mp_put_be(m, n, 2);
+  return mp_put1(m, tag32) && mp_put_be(m, n, 4);
+}
 static int mp_encode(exp_t *v, mp_buf *m);
 static int mp_encode_int(mp_buf *m, int64_t n) {
   if (n >= 0) {
@@ -71,13 +91,7 @@ static int mp_encode_int(mp_buf *m, int64_t n) {
   return mp_put1(m, 0xd3) && mp_put_be(m, (uint64_t)n, 8);
 }
 static int mp_encode_strlen(mp_buf *m, size_t len) {
-  if (len < 32)
-    return mp_put1(m, (uint8_t)(0xa0 | len));
-  if (len <= 0xff)
-    return mp_put1(m, 0xd9) && mp_put_be(m, len, 1);
-  if (len <= 0xffff)
-    return mp_put1(m, 0xda) && mp_put_be(m, len, 2);
-  return mp_put1(m, 0xdb) && mp_put_be(m, len, 4);
+  return mp_put_sized(m, 0xa0, 32, 0xd9, 0xda, 0xdb, len);
 }
 static int mp_encode(exp_t *v, mp_buf *m) {
   if (!v || v == NIL_EXP)
@@ -101,18 +115,14 @@ static int mp_encode(exp_t *v, mp_buf *m) {
   }
   if (isblob(v)) {
     size_t len = blob_len(v);
-    int h = (len <= 0xff)     ? (mp_put1(m, 0xc4) && mp_put_be(m, len, 1))
-            : (len <= 0xffff) ? (mp_put1(m, 0xc5) && mp_put_be(m, len, 2))
-                              : (mp_put1(m, 0xc6) && mp_put_be(m, len, 4));
+    int h = mp_put_sized(m, 0, 0, 0xc4, 0xc5, 0xc6, len);
     return h && mp_putn(m, blob_bytes(v), len);
   }
   if (ispair(v)) {
     size_t n = 0;
     for (exp_t *p = v; p && ispair(p) && p->content; p = p->next)
       n++;
-    int h = (n < 16)        ? mp_put1(m, (uint8_t)(0x90 | n))
-            : (n <= 0xffff) ? (mp_put1(m, 0xdc) && mp_put_be(m, n, 2))
-                            : (mp_put1(m, 0xdd) && mp_put_be(m, n, 4));
+    int h = mp_put_sized(m, 0x90, 16, 0, 0xdc, 0xdd, n);
     if (!h)
       return 0;
     for (exp_t *p = v; p && ispair(p) && p->content; p = p->next)
@@ -123,9 +133,7 @@ static int mp_encode(exp_t *v, mp_buf *m) {
   if (isdict(v)) {
     dict_t *d = (dict_t *)v->ptr;
     size_t n = d ? d->ht[0].used : 0;
-    int h = (n < 16)        ? mp_put1(m, (uint8_t)(0x80 | n))
-            : (n <= 0xffff) ? (mp_put1(m, 0xde) && mp_put_be(m, n, 2))
-                            : (mp_put1(m, 0xdf) && mp_put_be(m, n, 4));
+    int h = mp_put_sized(m, 0x80, 16, 0, 0xde, 0xdf, n);
     if (!h)
       return 0;
     if (d)
@@ -149,6 +157,14 @@ static uint64_t mp_get_be(const uint8_t *b, size_t pos, int n) {
   for (int i = 0; i < n; i++)
     v = (v << 8) | b[pos + i];
   return v;
+}
+/* Sign-extend the low nb*8 bits of v to a full int64. nb==8 is a no-op
+   (full width). Reproduces exactly the per-width `(int8_t/int16_t/int32_t/
+   int64_t)` casts the signed integer arms used: shift the sign bit of the
+   nb-byte field up to bit 63, then arithmetic-shift back down. */
+static inline int64_t mp_sext(uint64_t v, int nb) {
+  int sh = 64 - nb * 8;
+  return (int64_t)(v << sh) >> sh;
 }
 /* Decode `n` elements into a fresh list. */
 static exp_t *mp_decode_array(const uint8_t *b, size_t len, size_t *pos,
@@ -233,52 +249,24 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos) {
     return refexp(NIL_EXP); /* false → nil */
   case 0xc3:
     return refexp(TRUE_EXP); /* true → t */
-  case 0xcc: {
-    MP_NEED(1);
-    int64_t v = (int64_t)mp_get_be(b, *pos, 1);
-    *pos += 1;
+  case 0xcc: /* uint8 */
+  case 0xcd: /* uint16 */
+  case 0xce: /* uint32 */
+  case 0xcf: /* uint64 (reinterpreted as int64) */ {
+    int nb = (c == 0xcc) ? 1 : (c == 0xcd) ? 2 : (c == 0xce) ? 4 : 8;
+    MP_NEED((size_t)nb);
+    int64_t v = (int64_t)mp_get_be(b, *pos, nb);
+    *pos += nb;
     return MAKE_FIX(v);
   }
-  case 0xcd: {
-    MP_NEED(2);
-    int64_t v = (int64_t)mp_get_be(b, *pos, 2);
-    *pos += 2;
-    return MAKE_FIX(v);
-  }
-  case 0xce: {
-    MP_NEED(4);
-    int64_t v = (int64_t)mp_get_be(b, *pos, 4);
-    *pos += 4;
-    return MAKE_FIX(v);
-  }
-  case 0xcf: {
-    MP_NEED(8);
-    int64_t v = (int64_t)mp_get_be(b, *pos, 8);
-    *pos += 8;
-    return MAKE_FIX(v);
-  }
-  case 0xd0: {
-    MP_NEED(1);
-    int64_t v = (int8_t)mp_get_be(b, *pos, 1);
-    *pos += 1;
-    return MAKE_FIX(v);
-  }
-  case 0xd1: {
-    MP_NEED(2);
-    int64_t v = (int16_t)mp_get_be(b, *pos, 2);
-    *pos += 2;
-    return MAKE_FIX(v);
-  }
-  case 0xd2: {
-    MP_NEED(4);
-    int64_t v = (int32_t)mp_get_be(b, *pos, 4);
-    *pos += 4;
-    return MAKE_FIX(v);
-  }
-  case 0xd3: {
-    MP_NEED(8);
-    int64_t v = (int64_t)mp_get_be(b, *pos, 8);
-    *pos += 8;
+  case 0xd0: /* int8 */
+  case 0xd1: /* int16 */
+  case 0xd2: /* int32 */
+  case 0xd3: /* int64 */ {
+    int nb = (c == 0xd0) ? 1 : (c == 0xd1) ? 2 : (c == 0xd2) ? 4 : 8;
+    MP_NEED((size_t)nb);
+    int64_t v = mp_sext(mp_get_be(b, *pos, nb), nb);
+    *pos += nb;
     return MAKE_FIX(v);
   }
   case 0xca: {
