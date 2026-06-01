@@ -124,6 +124,16 @@ enum {
 #endif
 #endif
 
+/* Marks a function as run-rarely so the compiler places it off the hot path
+   (its own .text.unlikely section) and never inlines it into a hot caller —
+   used only on cold compiler/disasm helpers to keep them from perturbing the
+   layout/inlining of the VM hot loop. No-op on compilers without the attr. */
+#if defined(__has_attribute) && __has_attribute(cold)
+#define ALCOVE_COLD __attribute__((cold, noinline))
+#else
+#define ALCOVE_COLD
+#endif
+
 enum {
   EXP_ERROR_PARSING_MACROCHAR = 1,
   EXP_ERROR_PARSING_ILLEGAL_CHAR,

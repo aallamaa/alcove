@@ -5045,6 +5045,21 @@ static int add_const(compiler_t *c, exp_t *v) {
   c->consts[c->nconsts] = refexp(v);
   return c->nconsts++;
 }
+/* Emit `OP_LOAD_CONST <idx>` for `v`, interning the constant. No-op-safe if a
+   prior emit failed; bails (c->failed) if the const pool overflowed. Cold —
+   compiler only. */
+ALCOVE_COLD static void emit_load_const(compiler_t *c, exp_t *v) {
+  int k = add_const(c, v);
+  if (c->failed)
+    return;
+  emit_u8(c, OP_LOAD_CONST);
+  emit_u8(c, (uint8_t)k);
+}
+/* Emit the nil literal — the implicit result of empty bodies, else-less ifs,
+   etc. Thin wrapper over emit_load_const(nil). */
+ALCOVE_COLD static void emit_nil(compiler_t *c) {
+  emit_load_const(c, nil_singleton);
+}
 /* Emit a NAMED slot binding for a let/with/for-counter local. Storing the
    name (as a const symbol) lets an OP_EVAL_AST sub-form resolve the local by
    symbol at runtime; plain OP_BIND_SLOT leaves a NULL key and is kept only for
@@ -5072,6 +5087,7 @@ static int find_slot(compiler_t *c, const char *name) {
 
 static int op_for_head(const char *s);
 static void compile_expr(compiler_t *c, exp_t *e, int tail);
+static void patch_i16(compiler_t *c, int patch, int target);
 
 /* Returns OP_ADD..OP_NOT for pure-arithmetic/cmp symbols, -1 otherwise. */
 static int op_for_head(const char *s) {
@@ -5107,9 +5123,7 @@ static int op_for_head(const char *s) {
    last keep the caller's tail position. Empty body compiles to nil. */
 static void compile_body_seq(compiler_t *c, exp_t *body, int tail) {
   if (!body) {
-    int k = add_const(c, nil_singleton);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
     return;
   }
   int saw_any = 0;
@@ -5150,19 +5164,13 @@ static void compile_if(compiler_t *c, exp_t *form, int tail) {
     compile_expr(c, els, tail);
   else {
     /* (if cond then) with no else: result is nil. */
-    int k = add_const(c, NIL_EXP);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
   }
   if (c->failed)
     return;
   int end_target = c->ncode;
-  int16_t off_false = (int16_t)(false_target - (patch_false + 2));
-  int16_t off_end = (int16_t)(end_target - (patch_end + 2));
-  c->code[patch_false] = off_false & 0xff;
-  c->code[patch_false + 1] = (off_false >> 8) & 0xff;
-  c->code[patch_end] = off_end & 0xff;
-  c->code[patch_end + 1] = (off_end >> 8) & 0xff;
+  patch_i16(c, patch_false, false_target);
+  patch_i16(c, patch_end, end_target);
 }
 
 static void compile_call(compiler_t *c, exp_t *form, int tail) {
@@ -5526,9 +5534,7 @@ static void compile_when_unless(compiler_t *c, exp_t *form, int tail,
   if (run)
     compile_body_seq(c, run, tail);
   else {
-    int k = add_const(c, NIL_EXP);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
   }
   if (c->failed)
     return;
@@ -5539,19 +5545,13 @@ static void compile_when_unless(compiler_t *c, exp_t *form, int tail,
   if (skip)
     compile_body_seq(c, skip, tail);
   else {
-    int k = add_const(c, NIL_EXP);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
   }
   if (c->failed)
     return;
   int end_target = c->ncode;
-  int16_t off_false = (int16_t)(false_target - (patch_false + 2));
-  int16_t off_end = (int16_t)(end_target - (patch_end + 2));
-  c->code[patch_false] = off_false & 0xff;
-  c->code[patch_false + 1] = (off_false >> 8) & 0xff;
-  c->code[patch_end] = off_end & 0xff;
-  c->code[patch_end + 1] = (off_end >> 8) & 0xff;
+  patch_i16(c, patch_false, false_target);
+  patch_i16(c, patch_end, end_target);
 }
 
 /* Backpatch helper: write the i16 at code[patch..patch+1] as the relative
@@ -5617,9 +5617,7 @@ static void compile_and_or(compiler_t *c, exp_t *form, int tail, int is_or) {
 static void compile_cond(compiler_t *c, exp_t *form, int tail) {
   exp_t *cur = cdr(form);
   if (!cur) { /* (cond) -> nil */
-    int k = add_const(c, NIL_EXP);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
     return;
   }
   int end_patches[COND_MAX_PATCHES];
@@ -5653,9 +5651,7 @@ static void compile_cond(compiler_t *c, exp_t *form, int tail) {
     cur = cur->next->next;
   }
   if (!had_default) { /* no clause matched -> nil */
-    int k = add_const(c, NIL_EXP);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
   }
   int end_target = c->ncode;
   for (int i = 0; i < n_end; i++)
@@ -5715,9 +5711,7 @@ static void compile_case(compiler_t *c, exp_t *form, int tail) {
   }
   if (!had_default) { /* no match -> drop key, result nil */
     emit_u8(c, OP_POP);
-    int k = add_const(c, NIL_EXP);
-    emit_u8(c, OP_LOAD_CONST);
-    emit_u8(c, (uint8_t)k);
+    emit_nil(c);
   }
   int end_target = c->ncode;
   for (int i = 0; i < n_end; i++)
@@ -5829,12 +5823,8 @@ static void compile_for(compiler_t *c, exp_t *form, int tail) {
 
   int loop_end = c->ncode;
 
-  int16_t off_exit = (int16_t)(loop_end - (patch_exit + 2));
-  c->code[patch_exit] = off_exit & 0xff;
-  c->code[patch_exit + 1] = (off_exit >> 8) & 0xff;
-  int16_t off_jump = (int16_t)(loop_top - (patch_jump + 2));
-  c->code[patch_jump] = off_jump & 0xff;
-  c->code[patch_jump + 1] = (off_jump >> 8) & 0xff;
+  patch_i16(c, patch_exit, loop_end);
+  patch_i16(c, patch_jump, loop_top);
 
   c->nlet_depth--;
 
@@ -6056,9 +6046,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
          one keeps tail position. (do) with no exprs evaluates to nil. */
       exp_t *b = e->next;
       if (!b) {
-        int k = add_const(c, nil_singleton);
-        emit_u8(c, OP_LOAD_CONST);
-        emit_u8(c, (uint8_t)k);
+        emit_nil(c);
         return;
       }
       int saw_any = 0;
@@ -6186,9 +6174,7 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       if (init)
         compile_expr(c, init, 0);
       else {
-        int k = add_const(c, nil_singleton);
-        emit_u8(c, OP_LOAD_CONST);
-        emit_u8(c, (uint8_t)k);
+        emit_nil(c);
       }
       if (c->failed)
         return;
