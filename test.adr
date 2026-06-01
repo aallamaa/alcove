@@ -695,6 +695,71 @@ def is-ack (m n):
 
 assert "is-fused ackermann (jit shape)" (is-ack 3 6) 509
 
+def ts-let (n acc):
+  let s (+ acc n):
+    if (is n 0):
+      s
+      ts-let (- n 1) s
+
+def ts-lets (n acc):
+  let* (a (+ acc n)) (if (is n 0) a (ts-lets (- n 1) a))
+
+def ts-with (n acc):
+  with (s (+ acc n)):
+    if (is n 0):
+      s
+      ts-with (- n 1) s
+
+def ts-nest (n acc):
+  let a 1:
+    let b 1:
+      if (is n 0):
+        acc
+        ts-nest (- n 1) (+ acc a b)
+
+def ts-multi (n acc):
+  with (p 1 q 2 r 3):
+    if (is n 0):
+      acc
+      ts-multi (- n 1) (+ acc p q r)
+
+assert "tail-self let (small)" (ts-let 100 0) 5050
+
+assert "tail-self let* (small)" (ts-lets 100 0) 5050
+
+assert "tail-self with (small)" (ts-with 100 0) 5050
+
+assert "tail-self nested let" (ts-nest 5 0) 10
+
+assert "tail-self multi-bind with" (ts-multi 5 0) 30
+
+assert "tail-self let (1e6)" (ts-let 1000000 0) 500000500000
+
+assert "tail-self let* (1e6)" (ts-lets 1000000 0) 500000500000
+
+assert "tail-self with (1e6)" (ts-with 1000000 0) 500000500000
+
+assert "tail-self nested let (1e6)" (ts-nest 1000000 0) 2000000
+
+assert "tail-self multi-bind (1e6)" (ts-multi 1000000 0) 6000000
+
+def ts-cap (n acc):
+  let s n:
+    if (is n 0):
+      cons (fn () s) acc
+      ts-cap (- n 1) (cons (fn () s) acc)
+
+assert "tail-self bail on capture" (map (fn (g) (g)) (ts-cap 3 ())):
+  list 0 1 2 3
+
+def ts-eval (n acc):
+  let s (car (reverse (cons (+ acc 1) ()))):
+    if (is n 0):
+      s
+      ts-eval (- n 1) s
+
+assert "tail-self w/ eval-ast body" (ts-eval 1000000 0) 1000001
+
 assert "with 2 bindings" (with (a 3 b 4) (+ a b)) 7
 
 assert "with shadows" (let a 1 (with (a 9) a)) 9

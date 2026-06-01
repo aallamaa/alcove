@@ -1016,7 +1016,12 @@ typedef struct compiler_t {
   char *slot_names[ENV_INLINE_SLOTS];
   int nparams;
   int nslots;            /* current total: nparams + active let/with bindings */
-  int nlet_depth;        /* >0 disables OP_TAIL_SELF (keys/slots mismatch) */
+  int nlet_depth;        /* let/with/for nesting depth of the cursor */
+  int capture_unsafe;    /* 1 if the lambda body may create an env-capturing
+                            closure (fn/lambda/def/... anywhere) or push a try
+                            handler — disables OP_TAIL_SELF inside a let body,
+                            since TAIL_SELF mutates env->inline_vals in place.
+                            Set once by a body pre-pass in compile_lambda. */
   const char *self_name; /* for self-tail-call detection; NULL in anon fn */
   int failed;
 } compiler_t;

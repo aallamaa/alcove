@@ -5181,7 +5181,19 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
   /* Slot-headed calls compile fine now that vm_invoke_values has a
      string-as-callable arm (ticket 6). The earlier blanket refusal
      was too conservative. */
-  int is_self_tail = tail && c->self_name && c->nlet_depth == 0 &&
+  /* Self-tail emission. OP_TAIL_SELF rebinds the inline param slots in place
+     and jumps to pc=0, re-running the WHOLE prologue (including any
+     let/with-binding LOAD+BIND_SLOT_NAMED setup) from the fresh params. The
+     l_tail_self handler first unrefs ALL inline slots (params + let-added) and
+     resets n_inline=nparams, so the re-run prologue cleanly re-grows the let
+     slots with no refcount drift, and the skipped trailing UNBIND_SLOT(s) are
+     harmless. This makes it safe inside a let/with body — but ONLY when the
+     lambda body cannot create an env-capturing closure or push a try handler
+     (see body_capture_unsafe): in-place env mutation would otherwise corrupt
+     an escaped closure or grow the handler stack unboundedly. When unsafe, we
+     keep OP_TAIL_CALL (correct, just 2.9x slower in the let case). */
+  int is_self_tail = tail && c->self_name &&
+                     (c->nlet_depth == 0 || !c->capture_unsafe) &&
                      issymbol(head) && strcmp(exp_text(head), c->self_name) == 0;
   /* Cross-function tail call is safe regardless of nlet_depth:
      OP_TAIL_CALL wholesale releases current env's inline slots. */
@@ -6298,6 +6310,50 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   c->failed = 1;
 }
 
+/* Conservative compile-time predicate: does this body subtree contain any
+   construct that could (at runtime) create a closure capturing the current
+   call env, OR push a try handler? Such a body is "capture-unsafe": running
+   OP_TAIL_SELF (which mutates env->inline_vals in place and jumps to pc=0)
+   would corrupt an escaped closure's captured bindings, and would re-push a
+   try handler every iteration. We therefore disable the let-body OP_TAIL_SELF
+   relaxation (below) when this returns true, falling back to OP_TAIL_CALL.
+
+   The denylist symbols are the only env-capturing / handler-pushing forms:
+     - fn/lambda/def/defn/defc/defmacro/macro: build a closure over env. In a
+       directly-compiled body they already force a full-lambda AST bail
+       (compile_expr line ~6281), but they can ALSO ride along inside an
+       OP_EVAL_AST sub-form (e.g. (map (fn (x) ...) xs)), where the fn IS
+       compiled-out yet still captures env at AST-eval time. Scanning the raw
+       AST catches both.
+     - try: compiles to OP_PUSH_HANDLER, which snapshots env onto the handler
+       stack; a TAIL_SELF jump-to-pc=0 would re-push it unboundedly.
+   Anything not in this list (arith, if/do/cond/case/and/or, user fn calls,
+   let/with/for, value-only OP_EVAL_AST builtins like reverse/map-of-no-fn)
+   provably does not retain env, so in-place rebinding is safe. */
+static int body_capture_unsafe(exp_t *e) {
+  if (!e || !is_ptr(e))
+    return 0;
+  if (issymbol(e))
+    return 0;
+  if (!ispair(e))
+    return 0;
+  exp_t *head = car(e);
+  if (issymbol(head)) {
+    const char *s = exp_text(head);
+    if (!strcmp(s, "fn") || !strcmp(s, "lambda") || !strcmp(s, "def") ||
+        !strcmp(s, "defn") || !strcmp(s, "defc") || !strcmp(s, "defmacro") ||
+        !strcmp(s, "macro") || !strcmp(s, "try"))
+      return 1;
+  }
+  /* Recurse over every element of this list (head + args, and nested
+     lists). content holds the element; next is the rest of the list. */
+  for (exp_t *p = e; p; p = p->next) {
+    if (body_capture_unsafe(p->content))
+      return 1;
+  }
+  return 0;
+}
+
 int compile_lambda(exp_t *fn, int is_closure) {
   if (!fn || !islambda(fn))
     return 0;
@@ -6307,6 +6363,16 @@ int compile_lambda(exp_t *fn, int is_closure) {
   exp_t *body = fn->next->content;
   compiler_t c = {0};
   c.self_name = (const char *)fn->meta; /* may be NULL for anon fn */
+  /* One-shot body pre-pass: decide whether the let-body OP_TAIL_SELF
+     relaxation is permitted for this whole lambda (order-independent — a
+     capturing form anywhere, incl. a let val re-run each iteration, must
+     veto it). */
+  for (exp_t *bb = body; bb; bb = bb->next) {
+    if (body_capture_unsafe(bb->content)) {
+      c.capture_unsafe = 1;
+      break;
+    }
+  }
 
   /* Register params into slots 0..N-1 matching env->inline_slots.
      Rest params (dot notation or bare-symbol wrap) fall back to AST.
