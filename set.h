@@ -216,9 +216,8 @@ static exp_t *set_copy_exp(exp_t *src) {
   dict_t *rd = (dict_t *)ret->ptr;
   dict_t *sd = (dict_t *)src->ptr;
   if (sd)
-    for (unsigned int i = 0; i < sd->ht[0].size; i++)
-      for (keyval_t *k = sd->ht[0].table[i]; k; k = k->next)
-        set_insert_value(rd, k->val);
+    DICT_FOREACH(sd, k, 0, 0)
+      set_insert_value(rd, k->val);
   return ret;
 }
 
@@ -238,9 +237,8 @@ exp_t *setunioncmd(exp_t *e, env_t *env) {
   dict_t *rd = (dict_t *)ret->ptr;
   dict_t *bd = (dict_t *)b->ptr;
   if (bd)
-    for (unsigned int i = 0; i < bd->ht[0].size; i++)
-      for (keyval_t *k = bd->ht[0].table[i]; k; k = k->next)
-        set_insert_value(rd, k->val);
+    DICT_FOREACH(bd, k, 0, 0)
+      set_insert_value(rd, k->val);
   CLEAN_RETURN_2(a, b, ret);
 }
 
@@ -256,10 +254,9 @@ exp_t *setintersectioncmd(exp_t *e, env_t *env) {
   dict_t *rd = (dict_t *)ret->ptr;
   dict_t *ad = (dict_t *)a->ptr;
   if (ad)
-    for (unsigned int i = 0; i < ad->ht[0].size; i++)
-      for (keyval_t *k = ad->ht[0].table[i]; k; k = k->next)
-        if (set_contains_key(b, k->key))
-          set_insert_value(rd, k->val);
+    DICT_FOREACH(ad, k, 0, 0)
+      if (set_contains_key(b, k->key))
+        set_insert_value(rd, k->val);
   CLEAN_RETURN_2(a, b, ret);
 }
 
@@ -275,10 +272,9 @@ exp_t *setdifferencecmd(exp_t *e, env_t *env) {
   dict_t *rd = (dict_t *)ret->ptr;
   dict_t *ad = (dict_t *)a->ptr;
   if (ad)
-    for (unsigned int i = 0; i < ad->ht[0].size; i++)
-      for (keyval_t *k = ad->ht[0].table[i]; k; k = k->next)
-        if (!set_contains_key(b, k->key))
-          set_insert_value(rd, k->val);
+    DICT_FOREACH(ad, k, 0, 0)
+      if (!set_contains_key(b, k->key))
+        set_insert_value(rd, k->val);
   CLEAN_RETURN_2(a, b, ret);
 }
 
@@ -292,8 +288,7 @@ exp_t *setlistcmd(exp_t *e, env_t *env) {
   exp_t *ret = NIL_EXP, *tail = NULL;
   dict_t *d = (dict_t *)s->ptr;
   if (d)
-    for (unsigned int i = 0; i < d->ht[0].size; i++)
-      for (keyval_t *k = d->ht[0].table[i]; k; k = k->next)
-        list_append_owned(&ret, &tail, set_value_clone(k->val));
+    DICT_FOREACH(d, k, 0, 0)
+      list_append_owned(&ret, &tail, set_value_clone(k->val));
   CLEAN_RETURN_1(s, ret);
 }

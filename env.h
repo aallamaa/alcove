@@ -5,6 +5,35 @@
  * call path (single TU). The eval-coupled `lookup` resolver and the shard/
  * reactor runtime stay in alcove.c. NOT standalone, NOT separately compiled.
  */
+
+/* Walk dict buckets. `d` is the dict_t*, `kv` the loop-variable name bound to
+   each keyval_t* in turn, and [ht_lo, ht_hi] the inclusive ht[] index range to
+   walk: 0,0 for ht[0] only (the set/value walks); 0,1 for both ht[0] and ht[1]
+   (env scans both halves of an in-progress rehash). MACRO form so the hot
+   set-algebra bulk loops inline identically to the hand-rolled walk. Defined
+   here (the first-#included container fragment) so dict.h/set.h see it too;
+   used ONLY within the container fragments (env/dict/set). */
+#define DICT_FOREACH(d, kv, ht_lo, ht_hi)                                      \
+  for (unsigned int _alc_h = (ht_lo); _alc_h <= (unsigned int)(ht_hi);         \
+       _alc_h++)                                                               \
+    for (unsigned long _alc_b = 0; _alc_b < (d)->ht[_alc_h].size; _alc_b++)    \
+      for (keyval_t *kv = (d)->ht[_alc_h].table[_alc_b]; kv; kv = kv->next)
+
+/* Type-guard for builtins: if `var` fails predicate `pred`, build an error
+   from the trailing error(...) args (bound to `_alc_e`) and run `cleanup` —
+   the call site's CLEAN_RETURN_n with the right arity, e.g.
+   REQUIRE_TYPE(b, isblob, CLEAN_RETURN_1(b, _alc_e),
+                ERROR_ILLEGAL_VALUE, NULL, env, "blob-ref: not a blob").
+   Factors the `if (!isX(v)) CLEAN_RETURN(error(...))` guards across the
+   container fragments. Used ONLY within these fragments. */
+#define REQUIRE_TYPE(var, pred, cleanup, ...)                                  \
+  do {                                                                         \
+    if (!pred(var)) {                                                          \
+      exp_t *_alc_e = error(__VA_ARGS__);                                      \
+      cleanup;                                                                 \
+    }                                                                          \
+  } while (0)
+
 inline env_t *ref_env(env_t *env) {
   if (env) {
     REFCOUNT_INC(&env->nref);
@@ -65,16 +94,12 @@ static inline int env_break_self_cycle(env_t *env, int residual) {
     self_refs++;
   }
   if (env->d)
-    for (int h = 0; h < 2; h++) {
-      kvht_t *t = &env->d->ht[h];
-      for (unsigned long b = 0; b < t->size; b++)
-        for (keyval_t *k = t->table[b]; k; k = k->next) {
-          if (!is_self_closure(k->val, env))
-            continue;
-          if (k->val->nref != 1)
-            return 0;
-          self_refs++;
-        }
+    DICT_FOREACH(env->d, k, 0, 1) {
+      if (!is_self_closure(k->val, env))
+        continue;
+      if (k->val->nref != 1)
+        return 0;
+      self_refs++;
     }
   /* Every remaining ref to env must be a self-closure back-ref. */
   if (self_refs == 0 || self_refs != residual)
@@ -86,13 +111,9 @@ static inline int env_break_self_cycle(env_t *env, int residual) {
     if (is_self_closure(env->inline_vals[i], env))
       env->inline_vals[i]->next->meta = NULL;
   if (env->d)
-    for (int h = 0; h < 2; h++) {
-      kvht_t *t = &env->d->ht[h];
-      for (unsigned long b = 0; b < t->size; b++)
-        for (keyval_t *k = t->table[b]; k; k = k->next)
-          if (is_self_closure(k->val, env))
-            k->val->next->meta = NULL;
-    }
+    DICT_FOREACH(env->d, k, 0, 1)
+      if (is_self_closure(k->val, env))
+        k->val->next->meta = NULL;
   return 1;
 }
 

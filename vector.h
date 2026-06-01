@@ -39,6 +39,21 @@ static alc_vec_t *vec_alloc_storage(int64_t cap) {
   return v;
 }
 
+/* Commit a freshly-built replacement storage block: free the old buffer,
+   install new_v as vexp's storage, and set the vec-kind bits to newkind. The
+   alloc + element-conversion loop stays inline at each caller (so the typed
+   tensor/tighten loops aren't out-of-lined); this is the shared free-old/
+   swap-ptr/retag tail of vec_promote_i64_to_f64 / vec_promote_to_gen /
+   vec_tighten. `old` is captured by the caller before the conversion (the
+   caller still reads from it while filling new_v). */
+static inline void vec_swap_storage(exp_t *vexp, alc_vec_t *old,
+                                    alc_vec_t *new_v, unsigned newkind) {
+  free(old);
+  vexp->ptr = new_v;
+  vexp->flags =
+      (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | newkind);
+}
+
 exp_t *make_vector(int64_t n, exp_t *fill) {
   /* Hard cap to keep `(size_t)n * 8` from wrapping. With int61 fixnums n
      can reach 2^60; n*8 wraps modulo SIZE_MAX and hands us a tiny alloc
@@ -106,9 +121,7 @@ static int vec_promote_i64_to_f64(exp_t *vexp) {
   int32_t en = vexp->vec_win.end;
   for (int32_t i = s; i < en; i++)
     dst[i] = (double)src[i];
-  free(old);
-  vexp->ptr = new_v;
-  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | VEC_KIND_F64);
+  vec_swap_storage(vexp, old, new_v, VEC_KIND_F64);
   return 1;
 }
 
@@ -143,9 +156,7 @@ static int vec_promote_to_gen(exp_t *vexp) {
     for (int64_t i = 0; i < live; i++)
       dst[start + i] = make_floatf((expfloat)src[start + i]); /* fresh nref=1 */
   }
-  free(old);
-  vexp->ptr = new_v;
-  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | VEC_KIND_GEN);
+  vec_swap_storage(vexp, old, new_v, VEC_KIND_GEN);
   return 1;
 }
 
@@ -308,13 +319,26 @@ static int vec_tighten(exp_t *vexp) {
     }
     newkind = VEC_KIND_F64;
   }
-  free(old);
-  vexp->ptr = new_v;
-  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | newkind);
+  vec_swap_storage(vexp, old, new_v, newkind);
   vexp->vec_win.start = 0;
   vexp->vec_win.end = (int32_t)n;
   return 1;
 }
+
+/* Tensor ops produce floats; an I64-kind output vec must first promote to F64
+   so the result holds the math exactly (matches the pre-refactor per-cell
+   EXP_FLOAT boxing). Promotion fails on a FLAG_SHARED vec — run `cleanup`
+   (the call site's CLEAN_RETURN_n with the right arity, given the prebuilt
+   error expr `_alc_e`) rather than silently truncating. `name` is the op name
+   used in the error message. */
+#define VEC_REQUIRE_FLOAT_WRITABLE(vexp, name, cleanup)                        \
+  do {                                                                         \
+    if (vec_kind(vexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(vexp)) {     \
+      exp_t *_alc_e = error(ERROR_ILLEGAL_VALUE, e, env,                       \
+                            name ": cannot promote shared I64 vec");           \
+      cleanup;                                                                 \
+    }                                                                          \
+  } while (0)
 
 const char doc_vec[] = "(vec n init) — fixed-size vector of n cells "
                        "initialised to init. (vec n) defaults init to nil.";
@@ -516,14 +540,8 @@ exp_t *vecaxpycmd(exp_t *e, env_t *env) {
         yexp, aexp, xexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "vec-axpy!: length mismatch"));
   double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
-  /* Tensor ops produce floats. Promote I64 → F64 so the result holds
-     the math exactly (matches pre-refactor behavior where each cell
-     was boxed as an EXP_FLOAT). Promotion can fail on a FLAG_SHARED
-     vec — error out rather than silently truncating the result. */
-  if (vec_kind(yexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(yexp))
-    CLEAN_RETURN_3(yexp, aexp, xexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "vec-axpy!: cannot promote shared I64 vec"));
+  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-axpy!",
+                             CLEAN_RETURN_3(yexp, aexp, xexp, _alc_e));
   int err = 0;
   if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
     double *ycells = VEC_F64_CELLS(yexp);
@@ -555,10 +573,8 @@ exp_t *vecscalecmd(exp_t *e, env_t *env) {
         vexp, aexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-scale! v a): vec + scalar"));
   double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
-  if (vec_kind(vexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(vexp))
-    CLEAN_RETURN_2(vexp, aexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "vec-scale!: cannot promote shared I64 vec"));
+  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-scale!",
+                             CLEAN_RETURN_2(vexp, aexp, _alc_e));
   int err = 0;
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
@@ -636,10 +652,8 @@ exp_t *vecaddcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(
         yexp, xexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "vec-add!: length mismatch"));
-  if (vec_kind(yexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(yexp))
-    CLEAN_RETURN_2(yexp, xexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "vec-add!: cannot promote shared I64 vec"));
+  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-add!",
+                             CLEAN_RETURN_2(yexp, xexp, _alc_e));
   int err = 0;
   if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
     double *ycells = VEC_F64_CELLS(yexp);
@@ -671,10 +685,8 @@ exp_t *vecfillcmd(exp_t *e, env_t *env) {
         vexp, aexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-fill! v a): vec + scalar"));
   double a = isfloat(aexp) ? aexp->f : (double)FIX_VAL(aexp);
-  if (vec_kind(vexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(vexp))
-    CLEAN_RETURN_2(vexp, aexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "vec-fill!: cannot promote shared I64 vec"));
+  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-fill!",
+                             CLEAN_RETURN_2(vexp, aexp, _alc_e));
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells = VEC_F64_CELLS(vexp);
@@ -695,9 +707,7 @@ exp_t *vecrelucmd(exp_t *e, env_t *env) {
   if (!isvector(vexp))
     CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
                                "(vec-relu! v): not a vector"));
-  if (vec_kind(vexp) == VEC_KIND_I64 && !vec_promote_i64_to_f64(vexp))
-    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
-                               "vec-relu!: cannot promote shared I64 vec"));
+  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-relu!", CLEAN_RETURN_1(vexp, _alc_e));
   int err = 0;
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {

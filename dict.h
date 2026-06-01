@@ -102,10 +102,9 @@ static int is_fully_dumpable(exp_t *e, int depth) {
   if (isset(e) || isdict(e)) {
     dict_t *sd = (dict_t *)e->ptr;
     if (sd)
-      for (unsigned int i = 0; i < sd->ht[0].size; i++)
-        for (keyval_t *k = sd->ht[0].table[i]; k; k = k->next)
-          if (!is_fully_dumpable(k->val, depth + 1))
-            return 0;
+      DICT_FOREACH(sd, k, 0, 0)
+        if (!is_fully_dumpable(k->val, depth + 1))
+          return 0;
     return 1;
   }
   if (islist(e)) {
