@@ -246,6 +246,13 @@ exp_t *rediscmdscmd(exp_t *e, env_t *env);
 
 
 
+/* Segfault guard shared by map/filter/reduce/any?/all?/nth/reverse/append:
+   a tagged immediate (fixnum, char) passes a bare `cur != NULL` walk and then
+   dereferences its tag bits via cur->content. nil/the empty list is fine.
+   This is ONLY the predicate — callers keep their own unref cascade + error
+   id (NULL vs e), so the macro changes nothing about behavior. */
+#define NOT_A_LIST(x) ((x) && (x) != NIL_EXP && !ispair(x))
+
 #define DICT_KV_SETUP(err_name) \
   exp_t *d = EVAL(cadr(e), env); \
   if (iserror(d)) { unrefexp(e); return d; } \

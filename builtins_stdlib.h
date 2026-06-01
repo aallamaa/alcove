@@ -102,13 +102,9 @@ BITOP_AB(shrcmd, va >> (vb & 63))
 /* (~ x) — bitwise NOT. ~0 is -1 (all bits set, fits cleanly in int61). */
 const char doc_bitnot[] = "(~ x) — bitwise NOT (complement). Alias: bit-not.";
 exp_t *bitnotcmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *ret = NULL;
-  if (e->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
+  exp_t *ret = NULL;
+  EVAL_ARG_1(a);
+  if (a) {
     if (isnumber(a)) {
       ret = MAKE_FIX(~FIX_VAL(a));
     } else {
@@ -117,21 +113,15 @@ exp_t *bitnotcmd(exp_t *e, env_t *env) {
   } else {
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(~ x) needs one arg");
   }
-  unrefexp(a);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_1(a, ret);
 }
 
 /* (abs x) — |x| for fixnum or float. */
 const char doc_abs[] = "(abs x) — absolute value.";
 exp_t *abscmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *ret = NULL;
-  if (e->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
+  exp_t *ret = NULL;
+  EVAL_ARG_1(a);
+  if (a) {
     if (isnumber(a)) {
       int64_t v = FIX_VAL(a);
       int64_t av = v < 0 ? -v : v;
@@ -148,9 +138,7 @@ exp_t *abscmd(exp_t *e, env_t *env) {
       ret = error(ERROR_ILLEGAL_VALUE, e, env, "abs: not a number");
   } else
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(abs x)");
-  unrefexp(a);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_1(a, ret);
 }
 
 /* Helper for max/min: numeric "less than" between two values, promoting
@@ -219,13 +207,9 @@ MINMAX_CMD(mincmd, 1, "min")
 /* (length x) — list length, string length, or 0 for nil. */
 const char doc_length[] = "(length x) — element count of a list/string/vector.";
 exp_t *lengthcmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *ret = NULL;
-  if (e->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
+  exp_t *ret = NULL;
+  EVAL_ARG_1(a);
+  if (a) {
     int64_t n = 0;
     if (isstring(a)) {
       const char *_t = exp_text(a);
@@ -246,9 +230,7 @@ exp_t *lengthcmd(exp_t *e, env_t *env) {
   } else
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(length x)");
 done:
-  unrefexp(a);
-  unrefexp(e);
-  return ret;
+  CLEAN_RETURN_1(a, ret);
 }
 
 /* (nth n list) — 0-indexed; returns nil if out of range. */
@@ -261,7 +243,7 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
       /* b must be a heap pair (or nil) — without is_ptr we'd dereference
          the tag bits of a tagged immediate. Same fix pattern as
          appendcmd / reversecmd. nil/empty list is a clean miss. */
-      if (b && b != NIL_EXP && !ispair(b)) {
+      if (NOT_A_LIST(b)) {
         CLEAN_RETURN_2(a, b,
                        error(ERROR_ILLEGAL_VALUE, NULL, env,
                              "nth: second argument is not a list"));
@@ -283,22 +265,15 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
 const char doc_reverse[] =
     "(reverse xs) — list with elements in reverse order.";
 exp_t *reversecmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *acc = NIL_EXP;
-  if (e->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
+  exp_t *acc = NIL_EXP;
+  EVAL_ARG_1(a);
+  if (a) {
     /* Reject non-list args before walking — same fix pattern as appendcmd:
        a tagged immediate (fixnum, char) passes the `cur != NULL` check
        and segfaults on the deref of cur->content. nil/empty is fine. */
-    if (a && a != NIL_EXP && !ispair(a)) {
-      unrefexp(a);
-      unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                   "reverse: argument is not a list");
-    }
+    if (NOT_A_LIST(a))
+      CLEAN_RETURN_1(a, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                              "reverse: argument is not a list"));
     exp_t *cur = a;
     while (ispair(cur) && cur->content) {
       exp_t *node = make_node(refexp(cur->content));
@@ -307,9 +282,7 @@ exp_t *reversecmd(exp_t *e, env_t *env) {
       cur = cur->next;
     }
   }
-  unrefexp(a);
-  unrefexp(e);
-  return acc;
+  CLEAN_RETURN_1(a, acc);
 }
 
 /* (append list1 list2 ...) — flat concat into a new list (cars are
@@ -330,7 +303,7 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
        that isn't a heap pair is a hard error — without this guard, a
        tagged fixnum like (append 10 ...) walks `cur->content` which
        dereferences the tag bits and segfaults. */
-    if (list && list != NIL_EXP && !ispair(list)) {
+    if (NOT_A_LIST(list)) {
       if (head)
         unrefexp(head);
       unrefexp(list);
@@ -481,7 +454,7 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next)
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)"));
-  if (xs && xs != NIL_EXP && !ispair(xs))
+  if (NOT_A_LIST(xs))
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "map: second argument is not a list"));
@@ -517,7 +490,7 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(
         fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)"));
-  if (xs && xs != NIL_EXP && !ispair(xs))
+  if (NOT_A_LIST(xs))
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "filter: second argument is not a list"));
@@ -561,7 +534,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
         error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)"));
   if (!acc)
     acc = NIL_EXP; /* NULL init seed → nil */
-  if (xs && xs != NIL_EXP && !ispair(xs))
+  if (NOT_A_LIST(xs))
     CLEAN_RETURN_3(fn, acc, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "reduce: third argument is not a list"));
@@ -631,7 +604,7 @@ exp_t *anypcmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(any? pred list)"));
-  if (xs && xs != NIL_EXP && !ispair(xs))
+  if (NOT_A_LIST(xs))
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "any?: second argument is not a list"));
@@ -662,7 +635,7 @@ exp_t *allpcmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(all? pred list)"));
-  if (xs && xs != NIL_EXP && !ispair(xs))
+  if (NOT_A_LIST(xs))
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "all?: second argument is not a list"));
@@ -913,58 +886,28 @@ const char doc_range[] =
     "(range start end) or (range start end step) — list of integers "
     "from start (inclusive) to end (exclusive).";
 exp_t *rangecmd(exp_t *e, env_t *env) {
-  exp_t *arg1 = NULL, *arg2 = NULL, *arg3 = NULL;
-  if (!e->next)
-    goto bad;
-  arg1 = EVAL(e->next->content, env);
-  if (iserror(arg1)) {
-    unrefexp(e);
-    return arg1;
-  }
-  if (!e->next->next)
-    goto bad;
-  arg2 = EVAL(e->next->next->content, env);
-  if (iserror(arg2)) {
-    unrefexp(arg1);
-    unrefexp(e);
-    return arg2;
-  }
-  if (e->next->next->next) {
-    arg3 = EVAL(e->next->next->next->content, env);
-    if (iserror(arg3)) {
-      unrefexp(arg1);
-      unrefexp(arg2);
-      unrefexp(e);
-      return arg3;
-    }
-  }
-  if (!isnumber(arg1) || !isnumber(arg2) || (arg3 && !isnumber(arg3))) {
-    unrefexp(arg1);
-    unrefexp(arg2);
-    unrefexp(arg3);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "range: args must be integers");
-  }
-  {
-    int64_t start = FIX_VAL(arg1), end = FIX_VAL(arg2);
-    int64_t step = arg3 ? FIX_VAL(arg3) : (start <= end ? 1 : -1);
-    unrefexp(arg1);
-    unrefexp(arg2);
-    unrefexp(arg3);
-    unrefexp(e);
-    if (step == 0)
-      return error(ERROR_ILLEGAL_VALUE, NULL, env, "range: step cannot be 0");
-    exp_t *ret = NIL_EXP, *tail = NULL;
-    for (int64_t i = start; step > 0 ? i < end : i > end; i += step)
-      list_append_owned(&ret, &tail, MAKE_FIX(i));
-    return ret;
-  }
-bad:
-  unrefexp(arg1);
-  unrefexp(arg2);
-  unrefexp(e);
-  return error(ERROR_MISSING_PARAMETER, e, env, "(range start end [step])");
+  EVAL_ARG_3(arg1, arg2, arg3);
+  /* Arity is on the FORMS (e->next chain), not the values — a present arg
+     that evaluates to a NULL value is still "supplied" and must hit the
+     type check, exactly as the original goto-bad arity test did. */
+  if (!e->next || !e->next->next)
+    CLEAN_RETURN_3(arg1, arg2, arg3,
+                   error(ERROR_MISSING_PARAMETER, e, env,
+                         "(range start end [step])"));
+  if (!isnumber(arg1) || !isnumber(arg2) || (arg3 && !isnumber(arg3)))
+    CLEAN_RETURN_3(
+        arg1, arg2, arg3,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "range: args must be integers"));
+  int64_t start = FIX_VAL(arg1), end = FIX_VAL(arg2);
+  int64_t step = arg3 ? FIX_VAL(arg3) : (start <= end ? 1 : -1);
+  if (step == 0)
+    CLEAN_RETURN_3(
+        arg1, arg2, arg3,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "range: step cannot be 0"));
+  exp_t *ret = NIL_EXP, *tail = NULL;
+  for (int64_t i = start; step > 0 ? i < end : i > end; i += step)
+    list_append_owned(&ret, &tail, MAKE_FIX(i));
+  CLEAN_RETURN_3(arg1, arg2, arg3, ret);
 }
 
 /* (zip xs ys) — list of (x y) pairs from two lists. Stops at shorter. */
