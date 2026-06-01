@@ -1238,6 +1238,14 @@
 (assert "load returns t"               (load "/tmp/alcove-test-load.alc") t)
 (assert "load defines var"             loaded-var                  77)
 (assert "load defines fn"              (loaded-add 3)              80)
+;; load error carries "<basename>:<line>:" — the unbound var is on line 2 of
+;; the written file, so the annotated error-message must begin with that. A
+;; comment + blank line precede it so the line number is non-trivial (proves
+;; the form-start line is stamped after leading whitespace/comments).
+(write-string "/tmp/alcove-test-loaderr.alc" "; a comment\n(unbound_xyz_var)\n")
+(assert "load error has src:line"
+        (string-index (error-message (load "/tmp/alcove-test-loaderr.alc"))
+                      "alcove-test-loaderr.alc:2:") 0)
 
 ;; ---------- hash sets ----------
 (= s1 (set 1 2 2 "a" :kw))

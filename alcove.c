@@ -1467,9 +1467,70 @@ exp_t *load_exp_t(FILE *stream) {
 /* Per-type dump/load serializers live in a dedicated #included fragment. */
 #include "persist.h"
 
+/* Source-location tracking for the reader. Only touched on the cold parse
+   path (the reader's getc/ungetc sites) and the file/eval driver loops —
+   NEVER in the VM hot loop or JIT. g_reader_line is 1-based and bumped on
+   every consumed '\n'; g_reader_src is the current source label (a file
+   path) or NULL for interactive/anonymous input. The file drivers
+   save/restore both on the C stack so a nested (load …) reports the inner
+   file's lines and resumes the outer file's afterwards. */
+static ALCOVE_TLS int g_reader_line = 1;
+static ALCOVE_TLS const char *g_reader_src = NULL;
+/* Start line of the top-level form currently being read/evaluated. A driver
+   arms g_form_line_arm before calling reader(); reader() stamps g_form_line
+   with g_reader_line at the first SIGNIFICANT byte of the form (after any
+   leading whitespace/newlines/comments) and disarms. This makes the line the
+   form actually begins on, not the line the previous form ended on — so a
+   form preceded by blank/comment lines reports correctly. */
+static ALCOVE_TLS int g_form_line = 1;
+static ALCOVE_TLS int g_form_line_arm = 0;
+
+/* getc/ungetc wrappers that keep g_reader_line in sync. RGETC bumps the
+   line on a consumed newline; RUNGETC decrements when a newline is pushed
+   back so the count stays consistent with the stream position. These wrap
+   the reader's raw getc(stream) sites. */
+static inline int reader_getc(FILE *s) {
+  int c = getc(s);
+  if (c == '\n')
+    g_reader_line++;
+  return c;
+}
+static inline int reader_ungetc(int c, FILE *s) {
+  if (c == '\n' && g_reader_line > 1)
+    g_reader_line--;
+  return ungetc(c, s);
+}
+#define RGETC(s) reader_getc(s)
+#define RUNGETC(c, s) reader_ungetc((c), (s))
+
 /* The s-expression reader/tokenizer lives in a dedicated #included
    fragment (single TU — keeps the per-byte loop inlinable). */
 #include "reader.c"
+
+/* Prepend "<src>:<line>: " to an error's message, in place, when evaluating
+   a FILE (g_reader_src != NULL). Used by the file drivers so a top-level form
+   that errors — or a syntax error from the reader itself — reports where it
+   came from. The error's flags/errnum and id (->next) are left untouched, so
+   error?/error-message/try and the parsing-EOF sentinel all keep working; we
+   only rewrite the message string. No-op for non-errors, when src is NULL, or
+   if the message already begins with "<src>:" (so we never double-prefix). */
+static exp_t *annotate_error_loc(exp_t *err, const char *src, int line) {
+  if (!err || !iserror(err) || !src)
+    return err;
+  const char *msg = (const char *)err->ptr;
+  if (!msg)
+    return err;
+  size_t srclen = strlen(src);
+  if (strncmp(msg, src, srclen) == 0 && msg[srclen] == ':')
+    return err; /* already annotated — don't stack prefixes */
+  char *combined = NULL;
+  if (asprintf(&combined, "%s:%d: %s", src, line, msg) >= 0 && combined) {
+    free(err->ptr);
+    err->ptr = combined;
+  }
+  return err;
+}
+
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
 // istrue borrow object reference
 inline int istrue(exp_t *e) {
@@ -3951,12 +4012,29 @@ static exp_t *slurp_file_as_string(const char *path) {
   return ret;
 }
 
+/* Basename of a path (last component after '/'), for the short source label
+   in error prefixes — "/tmp/bad.alc" -> "bad.alc". Falls back to the whole
+   string when there's no slash. */
+static const char *src_basename(const char *path) {
+  const char *slash = strrchr(path, '/');
+  return slash ? slash + 1 : path;
+}
+
 static exp_t *eval_file_forms(const char *path, env_t *env) {
   FILE *fp = fopen(path, "r");
   if (!fp)
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot open '%s'",
                  path);
+  /* Save/restore the reader location so a nested (load …) reports the inner
+     file's lines and the outer file's count resumes afterwards. */
+  const char *prev_src = g_reader_src;
+  int prev_line = g_reader_line;
+  g_reader_src = src_basename(path);
+  g_reader_line = 1;
+  exp_t *result = TRUE_EXP;
   for (;;) {
+    g_form_line = g_reader_line; /* fallback if no significant byte is read */
+    g_form_line_arm = 1;         /* reader() stamps the true form-start line */
     exp_t *form = reader(fp, 0, 0);
     if (!form)
       break;
@@ -3965,18 +4043,24 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
         unrefexp(form);
         break;
       }
+      /* Reader syntax error: its line is g_reader_line at the failure point. */
       fclose(fp);
-      return form;
+      result = annotate_error_loc(form, g_reader_src, g_reader_line);
+      goto done;
     }
     exp_t *ret = evaluate(form, env);
     if (iserror(ret)) {
       fclose(fp);
-      return ret;
+      result = annotate_error_loc(ret, g_reader_src, g_form_line);
+      goto done;
     }
     unrefexp(ret);
   }
   fclose(fp);
-  return TRUE_EXP;
+done:
+  g_reader_src = prev_src;
+  g_reader_line = prev_line;
+  return result;
 }
 
 const char doc_readstring[] =
@@ -9407,6 +9491,13 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
       printf("nil");
     printf("\n\n");
     fflush(stdout); /* keep interactive (-R reactor / piped) output prompt */
+  } else if (res && iserror(res) && g_reader_src) {
+    /* Quiet (running a FILE): a top-level form errored. Errors were
+       previously swallowed here; surface it on stderr with the source
+       location, e.g. "foo.alc:42: Error unbound variable …". The form's
+       start line was captured in g_form_line before it was read. */
+    annotate_error_loc(res, g_reader_src, g_form_line);
+    fprintf(stderr, "%s\n", (const char *)res->ptr);
   }
   if (res)
     unrefexp(res);
@@ -9683,6 +9774,9 @@ int main(int argc, char *argv[]) {
   g_global_env = global;
   FILE *stream;
   int evaluatingfile = 0;
+  /* When running a FILE argument, the basename used to prefix file-context
+     error messages with "<src>:<line>:". NULL for stdin / -e / interactive. */
+  const char *script_src = NULL;
   int idx = 0;
   exp_t *t;
   exp_t *nil;
@@ -9924,6 +10018,7 @@ int main(int argc, char *argv[]) {
       evaluatingfile = 1;
       if (strcmp(argv[argc - 2], "-i") == 0)
         evaluatingfile |= 2;
+      script_src = src_basename(argv[argc - 1]);
     } else {
       printf("Error opening %s\n", argv[argc - 1]);
       exit(1);
@@ -9950,6 +10045,10 @@ int main(int argc, char *argv[]) {
     stream = fmemopen(sx, strlen(sx), "r");
     /* sx intentionally outlives this scope: it backs `stream` for the
        remainder of the run and is reclaimed by the OS at exit. */
+    /* The Adder front end transpiled the source into s-expressions, so the
+       reader's line count no longer maps to the user's original file. Drop
+       the source label rather than report misleading transpiled lines. */
+    script_src = NULL;
   }
 #endif
 
@@ -9998,16 +10097,24 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
+  /* File context: label errors with "<basename>:<line>:" and start counting
+     lines from 1. NULL src (stdin / -e / interactive / adder-transpiled)
+     leaves error messages unprefixed. */
+  g_reader_src = (evaluatingfile && script_src) ? script_src : NULL;
+  g_reader_line = 1;
   while (1) {
     idx++;
     if (!evaluatingfile)
       printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m", idx);
+    g_form_line = g_reader_line; /* fallback if no significant byte is read */
+    g_form_line_arm = 1;         /* reader() stamps the true form-start line */
     stre = reader(stream, 0, 0);
     if (iserror(stre) && (stre->flags == EXP_ERROR_PARSING_EOF)) {
       if (evaluatingfile) {
         if (evaluatingfile & 2) {
           stream = stdin;
           evaluatingfile = 0;
+          g_reader_src = NULL; /* switching to interactive stdin */
           unrefexp(stre);
           continue;
         } else {
@@ -10020,6 +10127,15 @@ int main(int argc, char *argv[]) {
       if (!evaluatingfile)
         printf("\n");
       goto endcleanly;
+    }
+    /* A reader syntax error (not EOF) in a file: its line is g_reader_line at
+       the failure point. Surface it on stderr with the source location and
+       move on to the next form instead of feeding the error exp to eval. */
+    if (iserror(stre) && g_reader_src) {
+      annotate_error_loc(stre, g_reader_src, g_reader_line);
+      fprintf(stderr, "%s\n", (const char *)stre->ptr);
+      unrefexp(stre);
+      continue;
     }
     /* Shared eval + print core; quiet (no Out[] print) while loading a
        file. Returns 1 on quit/exit. */

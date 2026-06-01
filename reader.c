@@ -203,13 +203,13 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
     for (;;) {
       int c;
       /* Eat inter-form whitespace, commas, and line comments. */
-      while ((c = getc(stream)) != EOF) {
+      while ((c = RGETC(stream)) != EOF) {
         if (c == ',')
           continue;
         if (c < 256 && (ISWHITESPACE & chrmap[c]))
           continue;
         if (c == ';') { /* line comment */
-          while ((c = getc(stream)) != EOF && c != '\n')
+          while ((c = RGETC(stream)) != EOF && c != '\n')
             ;
           continue;
         }
@@ -222,7 +222,7 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
       }
       if (c == '}')
         return lnode;
-      ungetc(c, stream);
+      RUNGETC(c, stream);
       vnode = reader(stream, '}', 0);
       if (!vnode)
         return lnode; /* `}` consumed by inner reader */
@@ -241,10 +241,10 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
     qq->next = make_node(vnode);
     return qq;
   } else if (x == ',') {
-    int c = getc(stream);
+    int c = RGETC(stream);
     int splice = (c == '@');
     if (!splice)
-      ungetc(c, stream);
+      RUNGETC(c, stream);
     vnode = reader(stream, 0, 0);
     char *tag = splice ? "unquote-splicing" : "unquote";
     exp_t *uq = make_node(make_symbol(tag, strlen(tag)));
@@ -257,7 +257,7 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
      * next form) but inside a list it bailed out mid-build, dropping
      * everything before the comment (tickets 7 & 8 root cause). */
     int c;
-    while ((c = getc(stream)) != EOF && c != '\n')
+    while ((c = RGETC(stream)) != EOF && c != '\n')
       ;
     return NULL; /* signal "no form here" — caller's loop continues. */
   }
@@ -286,12 +286,12 @@ exp_t *escapereader(FILE *stream, token_t **ptoken, int lastchar) {
   if (schrmap[lastchar]) {
     zchar = schrmap[lastchar];
   } else if (lastchar == 'x') {
-    if ((nchar = getc(stream)) == EOF)
+    if ((nchar = RGETC(stream)) == EOF)
       return READER_EOF_ERR();
     if (chr2hex[nchar] < 0)
       goto error;
     zchar = chr2hex[nchar] * 16;
-    if ((nchar = getc(stream)) == EOF)
+    if ((nchar = RGETC(stream)) == EOF)
       return READER_EOF_ERR();
     if (chr2hex[nchar] < 0)
       goto error;
@@ -317,7 +317,7 @@ error:
 static exp_t *reader_consume_utf8_tail(FILE *stream, token_t *token) {
   int y;
   do {
-    if ((y = getc(stream)) != EOF) {
+    if ((y = RGETC(stream)) != EOF) {
       if ((y < 192) && (y > 127))
         tokenadd(token, y);
     } else {
@@ -325,7 +325,7 @@ static exp_t *reader_consume_utf8_tail(FILE *stream, token_t *token) {
       return READER_EOF_ERR();
     }
   } while ((y < 192) && (y > 127));
-  ungetc(y, stream);
+  RUNGETC(y, stream);
   return NULL;
 }
 
@@ -353,9 +353,17 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
   int pushtoken = 0;
   int escape = 0;
 
-  while ((x = getc(stream)) != EOF) {
+  while ((x = RGETC(stream)) != EOF) {
     pushtoken = 0;
     escape = 0;
+    /* Stamp the form's start line at its first significant byte (after any
+       leading whitespace / blank lines). Comment paths below RE-ARM so the
+       stamp lands on the first real token, not on a leading comment. The
+       arm flag is set by the driver before each top-level reader() call. */
+    if (g_form_line_arm && !(x <= 255 && x >= 0 && (ISWHITESPACE & chrmap[x]))) {
+      g_form_line = g_reader_line;
+      g_form_line_arm = 0;
+    }
     if (x > 127) { /* UTF-8 SUPPORT */
       token = tokenize(x);
       if ((ret = reader_consume_utf8_tail(stream, token)))
@@ -368,12 +376,12 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
     else if ((ISTERMMACRO | ISNTERMMACRO) & chrmap[x]) {
       if (clmacro == x) {
         if (keepwspace & PARSER_TERMMACROMODE)
-          ungetc(x, stream);
+          RUNGETC(x, stream);
         return NULL; /* OK */
       }
       if (x == '#') {
         // Dispatch macro — or a `# ` line comment.
-        if ((y = getc(stream)) != EOF) {
+        if ((y = RGETC(stream)) != EOF) {
           if (y == ' ' || y == '\t' || y == '\n') {
             /* `# ...` line comment, running to end of line (Adder uses the
                same rule). Only `#` + whitespace is a comment; `#` glued to a
@@ -381,12 +389,14 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
                #b"..." blob). `;` remains a comment too. This was previously a
                hard parse error, so no valid program is affected. */
             if (y != '\n')
-              while ((z = getc(stream)) != EOF && z != '\n')
+              while ((z = RGETC(stream)) != EOF && z != '\n')
                 ;
+            if (clmacro == 0)
+              g_form_line_arm = 1; /* top-level `#` comment — re-arm next form */
             continue;
           }
           if (y == '\\') { // returning char
-            if ((z = getc(stream)) != EOF) {
+            if ((z = RGETC(stream)) != EOF) {
               return make_char(utf8_decode_stream(z, stream));
             } else
               return READER_EOF_ERR();
@@ -402,13 +412,13 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             /* Blob literal: #b"..." → an EXP_BLOB holding the string's bytes.
                This is the form the printer emits for a printable blob, so the
                value round-trips. The next char must open a string. */
-            if ((z = getc(stream)) != '"') {
+            if ((z = RGETC(stream)) != '"') {
               if (z != EOF)
-                ungetc(z, stream);
+                RUNGETC(z, stream);
               return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
                            "#b must be followed by a string literal");
             }
-            ungetc(z, stream); /* hand the `"` back to the string reader */
+            RUNGETC(z, stream); /* hand the `"` back to the string reader */
             exp_t *str = reader(stream, 0, 0);
             if (!str)
               return error(EXP_ERROR_PARSING_EOF, NULL, NULL,
@@ -433,10 +443,15 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
       }
       if ((ret = callmacrochar(stream, x)))
         return ret;
-      else
+      else {
+        /* callmacrochar returned "no form" — i.e. a `;` line comment. At top
+           level, re-arm so the stamp lands on the next real form's line. */
+        if (clmacro == 0)
+          g_form_line_arm = 1;
         continue;
+      }
     } else if (ISSINGLEESCAPE & chrmap[x]) { // step 5
-      if ((y = getc(stream)) != EOF) {
+      if ((y = RGETC(stream)) != EOF) {
         if ((ret = escapereader(stream, &token, y))) {
           if (token)
             freetoken(token);
@@ -454,7 +469,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
     while (!pushtoken) {
       if (!escape) {
         // step 8
-        if ((y = getc(stream)) != EOF) {
+        if ((y = RGETC(stream)) != EOF) {
           if (y > 127) {
             tokenadd(token, y);
             if ((ret = reader_consume_utf8_tail(stream, token)))
@@ -466,7 +481,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             tokenadd(token, y);
             continue;
           } else if (ISSINGLEESCAPE & chrmap[y]) {
-            if ((z = getc(stream)) != EOF) {
+            if ((z = RGETC(stream)) != EOF) {
               if ((ret = escapereader(stream, &token, z))) {
                 if (token)
                   freetoken(token); /* a bad escape (e.g. \x with non-hex)
@@ -479,10 +494,10 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             }
           } else if (ISMULTIPLEESCAPE & chrmap[y]) {
             pushtoken = 1;
-            ungetc(y, stream);
+            RUNGETC(y, stream);
           } // escape=1;
           else if (ISTERMMACRO & chrmap[y]) {
-            ungetc(y, stream);
+            RUNGETC(y, stream);
             pushtoken = 1;
           } else if (ISWHITESPACE & chrmap[y]) {
             pushtoken = 1; // ungetc if appropriate
@@ -501,7 +516,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
         }
       } else { // Escape mode
         // step 9
-        if ((y = getc(stream)) != EOF) {
+        if ((y = RGETC(stream)) != EOF) {
           if (y > 127) {
             tokenadd(token, y);
             if ((ret = reader_consume_utf8_tail(stream, token)))
@@ -514,7 +529,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
                      chrmap[y])
             tokenadd(token, y);
           else if (ISSINGLEESCAPE & chrmap[y]) {
-            if ((z = getc(stream)) != EOF) {
+            if ((z = RGETC(stream)) != EOF) {
               if ((ret = escapereader(stream, &token, z))) {
                 if (token)
                   freetoken(token); /* bad escape inside a "string" — free the
