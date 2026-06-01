@@ -1,3 +1,35 @@
+[DONE] JIT: equality-base tail loops now JIT (2026-06-01, x86-64 host).
+       (def cd (n) (if (is n 0) n (cd (- n 1)))) — the natural `is`-base
+       countdown — previously ran in the VM (~54x slower than its (> n 0)
+       twin) because the loop-shape matchers only fired for the recurse-in-
+       THEN polarity. The `is`-base if puts the BASE arm in THEN and the
+       recurse arm in ELSE, so the bytecode is mirrored (base-before-step).
+       Added a sibling matcher try_jit_simple_tail_loop_eq on both backends:
+       cmp=SLOT_IS_FIX, base=LOAD_SLOT in THEN, step=SLOT_SUB/ADD_FIX in ELSE,
+       TAIL_SELF; loop runs while n!=K and returns the slot on equal. Same
+       emitted loop as the gt twin, exit cc flipped to equal (amd64 je=0x04,
+       arm64 B.cond EQ cond=0). No bytecode bytes shifted (SLOT_IS_FIX fusion
+       already shipped). Validated on amd64: jit-fuzz PASSED (eq-countdown
+       101/101 cov, 805 byte-identical jit==VM), test-all ALL VARIANTS PASSED
+       (alcove 1417x5, adder 1427x5), ASan+UBSan clean on full test.alc, and
+       2000x cd(1e6) dropped ~29000ms -> ~558ms (parity with the gt twin).
+       New jit_fuzz.py gen_eq_countdown generator + test.alc assert-jits
+       gates (jc-eqcd/jc-equp) + behavior asserts.
+
+       ARM64 STATUS: MIRRORED-BUT-UNVALIDATED. jit_arm64.h's
+       try_jit_simple_tail_loop_eq is a pure structural mirror of the
+       validated try_jit_simple_tail_loop (same load/tbz/cmp/b.cond/step/
+       str/back-edge codegen; only the walk order swapped and cond pinned to
+       EQ=0 — no new hand-assembly). It cross-COMPILES clean
+       (aarch64-linux-gnu-gcc, syntax-only + -c to .o, no errors/warnings)
+       but was NOT RUN — this is an x86-64 host. BEFORE MERGING the arm64
+       path: on a Mac run `make test-all` (the new is-base asserts must pass
+       under jit/jit-mono) AND `make jit-fuzz` (eq-countdown category must
+       stay 100% jit'd, byte-identical jit==VM). If anything fails, the
+       fallback is trivial: drop the arm64 dispatch arm
+       (`} else if (try_jit_simple_tail_loop_eq(bc, insns, &n)) {`) and the
+       shape stays on the VM path (correct, just slow) on arm64 only.
+
 [DONE] JIT hardening + loop-coverage expansion (2026-06-01, macOS arm64 /
        Darwin 25, both backends; amd64 cross-checked under x86_64 Rosetta).
        Commits 5dd4bfb..da47df6. Five pieces:

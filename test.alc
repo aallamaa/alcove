@@ -1042,6 +1042,11 @@
 (def jc-le (n) (if (<= n 1000) (jc-le (+ n 1)) n))
 (def jc-gt (n) (if (> n 0) (jc-gt (- n 1)) n))
 (def jc-ge (n) (if (>= n 1) (jc-ge (- n 1)) n))
+;; equality-base tail loop — `(is n K)` base in THEN, recurse in ELSE: the
+;; swapped-polarity twin of jc-gt, JIT'd by try_jit_simple_tail_loop_eq.
+(def jc-eqcd (n) (if (is n 0) n (jc-eqcd (- n 1))))
+;; count-up equality variant: ADD step, non-zero target.
+(def jc-equp (n) (if (is n 100) n (jc-equp (+ n 5))))
 ;; counter loop whose limit exceeds i16 -> generic-compare triple, JIT'd by
 ;; try_jit_wide_counter_loop (not the fused simple_tail_loop shape).
 (def jc-wide (n) (if (< n 5000000) (jc-wide (+ n 1)) n))
@@ -1088,6 +1093,8 @@
 (assert-jits "jit loop: <= (wide limit)"  jc-le)
 (assert-jits "jit loop: > countdown"      jc-gt)
 (assert-jits "jit loop: >= countdown"     jc-ge)
+(assert-jits "jit loop: is-base countdown" jc-eqcd)
+(assert-jits "jit loop: is-base count-up"  jc-equp)
 (assert-jits "jit loop: wide (>i16) limit" jc-wide)
 (assert-jits "jit recurse: fact"          jc-fact)
 (assert-jits "jit recurse: fib"           jc-fib)
@@ -1109,6 +1116,8 @@
 (assert "jit loop < result"            (jc-lt 0)             1000)
 (assert "jit wide-limit loop result"   (jc-wide 4999990)     5000000)
 (assert "jit countdown result"         (jc-gt 1000000)       0)
+(assert "jit is-base countdown result" (jc-eqcd 1000000)     0)
+(assert "jit is-base count-up result"  (jc-equp 0)           100)
 (assert "jit fact result"              (jc-fact 10)          3628800)
 (assert "jit forsum result"            (jc-forsum 100000)    100000)
 (assert "jit listsum-builder length"   (length (jc-build 1 50 (list)))  50)

@@ -431,6 +431,109 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   return 1;
 }
 
+/* Sibling of try_jit_simple_tail_loop for the *swapped-polarity* equality-base
+   tail loop — the natural layout of `(def f (n) (if (is n K) n (f (- n S))))`.
+
+   The `is`-base if puts the BASE arm in THEN and the RECURSE arm in ELSE, so
+   the bytecode order is mirrored vs the gt/lt twin (which recurse-in-THEN):
+
+       0000  SLOT_IS_FIX  slot K        ; cmp
+       0004  BR_IF_FALSE  off           ; if !=, fall to ELSE (recurse)
+       0007  LOAD_SLOT    slot          ; THEN: base arm = return the slot
+       0009  JUMP         off           ; skip ELSE
+       0012  SLOT_SUB_FIX slot S        ; ELSE: step (SUB or ADD)
+       0016  TAIL_SELF    1
+       0018  RET
+
+   try_jit_simple_tail_loop's walk hard-codes step-before-base (recurse-in-
+   THEN) and so never fires here even though it already lists OP_SLOT_IS_FIX in
+   its cmp accept-set (that entry only covers the *other*, recurse-in-THEN
+   `is` polarity). Semantics here: while (n != K) { n step= S; } return n.
+
+   The emitted machine code is identical in spirit to the gt twin — keep the
+   tagged counter in rcx, loop with an in-buffer back-edge — only the exit
+   condition flips: exit (return base) when EQUAL (je), recurse when not-equal.
+   Restricted to OP_SLOT_IS_FIX cmp + LOAD_SLOT base on the same compared slot
+   (the only shape the source `is`-base if produces); SUB/ADD step like the
+   twin. No new bytes shift since SLOT_IS_FIX fusion already shipped. */
+static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint8_t *buf,
+                                       int *outn) {
+  uint8_t *c = bc->code;
+
+  int pc = 0, at_cmp, at_load, at_arith, at_tail;
+  uint8_t arith_op;
+  BC_TAKE(at_cmp, OP_SLOT_IS_FIX);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_load, OP_LOAD_SLOT); /* THEN: base arm = return the slot */
+  BC_EAT(OP_JUMP);
+  BC_TAKE_ANY(at_arith, arith_op); /* ELSE: step */
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
+  int16_t cmp_imm = BC_I16(at_cmp, 1);
+  uint8_t load_slot = BC_ARG(at_load, 0);
+  uint8_t arith_slot = BC_ARG(at_arith, 0);
+  int16_t arith_imm = BC_I16(at_arith, 1);
+
+  if (cmp_slot != arith_slot || cmp_slot != load_slot)
+    return 0;
+  if (cmp_slot >= ENV_INLINE_SLOTS)
+    return 0;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+  int32_t cmp_tagged = ((int32_t)cmp_imm << 3) | 1;
+  int32_t arith_delta = ((int32_t)arith_imm) << 3;
+
+  /* Equality-exit: loop runs while n != K, returns the slot when n == K.
+     x86 cc nibble je = 0x04. */
+  uint8_t exit_cc = 0x04;
+
+  int n = 0;
+
+  /* mov rcx, [rdi + slot_off] */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, slot_off);
+  /* test cl, 1 — verify tag bit set; if not, deopt. */
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_start = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt (placeholder) */
+
+  int loop_top = n;
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  int jcc_end_start = n;
+  n += x64_jcc_rel32(buf + n, exit_cc, 0); /* je end (placeholder) */
+  if (arith_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  /* tag bit preserved across ±(S<<3); subsequent loads stay tagged. */
+  n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, slot_off);
+  /* jmp loop_top */
+  {
+    int jmp_start = n;
+    n += x64_jmp_rel32(buf + n, (int32_t)(loop_top - (jmp_start + 5)));
+  }
+
+  int end_pc = n;
+  n += x64_mov_reg_reg(buf + n, X64_RAX, X64_RCX); /* mov rax, rcx */
+  n += x64_ret(buf + n);
+
+  int deopt_pc = n;
+  X64_EMIT_DEOPT();
+
+  x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
+  x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+
+  JIT_GUARD(80);
+  *outn = n;
+  return 1;
+}
+
 #define X64_XMM0 0
 #define X64_XMM1 1
 
@@ -3087,6 +3190,8 @@ int jit_compile(bytecode_t *bc) {
 
   if (try_jit_simple_tail_loop(bc, buf, &n)) {
     JT("simple_tail_loop");
+  } else if (try_jit_simple_tail_loop_eq(bc, buf, &n)) {
+    JT("simple_tail_loop_eq");
   } else if (try_jit_float_acc_loop(bc, buf, &n)) {
     JT("float_acc_loop");
   } else if (try_jit_wide_counter_loop(bc, buf, &n)) {

@@ -1593,6 +1593,16 @@ def jc-ge (n):
     jc-ge (- n 1)
     n
 
+def jc-eqcd (n):
+  if (is n 0):
+    n
+    jc-eqcd (- n 1)
+
+def jc-equp (n):
+  if (is n 100):
+    n
+    jc-equp (+ n 5)
+
 def jc-wide (n):
   if (< n 5000000):
     jc-wide (+ n 1)
@@ -1706,6 +1716,10 @@ assert-jits "jit loop: > countdown" jc-gt
 
 assert-jits "jit loop: >= countdown" jc-ge
 
+assert-jits "jit loop: is-base countdown" jc-eqcd
+
+assert-jits "jit loop: is-base count-up" jc-equp
+
 assert-jits "jit loop: wide (>i16) limit" jc-wide
 
 assert-jits "jit recurse: fact" jc-fact
@@ -1745,6 +1759,10 @@ assert "jit loop < result" (jc-lt 0) 1000
 assert "jit wide-limit loop result" (jc-wide 4999990) 5000000
 
 assert "jit countdown result" (jc-gt 1000000) 0
+
+assert "jit is-base countdown result" (jc-eqcd 1000000) 0
+
+assert "jit is-base count-up result" (jc-equp 0) 100
 
 assert "jit fact result" (jc-fact 10) 3628800
 

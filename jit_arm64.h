@@ -501,6 +501,110 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   return 1;
 }
 
+/* Sibling of try_jit_simple_tail_loop for the *swapped-polarity* equality-base
+   tail loop — the natural layout of `(def f (n) (if (is n K) n (f (- n S))))`.
+   The arm64 mirror of jit_amd64.h's try_jit_simple_tail_loop_eq.
+
+   The `is`-base if puts the BASE arm in THEN and the RECURSE arm in ELSE, so
+   the bytecode is mirrored vs the gt/lt twin (step-before-base):
+
+       SLOT_IS_FIX  slot K     4   ; cmp
+       BR_IF_FALSE  off        3   ; if !=, fall to ELSE (recurse)
+       LOAD_SLOT    slot       2   ; THEN: base arm = return the slot
+       JUMP         off        3   ; skip ELSE
+       SLOT_SUB_FIX slot S     4   ; ELSE: step (SUB or ADD)
+       TAIL_SELF    1          2
+       RET                     1
+   = 19 bytes. Semantics: while (n != K) { n step= S; } return n.
+
+   Emitted code is identical in spirit to the gt twin — counter in x1, in-buffer
+   back-edge — only the exit condition flips: exit (return base) when EQUAL
+   (B.cond EQ, cond=0), recurse when not-equal. Pure mirror reusing the
+   already-present EQ codegen; no new hand-assembly.
+
+   NOTE: arm64-mirrored but NOT validated on this x86-64 host — see TODO.lst. */
+static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint32_t *out,
+                                       int *outn) {
+  uint8_t *c = bc->code;
+
+  int pc = 0, at_cmp, at_load, at_arith, at_tail;
+  uint8_t arith_op;
+  BC_TAKE(at_cmp, OP_SLOT_IS_FIX);
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE(at_load, OP_LOAD_SLOT); /* THEN: base arm = return the slot */
+  BC_EAT(OP_JUMP);
+  BC_TAKE_ANY(at_arith, arith_op); /* ELSE: step */
+  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+    return 0;
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 1)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  uint8_t cmp_slot = BC_ARG(at_cmp, 0);
+  int16_t cmp_imm = BC_I16(at_cmp, 1);
+  uint8_t load_slot = BC_ARG(at_load, 0);
+  uint8_t arith_slot = BC_ARG(at_arith, 0);
+  int16_t arith_imm = BC_I16(at_arith, 1);
+
+  if (cmp_slot != arith_slot || cmp_slot != load_slot)
+    return 0;
+  if (cmp_slot >= ENV_INLINE_SLOTS)
+    return 0;
+
+  int slot_off = (int)offsetof(env_t, inline_vals[0]) + (int)cmp_slot * 8;
+  if (slot_off < 0 || slot_off > 32760)
+    return 0;
+
+  int64_t cmp_tagged_64 = ((int64_t)cmp_imm << 3) | 1;
+  int cmp_wide = (cmp_tagged_64 < 0 || cmp_tagged_64 > 4095);
+
+  int arith_delta = ((int)arith_imm) << 3;
+  if (arith_delta < 0 || arith_delta > 4095)
+    return 0;
+
+  /* Equality-exit: loop runs while n != K, returns the slot when n == K.
+     arm64 cond EQ = 0. */
+  int cond = 0;
+
+  int n = 0;
+  out[n++] = arm64_ldr_imm(1, 0, slot_off); /* ldr x1, [x0,#off] */
+  int patch_tbz = n;
+  out[n++] = 0; /* placeholder tbz x1,#0,deopt */
+  if (cmp_wide)
+    n += emit_mov64(out + n, 2, (uint64_t)cmp_tagged_64);
+  int loop_top = n;
+  if (cmp_wide)
+    out[n++] = arm64_cmp_reg(1, 2); /* cmp x1, x2 (wide FIX(K)) */
+  else
+    out[n++] = arm64_cmp_imm(1, (int)cmp_tagged_64); /* cmp x1, #FIX(K) */
+  int patch_bcond = n;
+  out[n++] = 0; /* placeholder b.eq end */
+  if (arith_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+  else
+    out[n++] = arm64_add_imm(1, 1, arith_delta);
+  out[n++] = arm64_str_imm(1, 0, slot_off); /* str x1, [x0,#off] */
+  {
+    int cur = n++;
+    out[cur] = arm64_b(loop_top - cur);
+  } /* b loop_top */
+  /* end: */
+  int end_pc = n;
+  out[patch_bcond] = arm64_b_cond(cond, end_pc - patch_bcond);
+  out[n++] = arm64_mov_reg(0, 1); /* x0 = x1 (last value, == K) */
+  out[n++] = arm64_ret();
+  /* deopt: */
+  int deopt_pc = n;
+  PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  ARM64_EMIT_DEOPT();
+
+  JIT_GUARD(24);
+  *outn = n;
+  return 1;
+}
+
 /* Float-accumulator self-tail loop — arm64 mirror of the amd64
    try_jit_float_acc_loop (jit_amd64.h, commit 23c0fc4). Two-slot shape
    (25 bytes), produced by:
@@ -2690,6 +2794,8 @@ int jit_compile(bytecode_t *bc) {
 
   if (try_jit_simple_tail_loop(bc, insns, &n)) {
     /* matched — fall through to mmap+install */
+  } else if (try_jit_simple_tail_loop_eq(bc, insns, &n)) {
+    /* swapped-polarity equality-base self-tail loop (is-base countdown) */
   } else if (try_jit_float_acc_loop(bc, insns, &n)) {
     /* integer-counter + unboxed-float-accumulator self-tail loop */
   } else if (try_jit_wide_counter_loop(bc, insns, &n)) {

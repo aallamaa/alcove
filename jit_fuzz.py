@@ -116,7 +116,33 @@ def gen_float_acc(rng, idx):
     return name, defn, args, "float-acc"
 
 
-GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc]
+def gen_eq_countdown(rng, idx):
+    """(def f (n) (if (is n K) n (f (OP n STEP)))) — equality-base tail loop.
+
+    The swapped-polarity twin of gen_counter_loop: the `is`-base if puts the
+    BASE arm (return the slot) in THEN and the recurse arm in ELSE, so the
+    bytecode is mirrored vs the gt/lt counter loop. JITs via the
+    simple_tail_loop_eq matcher. Semantics: while (n != K) { n OP= STEP; }
+    return n — so STEP must drive n toward K and K must be reachable from the
+    start by an exact multiple of STEP (else it would run forever)."""
+    name = f"eq{idx}"
+    target = rng.choice([0, 1, -1, 5, 50, 100, -50])
+    step = rng.choice([1, 2, 3, 5])
+    countdown = rng.choice([True, False])
+    op = "-" if countdown else "+"
+    body = f"(if (is n {target}) n ({name} ({op} n {step})))"
+    defn = f"(def {name} (n) {body})"
+    # Pick starts that are exact multiples of STEP away from the target on the
+    # correct side, plus a 0-iteration case (start == target).
+    if countdown:
+        normal = target + rng.randint(1, 30) * step
+    else:
+        normal = target - rng.randint(1, 30) * step
+    args = [(str(normal), True), (str(target), True)]
+    return name, defn, args, "eq-countdown"
+
+
+GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown]
 
 
 def generate(rng, count):
