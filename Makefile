@@ -12,6 +12,16 @@ BINDIR       ?= $(PREFIX)/bin
 # inline call result read back as the wrong tag). -fno-strict-aliasing makes
 # the punning well-defined — the same flag CPython and most interpreters use.
 SAFE_FLAGS   := -fno-strict-aliasing
+# Tune codegen for the EXACT host CPU (AVX-512 / FMA / etc. where present).
+# You recompile per machine, so a host-specific binary is fine — and this is
+# self-adapting: `-march=native` targets whatever the build host supports.
+# It also stays safe everywhere: the probe blanks it out if the compiler
+# rejects it (older toolchains / odd targets still build), and you can
+# override — `make MARCH='-march=x86-64-v3'` for a portable baseline, or
+# `make MARCH=` to disable. Native (non-emcc) builds only; the wasm target
+# never sees it.
+MARCH        ?= -march=native
+MARCH        := $(shell $(CC) $(MARCH) -xc -S -o /dev/null /dev/null >/dev/null 2>&1 && printf '%s' '$(MARCH)')
 ifneq ($(JIT_OK),)
   JIT_FLAGS  := -DALCOVE_JIT=1
 else
@@ -133,7 +143,7 @@ parser:
 	$(CC) -Wall -W $(SAFE_FLAGS) -g3 -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 speed:
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 # Explicit non-JIT release build — alias of `speed`. Use this when you
 # want to opt out of the JIT path (e.g. for A/B comparison).
@@ -141,7 +151,7 @@ nojit: speed
 # Single-threaded build: plain ++/-- refcounts instead of __sync atomics.
 # Correctness is identical as long as nothing threads the interpreter.
 mono:
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 # JIT build. Auto-picks the arm64 or amd64 backend based on `uname -m`.
 # On unsupported architectures, JIT_FLAGS is empty and you get a plain
@@ -150,7 +160,7 @@ jit:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 # JIT + single-threaded refcount — the fastest build. Pair as long as
 # nothing threads the interpreter.
@@ -158,7 +168,7 @@ jit-mono:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
 # Adder build: the full JIT runtime + the .adr front end, emitted
@@ -167,7 +177,7 @@ adder:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(JIT_FLAGS) -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
 # Regenerate test.adr from test.alc (shared engine suite, transpiled via

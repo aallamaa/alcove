@@ -7,6 +7,25 @@
  * alcove.h; the dump/load serializers + the `vector` builtin stay in alcove.c.
  * NOT standalone, NOT separately compiled.
  */
+
+/* VEC_SIMD — placed right before an elementwise F64 loop to tell the compiler
+ * "no element of this loop aliases another across iterations, vectorize it."
+ * It enables AVX/AVX-512/FMA packing (with -march=native the codegen targets
+ * the build host) WITHOUT the `restrict` route, which would be UB for the
+ * legal in-place aliasing calls we support (e.g. (vec-axpy! v a v) where the
+ * source and destination vector are the SAME object — that is a self-update,
+ * not iteration-to-iteration aliasing, and stays correct under ivdep).
+ * Portable: empty on toolchains that lack the pragma, so it still builds and
+ * runs everywhere. ONLY valid on loops with no loop-carried dependency — do
+ * NOT use on reductions (vec-dot, vec-max, vec-argmax), whose accumulator is
+ * carried across iterations and must not be reassociated without fast-math. */
+#if defined(__clang__)
+#  define VEC_SIMD _Pragma("clang loop vectorize(assume_safety)")
+#elif defined(__GNUC__)
+#  define VEC_SIMD _Pragma("GCC ivdep")
+#else
+#  define VEC_SIMD
+#endif
 /* ---------------- Vectors ----------------
    Mutable, O(1) random-access array. Storage layout:
      e->type    = EXP_VECTOR
@@ -546,6 +565,7 @@ exp_t *vecaxpycmd(exp_t *e, env_t *env) {
   if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
     double *ycells = VEC_F64_CELLS(yexp);
     double *xcells = VEC_F64_CELLS(xexp);
+    VEC_SIMD
     for (int64_t i = 0; i < ny; i++)
       ycells[i] += a * xcells[i];
   } else {
@@ -579,6 +599,7 @@ exp_t *vecscalecmd(exp_t *e, env_t *env) {
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells = VEC_F64_CELLS(vexp);
+    VEC_SIMD
     for (int64_t i = 0; i < n; i++)
       cells[i] *= a;
   } else {
@@ -658,6 +679,7 @@ exp_t *vecaddcmd(exp_t *e, env_t *env) {
   if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
     double *ycells = VEC_F64_CELLS(yexp);
     double *xcells = VEC_F64_CELLS(xexp);
+    VEC_SIMD
     for (int64_t i = 0; i < ny; i++)
       ycells[i] += xcells[i];
   } else {
@@ -712,6 +734,7 @@ exp_t *vecrelucmd(exp_t *e, env_t *env) {
   int64_t n = vec_len(vexp);
   if (vec_kind(vexp) == VEC_KIND_F64) {
     double *cells = VEC_F64_CELLS(vexp);
+    VEC_SIMD
     for (int64_t i = 0; i < n; i++)
       if (cells[i] < 0.0)
         cells[i] = 0.0;
