@@ -78,23 +78,27 @@ Two honest takeaways:
 Full results (one machine, x86-64; each cell is best-of-15 wall-clock
 including the time to launch the program):
 
-| benchmark       |   alcove |  C (gcc -O2) |   python3 | alcove vs C    | alcove vs python |
-|-----------------|---------:|-------------:|----------:|----------------|-----------------:|
-| `ackermann 3 9` | 15.3 ms  |     5.34 ms  | 1328.8 ms | 3.4× slower    |       87× faster |
-| `tak 24 16 8`   |  5.91 ms |     3.90 ms  |   87.5 ms | 1.5× slower    |       15× faster |
-| `forsum 1e7`    |  7.19 ms |     4.00 ms  |  236.0 ms | 2.0× slower    |       33× faster |
-| `sieve`         |  5.15 ms |     4.03 ms  |   72.9 ms | 1.3× slower    |       14× faster |
-| `sieve-fast`    |  2.20 ms |     0.84 ms  |   21.8 ms | C under 1 ms ² |       10× faster |
-| `fact 19`       |  3.43 ms |     1.34 ms  |   88.1 ms | C precomputed ²|       26× faster |
-| `countdown`     |  4.81 ms |     0.69 ms  |  950.2 ms | C precomputed ²|      198× faster |
-| `listsum`       |  3.49 ms |     3.63 ms  |   35.5 ms | shortcut ¹     |       10× faster |
-| `nqueens 10`    |  1.66 ms |     3.94 ms  |   90.8 ms | shortcut ¹     |       55× faster |
-| `nqueens-vec`   |  2.24 ms |     4.07 ms  |  144.7 ms | shortcut ¹     |       65× faster |
-| `fib 33`        |  1.16 ms |     6.16 ms  |  343.7 ms | shortcut ¹     |      298× faster |
-| `mlp` (5 ep.)   |  588 ms  |     n/a   ³  | 3360.4 ms | —              |      5.7× faster |
+| benchmark       |   alcove |  C (gcc -O2) |   python3 | alcove vs C       | alcove vs python |
+|-----------------|---------:|-------------:|----------:|-------------------|-----------------:|
+| `ackermann 3 9` | 15.3 ms  |     5.34 ms  | 1328.8 ms | 2.9× slower       |       87× faster |
+| `tak 24 16 8`   |  5.91 ms |     3.90 ms  |   87.5 ms | 1.5× slower       |       15× faster |
+| `forsum 1e7`    |  7.19 ms |     4.00 ms  |  236.0 ms | 1.8× slower       |       33× faster |
+| `sieve`         |  5.15 ms |     4.03 ms  |   72.9 ms | 1.3× slower       |       14× faster |
+| `sieve-fast`    |  2.20 ms |     0.84 ms  |   21.8 ms | 2.6× slower **    |       10× faster |
+| `fact 19`       |  3.43 ms |     1.34 ms  |   88.1 ms | 2.6× slower **    |       26× faster |
+| `countdown`     |  4.81 ms |     0.69 ms  |  950.2 ms | 7.0× slower **    |      198× faster |
+| `listsum`       |  3.49 ms |     3.63 ms  |   35.5 ms | 1.04× faster *    |       10× faster |
+| `nqueens-vec`   |  2.24 ms |     4.07 ms  |  144.7 ms | 1.8× faster *     |       65× faster |
+| `nqueens 10`    |  1.66 ms |     3.94 ms  |   90.8 ms | 2.4× faster *     |       55× faster |
+| `fib 33`        |  1.16 ms |     6.16 ms  |  343.7 ms | 5.3× faster *     |      298× faster |
+| `mlp` (5 ep.)   |  588 ms  |     n/a   *** | 3360.4 ms | —                |      5.7× faster |
 
-**¹ "shortcut" — alcove looks faster than C here, but it isn't running
-faster; it's doing *less work*.** When alcove's just-in-time compiler
+(Ratios are just the two time columns divided — e.g. `fib` 6.16 / 1.16 ≈
+5.3. They're end-to-end, so they include the launch time noted below.)
+
+**\* The "× faster" rows are real numbers but not a fair race — alcove
+isn't running faster than C, it's doing *less work*.** When alcove's
+just-in-time compiler
 recognizes one of a few specific code patterns, it quietly swaps in a
 hand-tuned routine that reaches the same answer a smarter way. The plain
 C program does the work the long way:
@@ -113,14 +117,15 @@ Write the C version using the *same* trick (a counting-loop `fib`, a
 bit-trick `nqueens`, a memory pool) and **C wins again.** So these rows
 show off what alcove's JIT does, not that the language outruns C.
 
-**² C does almost nothing here.** On `fact` and `countdown` the C
-compiler is clever enough to notice the answer is a fixed constant and
-work it out *while compiling*, so the run-time C program barely executes
-— there's nothing real to race against (the alcove and Python numbers
-are still meaningful). On `sieve-fast`, C simply finishes in well under
-a millisecond, which is too fast to compare reliably.
+**\*\* The C time barely reflects real work, so its "× slower" is
+overstated.** On `fact` and `countdown` the C compiler is clever enough
+to notice the answer is a fixed constant and work it out *while
+compiling*, so the run-time C program does almost nothing. On
+`sieve-fast` C simply finishes in well under a millisecond — too fast to
+time reliably at this scale. In all three the C column is so small that
+the ratio mostly measures alcove's own launch cost, not a fair race.
 
-**³** `mlp` (the §2 demo) has no C version (it trains a neural net with
+**\*\*\*** `mlp` (the §2 demo) has no C version (it trains a neural net with
 randomness, so the result differs run to run); it's ~5.7× faster than
 plain Python.
 
