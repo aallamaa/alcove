@@ -1954,6 +1954,109 @@ static const char *reserved_param_name(exp_t *params) {
     }                                                                         \
   } while (0)
 
+/* ---- optional type annotations (JIT speculation hints) ----
+   Surface: a trailing keyword annotates the preceding parameter, and a keyword
+   right after the param list (followed by a body) is the return type:
+     (def dot (a :vec-f64 b :vec-f64) :f64 ...)
+   Hints feed the JIT (Phase 2); they never change semantics — a value that
+   doesn't match its hint at runtime just de-opts to the VM. Unknown type
+   keywords are a hard error at definition (catches typos). Phase 1 validates
+   the hints and strips them so var2env / compile_lambda / arity see plain
+   params and bodies; Phase 2 will record them for the JIT instead of discarding.
+   The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64, :vec-i64. */
+enum {
+  TYPE_HINT_NONE = 0,
+  TYPE_HINT_INT,
+  TYPE_HINT_F64,
+  TYPE_HINT_VEC_F64,
+  TYPE_HINT_VEC_I64
+};
+/* Map a type-hint keyword's text to its code, or -1 if not a known type. */
+static int type_hint_code(const char *kw) {
+  if (!strcmp(kw, ":int"))
+    return TYPE_HINT_INT;
+  if (!strcmp(kw, ":f64"))
+    return TYPE_HINT_F64;
+  if (!strcmp(kw, ":vec-f64"))
+    return TYPE_HINT_VEC_F64;
+  if (!strcmp(kw, ":vec-i64"))
+    return TYPE_HINT_VEC_I64;
+  return -1;
+}
+/* A keyword is an EXP_SYMBOL whose text starts with ':'. */
+static int is_keyword_exp(exp_t *x) {
+  return is_ptr(x) && issymbol(x) && ((char *)exp_text(x))[0] == ':';
+}
+/* True if a param list carries any trailing-keyword hint (top-level keyword).
+   Only a real list (pair chain) can; a bare-symbol rest param (fn xs ...) or
+   empty () cannot, and must NOT be walked as a node chain. */
+static int params_have_hint(exp_t *params) {
+  if (!ispair(params))
+    return 0;
+  for (exp_t *p = params; p && p->content; p = p->next)
+    if (is_keyword_exp(p->content))
+      return 1;
+  return 0;
+}
+/* Validate the hints in `params` and return a fresh param list with them
+   stripped. No hints → the list is returned unchanged (refexp'd), so the
+   common case allocates nothing extra. On a bad hint (unknown type, or a
+   keyword not following a parameter) sets *errp and returns NULL. */
+static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
+                                 exp_t **errp) {
+  *errp = NULL;
+  if (!params_have_hint(params))
+    return refexp(params);
+  exp_t *head = NULL, *tail = NULL;
+  int prev_bindable = 0; /* did the previous kept node take a hint slot? */
+  for (exp_t *p = params; p && p->content; p = p->next) {
+    exp_t *c = p->content;
+    if (is_keyword_exp(c)) {
+      if (type_hint_code((char *)exp_text(c)) < 0)
+        *errp = error(ERROR_ILLEGAL_VALUE, form, env,
+                      "unknown type hint '%s' (expected :int :f64 :vec-f64 "
+                      ":vec-i64)",
+                      (char *)exp_text(c));
+      else if (!prev_bindable)
+        *errp = error(ERROR_ILLEGAL_VALUE, form, env,
+                      "type hint '%s' must follow a parameter",
+                      (char *)exp_text(c));
+      if (*errp) {
+        if (head)
+          unrefexp(head);
+        return NULL;
+      }
+      prev_bindable = 0; /* at most one hint per parameter */
+      continue;          /* strip the hint */
+    }
+    exp_t *node = make_node(refexp(c));
+    if (tail)
+      tail = tail->next = node;
+    else
+      head = tail = node;
+    prev_bindable = 1;
+  }
+  return head ? head : refexp(NIL_EXP);
+}
+/* If `body` begins with a return-type keyword followed by more forms, validate
+   it and return the body with that keyword skipped; else return body unchanged.
+   On an unknown return-type keyword sets *errp and returns NULL. */
+static exp_t *strip_return_hint(exp_t *body, exp_t *form, env_t *env,
+                                exp_t **errp) {
+  *errp = NULL;
+  if (body && is_keyword_exp(car(body)) && cdr(body)) {
+    if (type_hint_code((char *)exp_text(car(body))) < 0) {
+      *errp = error(ERROR_ILLEGAL_VALUE, form, env,
+                    "unknown return-type hint '%s' (expected :int :f64 "
+                    ":vec-f64 :vec-i64)",
+                    (char *)exp_text(car(body)));
+      return NULL;
+    }
+    return cdr(body); /* skip the return-type keyword */
+  }
+  return body;
+}
+
 /* Lambdas here are NOT closures: the returned EXP_LAMBDA stores only
    params + body, with no reference to the defining env. Free variables
    are resolved dynamically against the CALLER's env chain at invoke
@@ -1974,16 +2077,30 @@ exp_t *fncmd(exp_t *e, env_t *env) {
     CHECK_RESERVED_BIND(header, val, "as a parameter",
                         { unrefexp(e); return val; });
     if (cur) {
+      /* Type annotations (Phase 1): validate + strip param hints + an optional
+         return-type keyword, exactly as def does. */
+      exp_t *herr = NULL;
+      exp_t *clean_params = build_clean_params(header, e, env, &herr);
+      if (herr) {
+        unrefexp(e);
+        return herr;
+      }
+      cur = strip_return_hint(cur, e, env, &herr);
+      if (herr) {
+        unrefexp(clean_params);
+        unrefexp(e);
+        return herr;
+      }
       /* Body is the remaining list; first form may be nil/literal/symbol
          as well as a pair — all are legal body expressions. */
       body = cur;
       vali = make_node(refexp(body));
       if (issymbol(header)) {
         exp_t *dot = make_node(make_symbol(".", 1));
-        dot->next = make_node(refexp(header));
+        dot->next = make_node(clean_params);
         val = make_node(dot);
       } else {
-        val = make_node(refexp(header));
+        val = make_node(clean_params);
       }
       val->next = vali;
       val->type = EXP_LAMBDA;
@@ -2035,6 +2152,21 @@ exp_t *defcmd(exp_t *e, env_t *env) {
       CHECK_RESERVED_BIND(header, val, "as a parameter",
                           { unrefexp(e); return val; });
       if (cur) {
+        /* Type annotations (Phase 1): validate + strip the param hints and an
+           optional return-type keyword. `clean_params` is owned; everything
+           downstream sees plain params/body. */
+        exp_t *herr = NULL;
+        exp_t *clean_params = build_clean_params(header, e, env, &herr);
+        if (herr) {
+          unrefexp(e);
+          return herr;
+        }
+        cur = strip_return_hint(cur, e, env, &herr);
+        if (herr) {
+          unrefexp(clean_params);
+          unrefexp(e);
+          return herr;
+        }
         /* (ns ...)-aware binding name: foo/<name> for a top-level def, else
            plain. Used for the docstring key, the lambda self-name, and the
            global binding so a qualified self-call still gets self-tail TCO. */
@@ -2063,10 +2195,10 @@ exp_t *defcmd(exp_t *e, env_t *env) {
           /* Bare-symbol params: represent as (. sym) so var2env collects
              all args into a list bound to sym. */
           exp_t *dot = make_node(make_symbol(".", 1));
-          dot->next = make_node(refexp(header));
+          dot->next = make_node(clean_params);
           val = make_node(dot);
         } else {
-          val = make_node(refexp(header));
+          val = make_node(clean_params);
         }
         val->next = vali;
         val->type = EXP_LAMBDA;
@@ -2144,20 +2276,50 @@ exp_t *defncmd(exp_t *e, env_t *env) {
     if (is_ptr(clause) && ispair(clause)) {
       exp_t *first = car(clause);
       if (is_ptr(first) && ispair(first)) {
-        /* explicit param list */
-        params_node = refexp(first);
+        /* explicit param list — validate/strip type hints (Phase 1) */
+        exp_t *herr = NULL;
+        params_node = build_clean_params(first, e, env, &herr);
+        if (herr) {
+          unrefexp(clauses_head);
+          unrefexp(e);
+          return herr;
+        }
         if (cdr(clause))
           body_node = refexp(cdr(clause));
       } else if (issymbol(first)) {
         /* leading-symbol params: collect leading symbols into a fresh list,
-           the remainder is the body. */
+           the remainder is the body. A trailing keyword annotates (and is
+           stripped from) the preceding param — same hints as the list form. */
         exp_t *ph = NIL_EXP, *pt = NULL, *p = clause;
+        int prev_bindable = 0;
         while (p && p->content && issymbol(p->content)) {
+          if (is_keyword_exp(p->content)) {
+            exp_t *herr = NULL;
+            if (type_hint_code((char *)exp_text(p->content)) < 0)
+              herr = error(ERROR_ILLEGAL_VALUE, e, env,
+                           "unknown type hint '%s' (expected :int :f64 "
+                           ":vec-f64 :vec-i64)",
+                           (char *)exp_text(p->content));
+            else if (!prev_bindable)
+              herr = error(ERROR_ILLEGAL_VALUE, e, env,
+                           "type hint '%s' must follow a parameter",
+                           (char *)exp_text(p->content));
+            if (herr) {
+              unrefexp(ph);
+              unrefexp(clauses_head);
+              unrefexp(e);
+              return herr;
+            }
+            prev_bindable = 0;
+            p = p->next;
+            continue; /* strip the hint */
+          }
           exp_t *pn = make_node(refexp(p->content));
           if (pt)
             pt = pt->next = pn;
           else
             ph = pt = pn;
+          prev_bindable = 1;
           p = p->next;
         }
         params_node = ph; /* owned */

@@ -1493,6 +1493,32 @@
 (assert "odd t"                       (odd 3)                        t)
 (assert "odd nil"                     (odd 4)                        nil)
 
+;; ---------- type annotations (Phase 1: parsed, validated, then erased —
+;; no runtime effect yet; they feed the JIT in a later phase) ----------
+(def ta-f (x :int) (* x 2))
+(assert "type hint: param"            (ta-f 5)                       10)
+(def ta-g (a :f64 b :f64) (+ a b))
+(assert "type hint: two params"       (ta-g 1.5 2.5)                 4.0)
+(def ta-h (x :int) :f64 (+ x 1))
+(assert "type hint: return type"      (ta-h 4)                       5)
+(def ta-r (a :int . rest) (+ a (count rest)))
+(assert "type hint: with rest param"  (ta-r 10 1 2)                  12)
+(def ta-cd (n :int acc :int) (if (is n 0) acc (ta-cd (- n 1) (+ acc 1))))
+(assert "type hint: deep recursion keeps TCO" (ta-cd 200000 0)       200000)
+(assert "type hint: fn param"         ((fn (x :int) (* x 3)) 4)      12)
+(defn ta-sq ((x :int) (* x x)))
+(assert "type hint: defn explicit"    (ta-sq 6)                      36)
+(defn ta-dbl (x :int (* x 2)))
+(assert "type hint: defn leading-sym" (ta-dbl 8)                     16)
+(def ta-novel (x) (* x x))
+(assert "no hint: unchanged"          (ta-novel 7)                   49)
+(assert-true "type hint: unknown keyword errors at def"
+             (error? (try (def ta-bad (x :nope) x) (fn (e) e))))
+(assert-true "type hint: keyword without param errors"
+             (error? (try (def ta-bad2 (:int) 1) (fn (e) e))))
+(assert-true "type hint: unknown return type errors"
+             (error? (try (def ta-bad3 (x :int) :nope x) (fn (e) e))))
+
 ;; ---------- bitwise ----------
 (assert "bit-and"                     (bit-and 12 10)                8)
 (assert "bit-or"                      (bit-or  12 10)                14)
