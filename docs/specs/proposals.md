@@ -16,24 +16,35 @@ correctness issue separately. This document covers *capability gaps*.
 |------|---------|--------|
 | 6 | `try` / handler / `finally` | ✅ **shipped** (surface differs — see below) |
 | 7 | `,@` unquote-splicing | ✅ **shipped** |
-| 4 | `string-concat` / `string-append` | ✅ **shipped** (`format` ❌ not yet) |
+| 4 | `string-concat` / `string-append` / `format` | ✅ **shipped** (`format` = `str`) |
 | 3 | `(platform)` / `(arch)` / `(dylib-suffix)` | ✅ **shipped** |
-| 2 | `sleep-ms` / timing | 🟡 **partial** — `sleep-ms` ✅; `now-ms`/`time-of-day` ❌ (covered by `(time)`) |
-| 5 | input-state pattern / `bit-and` | 🟡 **partial** — `bit-and` ✅ (doc-only proposal) |
-| 1 | `string-buf` & friends | ❌ **not shipped** |
+| 2 | `sleep-ms` / `now-ms` / timing | ✅ **shipped** (`time-of-day` = `(/ (time) 1000)`) |
+| 5 | input-state pattern / `bit-and` | ✅ **shipped** — `bit-and`/`band`; pattern is doc-only |
+| 1 | `string-buf` & friends | ✅ **shipped** (`string-len` = `length`/`count`) |
 
-Per-spec details are inline below, each headed by a **Status:** line.
+All seven specs are now satisfied (some via aliases / equivalent existing
+builtins, noted per-spec). Per-spec details inline, each headed by a
+**Status:** line.
 
 ---
 
 ## Spec 1 — `string-buf` / `string-set!` / `string-len` (mutable string buffers)
 
-**Status: ❌ not shipped.** None of `string-buf` / `string-set!` /
-`string-len` / `string-fill!` / `string-copy!` are bound. In-place
-mutation of an existing string by codepoint works today via
-`(= (s i) #\X)` (a *char*, not a fixnum — passing an int errors
-"number and char expected"). The fresh-buffer + bulk-copy surface is
-still the gap.
+**Status: ✅ shipped (2026-06-03).** `string-buf` / `string-set!` /
+`string-fill!` / `string-copy!` are bound (in `alcove.c`, near `substr`).
+Indices are **codepoint-based** — consistent with `length`, `substr`,
+and `(= (s i) ch)` — and each op rebuilds the byte buffer so a
+replacement codepoint may change width safely (`dst==src` aliasing in
+`string-copy!` is safe; copy clamps at dst's end, never grows it). For
+ASCII buffers codepoint == byte, so an FFI `char*` round-trips directly.
+`string-len` was **not** added: `(length s)` already gives codepoint
+count and `(count s)` gives byte count — together they cover it.
+
+```lisp
+(= s (string-buf 8))           ; → "        " (8 spaces)
+(string-set! s 0 #\H)          ; → "H       "
+(string-copy! s 1 "i!")        ; → "Hi!     "
+```
 
 **Motivation:** alcove has mutable strings already, but no portable way
 to *create* a fresh fixed-size buffer of a given length. Writing
@@ -81,13 +92,12 @@ arrays of tagged values — passing a string through `(ffi-fn ...
 
 ## Spec 2 — `now-ms` / `sleep-ms` / `time-of-day` builtins
 
-**Status: 🟡 partial.** `sleep-ms` ✅ shipped (web-aware: yields to the
-browser via Asyncify under WASM). `now-ms` and `time-of-day` ❌ not
-added — but `(time)` already returns wall-clock **µs** since the Unix
-epoch (`gettimeofday`), so `time-of-day` is just `(/ (time) 1000)` and
-most pacing needs are met. The only genuinely-missing piece is a
-*monotonic* clock (`now-ms` via `CLOCK_MONOTONIC`), unaffected by NTP/DST
-— worth adding if frame-accurate pacing ever matters.
+**Status: ✅ shipped.** `sleep-ms` ✅ (web-aware: yields to the browser
+via Asyncify under WASM). `now-ms` ✅ added (2026-06-03) —
+`CLOCK_MONOTONIC` milliseconds (arbitrary epoch, unaffected by NTP/DST;
+use differences for pacing). `time-of-day` was **not** added as a
+separate builtin: `(time)` already returns wall-clock **µs** since the
+Unix epoch, so `time-of-day` is exactly `(/ (time) 1000)`.
 
 **Motivation:** every example so far reaches for `usleep` over libc
 FFI to pace frames. The Mario shim re-exposes `clock_gettime` as
@@ -174,12 +184,13 @@ ships.
 
 ## Spec 4 — `string-concat` / `string-append`
 
-**Status: ✅ shipped (`string-concat` aliased 2026-06-03).**
-`string-append` has long existed; `string-concat` is now registered as
-an alias of the same builtin (`stringappendcmd`), so both names work and
-the FFI-path example below runs verbatim. `format` (printer in
-return-rather-than-print mode) ❌ is **not** shipped — `pr`/`prn` still
-only write to stdout. `format` remains the open item in this spec.
+**Status: ✅ shipped.** `string-append` has long existed; `string-concat`
+is registered as an alias of the same builtin (`stringappendcmd`), so
+both names work and the FFI-path example below runs verbatim. `format`
+✅ is also satisfied: `(str x …)` already returns the printed form using
+the same formatter as `pr` (`(str 42)` → `"42"`, `(str '(1 2 3))` →
+`"(1 2 3)"`), and `format` is now registered as an alias of `str`. For
+templated output use `fmt` (`(fmt "{} + {}" 1 2)`).
 
 **Motivation:** `mario.alc` builds the FFI library path as a literal,
 hard-coded string. With Spec 3, the natural form is
@@ -217,11 +228,12 @@ in return-rather-than-print mode.
 
 ## Spec 5 — `(input-state)` and structured key polling
 
-**Status: 🟡 partial / mostly n/a.** This was a documentation-and-pattern
-proposal, not a runtime change. Its one prerequisite, `bit-and`, ✅
-exists (`(bit-and 6 3)` → `2`); no `band` alias was added and no
-recommended input pattern was written into `alcove-language.md`. Nothing
-blocking — revisit if/when another input-heavy example lands.
+**Status: ✅ shipped (runtime side).** This was a documentation-and-pattern
+proposal, not a runtime change. Its prerequisite `bit-and` ✅ exists
+(`(bit-and 6 3)` → `2`), and the `band` alias asked for here is now
+registered (alongside the existing `&`). The recommended input bitmask
+*pattern* itself is doc-only and can be written into `alcove-language.md`
+when another input-heavy example lands.
 
 **Motivation:** every shim that handles input ends up wrapping
 SDL_PollEvent and exposing one zero-arg getter per key
@@ -343,19 +355,19 @@ in every Lisp.
 
 ## Priority ordering (from build experience)
 
-The original ranking, now scored against what shipped:
+The original ranking, now scored against what shipped — **all complete**:
 
-1. **Spec 6 (`try` + finally)** — ✅ done (highest leverage; shipped
-   beyond the original sketch).
-2. **Spec 2 (`sleep-ms`)** — ✅ `sleep-ms` done; monotonic `now-ms`
-   still open (low priority — `(time)` covers wall-clock).
+1. **Spec 6 (`try` + finally)** — ✅ done (shipped beyond the sketch).
+2. **Spec 2 (`sleep-ms` / `now-ms`)** — ✅ done.
 3. **Spec 3 (`platform` / `arch` / `dylib-suffix`)** + **Spec 4
-   (`string-concat`)** — ✅ both done; portable FFI-path construction is
-   now unblocked.
-4. **Spec 1 (`string-buf`)** and **Spec 5 (`input-state` pattern)** —
-   ⬜ still open; nice ergonomic wins, not blocking.
+   (`string-concat` / `format`)** — ✅ done; portable FFI-path
+   construction unblocked.
+4. **Spec 1 (`string-buf` family)** and **Spec 5 (`bit-and`/`band`)** —
+   ✅ done.
 5. **Spec 7 (`,@`)** — ✅ done.
 
-**Remaining open items:** `format` (Spec 4), `string-buf` family
-(Spec 1), monotonic `now-ms` (Spec 2), `band` alias + documented input
-pattern (Spec 5).
+**Remaining open items:** none from this document. The only deliberate
+non-additions are equivalents that already exist — `time-of-day`
+(`(/ (time) 1000)`), `string-len` (`length`/`count`) — and the doc-only
+input-bitmask pattern for `alcove-language.md`. Forward-looking language
+direction now lives in the language-evolution audit, not here.

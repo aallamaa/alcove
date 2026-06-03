@@ -3442,6 +3442,43 @@
 (assert-false "assert-false detects falsy" nil)
 
 ;; ====================================================================
+;; proposals.md tactical builtins: format / band / now-ms + string buffers
+;; ====================================================================
+(assert "format scalar"        (format 42)                 "42")
+(assert "format list"          (format (list 1 2 3))       "(1 2 3)")
+(assert "format = str alias"   (format "hi")               "hi")
+(assert "band = bit-and"       (band 12 10)                8)
+(assert-true "now-ms is a number"  (number? (now-ms)))
+(assert-true "now-ms is monotonic non-decreasing"
+             (do (= _t0 (now-ms)) (sleep-ms 2) (>= (now-ms) _t0)))
+;; string buffers (codepoint-indexed; ASCII buffer == byte buffer for FFI)
+(assert "string-buf default space" (string-buf 4)          "    ")
+(assert "string-buf init char"     (string-buf 3 #\*)      "***")
+(assert "string-buf zero len"      (string-buf 0)          "")
+(assert "string-set! in place"
+        (do (= _s (string-buf 4)) (string-set! _s 0 #\H) (string-set! _s 1 #\i) _s)
+        "Hi  ")
+(assert "string-set! returns s"
+        (do (= _s (string-buf 2)) (string-set! _s 0 #\Z))
+        "Z ")
+(assert "string-fill!"             (string-fill! (string-buf 5) #\x)  "xxxxx")
+(assert "string-copy! at offset"
+        (do (= _d (string-buf 8)) (string-copy! _d 2 "Hi") _d)
+        "  Hi    ")
+(assert "string-copy! clamps at dst end"
+        (do (= _d (string-buf 3)) (string-copy! _d 1 "ABCDE") _d)
+        " AB")
+(assert "string-copy! self-alias safe"
+        (do (= _d "abcd") (string-copy! _d 0 _d) _d)
+        "abcd")
+(assert "string-set! utf8 width change"
+        (do (= _s (string-buf 3)) (string-set! _s 1 #\é) _s)
+        " é ")
+(assert "string-set! utf8 keeps codepoint length"
+        (do (= _s (string-buf 3)) (string-set! _s 1 #\é) (length _s))
+        3)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner

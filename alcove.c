@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h> /* clock_gettime(CLOCK_MONOTONIC) for (now-ms) */
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
 #ifdef ALCOVE_ALS
@@ -328,6 +329,7 @@ lispProc lispProcList[] = {
     LISPCMD("int", intcmd, doc_int),
     /* Bitwise — int-only. C-style spelling + Lisp-style aliases. */
     LISPCMD("bit-and", bitandcmd, doc_bitand),
+    LISPCMD("band", bitandcmd, doc_bitand),
     LISPCMD("&", bitandcmd, doc_bitand),
     LISPCMD("bit-or", bitorcmd, doc_bitor),
     LISPCMD("|", bitorcmd, doc_bitor),
@@ -426,7 +428,12 @@ lispProc lispProcList[] = {
     LISPCMD("println", prncmd, doc_prn),
     /* Strings and whole-file I/O */
     LISPCMD("str", strcmd, doc_str),
+    LISPCMD("format", strcmd, doc_str),
     LISPCMD("fmt", fmtcmd, doc_fmt),
+    LISPCMD("string-buf", stringbufcmd, doc_stringbuf),
+    LISPCMD("string-set!", stringsetcmd, doc_stringset),
+    LISPCMD("string-fill!", stringfillcmd, doc_stringfill),
+    LISPCMD("string-copy!", stringcopycmd, doc_stringcopy),
     LISPCMD("substr", substrcmd, doc_substr),
     LISPCMD("string-append", stringappendcmd, doc_stringappend),
     LISPCMD("string-concat", stringappendcmd, doc_stringappend),
@@ -462,6 +469,7 @@ lispProc lispProcList[] = {
     LISPCMD("platform", platformcmd, doc_platform),
     LISPCMD("arch", archcmd, doc_arch),
     LISPCMD("dylib-suffix", dylibsuffixcmd, doc_dylibsuffix),
+    LISPCMD("now-ms", nowmscmd, doc_nowms),
     LISPCMD("sleep-ms", sleepmscmd, doc_sleepms),
     LISPCMD("exit", exitcmd, doc_exit),
     LISPCMD("quit", exitcmd, doc_exit),
@@ -3852,6 +3860,153 @@ exp_t *stringappendcmd(exp_t *e, env_t *env) {
   free(buf);
   unrefexp(e);
   return ret;
+}
+
+/* ---- mutable string buffers (docs/specs/proposals.md Spec 1) ----
+   Fresh fixed-size strings plus in-place codepoint mutation, for building
+   text / FFI char* payloads. All indices are CODEPOINT-based, consistent
+   with `length`, `substr`, and `(= (s i) ch)` (use `count` for byte length).
+   For ASCII buffers codepoint == byte, so an FFI char* round-trips directly.
+   Each op rebuilds the byte buffer (a replacement codepoint may differ in
+   width) and mutates in place via exp_set_text. */
+
+/* Build a fresh EXP_STRING of `n` copies of codepoint `cp`. */
+static exp_t *make_filled_string(int64_t n, uint32_t cp) {
+  char enc[4];
+  int k = utf8_encode(cp, enc);
+  size_t total = (size_t)n * (size_t)k;
+  char *buf = memalloc(total + 1, 1);
+  for (int64_t j = 0; j < n; j++)
+    memcpy(buf + (size_t)j * (size_t)k, enc, (size_t)k);
+  buf[total] = '\0';
+  exp_t *s = make_string(buf, (int)total);
+  free(buf);
+  return s;
+}
+
+const char doc_stringbuf[] =
+    "(string-buf n [init]) — fresh mutable string of n copies of char init "
+    "(default space). For building text / FFI char* buffers; mutate with "
+    "string-set!/string-fill!/string-copy! or (= (s i) ch).";
+exp_t *stringbufcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(nexp, initexp);
+  if (!isnumber(nexp))
+    CLEAN_RETURN_2(nexp, initexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "string-buf: length must be an integer"));
+  if (initexp && !ischar(initexp))
+    CLEAN_RETURN_2(nexp, initexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "string-buf: init must be a char"));
+  int64_t n = FIX_VAL(nexp);
+  if (n < 0 || n > ((int64_t)1 << 30))
+    CLEAN_RETURN_2(nexp, initexp,
+                   error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                         "string-buf: length out of range"));
+  uint32_t cp = initexp ? (uint32_t)CHAR_VAL(initexp) : (uint32_t)' ';
+  exp_t *ret = make_filled_string(n, cp);
+  CLEAN_RETURN_2(nexp, initexp, ret);
+}
+
+const char doc_stringset[] =
+    "(string-set! s i ch) — set codepoint i of string s to char ch, in place. "
+    "Index is codepoint-based; out of range is an error. Returns s.";
+exp_t *stringsetcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(s, idx, ch);
+  if (!isstring(s) || !isnumber(idx) || !ischar(ch))
+    CLEAN_RETURN_3(s, idx, ch,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(string-set! s i ch): expected string, integer, char"));
+  const char *cur = exp_text(s);
+  int64_t cpi = FIX_VAL(idx);
+  if (cpi < 0 || cpi >= utf8_strlen(cur))
+    CLEAN_RETURN_3(s, idx, ch,
+                   error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                         "string-set!: index out of range"));
+  size_t a = utf8_byte_offset(cur, cpi);
+  size_t aend = utf8_byte_offset(cur, cpi + 1);
+  size_t total = strlen(cur);
+  char enc[4];
+  int k = utf8_encode((uint32_t)CHAR_VAL(ch), enc);
+  size_t newlen = a + (size_t)k + (total - aend);
+  char *nb = memalloc(newlen + 1, 1);
+  memcpy(nb, cur, a);
+  memcpy(nb + a, enc, (size_t)k);
+  memcpy(nb + a + (size_t)k, cur + aend, total - aend);
+  nb[newlen] = '\0';
+  exp_set_text(s, nb, newlen);
+  free(nb);
+  exp_t *ret = refexp(s);
+  CLEAN_RETURN_3(s, idx, ch, ret);
+}
+
+const char doc_stringfill[] =
+    "(string-fill! s ch) — set every codepoint of s to char ch, in place. "
+    "Returns s.";
+exp_t *stringfillcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, ch);
+  if (!isstring(s) || !ischar(ch))
+    CLEAN_RETURN_2(s, ch,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(string-fill! s ch): expected string and char"));
+  int64_t n = utf8_strlen(exp_text(s));
+  char enc[4];
+  int k = utf8_encode((uint32_t)CHAR_VAL(ch), enc);
+  size_t total = (size_t)n * (size_t)k;
+  char *nb = memalloc(total + 1, 1);
+  for (int64_t j = 0; j < n; j++)
+    memcpy(nb + (size_t)j * (size_t)k, enc, (size_t)k);
+  nb[total] = '\0';
+  exp_set_text(s, nb, total);
+  free(nb);
+  exp_t *ret = refexp(s);
+  CLEAN_RETURN_2(s, ch, ret);
+}
+
+const char doc_stringcopy[] =
+    "(string-copy! dst i src) — copy src's codepoints into dst starting at "
+    "codepoint index i, clamped at dst's end (dst's length never grows). "
+    "Returns dst.";
+exp_t *stringcopycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(dst, idx, src);
+  if (!isstring(dst) || !isnumber(idx) || !isstring(src))
+    CLEAN_RETURN_3(dst, idx, src,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(string-copy! dst i src): expected string, integer, string"));
+  int64_t di = FIX_VAL(idx);
+  if (di < 0)
+    CLEAN_RETURN_3(dst, idx, src,
+                   error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                         "string-copy!: negative index"));
+  const char *d = exp_text(dst);
+  const char *s = exp_text(src);
+  int64_t dn = utf8_strlen(d);
+  int64_t sn = utf8_strlen(s);
+  if (di > dn)
+    di = dn;
+  int64_t ncopy = sn;
+  if (di + ncopy > dn) /* clamp at dst's end — never grow dst */
+    ncopy = dn - di;
+  if (ncopy <= 0) { /* nothing fits; leave dst unchanged */
+    exp_t *ret = refexp(dst);
+    CLEAN_RETURN_3(dst, idx, src, ret);
+  }
+  /* Rebuild dst = d[0..di) + src[0..ncopy) + d[di+ncopy..dn). Reads of d and s
+     finish before exp_set_text replaces dst's storage, so dst==src is safe. */
+  size_t pre_end = utf8_byte_offset(d, di);
+  size_t post_start = utf8_byte_offset(d, di + ncopy);
+  size_t dtotal = strlen(d);
+  size_t src_bytes = utf8_byte_offset(s, ncopy);
+  size_t newlen = pre_end + src_bytes + (dtotal - post_start);
+  char *nb = memalloc(newlen + 1, 1);
+  memcpy(nb, d, pre_end);
+  memcpy(nb + pre_end, s, src_bytes);
+  memcpy(nb + pre_end + src_bytes, d + post_start, dtotal - post_start);
+  nb[newlen] = '\0';
+  exp_set_text(dst, nb, newlen);
+  free(nb);
+  exp_t *ret = refexp(dst);
+  CLEAN_RETURN_3(dst, idx, src, ret);
 }
 
 const char doc_substr[] = "(substr s start end) — substring [start,end).";

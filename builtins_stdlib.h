@@ -2277,6 +2277,20 @@ exp_t *dylibsuffixcmd(exp_t *e, env_t *env) {
    synchronous .alc game loop to yield to the browser — JS-side
    setTimeout in an addFunction'd callback can't unwind the alcove
    eval frames behind it. */
+/* Monotonic millisecond clock — for frame pacing / elapsed-time measurement,
+   unaffected by NTP/DST steps (unlike (time), which is wall-clock µs). The
+   epoch is arbitrary; only differences are meaningful. */
+const char doc_nowms[] =
+    "(now-ms) — fixnum milliseconds from a monotonic clock (arbitrary epoch; "
+    "use differences). For wall-clock time use (time) (µs since Unix epoch).";
+exp_t *nowmscmd(exp_t *e, env_t *env) {
+  (void)e;
+  (void)env;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return make_integeri((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
 const char doc_sleepms[] = "(sleep-ms N) — sleep N milliseconds. On web, "
                            "yields to the browser via Asyncify.";
 exp_t *sleepmscmd(exp_t *e, env_t *env) {
