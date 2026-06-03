@@ -429,6 +429,7 @@ lispProc lispProcList[] = {
     LISPCMD("fmt", fmtcmd, doc_fmt),
     LISPCMD("substr", substrcmd, doc_substr),
     LISPCMD("string-append", stringappendcmd, doc_stringappend),
+    LISPCMD("string-concat", stringappendcmd, doc_stringappend),
     LISPCMD("string-split", stringsplitcmd, doc_stringsplit),
     LISPCMD("string-join", stringjoincmd, doc_stringjoin),
     LISPCMD("string-trim", stringtrimcmd, doc_stringtrim),
@@ -458,6 +459,9 @@ lispProc lispProcList[] = {
     LISPCMD("dir", dircmd, doc_dir),
     LISPCMD("time", timecmd, doc_time),
     LISPCMD("web?", webpcmd, doc_webp),
+    LISPCMD("platform", platformcmd, doc_platform),
+    LISPCMD("arch", archcmd, doc_arch),
+    LISPCMD("dylib-suffix", dylibsuffixcmd, doc_dylibsuffix),
     LISPCMD("sleep-ms", sleepmscmd, doc_sleepms),
     LISPCMD("exit", exitcmd, doc_exit),
     LISPCMD("quit", exitcmd, doc_exit),
@@ -3822,7 +3826,8 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_stringappend[] =
-    "(string-append s ...) — concatenate strings. Non-strings are errors.";
+    "(string-append s ...) / (string-concat s ...) — concatenate strings "
+    "(string-concat is an alias). Non-strings are errors.";
 exp_t *stringappendcmd(exp_t *e, env_t *env) {
   size_t cap = 64, len = 0;
   char *buf = memalloc(cap, 1);

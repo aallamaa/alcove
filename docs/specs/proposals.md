@@ -10,7 +10,30 @@ correctness issue separately. This document covers *capability gaps*.
 
 ---
 
+## Status at a glance (updated 2026-06-03)
+
+| Spec | Feature | Status |
+|------|---------|--------|
+| 6 | `try` / handler / `finally` | ✅ **shipped** (surface differs — see below) |
+| 7 | `,@` unquote-splicing | ✅ **shipped** |
+| 4 | `string-concat` / `string-append` | ✅ **shipped** (`format` ❌ not yet) |
+| 3 | `(platform)` / `(arch)` / `(dylib-suffix)` | ✅ **shipped** |
+| 2 | `sleep-ms` / timing | 🟡 **partial** — `sleep-ms` ✅; `now-ms`/`time-of-day` ❌ (covered by `(time)`) |
+| 5 | input-state pattern / `bit-and` | 🟡 **partial** — `bit-and` ✅ (doc-only proposal) |
+| 1 | `string-buf` & friends | ❌ **not shipped** |
+
+Per-spec details are inline below, each headed by a **Status:** line.
+
+---
+
 ## Spec 1 — `string-buf` / `string-set!` / `string-len` (mutable string buffers)
+
+**Status: ❌ not shipped.** None of `string-buf` / `string-set!` /
+`string-len` / `string-fill!` / `string-copy!` are bound. In-place
+mutation of an existing string by codepoint works today via
+`(= (s i) #\X)` (a *char*, not a fixnum — passing an int errors
+"number and char expected"). The fresh-buffer + bulk-copy surface is
+still the gap.
 
 **Motivation:** alcove has mutable strings already, but no portable way
 to *create* a fresh fixed-size buffer of a given length. Writing
@@ -58,6 +81,14 @@ arrays of tagged values — passing a string through `(ffi-fn ...
 
 ## Spec 2 — `now-ms` / `sleep-ms` / `time-of-day` builtins
 
+**Status: 🟡 partial.** `sleep-ms` ✅ shipped (web-aware: yields to the
+browser via Asyncify under WASM). `now-ms` and `time-of-day` ❌ not
+added — but `(time)` already returns wall-clock **µs** since the Unix
+epoch (`gettimeofday`), so `time-of-day` is just `(/ (time) 1000)` and
+most pacing needs are met. The only genuinely-missing piece is a
+*monotonic* clock (`now-ms` via `CLOCK_MONOTONIC`), unaffected by NTP/DST
+— worth adding if frame-accurate pacing ever matters.
+
 **Motivation:** every example so far reaches for `usleep` over libc
 FFI to pace frames. The Mario shim re-exposes `clock_gettime` as
 `gfx_now_ms`. Both are universal, OS-portable, and already wrapped by
@@ -97,6 +128,15 @@ question is the name (alcove uses kebab-case, so `now-ms` over
 
 ## Spec 3 — `(platform)` and `(arch)` queries
 
+**Status: ✅ shipped (2026-06-03).** `(platform)` → symbol
+`web | darwin | linux | freebsd | unknown`; `(arch)` → symbol
+`arm64 | amd64 | x86 | wasm | unknown`; `(dylib-suffix)` → string
+`".dylib"` (macOS) / `".wasm"` (web) / `".so"` (else). Values come from
+compile-time macros (`__APPLE__`, `__linux__`, `__aarch64__`,
+`__x86_64__`, `ALCOVE_WEB`, …). Implemented exactly as the spec sketched
+— see `platformcmd`/`archcmd`/`dylibsuffixcmd` in `builtins_stdlib.h`.
+The example below works verbatim.
+
 **Motivation:** the Mario Makefile has to switch on `uname -s` to
 choose between `.dylib` and `.so` for the shim, and the alcove side
 hard-codes `./libmariogfx.so` (relying on a Darwin symlink). A
@@ -134,6 +174,13 @@ ships.
 
 ## Spec 4 — `string-concat` / `string-append`
 
+**Status: ✅ shipped (`string-concat` aliased 2026-06-03).**
+`string-append` has long existed; `string-concat` is now registered as
+an alias of the same builtin (`stringappendcmd`), so both names work and
+the FFI-path example below runs verbatim. `format` (printer in
+return-rather-than-print mode) ❌ is **not** shipped — `pr`/`prn` still
+only write to stdout. `format` remains the open item in this spec.
+
 **Motivation:** `mario.alc` builds the FFI library path as a literal,
 hard-coded string. With Spec 3, the natural form is
 `(string-concat "./libmariogfx" (dylib-suffix))` — but alcove has no
@@ -170,6 +217,12 @@ in return-rather-than-print mode.
 
 ## Spec 5 — `(input-state)` and structured key polling
 
+**Status: 🟡 partial / mostly n/a.** This was a documentation-and-pattern
+proposal, not a runtime change. Its one prerequisite, `bit-and`, ✅
+exists (`(bit-and 6 3)` → `2`); no `band` alias was added and no
+recommended input pattern was written into `alcove-language.md`. Nothing
+blocking — revisit if/when another input-heavy example lands.
+
 **Motivation:** every shim that handles input ends up wrapping
 SDL_PollEvent and exposing one zero-arg getter per key
 (`gfx_left`, `gfx_right`, `gfx_jump`, ...). With more keys, this
@@ -203,6 +256,23 @@ runtime change.
 ---
 
 ## Spec 6 — `try` / `catch` for FFI failure isolation
+
+**Status: ✅ shipped — and exceeded — but the surface differs.** Landed
+as `(try body handler [finally])` where `handler` is a **function**
+applied to the error value, *not* the `(catch e …)` keyword form
+sketched below. It went further than proposed: it *adds* a `finally`
+clause (the spec said "no finally — keep it minimal"), is call/cc-safe,
+and survives deep tail recursion (heap handler stack, commit `8678db6`).
+Error accessors are `error?` (predicate) and `error-message` — not the
+proposed `errorp`/`err-code`/`err-msg`. There is no `throw`/`catch`
+keyword and no re-raise primitive (return the error value to propagate).
+Example of the *actual* surface:
+
+```lisp
+(try (/ 1 0)
+     (fn (e) (error-message e))     ; → "Illegal Division by 0"
+     (prn "cleanup always runs"))   ; optional finally
+```
 
 **Motivation:** if the user runs `mario.alc` without building the
 shim, `(ffi-fn "./libmariogfx.so" ...)` fails and brings down the
@@ -238,6 +308,10 @@ propagation. But a clear win for reusability.
 
 ## Spec 7 — `defmacro` `,@` (unquote-splicing)
 
+**Status: ✅ shipped.** Both the `,@xs` reader shorthand and the
+`(unquote-splicing xs)` long form work inside quasiquote:
+`` (= xs (list 2 3)) `(1 ,@xs 4) `` → `(1 2 3 4)`.
+
 **Motivation:** documented in `alcove-language.md` as missing.
 Variadic macros currently have to manually `cons` / `list` to splice
 arguments. Adding `,@` is a parser/macro-expander change without
@@ -269,15 +343,19 @@ in every Lisp.
 
 ## Priority ordering (from build experience)
 
-If only one or two were to land:
+The original ranking, now scored against what shipped:
 
-1. **Spec 6 (`try` / `catch`)** — highest leverage. Once games can
-   handle FFI errors, every other shim integration becomes safer.
-2. **Spec 2 (`now-ms` / `sleep-ms`)** — every game / animation
-   reinvents these. Trivial to ship.
-3. **Spec 3 (`platform` / `dylib-suffix`)** + **Spec 4
-   (`string-concat`)** together — they unblock truly portable FFI
-   path construction.
-4. **Spec 1 (`string-buf`)** and **Spec 5 (`input-state`
-   pattern)** — nice ergonomic wins; not blocking.
-5. **Spec 7 (`,@`)** — useful but rarely needed in early-day code.
+1. **Spec 6 (`try` + finally)** — ✅ done (highest leverage; shipped
+   beyond the original sketch).
+2. **Spec 2 (`sleep-ms`)** — ✅ `sleep-ms` done; monotonic `now-ms`
+   still open (low priority — `(time)` covers wall-clock).
+3. **Spec 3 (`platform` / `arch` / `dylib-suffix`)** + **Spec 4
+   (`string-concat`)** — ✅ both done; portable FFI-path construction is
+   now unblocked.
+4. **Spec 1 (`string-buf`)** and **Spec 5 (`input-state` pattern)** —
+   ⬜ still open; nice ergonomic wins, not blocking.
+5. **Spec 7 (`,@`)** — ✅ done.
+
+**Remaining open items:** `format` (Spec 4), `string-buf` family
+(Spec 1), monotonic `now-ms` (Spec 2), `band` alias + documented input
+pattern (Spec 5).

@@ -2213,6 +2213,63 @@ exp_t *webpcmd(exp_t *e, env_t *env) {
 #endif
 }
 
+/* Host-identity queries. Values come from compile-time macros, so they are
+   constant for the life of the binary (and stay correct under our per-machine
+   recompile-on-install model). platform/arch return symbols so a script reads
+   (is (platform) 'linux); dylib-suffix returns the shared-library extension as
+   a string, ready to splice into an FFI path. WASM reports as 'web. */
+const char doc_platform[] =
+    "(platform) — host OS as a symbol: web | darwin | linux | freebsd | unknown.";
+exp_t *platformcmd(exp_t *e, env_t *env) {
+  (void)e;
+  (void)env;
+#if defined(ALCOVE_WEB)
+  return make_symbol("web", 3);
+#elif defined(__APPLE__)
+  return make_symbol("darwin", 6);
+#elif defined(__linux__)
+  return make_symbol("linux", 5);
+#elif defined(__FreeBSD__)
+  return make_symbol("freebsd", 7);
+#else
+  return make_symbol("unknown", 7);
+#endif
+}
+
+const char doc_arch[] =
+    "(arch) — host CPU as a symbol: arm64 | amd64 | x86 | wasm | unknown.";
+exp_t *archcmd(exp_t *e, env_t *env) {
+  (void)e;
+  (void)env;
+#if defined(__wasm__) || defined(__wasm32__) || defined(__EMSCRIPTEN__)
+  return make_symbol("wasm", 4);
+#elif defined(__aarch64__) || defined(__arm64__)
+  return make_symbol("arm64", 5);
+#elif defined(__x86_64__)
+  return make_symbol("amd64", 5);
+#elif defined(__i386__)
+  return make_symbol("x86", 3);
+#else
+  return make_symbol("unknown", 7);
+#endif
+}
+
+const char doc_dylibsuffix[] =
+    "(dylib-suffix) — shared-library file extension for this host: "
+    "\".dylib\" on macOS, \".wasm\" on web, \".so\" elsewhere. Splice into an "
+    "FFI path: (string-concat \"./libfoo\" (dylib-suffix)).";
+exp_t *dylibsuffixcmd(exp_t *e, env_t *env) {
+  (void)e;
+  (void)env;
+#if defined(ALCOVE_WEB)
+  return make_string(".wasm", 5);
+#elif defined(__APPLE__)
+  return make_string(".dylib", 6);
+#else
+  return make_string(".so", 3);
+#endif
+}
+
 /* (sleep-ms N) — block the caller for N milliseconds, then return nil.
    On native, calls usleep(); on the WASM build, calls emscripten_sleep()
    which, with -sASYNCIFY=1, suspends the WASM stack so the browser can
