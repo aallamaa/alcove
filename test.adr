@@ -1981,6 +1981,33 @@ write-string "/tmp/alcove-test-loaderr.alc" "; a comment\n(unbound_xyz_var)\n"
 assert "load error has src:line" (string-index (error-message (load "/tmp/alcove-test-loaderr.alc")) "alcove-test-loaderr.alc:2:"):
   0
 
+write-string "/tmp/alcove-test-mod.alc" "(ns tmod)\n(def hi (n) (str \"hi:\" n))\n(def bye (n) (str \"bye:\" n))\n"
+
+assert "require returns t first time" (require "/tmp/alcove-test-mod.alc") t
+
+assert "require returns nil if loaded" (require "/tmp/alcove-test-mod.alc"):
+  nil
+
+assert "module def is namespace-qualified" (tmod/hi 5) "hi:5"
+
+assert-true "module bare name not global" (error? (try (hi 5) (fn (e) e)))
+
+require "/tmp/alcove-test-mod.alc" :refer
+
+assert "refer-all imports hi" (hi 7) "hi:7"
+
+assert "refer-all imports bye" (bye 8) "bye:8"
+
+write-string "/tmp/alcove-test-mod2.alc" "(ns tmod2)\n(def one (n) (+ n 1))\n(def two (n) (+ n 2))\n"
+
+require "/tmp/alcove-test-mod2.alc" :refer one
+
+assert "selective refer imports listed" (one 10) 11
+
+assert-true "selective refer omits others" (error? (try (two 10) (fn (e) e)))
+
+assert "selective: qualified still works" (tmod2/two 10) 12
+
 setf s1 (set 1 2 2 "a" :kw)
 
 assert "set? populated" (set? s1) t
@@ -5365,6 +5392,38 @@ assert "string-set! utf8 width change" (do (setf _s (string-buf 3)) (string-set!
 
 assert "string-set! utf8 keeps codepoint length" (do (setf _s (string-buf 3)) (string-set! _s 1 #\é) (length _s)):
   3
+
+ns nstest
+
+def nsfn (x):
+  * x 2
+
+defn nsmulti ((x) x) ((x y) (+ x y))
+
+defmacro nsmac (x):
+  list '+ x 1
+
+def nscount (n acc):
+  if (is n 0):
+    acc
+    nstest/nscount (- n 1) (+ acc 1)
+
+ns()
+
+assert "ns auto-prefix def" (nstest/nsfn 21) 42
+
+assert "ns auto-prefix defn multi" (nstest/nsmulti 3 4) 7
+
+assert "ns auto-prefix defmacro" (nstest/nsmac 9) 10
+
+assert "ns qualified self-call + TCO" (nstest/nscount 100000 0) 100000
+
+assert-true "ns bare name unbound after clear" (error? (try nsfn (fn (e) e)))
+
+assert "ns cleared: plain def not prefixed" (do (def nsplain () 5) (nsplain)):
+  5
+
+assert-true "ns explicit slash not double-qualified" (do (ns nstest) (def nstest/already () 1) (ns) (no (error? (try (nstest/already) (fn (e) e)))))
 
 
 # ====================================================================

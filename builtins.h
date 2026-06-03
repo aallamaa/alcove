@@ -101,7 +101,7 @@ extern const char doc_str[], doc_fmt[], doc_substr[], doc_stringappend[],
                   doc_stringupcase[], doc_stringdowncase[];
 extern const char doc_readstring[], doc_writestring[], doc_appendstring[],
                   doc_readlines[], doc_fileexistsp[], doc_writebytes[],
-                  doc_load[];
+                  doc_load[], doc_ns[], doc_require[];
 extern const char doc_persist[], doc_forget[], doc_unpersist[];
 extern const char doc_savedb[], doc_loaddb[];
 extern const char doc_ispersistent[];
@@ -218,6 +218,8 @@ exp_t *readlinescmd(exp_t *e, env_t *env);
 exp_t *fileexistspcmd(exp_t *e, env_t *env);
 exp_t *writebytescmd(exp_t *e, env_t *env);
 exp_t *loadcmd(exp_t *e, env_t *env);
+exp_t *nscmd(exp_t *e, env_t *env);
+exp_t *requirecmd(exp_t *e, env_t *env);
 exp_t *vecdotcmd(exp_t *e, env_t *env);
 exp_t *vecaxpycmd(exp_t *e, env_t *env);
 exp_t *vecscalecmd(exp_t *e, env_t *env);

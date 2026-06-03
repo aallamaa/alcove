@@ -452,6 +452,8 @@ lispProc lispProcList[] = {
     LISPCMD("file-exists?", fileexistspcmd, doc_fileexistsp),
     LISPCMD("write-bytes", writebytescmd, doc_writebytes),
     LISPCMD("load", loadcmd, doc_load),
+    LISPCMD("require", requirecmd, doc_require),
+    LISPCMD("ns", nscmd, doc_ns),
     /* Persistence */
     LISPCMD("persist", persistcmd, doc_persist),
     LISPCMD("forget", forgetcmd, doc_forget),
@@ -1488,6 +1490,37 @@ exp_t *load_exp_t(FILE *stream) {
    file's lines and resumes the outer file's afterwards. */
 static ALCOVE_TLS int g_reader_line = 1;
 static ALCOVE_TLS const char *g_reader_src = NULL;
+/* Module system (see requirecmd / nscmd):
+   g_reader_dir  — directory of the file currently being loaded, so `require`
+                   can resolve a sibling module relative to the requirer first.
+                   NULL for interactive/stdin. Saved/restored across nested loads.
+   g_current_ns  — the active namespace set by (ns name); while non-NULL the
+                   def* forms auto-qualify a GLOBAL binding's name to ns/name.
+                   Reset to NULL at the start of each loaded file (a file has no
+                   namespace until it declares one) and restored afterward. */
+static ALCOVE_TLS char *g_reader_dir = NULL;
+static ALCOVE_TLS char *g_current_ns = NULL;
+/* The namespace the most-recently-loaded file declared (its final (ns ...), or
+   NULL if none) — eval_file_forms stamps this just before restoring
+   g_current_ns, so `require` can read it after loading to drive :refer. */
+static ALCOVE_TLS char *g_last_module_ns = NULL;
+
+/* Binding name for a def* form: a freshly-malloc'd "<ns>/<bare>" when a
+   namespace is active AND this is a GLOBAL definition (root env) AND bare isn't
+   already qualified; otherwise `bare` itself, borrowed. Caller frees the result
+   IFF it differs from the bare pointer it passed in (i.e. only when actually
+   qualified). Restricting to the root env keeps defs nested in a let/function
+   during load un-namespaced (they're locals). With no (ns ...) active this
+   returns the borrowed name and allocates nothing, so the common definition
+   path is exactly as cheap as before and the test suites are unchanged. */
+static char *ns_qualify(const char *bare, env_t *env) {
+  if (g_current_ns && env && env->root == NULL && !strchr(bare, '/')) {
+    char *q = NULL;
+    if (asprintf(&q, "%s/%s", g_current_ns, bare) >= 0 && q)
+      return q;
+  }
+  return (char *)bare; /* borrowed — caller must NOT free (== input pointer) */
+}
 /* Start line of the top-level form currently being read/evaluated. A driver
    arms g_form_line_arm before calling reader(); reader() stamps g_form_line
    with g_reader_line at the first SIGNIFICANT byte of the form (after any
@@ -1998,6 +2031,10 @@ exp_t *defcmd(exp_t *e, env_t *env) {
       CHECK_RESERVED_BIND(header, val, "as a parameter",
                           { unrefexp(e); return val; });
       if (cur) {
+        /* (ns ...)-aware binding name: foo/<name> for a top-level def, else
+           plain. Used for the docstring key, the lambda self-name, and the
+           global binding so a qualified self-call still gets self-tail TCO. */
+        char *qname = ns_qualify(exp_text(name), env);
         /* Docstring: (def f (args) "..." body...) — a leading string that
            is FOLLOWED by more forms is documentation, not the body. A lone
            string body (def f () "hi") stays the return value. Stored by
@@ -2005,7 +2042,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         if (isstring(car(cur)) && cdr(cur)) {
           if (!user_doc)
             user_doc = create_dict();
-          set_get_keyval_dict(user_doc, (char *)exp_text(name), car(cur));
+          set_get_keyval_dict(user_doc, qname, car(cur));
           cur = cdr(cur);
         }
         /* Body is the remaining list; first form may be nil/literal/symbol
@@ -2029,7 +2066,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         }
         val->next = vali;
         val->type = EXP_LAMBDA;
-        val->meta = (keyval_t *)strdup(exp_text(name));
+        val->meta = (keyval_t *)strdup(qname);
         /* Closure: capture defining env (see fncmd for rationale). */
         if (env) {
           val->next->meta = (struct keyval_t *)ref_env(env);
@@ -2040,8 +2077,10 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         compile_lambda(val, env && env->root);
         if (!(env->d))
           env->d = create_dict();
-        set_get_keyval_dict(env->d, exp_text(name),
+        set_get_keyval_dict(env->d, qname,
                             val); /* return value (the kv) unused */
+        if (qname != exp_text(name)) /* ns_qualify allocated iff qualified */
+          free(qname);
         GEN_BUMP(); /* invalidate bytecode global-resolution caches */
       } else
         val =
@@ -2145,13 +2184,16 @@ exp_t *defncmd(exp_t *e, env_t *env) {
       clauses_head = clauses_tail = node;
   }
   /* Wrapper: an EXP_LAMBDA flagged multi; content holds the clause list. */
+  char *qname = ns_qualify(exp_text(name), env); /* (ns ...)-aware, see defcmd */
   val = make_node(clauses_head);
   val->type = EXP_LAMBDA;
   val->flags |= FLAG_MULTI;
-  val->meta = (struct keyval_t *)strdup(exp_text(name));
+  val->meta = (struct keyval_t *)strdup(qname);
   if (!(env->d))
     env->d = create_dict();
-  set_get_keyval_dict(env->d, exp_text(name), val);
+  set_get_keyval_dict(env->d, qname, val);
+  if (qname != exp_text(name)) /* ns_qualify allocated iff qualified */
+    free(qname);
   GEN_BUMP();
   unrefexp(e);
   return val;
@@ -2249,15 +2291,18 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
         val = make_node(refexp(header));
         val->next = vali;
         val->type = EXP_MACRO;
-        val->meta = (keyval_t *)strdup(exp_text(name));
+        char *qname = ns_qualify(exp_text(name), env); /* (ns ...)-aware */
+        val->meta = (keyval_t *)strdup(qname);
         if (env) {
           val->next->meta = (struct keyval_t *)ref_env(env);
           env->has_closure = 1;
         }
         if (!(env->d))
           env->d = create_dict();
-        set_get_keyval_dict(env->d, exp_text(name),
+        set_get_keyval_dict(env->d, qname,
                             val); /* return value (the kv) unused */
+        if (qname != exp_text(name)) /* ns_qualify allocated iff qualified */
+          free(qname);
         GEN_BUMP();
       }
 
@@ -4180,6 +4225,22 @@ static const char *src_basename(const char *path) {
   return slash ? slash + 1 : path;
 }
 
+/* Directory portion of path (everything before the last '/'), malloc'd; "."
+   when there is no slash. Caller frees. Used so `require` can resolve a module
+   relative to the file that required it. */
+static char *path_dirname(const char *path) {
+  const char *slash = strrchr(path, '/');
+  if (!slash)
+    return strdup(".");
+  size_t n = (size_t)(slash - path);
+  if (n == 0)
+    n = 1; /* "/foo" → dir "/" */
+  char *d = memalloc(n + 1, 1);
+  memcpy(d, path, n);
+  d[n] = '\0';
+  return d;
+}
+
 static exp_t *eval_file_forms(const char *path, env_t *env) {
   FILE *fp = fopen(path, "r");
   if (!fp)
@@ -4191,6 +4252,13 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
   int prev_line = g_reader_line;
   g_reader_src = src_basename(path);
   g_reader_line = 1;
+  /* Track this file's directory (for require's sibling-first search) and give
+     the file a fresh namespace slate — (ns ...) it declares stays local to it
+     and the outer file's namespace resumes afterward. */
+  char *prev_dir = g_reader_dir;
+  char *prev_ns = g_current_ns;
+  g_reader_dir = path_dirname(path);
+  g_current_ns = NULL;
   exp_t *result = TRUE_EXP;
   for (;;) {
     g_form_line = g_reader_line; /* fallback if no significant byte is read */
@@ -4220,6 +4288,14 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
 done:
   g_reader_src = prev_src;
   g_reader_line = prev_line;
+  free(g_reader_dir);
+  g_reader_dir = prev_dir;
+  /* Expose the namespace this file declared (if any) for require's :refer,
+     then restore the outer file's namespace. */
+  free(g_last_module_ns);
+  g_last_module_ns = g_current_ns ? strdup(g_current_ns) : NULL;
+  free(g_current_ns);
+  g_current_ns = prev_ns;
   return result;
 }
 
@@ -4338,6 +4414,238 @@ exp_t *loadcmd(exp_t *e, env_t *env) {
                                "load: path must be a string"));
   exp_t *ret = eval_file_forms((char *)exp_text(path), env);
   CLEAN_RETURN_1(path, ret);
+}
+
+const char doc_ns[] =
+    "(ns name) — set the current namespace. While active, top-level "
+    "def/defn/defc/defmacro auto-qualify their name to name/<symbol>; "
+    "reference them from elsewhere as name/symbol. Stays active until the next "
+    "(ns ...) or the end of the file being loaded. (ns) with no arg clears it.";
+exp_t *nscmd(exp_t *e, env_t *env) {
+  /* Like def, (ns) mutates global load state — refuse from a RESP callback. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
+  /* Name is taken literally (unevaluated), like def's name. (ns) clears. */
+  exp_t *arg = cadr(e);
+  if (arg && !issymbol(arg) && !isstring(arg)) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "ns: name must be a bare symbol (or string), or omitted");
+  }
+  free(g_current_ns);
+  g_current_ns = arg ? strdup(exp_text(arg)) : NULL;
+  unrefexp(e);
+  return TRUE_EXP;
+}
+
+/* require's load-once + cycle bookkeeping, keyed by canonical (realpath) path.
+   Plain globals, not TLS: module loading is a startup/main-thread activity and
+   is already refused from RESP callbacks (g_resp_cb_guard). g_loaded =
+   fully-loaded modules; g_loading = modules whose load is in progress (cycle
+   guard — a require that re-enters an in-flight module returns immediately). */
+static dict_t *g_loaded_modules = NULL;
+static dict_t *g_loading_modules = NULL;
+
+/* Write "<dir>/<name>" (or just "<name>" when dir is NULL) into out and return
+   1 if that file exists, else 0. The single snprintf+access check shared by all
+   of resolve_module_path's search branches. */
+static int module_file_at(char *out, const char *dir, const char *name) {
+  if (dir) {
+    if (snprintf(out, PATH_MAX, "%s/%s", dir, name) >= PATH_MAX)
+      return 0;
+  } else {
+    snprintf(out, PATH_MAX, "%s", name);
+  }
+  return access(out, F_OK) == 0;
+}
+
+/* Resolve a require spec to an existing file path. Appends ".alc" when the
+   spec has no ".alc" suffix. Search order: absolute → used as-is; else the
+   requiring file's directory (g_reader_dir), then each ':'-separated entry of
+   $ALCOVE_PATH, then cwd. Writes the first hit into out (size PATH_MAX) and
+   returns 1; returns 0 if nothing exists. */
+static int resolve_module_path(const char *spec, char *out) {
+  char name[PATH_MAX];
+  size_t sl = strlen(spec);
+  int has_suffix = (sl >= 4 && strcmp(spec + sl - 4, ".alc") == 0);
+  if (snprintf(name, sizeof(name), "%s%s", spec, has_suffix ? "" : ".alc") >=
+      (int)sizeof(name))
+    return 0;
+  if (name[0] == '/') /* absolute → used as-is, no search */
+    return module_file_at(out, NULL, name);
+  /* 1) relative to the requiring file's directory */
+  if (g_reader_dir && module_file_at(out, g_reader_dir, name))
+    return 1;
+  /* 2) each dir in $ALCOVE_PATH */
+  const char *ap = getenv("ALCOVE_PATH");
+  if (ap && *ap) {
+    const char *p = ap;
+    while (*p) {
+      const char *colon = strchr(p, ':');
+      size_t len = colon ? (size_t)(colon - p) : strlen(p);
+      if (len > 0 && len < PATH_MAX) {
+        char dir[PATH_MAX];
+        memcpy(dir, p, len);
+        dir[len] = '\0';
+        if (module_file_at(out, dir, name))
+          return 1;
+      }
+      if (!colon)
+        break;
+      p = colon + 1;
+    }
+  }
+  /* 3) cwd (the spec as given) */
+  return module_file_at(out, NULL, name);
+}
+
+/* Bind the unqualified <bare> in the global env to whatever <ns>/<bare> is
+   currently bound to, so callers can use the short name. Returns 1 if the
+   qualified name existed (and was aliased), 0 otherwise. */
+static int refer_one(const char *ns, const char *bare) {
+  if (!g_global_env || !g_global_env->d)
+    return 0;
+  char *q = NULL;
+  if (asprintf(&q, "%s/%s", ns, bare) < 0 || !q)
+    return 0;
+  keyval_t *kv = set_get_keyval_dict(g_global_env->d, q, NULL);
+  free(q);
+  if (!kv)
+    return 0;
+  /* set_get_keyval_dict refs the value itself + unrefs any prior binding. */
+  set_get_keyval_dict(g_global_env->d, (char *)bare, kv->val);
+  return 1;
+}
+
+/* Alias every <ns>/<name> binding to its unqualified <name>. Collects the hits
+   first, then binds — inserting into env->d can rehash it, so we must not
+   insert while walking it. Nested-namespace names (suffix still has a '/') are
+   left qualified. */
+static void refer_all(const char *ns) {
+  if (!g_global_env || !g_global_env->d)
+    return;
+  dict_t *dp = g_global_env->d;
+  size_t nslen = strlen(ns), n = 0;
+  /* A key is in namespace ns iff it starts with "ns/" and the rest is a single
+     unqualified segment (no further '/'). */
+#define REFER_MATCH(kk)                                                        \
+  (strncmp((kk), ns, nslen) == 0 && (kk)[nslen] == '/' && (kk)[nslen + 1] &&   \
+   !strchr((kk) + nslen + 1, '/'))
+  for (unsigned int i = 0; i < dp->ht[0].size; i++)
+    for (keyval_t *k = dp->ht[0].table[i]; k; k = k->next)
+      if (REFER_MATCH((const char *)k->key))
+        n++;
+  if (!n)
+    return;
+  char **names = memalloc(n, sizeof(char *));
+  exp_t **vals = memalloc(n, sizeof(exp_t *));
+  size_t j = 0;
+  for (unsigned int i = 0; i < dp->ht[0].size; i++)
+    for (keyval_t *k = dp->ht[0].table[i]; k; k = k->next) {
+      const char *key = (const char *)k->key;
+      if (REFER_MATCH(key)) {
+        names[j] = strdup(key + nslen + 1);
+        vals[j] = k->val;
+        j++;
+      }
+    }
+#undef REFER_MATCH
+  for (j = 0; j < n; j++) {
+    set_get_keyval_dict(dp, names[j], vals[j]);
+    free(names[j]);
+  }
+  free(names);
+  free(vals);
+  GEN_BUMP();
+}
+
+const char doc_require[] =
+    "(require \"path\") — load an Alcove module once. \".alc\" is appended if "
+    "absent; the file is searched relative to the requiring file, then "
+    "$ALCOVE_PATH, then cwd. Already-loaded (or mid-load, for cycles) modules "
+    "are not re-run. Returns t when it loaded the file, nil when already loaded. "
+    "(require \"path\" :refer) also binds every name the module's namespace "
+    "defines unqualified; (require \"path\" :refer a b) binds only a and b — so "
+    "you can call `parse` instead of `json/parse`.";
+exp_t *requirecmd(exp_t *e, env_t *env) {
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
+  EVAL_ARG_1(spec);
+  if (!isstring(spec))
+    CLEAN_RETURN_1(spec, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "require: argument must be a string"));
+  char found[PATH_MAX];
+  if (!resolve_module_path((char *)exp_text(spec), found))
+    CLEAN_RETURN_1(spec, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "require: module not found: '%s' (searched "
+                               "requiring dir, $ALCOVE_PATH, cwd)",
+                               (char *)exp_text(spec)));
+  /* Canonical path is the dedup key (so "a.alc" and "./a.alc" are one module). */
+  char canon[PATH_MAX];
+  if (!realpath(found, canon))
+    snprintf(canon, sizeof(canon), "%s", found); /* fall back to the found path */
+  if (!g_loaded_modules)
+    g_loaded_modules = create_dict();
+  if (!g_loading_modules)
+    g_loading_modules = create_dict();
+
+  /* Load (unless already loaded / mid-load), recording the module's declared
+     namespace so a later :refer works even when it was loaded earlier. The
+     g_loaded_modules value is the ns string, or TRUE_EXP for a ns-less module. */
+  const char *module_ns = NULL;
+  keyval_t *loaded = set_get_keyval_dict(g_loaded_modules, canon, NULL);
+  if (loaded) {
+    module_ns = isstring(loaded->val) ? exp_text(loaded->val) : NULL;
+  } else if (set_get_keyval_dict(g_loading_modules, canon, NULL)) {
+    CLEAN_RETURN_1(spec, NIL_EXP); /* cyclic: mid-load, names not all defined */
+  } else {
+    set_get_keyval_dict(g_loading_modules, canon, TRUE_EXP);
+    /* require always loads into the GLOBAL env, regardless of caller scope, so
+       a module's defs are top-level (and (ns ...)-qualifiable). */
+    exp_t *ret = eval_file_forms(found, g_global_env);
+    del_keyval_dict(g_loading_modules, canon);
+    if (iserror(ret))
+      CLEAN_RETURN_1(spec, ret); /* propagate; don't mark loaded */
+    unrefexp(ret);
+    /* Record the module's declared namespace (string), or TRUE_EXP if none, so
+       a later :refer on this already-loaded module still knows the prefix. */
+    exp_t *nsval = g_last_module_ns
+                       ? make_string(g_last_module_ns,
+                                     (int)strlen(g_last_module_ns))
+                       : TRUE_EXP;
+    set_get_keyval_dict(g_loaded_modules, canon, nsval); /* dict refs it */
+    if (nsval != TRUE_EXP)
+      unrefexp(nsval);
+    module_ns = g_last_module_ns; /* borrowed — stable for the rest of this call */
+  }
+
+  /* Optional :refer. `:refer` followed by no names (or only a keyword like
+     :all) imports EVERY name the module's namespace defines, unqualified;
+     otherwise each symbol following :refer is imported on its own. A ns-less
+     module's names are already global, so :refer is a no-op there. */
+  exp_t *kw = caddr(e);
+  if (module_ns && kw && issymbol(kw) &&
+      strcmp((char *)exp_text(kw), ":refer") == 0) {
+    int any = 0;
+    for (exp_t *n = e->next->next->next; n; n = n->next) {
+      if (!issymbol(n->content) || ((char *)exp_text(n->content))[0] == ':')
+        continue; /* skip a stray keyword like :all */
+      any = 1;
+      if (!refer_one(module_ns, (char *)exp_text(n->content)))
+        CLEAN_RETURN_1(spec, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                   "require :refer: %s/%s is not defined",
+                                   module_ns, (char *)exp_text(n->content)));
+    }
+    if (any)
+      GEN_BUMP();
+    else
+      refer_all(module_ns); /* :refer with no explicit names → import all */
+  }
+  CLEAN_RETURN_1(spec, loaded ? NIL_EXP : TRUE_EXP);
 }
 
 /* Forward decls needed by HOFs and alc_apply helpers below. */
@@ -10179,6 +10487,9 @@ int main(int argc, char *argv[]) {
       if (strcmp(argv[argc - 2], "-i") == 0)
         evaluatingfile |= 2;
       script_src = src_basename(argv[argc - 1]);
+      /* Let (require ...) at the top level of a script resolve modules
+         relative to the script's own directory first. */
+      g_reader_dir = path_dirname(argv[argc - 1]);
     } else {
       printf("Error opening %s\n", argv[argc - 1]);
       exit(1);

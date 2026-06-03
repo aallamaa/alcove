@@ -1,0 +1,7 @@
+# Custom languages — map to closest existing grammars for GitHub highlighting
+*.alc linguist-language=Scheme
+*.adr linguist-language=Scheme
+
+# Keep them out of the repo language stats bar (optional — remove if you want them counted)
+*.alc linguist-detectable=false
+*.adr linguist-detectable=false
