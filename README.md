@@ -62,30 +62,49 @@ Alcove, and Adder side by side:
 
 ### 1. JIT performance
 
-`make jit` builds with the native backend on by default. On the
-standard microbenchmarks alcove beats CPython 3.13 by **~6–700×** on
-the shapes the JIT recognizes (`fib`, `fact`, `tak`, `ackermann`,
-sieve-style tight loops, mlp tensor inner loops):
+`make jit` builds with the native backend on by default. The benchmark
+suite now runs each program three ways — **alcove, native C (`cc -O2`),
+and CPython 3.13** — so you can see both how far ahead of Python alcove
+is *and* how close to hand-written C it gets. On the shapes the JIT
+recognizes alcove lands **within ~1–3× of native C** (and matches or
+beats it on the JIT-friendly ones), while staying **~6–300× faster
+than CPython**:
 
-| benchmark      | alcove   | python3   | speedup            |
-|----------------|---------:|----------:|-------------------:|
-| `fib 33`       | `<0.1 ms`|  384.3 ms | **~700× alcove** ¹ |
-| `nqueens 10`   | `<0.1 ms`|   51.3 ms | **~700× alcove** ¹ |
-| `countdown`    |   2.6 ms |  471.6 ms |  **178× alcove**   |
-| `forsum 1e7`   |   2.3 ms |  192.4 ms |   85× alcove       |
-| `fact 19`      |   1.4 ms |   73.7 ms |   52× alcove       |
-| `tak 24 16 8`  |   1.5 ms |   76.7 ms |   51× alcove       |
-| `listsum`      |   0.8 ms |   20.3 ms |   27× alcove       |
-| `ackermann 3 9`|  33.7 ms |  545.9 ms |   16× alcove       |
-| `sieve-fast`   |   0.5 ms |    5.8 ms |   11× alcove       |
-| `mlp` (5 ep.)  | 528.0 ms | 3173.5 ms |  6.0× alcove ²     |
+| benchmark       |   alcove |  C (`-O2`) |   python3 |  alcove ÷ C |
+|-----------------|---------:|-----------:|----------:|------------:|
+| `fib 33`        |  1.14 ms |    6.21 ms |  340.4 ms |  <noise ¹   |
+| `nqueens 10`    |  1.41 ms |    3.59 ms |   92.0 ms |  <noise ¹   |
+| `nqueens-vec`   |  1.34 ms |    3.54 ms |  145.8 ms |  <noise ¹   |
+| `listsum`       |  3.71 ms |    3.26 ms |   37.0 ms | 1.1× faster |
+| `sieve`         |  5.18 ms |    4.10 ms |   73.5 ms | 1.1× slower |
+| `tak 24 16 8`   |  5.56 ms |    4.18 ms |   88.6 ms | 1.2× slower |
+| `forsum 1e7`    |  7.08 ms |    3.61 ms |  235.1 ms | 2.0× slower |
+| `ackermann 3 9` | 15.39 ms |    5.07 ms | 1403.5 ms | 3.3× slower |
+| `fact 19`       |  3.71 ms |    1.27 ms |   88.3 ms |  <noise ²   |
+| `countdown`     |  4.39 ms |    0.68 ms |  981.3 ms |  <noise ²   |
+| `sieve-fast`    |  2.15 ms |    0.97 ms |   22.5 ms |  <noise ²   |
+| `mlp` (5 ep.)   | 603.3 ms |    n/a ³   | 3392.0 ms |     —       |
 
-¹ Net of startup, fib & nqueens land in the noise floor — sub-100 µs
-of arithmetic after the JIT shape catches. Treat as "the JIT erased
-the work."
-² mlp is heavy float math through `vec-dot` / `vec-axpy!` / etc. The
-Python comparison is pure stdlib (no numpy) — matches the rest of
-the suite. Numbers from `make benchmark-jit`.
+Best-of-15 total wall-clock (mlp best-of-3), x86-64, `make benchmark`
+with a JIT build. Times include process startup (alcove ≈ 1.6 ms, C
+≈ 0.9 ms, python ≈ 12.6 ms); the `÷ C` ratio is computed from
+startup-adjusted *net* times. CPython trails C by **one to three orders
+of magnitude** across the table — read it off the `python3` column (e.g.
+`fib` 340 ms vs C's 6 ms ≈ 55×, `ackermann` 1403 ms vs 5 ms ≈ 280×).
+
+¹ `<noise`: the JIT compiles these shapes to native code so tight that
+the remaining arithmetic falls below the ~0.5 ms process-spawn floor, so
+the *net* ratio is unmeasurable — but the **absolute** column shows
+alcove finishing the whole program faster than C computes it alone
+(`fib` 1.1 ms vs 6.2 ms; `nqueens` 1.4 ms vs 3.6 ms). The JIT erased the
+work.
+² `<noise`: C itself runs these in well under a millisecond, so *its*
+net work is below the floor and no honest ratio can be formed against it.
+The absolute columns tell it: alcove ~3–4× C here, both far ahead of
+CPython.
+³ mlp is heavy float math through `vec-dot` / `vec-axpy!` / etc.; no C
+twin (stochastic SGD, different RNG). The Python comparison is pure
+stdlib (no numpy) — matches the rest of the suite.
 
 Reproduce with `make benchmark` (speed build) or `make benchmark-jit`
 (JIT + single-threaded refcount; the numbers above). The JIT works
