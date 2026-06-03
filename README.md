@@ -88,9 +88,10 @@ than CPython**:
 Best-of-15 total wall-clock (mlp best-of-3), x86-64, `make benchmark`
 with a JIT build. Times include process startup (alcove ≈ 1.6 ms, C
 ≈ 0.9 ms, python ≈ 12.6 ms); the `÷ C` ratio is computed from
-startup-adjusted *net* times. CPython trails C by **one to three orders
-of magnitude** across the table — read it off the `python3` column (e.g.
-`fib` 340 ms vs C's 6 ms ≈ 55×, `ackermann` 1403 ms vs 5 ms ≈ 280×).
+startup-adjusted *net* times. Against CPython, alcove is **~6–300×
+faster** across the table — compare the `alcove` and `python3` columns
+directly (`fib` 1.1 ms vs 340 ms ≈ 300×, `ackermann` 15 ms vs 1403 ms
+≈ 91×, `countdown` 4.4 ms vs 981 ms ≈ 223×).
 
 ¹ `<noise`: the JIT compiles these shapes to native code so tight that
 the remaining arithmetic falls below the ~0.5 ms process-spawn floor, so
@@ -100,8 +101,8 @@ alcove finishing the whole program faster than C computes it alone
 work.
 ² `<noise`: C itself runs these in well under a millisecond, so *its*
 net work is below the floor and no honest ratio can be formed against it.
-The absolute columns tell it: alcove ~3–4× C here, both far ahead of
-CPython.
+The absolute columns tell it: alcove is ~3–4× C here, and still
+~10–220× faster than CPython.
 ³ mlp is heavy float math through `vec-dot` / `vec-axpy!` / etc.; no C
 twin (stochastic SGD, different RNG). The Python comparison is pure
 stdlib (no numpy) — matches the rest of the suite.
