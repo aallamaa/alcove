@@ -13,12 +13,13 @@
           (if (is (- col (- row offset)) (vec-ref qs offset)) nil
               (if (is (+ col (- row offset)) (vec-ref qs offset)) nil
                   (safe? col qs row (+ offset 1)))))))
-(def try-cols (n row col qs count)
-  (if (>= col n) count
+; NB: `count` is a reserved builtin name, so the per-row accumulator is `cnt`.
+(def try-cols (n row col qs cnt)
+  (if (>= col n) cnt
       (if (safe? col qs row 0)
           (do (vec-set! qs row col)
-              (try-cols n row (+ col 1) qs (+ count (solve n (+ row 1) qs))))
-          (try-cols n row (+ col 1) qs count))))
+              (try-cols n row (+ col 1) qs (+ cnt (solve n (+ row 1) qs))))
+          (try-cols n row (+ col 1) qs cnt))))
 (def solve (n row qs)
   (if (>= row n) 1
       (try-cols n row 0 qs 0)))

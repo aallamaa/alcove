@@ -170,38 +170,52 @@ for prog in $STOCHASTIC;   do run_one "$prog" 3;  done
 # against the native-C baseline: alcove÷C and python÷C ( >1 = slower than
 # C, <1 = faster than C — e.g. a JIT'd shape that beats -O2 ).
 NOISE_FLOOR_US=500  # any net <500µs is dominated by startup variance
-echo "=== summary (net = best-of-N minus median startup; ratios vs native C) ==="
-printf "%-14s %12s %12s %12s %13s %13s\n" benchmark alcove C python "alcove/C" "python/C"
-printf -- '-%.0s' {1..80}; echo
+echo "=== summary (per-benchmark; C is the speed ceiling at equal work) ==="
+printf "%-14s %12s %12s %12s %16s %14s\n" benchmark alcove C python "alcove/C" "vs python"
+printf -- '-%.0s' {1..84}; echo
 for r in "${ROWS[@]}"; do
   set -- $r
   name=$1; a=$2; c=$3; p=$4
   net_a=$(( a - STARTUP_ALC )); [ "$net_a" -lt 0 ] && net_a=0
   net_p=$(( p - STARTUP_PY  )); [ "$net_p" -lt 0 ] && net_p=0
   a_str=$(format_ms "$a"); p_str=$(format_ms "$p")
-  if [ "$c" = "-" ]; then
-    c_str="n/a"; net_c=-1
+  if [ "$c" = "-" ]; then c_str="n/a"; net_c=-1; else net_c=$(( c - STARTUP_C )); [ "$net_c" -lt 0 ] && net_c=0; c_str=$(format_ms "$c"); fi
+  # Category (from the JIT-shape investigation — see the footnotes / README §1):
+  #   kernel = the JIT substitutes a hand-written native kernel running a BETTER
+  #            algorithm than the source/C twin, so "alcove faster" is doing
+  #            fewer ops, not faster ones — NOT like-for-like.
+  #   cfold  = cc -O2 constant-folds the fixed-argument inner call, so C
+  #            measures ~nothing; no honest ratio.
+  #   fair   = same algorithm both sides; C is the ceiling, ratio is meaningful.
+  case "$name" in
+    fib|nqueens|nqueens-vec|listsum) kind=kernel ;;
+    fact|countdown)                  kind=cfold  ;;
+    mlp)                             kind=none   ;;
+    *)                               kind=fair   ;;
+  esac
+  if [ "$kind" = kernel ]; then ac="JIT kernel †"
+  elif [ "$kind" = cfold ]; then ac="C folds ‡"
+  elif [ "$net_c" -lt 0 ]; then ac="n/a"
+  elif [ "$net_a" -lt "$NOISE_FLOOR_US" ] || [ "$net_c" -lt "$NOISE_FLOOR_US" ]; then
+    ac="~startup ‡"   # work below the spawn floor — read the absolute columns
   else
-    net_c=$(( c - STARTUP_C )); [ "$net_c" -lt 0 ] && net_c=0
-    c_str=$(format_ms "$c")
+    ac=$("$PYTHON" -c "r=$net_a/$net_c; print(f'{r:.2f}x slower' if r>=1 else f'{1/r:.2f}x faster')")
   fi
-  # ratio: net_x vs net_c against the native-C baseline. Both must clear the
-  # noise floor — sub-floor net work is below the process-spawn variance and
-  # cannot be turned into an honest multiple (read the absolute columns).
-  ratio() { # ratio <net_x>
-    local nx="$1"
-    if [ "$net_c" -lt 0 ]; then echo "n/a"; return; fi
-    if [ "$nx" -lt "$NOISE_FLOOR_US" ] || [ "$net_c" -lt "$NOISE_FLOOR_US" ]; then
-      echo "<noise"; return
-    fi
-    "$PYTHON" -c "
-r = $nx / $net_c
-print(f'{r:.2f}x slower' if r >= 1 else f'{1/r:.2f}x faster')"
-  }
-  printf "%-14s %12s %12s %12s %13s %13s\n" \
-    "$name" "$a_str" "$c_str" "$p_str" "$(ratio "$net_a")" "$(ratio "$net_p")"
+  # alcove vs python: robust raw-total ratio (alcove is always far ahead).
+  if [ "$name" = mlp ]; then vp=$("$PYTHON" -c "print(f'{$p/$a:.1f}x')"); else vp=$("$PYTHON" -c "print(f'{$p/$a:.0f}x')"); fi
+  printf "%-14s %12s %12s %12s %16s %14s\n" "$name" "$a_str" "$c_str" "$p_str" "$ac" "$vp"
 done
 echo ""
-echo "note: alcove/python times include interpreter startup (see startup row);"
-echo "      ratios use startup-adjusted net times. C is cc $CFLAGS_BENCH, ~0 startup."
-echo "      '<noise' = net work below the ${NOISE_FLOOR_US}us startup-variance floor."
+echo "note: best-of-15 total wall-clock (mlp best-of-3); times include process"
+echo "      startup (alcove $(format_ms "$STARTUP_ALC" | xargs), C $(format_ms "${STARTUP_C:-0}" | xargs), python $(format_ms "$STARTUP_PY" | xargs)). C is cc $CFLAGS_BENCH."
+echo "      'vs python' = python/alcove (alcove's favour). On FAIR rows alcove is"
+echo "      ~1-3x of -O2 C; C is the ceiling at equal work."
+echo ""
+echo "† NOT like-for-like — the JIT recognized the shape and ran a hand-written"
+echo "  native kernel with a BETTER algorithm (fewer ops, not faster ones):"
+echo "    fib           folds f(n)=f(n-1)+f(n-2) to an O(n) loop (recurse_add_two)"
+echo "    nqueens(-vec) bitmask O(1)-conflict solver (nq_count_bits) vs O(row) safe?"
+echo "    listsum       bump-arena cons alloc vs the C twin's malloc()/node"
+echo "  A C program using the same trick would match or beat alcove."
+echo "‡ C runs sub-millisecond here (cc -O2 constant-folds the fixed-arg call, or"
+echo "  the work is below the startup floor) — no honest ratio; read absolute cols."
