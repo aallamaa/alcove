@@ -22,14 +22,31 @@ wait_listening() {
   return 1
 }
 
-# wall-clock in microseconds since epoch. Use date rather than spawning
-# Python for the timer itself; the old millisecond timer quantized very
-# fast benchmarks into a 1 ms floor and distorted the startup-adjusted
-# speedup table.
+# wall-clock in microseconds since epoch.
+#
+# IMPORTANT: the per-iteration timers (best_of/median_of) do NOT call this —
+# they read bash's $EPOCHREALTIME directly into a variable, with no subshell
+# and no `date` fork. That matters: a `$(date)` / `$(now_us)` command
+# substitution forks a subshell (~0.6–2 ms here), which is LARGER than the
+# JIT'd micro-benchmarks themselves and was swamping their net work as noise.
+# now_us is kept only as a fallback for shells without $EPOCHREALTIME (bash<5)
+# and for other sourcing scripts.
 now_us() {
-  local ns
-  ns=$(date +%s%N)
-  echo $(( ns / 1000 ))
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    echo "${EPOCHREALTIME/./}"   # "S.UUUUUU" -> integer microseconds
+  else
+    local ns; ns=$(date +%s%N); echo $(( ns / 1000 ))
+  fi
+}
+
+# Read the current time in microseconds into the named variable, in-process
+# (no subshell/fork) when $EPOCHREALTIME is available. Usage: read_us s
+read_us() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    printf -v "$1" '%s' "${EPOCHREALTIME/./}"
+  else
+    local ns; ns=$(date +%s%N); printf -v "$1" '%s' "$(( ns / 1000 ))"
+  fi
 }
 
 format_ms() {
@@ -41,7 +58,7 @@ best_of() {
   local n="$1"; shift
   local best=999999999 s e t rc
   for _ in $(seq 1 "$n"); do
-    s=$(now_us); "$@" >/dev/null 2>&1; rc=$?; e=$(now_us)
+    read_us s; "$@" >/dev/null 2>&1; rc=$?; read_us e
     if [ "$rc" -ne 0 ]; then
       echo "benchmark command failed ($rc): $*" >&2
       return "$rc"
@@ -58,7 +75,7 @@ median_of() {
   local s e rc vals
   vals=$(mktemp)
   for _ in $(seq 1 "$n"); do
-    s=$(now_us); "$@" >/dev/null 2>&1; rc=$?; e=$(now_us)
+    read_us s; "$@" >/dev/null 2>&1; rc=$?; read_us e
     if [ "$rc" -ne 0 ]; then
       rm -f "$vals"
       echo "benchmark command failed ($rc): $*" >&2
