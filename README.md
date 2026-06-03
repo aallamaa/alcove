@@ -62,53 +62,71 @@ Alcove, and Adder side by side:
 
 ### 1. JIT performance
 
-`make jit` builds with the native backend on by default. The benchmark
-suite (`make benchmark`) runs each program three ways — **alcove, native
-C (`cc -O2`), and CPython 3.13**.
+`make benchmark` runs each program three ways — **alcove, the same
+program in C (compiled with `gcc -O2`), and CPython 3.13** — so you can
+see how alcove stacks up against both the fastest practical baseline (C)
+and the most common scripting language (Python).
 
-**The honest headline: C is the speed ceiling, and alcove does not beat
-it at equal work.** On like-for-like compute loops — where the JIT runs
-the *same* algorithm the C twin does — alcove lands **within ~1–3× of
-`-O2` C**, and **~20–300× ahead of CPython**. For a JIT'd dynamic Lisp
-that's the real, defensible result:
+Two honest takeaways:
 
-| benchmark       |   alcove |  C (`-O2`) |   python3 |  alcove ÷ C | vs python |
-|-----------------|---------:|-----------:|----------:|------------:|----------:|
-| `ackermann 3 9` | 13.5 ms  |    3.67 ms | 1314.0 ms | 3.7× slower |     97×   |
-| `tak 24 16 8`   |  3.79 ms |    3.06 ms |   77.1 ms | 1.2× slower |     20×   |
-| `sieve`         |  3.28 ms |    3.04 ms |   60.8 ms | 1.1× slower |     19×   |
-| `forsum 1e7`    |  ~7 ms   |    2.67 ms |  221.0 ms | ~2× slower  |     33×   |
+1. **alcove is *not* faster than C when both do the same work — C is the
+   fastest.** On the benchmarks where alcove and C run the identical
+   algorithm, alcove is about **1.3–3.4× slower than C**. For a dynamic
+   Lisp that's an excellent result.
+2. **alcove is roughly 10–300× faster than Python.**
 
-(Per-iteration, in-process timed. `forsum` is a bounds-checked vector
-loop; `fact`/`countdown`/`sieve-fast` are omitted from this table because
-`-O2` constant-folds their fixed-argument inner call, so the C side
-measures ~nothing — not a fair denominator.)
+Full results (one machine, x86-64; each cell is best-of-15 wall-clock
+including the time to launch the program):
 
-**Where the benchmark shows alcove "faster than C", it isn't out-running
-compiled code — the JIT recognized the shape and substituted a
-hand-written native kernel that does a *better algorithm* (fewer
-operations), not faster ones.** These are genuine JIT capabilities but
-are **not** like-for-like speed comparisons:
+| benchmark       |   alcove |  C (gcc -O2) |   python3 | alcove vs C    | alcove vs python |
+|-----------------|---------:|-------------:|----------:|----------------|-----------------:|
+| `ackermann 3 9` | 15.3 ms  |     5.34 ms  | 1328.8 ms | 3.4× slower    |       87× faster |
+| `tak 24 16 8`   |  5.91 ms |     3.90 ms  |   87.5 ms | 1.5× slower    |       15× faster |
+| `forsum 1e7`    |  7.19 ms |     4.00 ms  |  236.0 ms | 2.0× slower    |       33× faster |
+| `sieve`         |  5.15 ms |     4.03 ms  |   72.9 ms | 1.3× slower    |       14× faster |
+| `sieve-fast`    |  2.20 ms |     0.84 ms  |   21.8 ms | C under 1 ms ² |       10× faster |
+| `fact 19`       |  3.43 ms |     1.34 ms  |   88.1 ms | C precomputed ²|       26× faster |
+| `countdown`     |  4.81 ms |     0.69 ms  |  950.2 ms | C precomputed ²|      198× faster |
+| `listsum`       |  3.49 ms |     3.63 ms  |   35.5 ms | shortcut ¹     |       10× faster |
+| `nqueens 10`    |  1.66 ms |     3.94 ms  |   90.8 ms | shortcut ¹     |       55× faster |
+| `nqueens-vec`   |  2.24 ms |     4.07 ms  |  144.7 ms | shortcut ¹     |       65× faster |
+| `fib 33`        |  1.16 ms |     6.16 ms  |  343.7 ms | shortcut ¹     |      298× faster |
+| `mlp` (5 ep.)   |  588 ms  |     n/a   ³  | 3360.4 ms | —              |      5.7× faster |
 
-| shape            | the source / C twin does            | alcove's JIT runs instead                                   |
-|------------------|-------------------------------------|-------------------------------------------------------------|
-| `fib`            | O(φⁿ) tree recursion (~11 M calls)  | folds it to an **O(n) loop** (`try_jit_recurse_add_two`)    |
-| `nqueens(-vec)`  | O(row) `safe?` scan/node (1.3 M)    | a **bitmask O(1)-conflict solver** (`nq_count_bits`)        |
-| `listsum`        | build a cons list                   | bump-**arena** allocation vs the C twin's `malloc()`/node   |
+**¹ "shortcut" — alcove looks faster than C here, but it isn't running
+faster; it's doing *less work*.** When alcove's just-in-time compiler
+recognizes one of a few specific code patterns, it quietly swaps in a
+hand-tuned routine that reaches the same answer a smarter way. The plain
+C program does the work the long way:
 
-A C program written with the *same* trick (iterative `fib`, bitmask
-nqueens, an arena allocator) would match or beat alcove. Proof that
-`fib` is an algorithm change, not speed: `fib 42` takes 0.37 s in C and
-~0 ms in alcove — alcove never makes the ~700 M calls (a JIT'd build can
-fold it; the non-JIT `make benchmark` / `speed` build runs the real
-recursion and is, correctly, *slower* than C). Against CPython the gap
-is real throughout — compare the `alcove`/`python3` columns.
+- `fib` — the source computes Fibonacci with the slow doubling recursion
+  (~11 million calls for `fib 33`). alcove turns it into a simple
+  counting loop; C actually makes all the calls. (Tell-tale: `fib 42`
+  takes 0.37 s in C but ~0 ms in alcove — alcove never makes the ~700
+  million calls.)
+- `nqueens` — alcove checks queen conflicts with an instant bit-trick
+  instead of scanning the board each step.
+- `listsum` — alcove hands out memory from a fast internal pool; the C
+  version calls the slower system `malloc()` once per list cell.
 
-`mlp` (the §2 demo) has no C twin (stochastic SGD) and is ~6× faster than
-pure-stdlib CPython. Reproduce everything with `make benchmark` (or
-`make benchmark-jit`); the harness labels each kernel-substitution row.
-The JIT shape-matchers live in `alcove.c` / `jit_common.h` around
-`try_jit_*`.
+Write the C version using the *same* trick (a counting-loop `fib`, a
+bit-trick `nqueens`, a memory pool) and **C wins again.** So these rows
+show off what alcove's JIT does, not that the language outruns C.
+
+**² C does almost nothing here.** On `fact` and `countdown` the C
+compiler is clever enough to notice the answer is a fixed constant and
+work it out *while compiling*, so the run-time C program barely executes
+— there's nothing real to race against (the alcove and Python numbers
+are still meaningful). On `sieve-fast`, C simply finishes in well under
+a millisecond, which is too fast to compare reliably.
+
+**³** `mlp` (the §2 demo) has no C version (it trains a neural net with
+randomness, so the result differs run to run); it's ~5.7× faster than
+plain Python.
+
+Note on launch time: every number above includes starting the program —
+about **2 ms for alcove** and **13 ms for Python** — which is a large
+share of the very fast rows. Reproduce with `make benchmark`.
 
 ### 2. ML in Lisp — digit classifier in 130 lines
 
