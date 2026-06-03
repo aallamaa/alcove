@@ -1265,6 +1265,15 @@
 (assert "selective refer imports listed"   (one 10)         11)
 (assert-true "selective refer omits others" (error? (try (two 10) (fn (e) e))))
 (assert "selective: qualified still works"  (tmod2/two 10)   12)
+;; cross-dialect: require an Adder (.adr) module — it is transpiled on load, so
+;; this works from both the alcove and adder binaries (bare paren forms pass
+;; through the Adder front end unchanged).
+(write-string "/tmp/alcove-test-adrmod.adr"
+              "(ns amod)\n(def hey (n) (str \"hey:\" n))\n")
+(assert "require .adr module"           (do (require "/tmp/alcove-test-adrmod.adr")
+                                            (amod/hey 3))    "hey:3")
+(assert "require .adr :refer"           (do (require "/tmp/alcove-test-adrmod.adr" :refer)
+                                            (hey 4))         "hey:4")
 
 ;; ---------- hash sets ----------
 (= s1 (set 1 2 2 "a" :kw))

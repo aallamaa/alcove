@@ -2008,6 +2008,14 @@ assert-true "selective refer omits others" (error? (try (two 10) (fn (e) e)))
 
 assert "selective: qualified still works" (tmod2/two 10) 12
 
+write-string "/tmp/alcove-test-adrmod.adr" "(ns amod)\n(def hey (n) (str \"hey:\" n))\n"
+
+assert "require .adr module" (do (require "/tmp/alcove-test-adrmod.adr") (amod/hey 3)):
+  "hey:3"
+
+assert "require .adr :refer" (do (require "/tmp/alcove-test-adrmod.adr" :refer) (hey 4)):
+  "hey:4"
+
 setf s1 (set 1 2 2 "a" :kw)
 
 assert "set? populated" (set? s1) t

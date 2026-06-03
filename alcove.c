@@ -30,11 +30,15 @@
 #include <time.h> /* clock_gettime(CLOCK_MONOTONIC) for (now-ms) */
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
-#ifdef ALCOVE_ALS
 /* Adder front end: a string->string transpiler that turns the
-   whitespace/`:`-block surface syntax into ordinary alcove
-   s-expressions before they reach reader(). */
+   whitespace/`:`-block surface syntax into ordinary alcove s-expressions
+   before they reach reader(). Included UNCONDITIONALLY (not just in the adder
+   build) because (require)/(load) are dialect-aware by file extension — a .adr
+   module is transpiled via als_to_sexpr in BOTH the alcove and adder binaries,
+   so an .alc program can require a .adr one and vice versa. adr.h is
+   self-contained (its only ALCOVE_ALS* token is its own include guard). */
 #include "adr.h"
+#ifdef ALCOVE_ALS
 #define ALCOVE_PROGNAME "adder"
 #else
 #define ALCOVE_PROGNAME "alcove"
@@ -4246,11 +4250,39 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
   if (!fp)
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot open '%s'",
                  path);
+  /* Dialect by extension: a ".adr" file is Adder surface syntax — slurp it,
+     transpile to s-expressions via als_to_sexpr, and read the result from a
+     memstream. ".alc" (and anything else) is read directly as s-expressions.
+     This is what lets an .alc program (require) a .adr module and vice versa,
+     in either binary. `transpiled` backs the memstream and is freed at the end. */
+  char *transpiled = NULL;
+  size_t plen = strlen(path);
+  if (plen >= 4 && strcmp(path + plen - 4, ".adr") == 0) {
+    als_buf slurp;
+    als_buf_init(&slurp);
+    char chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof chunk, fp)) > 0)
+      als_buf_putn(&slurp, chunk, got);
+    fclose(fp);
+    transpiled = als_to_sexpr(slurp.p ? slurp.p : "");
+    free(slurp.p);
+    fp = transpiled ? fmemopen(transpiled, strlen(transpiled), "r") : NULL;
+    if (!fp) {
+      free(transpiled);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "require: failed to transpile Adder module '%s'", path);
+    }
+  }
   /* Save/restore the reader location so a nested (load …) reports the inner
-     file's lines and the outer file's count resumes afterwards. */
+     file's lines and the outer file's count resumes afterwards. For a
+     transpiled .adr module the reader counts lines in the GENERATED
+     s-expressions, which don't map back to the source — so drop the label
+     rather than print misleading "<file>:<line>:" (same call the main loop
+     makes for Adder input). */
   const char *prev_src = g_reader_src;
   int prev_line = g_reader_line;
-  g_reader_src = src_basename(path);
+  g_reader_src = transpiled ? NULL : src_basename(path);
   g_reader_line = 1;
   /* Track this file's directory (for require's sibling-first search) and give
      the file a fresh namespace slate — (ns ...) it declares stays local to it
@@ -4296,6 +4328,7 @@ done:
   g_last_module_ns = g_current_ns ? strdup(g_current_ns) : NULL;
   free(g_current_ns);
   g_current_ns = prev_ns;
+  free(transpiled); /* no-op when the file was read directly (.alc) */
   return result;
 }
 
@@ -4456,27 +4489,51 @@ static int module_file_at(char *out, const char *dir, const char *name) {
     if (snprintf(out, PATH_MAX, "%s/%s", dir, name) >= PATH_MAX)
       return 0;
   } else {
-    snprintf(out, PATH_MAX, "%s", name);
+    snprintf(out, PATH_MAX, "%.*s", (int)(PATH_MAX - 1), name);
   }
   return access(out, F_OK) == 0;
 }
 
-/* Resolve a require spec to an existing file path. Appends ".alc" when the
-   spec has no ".alc" suffix. Search order: absolute → used as-is; else the
+/* Try every candidate basename (cand[0..ncand)) under `dir` (NULL = as-is),
+   returning 1 and writing the first hit into out. Candidates are ordered by
+   preference (.alc before .adr), so a sibling .alc wins over a sibling .adr. */
+static int module_try_dir(char *out, const char *dir, char cand[][PATH_MAX],
+                          int ncand) {
+  for (int c = 0; c < ncand; c++)
+    if (module_file_at(out, dir, cand[c]))
+      return 1;
+  return 0;
+}
+
+/* Resolve a require spec to an existing file path. With an explicit ".alc" or
+   ".adr" suffix the spec is used verbatim; otherwise BOTH "<spec>.alc" and
+   "<spec>.adr" are tried (so a program can require either dialect by bare
+   name, .alc preferred). Search order: absolute → used as-is; else the
    requiring file's directory (g_reader_dir), then each ':'-separated entry of
    $ALCOVE_PATH, then cwd. Writes the first hit into out (size PATH_MAX) and
    returns 1; returns 0 if nothing exists. */
 static int resolve_module_path(const char *spec, char *out) {
-  char name[PATH_MAX];
   size_t sl = strlen(spec);
-  int has_suffix = (sl >= 4 && strcmp(spec + sl - 4, ".alc") == 0);
-  if (snprintf(name, sizeof(name), "%s%s", spec, has_suffix ? "" : ".alc") >=
-      (int)sizeof(name))
+  int explicit_ext = sl >= 4 && (strcmp(spec + sl - 4, ".alc") == 0 ||
+                                 strcmp(spec + sl - 4, ".adr") == 0);
+  char cand[2][PATH_MAX];
+  int ncand = 0;
+  /* Bound the spec with a precision so the ".alc"/".adr" suffix always fits —
+     a spec too long to hold a 4-char suffix + NUL simply won't resolve. */
+  if (sl >= PATH_MAX - 5)
     return 0;
-  if (name[0] == '/') /* absolute → used as-is, no search */
-    return module_file_at(out, NULL, name);
+  if (explicit_ext) {
+    snprintf(cand[0], PATH_MAX, "%s", spec);
+    ncand = 1;
+  } else {
+    snprintf(cand[0], PATH_MAX, "%.*s.alc", (int)(PATH_MAX - 5), spec);
+    snprintf(cand[1], PATH_MAX, "%.*s.adr", (int)(PATH_MAX - 5), spec);
+    ncand = 2;
+  }
+  if (cand[0][0] == '/') /* absolute → used as-is, no search */
+    return module_try_dir(out, NULL, cand, ncand);
   /* 1) relative to the requiring file's directory */
-  if (g_reader_dir && module_file_at(out, g_reader_dir, name))
+  if (g_reader_dir && module_try_dir(out, g_reader_dir, cand, ncand))
     return 1;
   /* 2) each dir in $ALCOVE_PATH */
   const char *ap = getenv("ALCOVE_PATH");
@@ -4489,7 +4546,7 @@ static int resolve_module_path(const char *spec, char *out) {
         char dir[PATH_MAX];
         memcpy(dir, p, len);
         dir[len] = '\0';
-        if (module_file_at(out, dir, name))
+        if (module_try_dir(out, dir, cand, ncand))
           return 1;
       }
       if (!colon)
@@ -4498,7 +4555,7 @@ static int resolve_module_path(const char *spec, char *out) {
     }
   }
   /* 3) cwd (the spec as given) */
-  return module_file_at(out, NULL, name);
+  return module_try_dir(out, NULL, cand, ncand);
 }
 
 /* Bind the unqualified <bare> in the global env to whatever <ns>/<bare> is
