@@ -450,7 +450,7 @@ static exp_t *load_callable(exp_t *e, FILE *stream, int compile) {
      body uses an unsupported form). The lambda still works either way.
      Persisted lambdas are top-level (no captured env survives a dump). */
   if (compile)
-    compile_lambda(e, 0);
+    compile_lambda(e, 0, NULL, TYPE_HINT_NONE); /* hints aren't persisted */
   return e;
 }
 

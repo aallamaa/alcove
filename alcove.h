@@ -480,6 +480,13 @@ typedef struct bytecode_t {
      borrowed string ptr from the i-th param symbol's ->ptr. */
   uint8_t nparams;
   char *param_keys[ENV_INLINE_SLOTS];
+  /* Optional type-annotation hints (TYPE_HINT_* codes; 0 = none), parallel to
+     param_keys; ret_hint is the declared return type. Recorded from def-time
+     annotations (def f (x :int) :f64 ...). Phase 2: the JIT reads these to emit
+     a guarded specialized fast-path for shapes it would otherwise reject — the
+     guard still deopts on a wrong hint, so they only ever affect speed. */
+  uint8_t param_hints[ENV_INLINE_SLOTS];
+  uint8_t ret_hint;
   /* Name of the function this bytecode belongs to (borrowed from
      fn->meta). NULL for anonymous lambdas. JIT shape matchers compare
      this against the callee symbol of recursive CALL_GLOBAL ops to
@@ -518,7 +525,18 @@ extern uint64_t alcove_global_gen;
 
 void bytecode_free(bytecode_t *bc);
 void disasm_bytecode(bytecode_t *bc); /* opcode-by-opcode dump for debugging */
-int compile_lambda(exp_t *fn, int is_closure); /* 1 on success, 0 on fallback */
+/* Optional type-annotation codes (JIT speculation hints). 0 = unannotated. */
+enum {
+  TYPE_HINT_NONE = 0,
+  TYPE_HINT_INT,     /* :int    — tagged fixnum */
+  TYPE_HINT_F64,     /* :f64    — double */
+  TYPE_HINT_VEC_F64, /* :vec-f64 */
+  TYPE_HINT_VEC_I64  /* :vec-i64 */
+};
+/* param_hints (ENV_INLINE_SLOTS TYPE_HINT_* codes, or NULL) + ret_hint are the
+   def-time type annotations, recorded into the bytecode for the JIT. */
+int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
+                   uint8_t ret_hint); /* 1 on success, 0 on fallback */
 exp_t *vm_run(exp_t *fn, struct env_t *env); /* runs bytecode; returns owned */
 #ifdef ALCOVE_JIT
 int jit_compile(bytecode_t *bc); /* 1 if JIT'd, 0 otherwise */

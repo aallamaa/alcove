@@ -1963,14 +1963,23 @@ static const char *reserved_param_name(exp_t *params) {
    keywords are a hard error at definition (catches typos). Phase 1 validates
    the hints and strips them so var2env / compile_lambda / arity see plain
    params and bodies; Phase 2 will record them for the JIT instead of discarding.
-   The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64, :vec-i64. */
-enum {
-  TYPE_HINT_NONE = 0,
-  TYPE_HINT_INT,
-  TYPE_HINT_F64,
-  TYPE_HINT_VEC_F64,
-  TYPE_HINT_VEC_I64
-};
+   The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64, :vec-i64.
+   The TYPE_HINT_* enum lives in alcove.h (used by bytecode_t / compile_lambda). */
+/* Name of a TYPE_HINT_* code, for disasm / introspection. */
+static const char *type_hint_name(int code) {
+  switch (code) {
+  case TYPE_HINT_INT:
+    return ":int";
+  case TYPE_HINT_F64:
+    return ":f64";
+  case TYPE_HINT_VEC_F64:
+    return ":vec-f64";
+  case TYPE_HINT_VEC_I64:
+    return ":vec-i64";
+  default:
+    return ":any";
+  }
+}
 /* Map a type-hint keyword's text to its code, or -1 if not a known type. */
 static int type_hint_code(const char *kw) {
   if (!strcmp(kw, ":int"))
@@ -2001,18 +2010,24 @@ static int params_have_hint(exp_t *params) {
 /* Validate the hints in `params` and return a fresh param list with them
    stripped. No hints → the list is returned unchanged (refexp'd), so the
    common case allocates nothing extra. On a bad hint (unknown type, or a
-   keyword not following a parameter) sets *errp and returns NULL. */
+   keyword not following a parameter) sets *errp and returns NULL. When
+   hints_out is non-NULL it is filled (zeroed first) with the per-parameter
+   TYPE_HINT_* code, indexed by the cleaned param position, for the JIT. */
 static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
-                                 exp_t **errp) {
+                                 exp_t **errp, uint8_t *hints_out) {
   *errp = NULL;
+  if (hints_out)
+    memset(hints_out, 0, ENV_INLINE_SLOTS);
   if (!params_have_hint(params))
     return refexp(params);
   exp_t *head = NULL, *tail = NULL;
   int prev_bindable = 0; /* did the previous kept node take a hint slot? */
+  int kept = -1;         /* index of the last kept param (for hints_out) */
   for (exp_t *p = params; p && p->content; p = p->next) {
     exp_t *c = p->content;
     if (is_keyword_exp(c)) {
-      if (type_hint_code((char *)exp_text(c)) < 0)
+      int code = type_hint_code((char *)exp_text(c));
+      if (code < 0)
         *errp = error(ERROR_ILLEGAL_VALUE, form, env,
                       "unknown type hint '%s' (expected :int :f64 :vec-f64 "
                       ":vec-i64)",
@@ -2026,6 +2041,8 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
           unrefexp(head);
         return NULL;
       }
+      if (hints_out && kept >= 0 && kept < ENV_INLINE_SLOTS)
+        hints_out[kept] = (uint8_t)code;
       prev_bindable = 0; /* at most one hint per parameter */
       continue;          /* strip the hint */
     }
@@ -2034,24 +2051,31 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
       tail = tail->next = node;
     else
       head = tail = node;
+    kept++;
     prev_bindable = 1;
   }
   return head ? head : refexp(NIL_EXP);
 }
 /* If `body` begins with a return-type keyword followed by more forms, validate
-   it and return the body with that keyword skipped; else return body unchanged.
-   On an unknown return-type keyword sets *errp and returns NULL. */
+   it and return the body with that keyword skipped (writing its TYPE_HINT_*
+   code to *ret_out); else return body unchanged with *ret_out = 0. On an
+   unknown return-type keyword sets *errp and returns NULL. */
 static exp_t *strip_return_hint(exp_t *body, exp_t *form, env_t *env,
-                                exp_t **errp) {
+                                exp_t **errp, uint8_t *ret_out) {
   *errp = NULL;
+  if (ret_out)
+    *ret_out = TYPE_HINT_NONE;
   if (body && is_keyword_exp(car(body)) && cdr(body)) {
-    if (type_hint_code((char *)exp_text(car(body))) < 0) {
+    int code = type_hint_code((char *)exp_text(car(body)));
+    if (code < 0) {
       *errp = error(ERROR_ILLEGAL_VALUE, form, env,
                     "unknown return-type hint '%s' (expected :int :f64 "
                     ":vec-f64 :vec-i64)",
                     (char *)exp_text(car(body)));
       return NULL;
     }
+    if (ret_out)
+      *ret_out = (uint8_t)code;
     return cdr(body); /* skip the return-type keyword */
   }
   return body;
@@ -2077,15 +2101,17 @@ exp_t *fncmd(exp_t *e, env_t *env) {
     CHECK_RESERVED_BIND(header, val, "as a parameter",
                         { unrefexp(e); return val; });
     if (cur) {
-      /* Type annotations (Phase 1): validate + strip param hints + an optional
-         return-type keyword, exactly as def does. */
+      /* Type annotations: validate + strip param hints + an optional
+         return-type keyword, exactly as def does; record them for the JIT. */
+      uint8_t phints[ENV_INLINE_SLOTS];
+      uint8_t rhint = TYPE_HINT_NONE;
       exp_t *herr = NULL;
-      exp_t *clean_params = build_clean_params(header, e, env, &herr);
+      exp_t *clean_params = build_clean_params(header, e, env, &herr, phints);
       if (herr) {
         unrefexp(e);
         return herr;
       }
-      cur = strip_return_hint(cur, e, env, &herr);
+      cur = strip_return_hint(cur, e, env, &herr, &rhint);
       if (herr) {
         unrefexp(clean_params);
         unrefexp(e);
@@ -2118,7 +2144,7 @@ exp_t *fncmd(exp_t *e, env_t *env) {
          scope, env->root != NULL) compile with no_gcache so free-var reads
          always re-resolve against the captured env (a closure that *mutates*
          a free var can't slot-resolve it and safely falls back to AST). */
-      compile_lambda(val, env && env->root);
+      compile_lambda(val, env && env->root, phints, rhint);
     } else
       val = error(EXP_ERROR_BODY_NOT_LIST, e, env, "Error body is not a list");
   } else
@@ -2152,16 +2178,18 @@ exp_t *defcmd(exp_t *e, env_t *env) {
       CHECK_RESERVED_BIND(header, val, "as a parameter",
                           { unrefexp(e); return val; });
       if (cur) {
-        /* Type annotations (Phase 1): validate + strip the param hints and an
-           optional return-type keyword. `clean_params` is owned; everything
-           downstream sees plain params/body. */
+        /* Type annotations: validate + strip the param hints and an optional
+           return-type keyword (recording them for the JIT). `clean_params` is
+           owned; everything downstream sees plain params/body. */
+        uint8_t phints[ENV_INLINE_SLOTS];
+        uint8_t rhint = TYPE_HINT_NONE;
         exp_t *herr = NULL;
-        exp_t *clean_params = build_clean_params(header, e, env, &herr);
+        exp_t *clean_params = build_clean_params(header, e, env, &herr, phints);
         if (herr) {
           unrefexp(e);
           return herr;
         }
-        cur = strip_return_hint(cur, e, env, &herr);
+        cur = strip_return_hint(cur, e, env, &herr, &rhint);
         if (herr) {
           unrefexp(clean_params);
           unrefexp(e);
@@ -2210,7 +2238,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         }
         /* Compile top-level defs and nested (closure) defs alike; closures
            get no_gcache (fresh free-var lookups against the captured env). */
-        compile_lambda(val, env && env->root);
+        compile_lambda(val, env && env->root, phints, rhint);
         if (!(env->d))
           env->d = create_dict();
         set_get_keyval_dict(env->d, qname,
@@ -2273,12 +2301,14 @@ exp_t *defncmd(exp_t *e, env_t *env) {
   for (exp_t *cl = cur; cl; cl = cl->next) {
     exp_t *clause = cl->content;
     exp_t *params_node = NULL, *body_node = NULL; /* each becomes an owned ref */
+    uint8_t phints[ENV_INLINE_SLOTS];
+    memset(phints, 0, sizeof phints);
     if (is_ptr(clause) && ispair(clause)) {
       exp_t *first = car(clause);
       if (is_ptr(first) && ispair(first)) {
-        /* explicit param list — validate/strip type hints (Phase 1) */
+        /* explicit param list — validate/strip type hints */
         exp_t *herr = NULL;
-        params_node = build_clean_params(first, e, env, &herr);
+        params_node = build_clean_params(first, e, env, &herr, phints);
         if (herr) {
           unrefexp(clauses_head);
           unrefexp(e);
@@ -2291,11 +2321,12 @@ exp_t *defncmd(exp_t *e, env_t *env) {
            the remainder is the body. A trailing keyword annotates (and is
            stripped from) the preceding param — same hints as the list form. */
         exp_t *ph = NIL_EXP, *pt = NULL, *p = clause;
-        int prev_bindable = 0;
+        int prev_bindable = 0, kept = -1;
         while (p && p->content && issymbol(p->content)) {
           if (is_keyword_exp(p->content)) {
             exp_t *herr = NULL;
-            if (type_hint_code((char *)exp_text(p->content)) < 0)
+            int code = type_hint_code((char *)exp_text(p->content));
+            if (code < 0)
               herr = error(ERROR_ILLEGAL_VALUE, e, env,
                            "unknown type hint '%s' (expected :int :f64 "
                            ":vec-f64 :vec-i64)",
@@ -2310,6 +2341,8 @@ exp_t *defncmd(exp_t *e, env_t *env) {
               unrefexp(e);
               return herr;
             }
+            if (kept >= 0 && kept < ENV_INLINE_SLOTS)
+              phints[kept] = (uint8_t)code;
             prev_bindable = 0;
             p = p->next;
             continue; /* strip the hint */
@@ -2319,6 +2352,7 @@ exp_t *defncmd(exp_t *e, env_t *env) {
             pt = pt->next = pn;
           else
             ph = pt = pn;
+          kept++;
           prev_bindable = 1;
           p = p->next;
         }
@@ -2342,7 +2376,7 @@ exp_t *defncmd(exp_t *e, env_t *env) {
     L->type = EXP_LAMBDA;
     if (env)
       L->next->meta = (struct keyval_t *)ref_env(env); /* closure capture */
-    compile_lambda(L, env && env->root);
+    compile_lambda(L, env && env->root, phints, TYPE_HINT_NONE);
     exp_t *node = make_node(L); /* owns L */
     if (clauses_tail)
       clauses_tail = clauses_tail->next = node;
@@ -5844,6 +5878,20 @@ void disasm_bytecode(bytecode_t *bc) {
     printf(", jit not installed");
 #endif
   printf("\x1B[39m\n");
+  /* Type annotations, if any were declared (def f (x :int) :f64 ...). */
+  int any_hint = bc->ret_hint != TYPE_HINT_NONE;
+  for (int i = 0; i < bc->nparams; i++)
+    if (bc->param_hints[i] != TYPE_HINT_NONE)
+      any_hint = 1;
+  if (any_hint) {
+    printf("\x1B[96mhints:");
+    for (int i = 0; i < bc->nparams; i++)
+      printf(" %s %s", bc->param_keys[i] ? bc->param_keys[i] : "?",
+             type_hint_name(bc->param_hints[i]));
+    if (bc->ret_hint != TYPE_HINT_NONE)
+      printf(" -> %s", type_hint_name(bc->ret_hint));
+    printf("\x1B[39m\n");
+  }
   int pc = 0;
   while (pc < bc->ncode) {
     int adv = bc_disasm_one(bc->code, pc);
@@ -7210,7 +7258,8 @@ static int body_capture_unsafe(exp_t *e) {
   return 0;
 }
 
-int compile_lambda(exp_t *fn, int is_closure) {
+int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
+                   uint8_t ret_hint) {
   if (!fn || !islambda(fn))
     return 0;
   if (fn->flags & FLAG_COMPILED)
@@ -7294,8 +7343,11 @@ int compile_lambda(exp_t *fn, int is_closure) {
      symbol ->ptr fields, kept alive by the lambda's ref on its
      header. */
   bc->nparams = (uint8_t)c.nparams;
-  for (int pi = 0; pi < c.nparams; pi++)
+  for (int pi = 0; pi < c.nparams; pi++) {
     bc->param_keys[pi] = c.slot_names[pi];
+    bc->param_hints[pi] = param_hints ? param_hints[pi] : TYPE_HINT_NONE;
+  }
+  bc->ret_hint = ret_hint;
   bc->self_name = (const char *)fn->meta; /* borrowed; NULL for anon */
   bc->no_gcache = (uint8_t)(is_closure != 0);
   fn->bc = bc;
