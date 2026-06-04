@@ -1504,6 +1504,11 @@ static ALCOVE_TLS const char *g_reader_src = NULL;
                    namespace until it declares one) and restored afterward. */
 static ALCOVE_TLS char *g_reader_dir = NULL;
 static ALCOVE_TLS char *g_current_ns = NULL;
+/* Set to 1 when a top-level form in a SCRIPT (a file argument or -e) fails to
+   parse or evaluate, so main() can exit non-zero — a runner/CI then detects the
+   failure instead of seeing the old always-0 status. The interactive REPL and
+   piped-stdin (REPL-mode) paths never set it: there you fix-and-continue. */
+static int g_script_error = 0;
 /* The namespace the most-recently-loaded file declared (its final (ns ...), or
    NULL if none) — eval_file_forms stamps this just before restoring
    g_current_ns, so `require` can read it after loading to drive :refer. */
@@ -10240,6 +10245,7 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     if (g_reader_src)
       annotate_error_loc(res, g_reader_src, g_form_line);
     fprintf(stderr, "%s\n", (const char *)res->ptr);
+    g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
   }
   if (res)
     unrefexp(res);
@@ -10929,6 +10935,7 @@ int main(int argc, char *argv[]) {
     if (iserror(stre) && g_reader_src) {
       annotate_error_loc(stre, g_reader_src, g_reader_line);
       fprintf(stderr, "%s\n", (const char *)stre->ptr);
+      g_script_error = 1; /* syntax error in a script → non-zero exit */
       unrefexp(stre);
       continue;
     }
@@ -10974,11 +10981,10 @@ endcleanly:
   if (nil_singleton) {
     nil_singleton = NULL;
   }
-#ifdef ALCOVE_ALS
-  /* main was renamed via #define, so the compiler no longer grants the
-     implicit `return 0` it special-cases for `main`. */
-  return 0;
-#endif
+  /* Exit non-zero if a script (file arg or -e) had a top-level parse/eval
+     error, so runners/CI can detect failure. Interactive / piped-stdin REPL
+     sessions never set g_script_error, so they still exit 0 on normal quit. */
+  return g_script_error;
 }
 #endif /* ALCOVE_NO_MAIN — a C embedder defines this to supply its own main */
 

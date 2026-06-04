@@ -287,7 +287,8 @@ test-all:
 	      "") echo "  CRASH / early exit — no TEST RESULT line"; ok=0;; \
 	      *) echo "  FAILURES — $$res"; ok=0;; \
 	    esac; \
-	    af=0; for i in 1 2 3 4; do "$$abin" --noload examples/adder/new-features.adr >/dev/null 2>&1 || af=1; done; \
+	    af=0; for i in 1 2 3 4; do "$$abin" --noload examples/adder/new-features.adr >/dev/null 2>&1; \
+	      rc=$$?; [ $$rc -ge 128 ] && af=1; done; \
 	    [ $$af -eq 0 ] || { echo "  CRASH in new-features.adr run"; ok=0; }; \
 	  else echo "  BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	done; \
