@@ -10230,12 +10230,15 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
       printf("nil");
     printf("\n\n");
     fflush(stdout); /* keep interactive (-R reactor / piped) output prompt */
-  } else if (res && iserror(res) && g_reader_src) {
-    /* Quiet (running a FILE): a top-level form errored. Errors were
-       previously swallowed here; surface it on stderr with the source
-       location, e.g. "foo.alc:42: Error unbound variable …". The form's
-       start line was captured in g_form_line before it was read. */
-    annotate_error_loc(res, g_reader_src, g_form_line);
+  } else if (res && iserror(res)) {
+    /* Quiet (running a FILE or -e): a top-level form errored. Surface it on
+       stderr — previously this was swallowed entirely unless a file source
+       label was set, so `alcove -e '(oops)'` failed SILENTLY with exit 0.
+       With a source label (file mode) prefix "<src>:<line>:" (the form's
+       start line, captured in g_form_line); -e / piped input has no label,
+       so print the bare message. */
+    if (g_reader_src)
+      annotate_error_loc(res, g_reader_src, g_form_line);
     fprintf(stderr, "%s\n", (const char *)res->ptr);
   }
   if (res)
