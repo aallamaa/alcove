@@ -1,0 +1,57 @@
+# Embedding Alcove in a C program
+
+Alcove is a single translation unit, so embedding it is just a `#include` —
+no library to link, no build system to integrate. Define `ALCOVE_NO_MAIN`
+(so Alcove's own `main()` is omitted), include `alcove.c`, and drive the
+engine through a small C API.
+
+```c
+#define ALCOVE_NO_MAIN
+#include "alcove.c"
+
+static exp_t *host_mul(exp_t *e, env_t *env) {        /* a C builtin */
+  return alcove_make_int(alcove_arg_int(e, env, 0) * alcove_arg_int(e, env, 1));
+}
+
+int main(void) {
+  alcove_init();                                 /* bring the engine up */
+  alcove_register_cmd("host-mul", host_mul, 0);  /* expose C to Alcove  */
+  exp_t *r = alcove_eval_string("(host-mul 6 7)");
+  printf("%lld\n", (long long)FIX_VAL(r));        /* 42 */
+  unrefexp(r);                                    /* own it → unref it   */
+}
+```
+
+Build & run (from the repo root):
+
+```sh
+make embed-example
+# or by hand:
+cc -I. -O2 -fno-strict-aliasing -o host examples/embed/host.c -lm
+```
+
+## The API
+
+| Function | Purpose |
+|----------|---------|
+| `env_t *alcove_init(void)` | Initialize the engine once; returns the global env (also `g_global_env`). |
+| `exp_t *alcove_eval_string(const char *src)` | Evaluate s-expressions; returns the last value as an **owned** ref, or an error value (test `iserror`). |
+| `int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware)` | Expose a C function `exp_t *(exp_t *e, env_t *env)` as an Alcove builtin. |
+| `alcove_arg_int / alcove_arg_string` | Inside a C builtin, pull the Nth (evaluated) argument as a C value. |
+| `make_integeri / make_floatf / make_string` | Build Alcove values from C. |
+| `isnumber/isfloat/isstring`, `FIX_VAL(e)`, `e->f`, `exp_text(e)` | Read Alcove values back into C. |
+| `refexp / unrefexp` | Refcount. **You own every `exp_t *` returned to you — `unrefexp` it once.** Tagged immediates (fixnums, chars, `nil`, `t`) need no unref. |
+
+## Notes
+
+- **One engine per process.** The runtime uses global singletons, so there is a
+  single interpreter instance (call `alcove_init` once). This matches the
+  embedding model; multiple independent states are not supported.
+- **Dialect.** `alcove_eval_string` reads Alcove s-expressions. To run Adder
+  (`.adr`) surface syntax, transpile first with `als_to_sexpr` (always
+  available) or use `require` on a `.adr` file.
+- **Errors never crash the host** — a failing form returns an error `exp_t`;
+  check `iserror` and read the message with `error-message` / `exp_text`.
+
+See [`host.c`](host.c) for a worked example covering callbacks, float/string
+results, error handling, and passing a C-built value into the engine.

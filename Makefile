@@ -300,10 +300,23 @@ test-all:
 	  else echo "  WASM SMOKE FAILED:"; sed 's/^/    /' "$$wbld" | tail -20; ok=0; fi; \
 	else printf '\n=== wasm/emcc smoke: skipped (need emcc + node) ===\n'; fi; \
 	rm -f "$$wbld"; \
+	printf '\n=== embedding example (examples/embed, C host #includes alcove.c) ===\n'; \
+	ebin=/tmp/alcove-embed.$$$$; \
+	if $(CC) $(SAFE_FLAGS) -O2 -I. -o "$$ebin" examples/embed/host.c -lm >"$$bld" 2>&1; then \
+	  if "$$ebin" | grep -q '(\* from-c 10) \[from-c=42\] => 420'; then \
+	    echo "  OK — embed host built and ran"; \
+	  else echo "  EMBED RAN WRONG:"; "$$ebin" | sed 's/^/    /'; ok=0; fi; \
+	else echo "  EMBED BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
+	rm -f "$$ebin"; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
 	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi
+# Embedding demo: a plain C host that #includes alcove.c with ALCOVE_NO_MAIN and
+# drives the engine via alcove_init / alcove_eval_string / alcove_register_cmd.
+embed-example:
+	$(CC) $(SAFE_FLAGS) -O2 $(MARCH) -I. -o examples/embed/host examples/embed/host.c -lm
+	@./examples/embed/host
 benchmark: speed
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.
@@ -520,4 +533,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

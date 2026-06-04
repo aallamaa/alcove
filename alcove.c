@@ -10507,22 +10507,22 @@ static void alcove_try_init_files(env_t *global) {
     printf(ALCOVE_PROGNAME ": loaded %s\n", path);
 }
 
-int main(int argc, char *argv[]) {
-  dict_t *dict = create_dict();
+/* alcove_init — bring the engine up: the per-type (de)serializers, the immortal
+   singletons (nil / t / *done*), and every builtin from lispProcList registered
+   into reserved_symbol. Returns the fresh global environment (also published as
+   g_global_env). Call exactly once before reader()/evaluate()/alcove_eval_string().
+   Shared by main() and by C embedders — a host does:
+       #define ALCOVE_NO_MAIN
+       #include "alcove.c"
+       env_t *g = alcove_init();
+       exp_t *r = alcove_eval_string("(+ 1 2)");  // owned; unrefexp when done
+   See examples/embed/ for a worked example. */
+env_t *alcove_init(void) {
   env_t *global = make_env(NULL);
   /* Publish the global env early so introspection builtins (source,
-     completion, etc.) can compare against it across all entry paths
-     (-e flag, file arg, stdin pipe), not just the interactive REPL. */
+     completion, etc.) can compare against it across all entry paths. */
   g_global_env = global;
-  FILE *stream;
-  int evaluatingfile = 0;
-  /* When running a FILE argument, the basename used to prefix file-context
-     error messages with "<src>:<line>:". NULL for stdin / -e / interactive. */
-  const char *script_src = NULL;
-  int idx = 0;
-  exp_t *t;
-  exp_t *nil;
-  exp_t *val;
+  exp_t *t, *nil, *val;
   exp_tfuncList[EXP_CHAR] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_CHAR]->load = load_char;
   exp_tfuncList[EXP_CHAR]->dump = dump_char;
@@ -10594,6 +10594,58 @@ int main(int argc, char *argv[]) {
                             lispProcList[i].flags & FLAG_TAIL_AWARE));
     unrefexp(val);
   }
+  (void)t;
+  (void)nil;
+  return global;
+}
+
+/* alcove_eval_string — read and evaluate every form in `src` (alcove
+   s-expressions), returning the LAST form's value as an OWNED reference (the
+   caller must unrefexp it when done), an error exp_t if a form fails to parse
+   or evaluate (test with iserror), or NIL_EXP for empty input. The engine must
+   already be up (alcove_init). Tagged immediates (fixnums, chars, nil, t) need
+   no unref; heap values do — unrefexp the result once, always. */
+exp_t *alcove_eval_string(const char *src) {
+  if (!src || !g_global_env)
+    return NIL_EXP;
+  FILE *stream = fmemopen((void *)src, strlen(src), "r");
+  if (!stream)
+    return NIL_EXP;
+  exp_t *last = NIL_EXP;
+  for (;;) {
+    exp_t *form = reader(stream, 0, 0);
+    if (iserror(form)) {
+      if (form->flags == EXP_ERROR_PARSING_EOF) {
+        unrefexp(form);
+        break;
+      }
+      unrefexp(last);
+      fclose(stream);
+      return form; /* parse error — caller checks iserror */
+    }
+    exp_t *r = evaluate(form, g_global_env);
+    if (r && iserror(r)) {
+      unrefexp(last);
+      fclose(stream);
+      return r; /* evaluation error */
+    }
+    unrefexp(last);
+    last = r ? r : NIL_EXP;
+  }
+  fclose(stream);
+  return last;
+}
+
+#ifndef ALCOVE_NO_MAIN
+int main(int argc, char *argv[]) {
+  dict_t *dict = create_dict();
+  env_t *global = alcove_init();
+  FILE *stream;
+  int evaluatingfile = 0;
+  /* When running a FILE argument, the basename used to prefix file-context
+     error messages with "<src>:<line>:". NULL for stdin / -e / interactive. */
+  const char *script_src = NULL;
+  int idx = 0;
 
 #ifdef ALCOVE_WEB
   /* Web build: init complete, hand control back to JS. The Emscripten
@@ -10603,8 +10655,6 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
   (void)dict;
-  (void)t;
-  (void)nil;
   (void)stream;
   (void)evaluatingfile;
   (void)idx;
@@ -10911,8 +10961,7 @@ endcleanly:
   free(exp_tfuncList[EXP_DICT]);
   free(exp_tfuncList[EXP_LIST]);
   free(exp_tfuncList[EXP_HAMT]);
-  unrefexp(t);
-  unrefexp(nil);
+  /* (t / nil were the immortal singletons — no unref needed; freed below.) */
   /* Immortal singletons. We can't free() the exp_t pointer itself
      anymore (it lives inside the bump-allocator chunk, not a separate
      malloc), but the strdup'd ptr field for the "t" symbol can be
@@ -10931,6 +10980,7 @@ endcleanly:
   return 0;
 #endif
 }
+#endif /* ALCOVE_NO_MAIN — a C embedder defines this to supply its own main */
 
 #ifdef ALCOVE_WEB
 /* Web entry point: invoked from JS after main() has initialised the

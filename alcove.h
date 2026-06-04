@@ -768,6 +768,13 @@ int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware);
 int         alcove_arg_int(exp_t *e, env_t *env, int n);
 const char *alcove_arg_string(exp_t *e, env_t *env, int n);
 exp_t      *alcove_make_int(int v);
+/* C embedding entry points (see the alcove_init comment in alcove.c and
+   examples/embed/). alcove_init() brings the engine up and returns the global
+   env; alcove_eval_string() evaluates s-expressions and returns the last value
+   as an owned ref (or an error exp_t — test iserror). Build a host by defining
+   ALCOVE_NO_MAIN before #include "alcove.c" so this TU's main() is omitted. */
+env_t *alcove_init(void);
+exp_t *alcove_eval_string(const char *src);
 exp_t *make_tree(exp_t *root, exp_t *node1);
 
 exp_t *make_string(char *str, int length);
