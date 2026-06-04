@@ -147,6 +147,18 @@ extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
 extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
                   doc_vecfill[], doc_vecrelu[], doc_vecargmax[], doc_vecmax[],
                   doc_veccopy[];
+extern const char doc_vecmul[], doc_vecsub[], doc_vecsum[], doc_vecmin[],
+                  doc_vecargmin[], doc_vecexp[], doc_vecsigmoid[],
+                  doc_vectanh[], doc_vecsoftmax[];
+exp_t *vecmulcmd(exp_t *e, env_t *env);
+exp_t *vecsubcmd(exp_t *e, env_t *env);
+exp_t *vecsumcmd(exp_t *e, env_t *env);
+exp_t *vecmincmd(exp_t *e, env_t *env);
+exp_t *vecargmincmd(exp_t *e, env_t *env);
+exp_t *vecexpcmd(exp_t *e, env_t *env);
+exp_t *vecsigmoidcmd(exp_t *e, env_t *env);
+exp_t *vectanhcmd(exp_t *e, env_t *env);
+exp_t *vecsoftmaxcmd(exp_t *e, env_t *env);
 extern const char doc_vector[];
 extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
 /* Redis keyspace bridge builtins. Defined below the `#include "resp.c"`

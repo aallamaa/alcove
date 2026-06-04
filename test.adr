@@ -3657,6 +3657,87 @@ vec-max vec-err
 
 assert "vec-max: recovers after non-numeric error" 42 42
 
+setf tm-a (vec 3 2.0)
+
+setf tm-b (vec 3 3.0)
+
+assert "vec-mul!: Hadamard" (do (vec-mul! tm-a tm-b) (vec->list tm-a)):
+  list 6.0 6.0 6.0
+
+setf ts-a (vec 3 5.0)
+
+setf ts-b (vec 3 2.0)
+
+assert "vec-sub!: elementwise" (do (vec-sub! ts-a ts-b) (vec->list ts-a)):
+  list 3.0 3.0 3.0
+
+assert "vec-mul!: returns target" (do (setf m1 (vec 2 4.0)) (is (vec-mul! m1 (vec 2 1.0)) m1)):
+  t
+
+assert "vec-sum: float" (vec-sum (vec 4 2.5)) 10.0
+
+assert "vec-sum: empty is 0" (vec-sum (vec 0 0)) 0.0
+
+setf mn-v (vec 3 0)
+
+vec-set! mn-v 0 3.0
+
+vec-set! mn-v 1 -1.0
+
+vec-set! mn-v 2 2.0
+
+assert "vec-min: smallest" (vec-min mn-v) -1.0
+
+assert "vec-argmin: index of min" (vec-argmin mn-v) 1
+
+setf mn2 (vec 4 0)
+
+vec-set! mn2 0 5
+
+vec-set! mn2 1 5
+
+vec-set! mn2 2 5
+
+vec-set! mn2 3 5
+
+assert "vec-argmin: ties favor lowest index" (vec-argmin mn2) 0
+
+assert "vec-tanh!(0) = 0" (do (setf t0 (vec 1 0.0)) (vec-tanh! t0) (vec-ref t0 0)):
+  0.0
+
+assert "vec-sigmoid!(0) = 0.5" (do (setf s0 (vec 1 0.0)) (vec-sigmoid! s0) (vec-ref s0 0)):
+  0.5
+
+assert "vec-exp!(0) = 1" (do (setf e0 (vec 1 0.0)) (vec-exp! e0) (vec-ref e0 0)):
+  1.0
+
+setf sm (vec 3 0)
+
+vec-set! sm 0 1.0
+
+vec-set! sm 1 2.0
+
+vec-set! sm 2 3.0
+
+vec-softmax! sm
+
+assert-true "vec-softmax!: sums to ~1" (< (abs (- (vec-sum sm) 1.0)) 0.0000001)
+
+assert-true "vec-softmax!: order preserved" (< (vec-ref sm 0) (vec-ref sm 2))
+
+assert-true "vec-softmax!: stable on large inputs (no overflow)" (do (setf big (vec 2 0)) (vec-set! big 0 1000.0) (vec-set! big 1 1001.0) (vec-softmax! big) (< (abs (- (vec-sum big) 1.0)) 0.0000001))
+
+assert "vec-mul!: promotes int vec" (do (setf iv (vec 3 2)) (vec-mul! iv (vec 3 3)) (vec-ref iv 0)):
+  6.0
+
+vec-mul! 'not-a-vec 'x
+
+assert "vec-mul!: recovers after type error" 42 42
+
+vec-sum 'not-a-vec
+
+assert "vec-sum: recovers after type error" 42 42
+
 vec-len 'not-a-vec
 
 assert "vec-len: recovers after type error" 42 42

@@ -824,6 +824,280 @@ exp_t *vecmaxcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(vexp, make_floatf((expfloat)m));
 }
 
+/* ---------- numeric / NN tensor ops ----------
+   Elementwise in-place (mul!/sub!), elementwise activations (exp!/sigmoid!/
+   tanh!/softmax!), and reductions (sum/min/argmin). Each takes the F64
+   fast-path (raw double loop, SIMD-vectorised where there's no transcendental
+   call or loop-carried dependency) and a generic vec_read_double/write_double
+   fallback for I64/GEN vectors. The in-place ops promote the target to F64 via
+   VEC_REQUIRE_FLOAT_WRITABLE; vec-min mirrors vec-max, vec-argmin vec-argmax. */
+
+const char doc_vecmul[] = "(vec-mul! y x) — in place y[i] *= x[i] (Hadamard "
+                          "product). Returns y.";
+exp_t *vecmulcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(yexp, xexp);
+  if (!isvector(yexp) || !isvector(xexp))
+    CLEAN_RETURN_2(yexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-mul! y x): both must be vectors"));
+  int64_t ny = vec_len(yexp);
+  if (ny != vec_len(xexp))
+    CLEAN_RETURN_2(
+        yexp, xexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "vec-mul!: length mismatch"));
+  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-mul!",
+                             CLEAN_RETURN_2(yexp, xexp, _alc_e));
+  int err = 0;
+  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
+    double *ycells = VEC_F64_CELLS(yexp);
+    double *xcells = VEC_F64_CELLS(xexp);
+    VEC_SIMD
+    for (int64_t i = 0; i < ny; i++)
+      ycells[i] *= xcells[i];
+  } else {
+    for (int64_t i = 0; i < ny; i++) {
+      double yv = vec_read_double(yexp, i, &err);
+      double xv = vec_read_double(xexp, i, &err);
+      if (err)
+        break;
+      vec_write_double(yexp, i, yv * xv);
+    }
+  }
+  if (err)
+    CLEAN_RETURN_2(yexp, xexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                                     "vec-mul!: non-numeric element"));
+  exp_t *ret = refexp(yexp);
+  CLEAN_RETURN_2(yexp, xexp, ret);
+}
+
+const char doc_vecsub[] = "(vec-sub! y x) — in place y[i] -= x[i]. Returns y.";
+exp_t *vecsubcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(yexp, xexp);
+  if (!isvector(yexp) || !isvector(xexp))
+    CLEAN_RETURN_2(yexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-sub! y x): both must be vectors"));
+  int64_t ny = vec_len(yexp);
+  if (ny != vec_len(xexp))
+    CLEAN_RETURN_2(
+        yexp, xexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "vec-sub!: length mismatch"));
+  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-sub!",
+                             CLEAN_RETURN_2(yexp, xexp, _alc_e));
+  int err = 0;
+  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
+    double *ycells = VEC_F64_CELLS(yexp);
+    double *xcells = VEC_F64_CELLS(xexp);
+    VEC_SIMD
+    for (int64_t i = 0; i < ny; i++)
+      ycells[i] -= xcells[i];
+  } else {
+    for (int64_t i = 0; i < ny; i++) {
+      double yv = vec_read_double(yexp, i, &err);
+      double xv = vec_read_double(xexp, i, &err);
+      if (err)
+        break;
+      vec_write_double(yexp, i, yv - xv);
+    }
+  }
+  if (err)
+    CLEAN_RETURN_2(yexp, xexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                                     "vec-sub!: non-numeric element"));
+  exp_t *ret = refexp(yexp);
+  CLEAN_RETURN_2(yexp, xexp, ret);
+}
+
+const char doc_vecsum[] =
+    "(vec-sum v) — sum of all elements, as a float. Empty vec -> 0.";
+exp_t *vecsumcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(
+        vexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-sum v): not a vector"));
+  int err = 0;
+  double s = 0.0;
+  int64_t n = vec_len(vexp);
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells = VEC_F64_CELLS(vexp);
+    for (int64_t i = 0; i < n; i++)
+      s += cells[i];
+  } else {
+    for (int64_t i = 0; i < n; i++) {
+      s += vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+    }
+  }
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-sum: non-numeric element"));
+  CLEAN_RETURN_1(vexp, make_floatf((expfloat)s));
+}
+
+const char doc_vecmin[] =
+    "(vec-min v) — smallest element as a float. Empty vec is an error.";
+exp_t *vecmincmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(
+        vexp, error(ERROR_ILLEGAL_VALUE, e, env, "(vec-min v): not a vector"));
+  int64_t n = vec_len(vexp);
+  if (n == 0)
+    CLEAN_RETURN_1(vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "vec-min: empty vector"));
+  int err = 0;
+  double m;
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells = VEC_F64_CELLS(vexp);
+    m = cells[0];
+    for (int64_t i = 1; i < n; i++)
+      if (cells[i] < m)
+        m = cells[i];
+  } else {
+    m = vec_read_double(vexp, 0, &err);
+    for (int64_t i = 1; i < n; i++) {
+      double x = vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+      if (x < m)
+        m = x;
+    }
+  }
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-min: non-numeric element"));
+  CLEAN_RETURN_1(vexp, make_floatf((expfloat)m));
+}
+
+const char doc_vecargmin[] =
+    "(vec-argmin v) — index of the smallest element. Empty vec -> -1.";
+exp_t *vecargmincmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
+                               "(vec-argmin v): not a vector"));
+  int64_t best = -1;
+  double bestv = 0.0;
+  int err = 0;
+  int64_t n = vec_len(vexp);
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells = VEC_F64_CELLS(vexp);
+    for (int64_t i = 0; i < n; i++)
+      if (best < 0 || cells[i] < bestv) {
+        best = i;
+        bestv = cells[i];
+      }
+  } else {
+    for (int64_t i = 0; i < n; i++) {
+      double x = vec_read_double(vexp, i, &err);
+      if (err)
+        break;
+      if (best < 0 || x < bestv) {
+        best = i;
+        bestv = x;
+      }
+    }
+  }
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-argmin: non-numeric element"));
+  CLEAN_RETURN_1(vexp, MAKE_FIX(best));
+}
+
+/* In-place elementwise activation: apply `fn` to every element. Promotes to
+   F64. `name` is for the error message. Shared by exp!/sigmoid!/tanh!. */
+#define VEC_ACTIVATION(cmdname, docname, fnexpr)                               \
+  exp_t *cmdname(exp_t *e, env_t *env) {                                       \
+    EVAL_ARG_1(vexp);                                                          \
+    if (!isvector(vexp))                                                       \
+      CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,                  \
+                                 "(" docname " v): not a vector"));            \
+    VEC_REQUIRE_FLOAT_WRITABLE(vexp, docname, CLEAN_RETURN_1(vexp, _alc_e));   \
+    int err = 0;                                                              \
+    int64_t n = vec_len(vexp);                                                \
+    if (vec_kind(vexp) == VEC_KIND_F64) {                                     \
+      double *cells = VEC_F64_CELLS(vexp);                                    \
+      for (int64_t i = 0; i < n; i++) {                                       \
+        double x = cells[i];                                                  \
+        cells[i] = (fnexpr);                                                  \
+      }                                                                       \
+    } else {                                                                  \
+      for (int64_t i = 0; i < n; i++) {                                       \
+        double x = vec_read_double(vexp, i, &err);                            \
+        if (err)                                                              \
+          break;                                                             \
+        vec_write_double(vexp, i, (fnexpr));                                  \
+      }                                                                       \
+    }                                                                         \
+    if (err)                                                                  \
+      CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,               \
+                                 docname ": non-numeric element"));           \
+    exp_t *ret = refexp(vexp);                                                \
+    CLEAN_RETURN_1(vexp, ret);                                                \
+  }
+const char doc_vecexp[] = "(vec-exp! v) — in place v[i] = exp(v[i]). Returns v.";
+VEC_ACTIVATION(vecexpcmd, "vec-exp!", exp(x))
+const char doc_vecsigmoid[] =
+    "(vec-sigmoid! v) — in place v[i] = 1/(1+exp(-v[i])). Returns v.";
+VEC_ACTIVATION(vecsigmoidcmd, "vec-sigmoid!", 1.0 / (1.0 + exp(-x)))
+const char doc_vectanh[] =
+    "(vec-tanh! v) — in place v[i] = tanh(v[i]). Returns v.";
+VEC_ACTIVATION(vectanhcmd, "vec-tanh!", tanh(x))
+
+const char doc_vecsoftmax[] =
+    "(vec-softmax! v) — in place numerically-stable softmax: v[i] = "
+    "exp(v[i]-max)/sum. Returns v.";
+exp_t *vecsoftmaxcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(vexp);
+  if (!isvector(vexp))
+    CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
+                               "(vec-softmax! v): not a vector"));
+  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-softmax!", CLEAN_RETURN_1(vexp, _alc_e));
+  int64_t n = vec_len(vexp);
+  if (n == 0) { /* softmax of nothing is a no-op */
+    exp_t *ret = refexp(vexp);
+    CLEAN_RETURN_1(vexp, ret);
+  }
+  int err = 0;
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells = VEC_F64_CELLS(vexp);
+    double m = cells[0];
+    for (int64_t i = 1; i < n; i++)
+      if (cells[i] > m)
+        m = cells[i];
+    double s = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+      cells[i] = exp(cells[i] - m);
+      s += cells[i];
+    }
+    double inv = s > 0.0 ? 1.0 / s : 0.0;
+    VEC_SIMD
+    for (int64_t i = 0; i < n; i++)
+      cells[i] *= inv;
+  } else {
+    double m = vec_read_double(vexp, 0, &err);
+    for (int64_t i = 1; i < n && !err; i++) {
+      double x = vec_read_double(vexp, i, &err);
+      if (x > m)
+        m = x;
+    }
+    double s = 0.0;
+    for (int64_t i = 0; i < n && !err; i++) {
+      double x = exp(vec_read_double(vexp, i, &err) - m);
+      vec_write_double(vexp, i, x);
+      s += x;
+    }
+    double inv = s > 0.0 ? 1.0 / s : 0.0;
+    for (int64_t i = 0; i < n && !err; i++)
+      vec_write_double(vexp, i, vec_read_double(vexp, i, &err) * inv);
+  }
+  if (err)
+    CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                               "vec-softmax!: non-numeric element"));
+  exp_t *ret = refexp(vexp);
+  CLEAN_RETURN_1(vexp, ret);
+}
+
 /* ---------- deque ops ----------
    vec-push! / vec-pop! at the back; vec-unshift! / vec-shift! at the
    front. Amortised O(1) via the cap/start/end window — pops bump the
