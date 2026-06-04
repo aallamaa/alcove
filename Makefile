@@ -30,6 +30,9 @@ endif
 
 # Detect platform → choose the right install command in dependency hints.
 UNAME_S      := $(shell uname -s)
+# Shared-library extension for native modules: .dylib on macOS, .so elsewhere
+# (matches the (dylib-suffix) builtin and require's explicit-extension handling).
+NATIVE_EXT   := $(if $(filter Darwin,$(UNAME_S)),dylib,so)
 ifeq ($(UNAME_S),Darwin)
   PKG_RL     := brew install readline
   PKG_FFI    := brew install libffi
@@ -303,21 +306,26 @@ test-all:
 	rm -f "$$wbld"; \
 	printf '\n=== embedding example (examples/embed, C host #includes alcove.c) ===\n'; \
 	ebin=/tmp/alcove-embed.$$$$; \
-	if $(CC) $(SAFE_FLAGS) -O2 -I. -o "$$ebin" examples/embed/host.c -lm >"$$bld" 2>&1; then \
+	if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) -I. -o "$$ebin" examples/embed/host.c -lm >"$$bld" 2>&1; then \
 	  if "$$ebin" | grep -q '(\* from-c 10) \[from-c=42\] => 420'; then \
 	    echo "  OK — embed host built and ran"; \
 	  else echo "  EMBED RAN WRONG:"; "$$ebin" | sed 's/^/    /'; ok=0; fi; \
 	else echo "  EMBED BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	rm -f "$$ebin"; \
-	printf '\n=== native module (examples/embed/nativemod.so via require) ===\n'; \
+	printf '\n=== native module (examples/embed/nativemod.$(NATIVE_EXT) via require) ===\n'; \
 	if [ "$(FFI_OK)" = yes ]; then \
-	  nso=/tmp/alcove-nativemod.$$$$.so; \
-	  if $(CC) $(SAFE_FLAGS) -O2 -shared -fPIC -I. -o "$$nso" examples/embed/nativemod.c >"$$bld" 2>&1 \
+	  nso=/tmp/alcove-nativemod.$$$$.$(NATIVE_EXT); \
+	  if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) -shared -fPIC -I. -o "$$nso" examples/embed/nativemod.c >"$$bld" 2>&1 \
 	     && ./alcove --noload -e "(require \"$$nso\") (prn (nm/add 20 22))" 2>/dev/null | grep -q 42; then \
 	    echo "  OK — native module built, required, and called"; \
 	  else echo "  NATIVE MODULE FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	  rm -f "$$nso"; \
 	else echo "  skipped (no libffi → alcove not built -rdynamic)"; fi; \
+	printf '\n=== script exit code (file/-e error → non-zero) ===\n'; \
+	./alcove --noload -e '(prn (+ 1 2))' >/dev/null 2>&1; gc=$$?; \
+	./alcove --noload -e '(this_is_unbound)'   >/dev/null 2>&1; bc=$$?; \
+	if [ $$gc -eq 0 ] && [ $$bc -ne 0 ]; then echo "  OK — good exits 0, error exits $$bc"; \
+	else echo "  EXIT-CODE WRONG: good=$$gc (want 0), error=$$bc (want nonzero)"; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
@@ -331,8 +339,8 @@ embed-example:
 # with (require ...). Needs an FFI-enabled alcove (built -rdynamic so the module
 # resolves alcove_register_cmd / make_* at dlopen). Builds the JIT alcove first.
 native-module-example: jit
-	$(CC) $(SAFE_FLAGS) -O2 -shared -fPIC -I. -o examples/embed/nativemod.so examples/embed/nativemod.c
-	@./alcove --noload -e '(require "examples/embed/nativemod.so") (prn (nm/add 20 22)) (prn (nm/scale 4)) (prn (nm/greet "world"))'
+	$(CC) $(SAFE_FLAGS) -O2 $(MARCH) -shared -fPIC -I. -o examples/embed/nativemod.$(NATIVE_EXT) examples/embed/nativemod.c
+	@./alcove --noload -e '(require "examples/embed/nativemod.$(NATIVE_EXT)") (prn (nm/add 20 22)) (prn (nm/scale 4)) (prn (nm/greet "world"))'
 benchmark: speed
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.

@@ -1204,13 +1204,14 @@ exp_t *matmulcmd(exp_t *e, env_t *env) {
       }
     }
   } else {
+    /* Same i,p,j accumulation order as the F64 path (accumulate into the
+       zero-init C) so F64-kind and generic-numeric inputs round identically;
+       stop on the first non-numeric element. */
     for (int64_t i = 0; i < m && !err; i++)
-      for (int64_t j = 0; j < n; j++) {
-        double s = 0.0;
-        for (int64_t p = 0; p < k; p++)
-          s += vec_read_double(aexp, i * k + p, &err) *
-               vec_read_double(bexp, p * n + j, &err);
-        C[i * n + j] = s;
+      for (int64_t p = 0; p < k && !err; p++) {
+        double aip = vec_read_double(aexp, i * k + p, &err);
+        for (int64_t j = 0; j < n && !err; j++)
+          C[i * n + j] += aip * vec_read_double(bexp, p * n + j, &err);
       }
   }
   if (err) {

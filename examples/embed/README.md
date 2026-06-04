@@ -85,3 +85,16 @@ like source modules). The module resolves the host's `alcove_register_cmd` /
 enabled** (it links `-rdynamic` then — the default when libffi is present).
 Name your builtins qualified (`nm/...`) so they don't collide with host
 globals. See [`nativemod.c`](nativemod.c) (`make native-module-example`).
+
+## Security / trust model
+
+`require` resolves a module by searching, in order: the requiring file's
+directory, then each `$ALCOVE_PATH` entry, then the **current working
+directory**. Loading any module — source *or* native — runs code, and a native
+`.so`/`.dylib` runs arbitrary machine code. So treat the **cwd and
+`$ALCOVE_PATH` as trusted input**, exactly as you would Python's `sys.path`:
+don't run a script from an untrusted directory if it does bare `(require …)`,
+and prefer an explicit `$ALCOVE_PATH` of dirs you control. (A bare name only
+ever resolves to `.alc`/`.adr`; a native module requires an explicit
+`.so`/`.dylib` in the spec.) Alcove is an embeddable scripting language, not a
+sandbox — there's no privilege boundary between a loaded module and the host.

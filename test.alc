@@ -2329,6 +2329,17 @@
 (assert "mat-vec: recovers after bad dims" 42 42)
 (mat-mul (vec 6 1.0) (vec 6 1.0) 4)
 (assert "mat-mul: recovers after bad k" 42 42)
+;; self-aliasing (same vector as both operands) — the SIMD ivdep loops must
+;; stay correct when y==x. (audit M-6)
+(= sa (vec 2 0)) (vec-set! sa 0 2.0) (vec-set! sa 1 3.0)
+(assert "vec-mul!: self-alias (v*v)" (do (vec-mul! sa sa) (vec->list sa)) (list 4.0 9.0))
+(= sb (vec 3 7.0))
+(assert "vec-sub!: self-alias (v-v)=0" (do (vec-sub! sb sb) (vec->list sb)) (list 0.0 0.0 0.0))
+;; A·A: [[1 2],[3 4]]² = [[7 10],[15 22]]
+(= saA (vec 4 0)) (vec-set! saA 0 1.0)(vec-set! saA 1 2.0)(vec-set! saA 2 3.0)(vec-set! saA 3 4.0)
+(= saAA (mat-mul saA saA 2))
+(assert "mat-mul: self-alias A·A [0]" (vec-ref saAA 0) 7.0)
+(assert "mat-mul: self-alias A·A [3]" (vec-ref saAA 3) 22.0)
 
 (vec-len 'not-a-vec)
 (assert "vec-len: recovers after type error" 42 42)

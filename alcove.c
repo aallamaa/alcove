@@ -2504,7 +2504,18 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
       if (cur && ispair(cur->content)) {
         body = car(cur);
         vali = make_node(refexp(body));
-        val = make_node(refexp(header));
+        /* Strip/validate type hints in the macro's param list, just like
+           def/fn/defn (so (defmacro f (x :int) ...) doesn't treat :int as a
+           parameter). Hints are meaningless for macros, so phints is ignored. */
+        uint8_t phints[ENV_INLINE_SLOTS];
+        exp_t *herr = NULL;
+        exp_t *clean_params = build_clean_params(header, e, env, &herr, phints);
+        if (herr) {
+          unrefexp(vali);
+          unrefexp(e);
+          return herr;
+        }
+        val = make_node(clean_params);
         val->next = vali;
         val->type = EXP_MACRO;
         char *qname = ns_qualify(exp_text(name), env); /* (ns ...)-aware */
@@ -4891,7 +4902,8 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
       /* Native module: dlopen + alcove_module_init registers its own builtins.
          No source namespace, so :refer below is a no-op (the module names its
          own exports, qualified as it likes). */
-      exp_t *nret = load_native_module(found, env);
+      exp_t *nret = load_native_module(canon, env); /* canon: the realpath we
+                       deduped on — avoids a symlink swap between check & load */
       del_keyval_dict(g_loading_modules, canon);
       if (iserror(nret))
         CLEAN_RETURN_1(spec, nret);
@@ -4900,7 +4912,8 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
     }
     /* require always loads into the GLOBAL env, regardless of caller scope, so
        a module's defs are top-level (and (ns ...)-qualifiable). */
-    exp_t *ret = eval_file_forms(found, g_global_env);
+    exp_t *ret = eval_file_forms(canon, g_global_env); /* load the realpath we
+                     deduped on (canon), not the unresolved hit (found) */
     del_keyval_dict(g_loading_modules, canon);
     if (iserror(ret))
       CLEAN_RETURN_1(spec, ret); /* propagate; don't mark loaded */
@@ -10596,6 +10609,11 @@ static void alcove_try_init_files(env_t *global) {
        exp_t *r = alcove_eval_string("(+ 1 2)");  // owned; unrefexp when done
    See examples/embed/ for a worked example. */
 env_t *alcove_init(void) {
+  /* Idempotent: a second call would leak the first env + reserved_symbol and
+     silently drop any builtins registered (via alcove_register_cmd) in between.
+     Return the existing engine instead. */
+  if (g_global_env)
+    return g_global_env;
   env_t *global = make_env(NULL);
   /* Publish the global env early so introspection builtins (source,
      completion, etc.) can compare against it across all entry paths. */
@@ -10684,11 +10702,16 @@ env_t *alcove_init(void) {
    already be up (alcove_init). Tagged immediates (fixnums, chars, nil, t) need
    no unref; heap values do — unrefexp the result once, always. */
 exp_t *alcove_eval_string(const char *src) {
-  if (!src || !g_global_env)
-    return NIL_EXP;
+  if (!g_global_env)
+    return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
+                 "alcove_eval_string: engine not initialized (call alcove_init "
+                 "first)");
+  if (!src)
+    return NIL_EXP; /* nothing to evaluate */
   FILE *stream = fmemopen((void *)src, strlen(src), "r");
   if (!stream)
-    return NIL_EXP;
+    return error(ERROR_ILLEGAL_VALUE, NULL, g_global_env,
+                 "alcove_eval_string: fmemopen failed");
   exp_t *last = NIL_EXP;
   for (;;) {
     exp_t *form = reader(stream, 0, 0);
@@ -11020,6 +11043,8 @@ endcleanly:
 #ifdef ALCOVE_READLINE
   repl_history_save();
 #endif
+  free(g_reader_dir); /* top-level script dir (eval_file_forms frees nested) */
+  g_reader_dir = NULL;
   destroy_dict(dict);
   destroy_env(global);
   destroy_dict(reserved_symbol);

@@ -770,19 +770,38 @@ int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware);
 /* Helpers for embedders implementing builtins outside the alcove TU
    (e.g. JS-side builtins in the WASM build). Evaluate the Nth (0-indexed)
    argument of the in-flight call and return it as a C int / C string;
-   wrap a C int as a fixnum exp_t* for return. */
+   wrap a C int as a fixnum exp_t* for return.
+   alcove_arg_string CAVEATS: the returned char* points into a static
+   round-robin of 4 buffers of 1024 bytes — a string longer than 1023 bytes is
+   silently truncated, and the 5th alcove_arg_string call within one builtin
+   reuses the 1st buffer (so copy the string if you need it past 4 calls or one
+   builtin). For full-fidelity / long strings, EVAL the arg yourself and read
+   exp_text(). */
 int         alcove_arg_int(exp_t *e, env_t *env, int n);
 const char *alcove_arg_string(exp_t *e, env_t *env, int n);
 exp_t      *alcove_make_int(int v);
 /* C embedding entry points (see the alcove_init comment in alcove.c and
    examples/embed/). alcove_init() brings the engine up and returns the global
-   env; alcove_eval_string() evaluates s-expressions and returns the last value
-   as an owned ref (or an error exp_t — test iserror). Build a host by defining
-   ALCOVE_NO_MAIN before #include "alcove.c" so this TU's main() is omitted. */
+   env (IDEMPOTENT — a second call returns the same env). alcove_eval_string()
+   evaluates s-expressions and returns the last value as an OWNED ref the caller
+   must unrefexp (or an error exp_t — test iserror; returns an error, not nil,
+   if the engine isn't initialized or fmemopen fails). Build a host by defining
+   ALCOVE_NO_MAIN before #include "alcove.c" so this TU's main() is omitted.
+   A native module (loaded by (require "x.so")) instead exports
+       int alcove_module_init(void);   // return 0 on success, nonzero to fail
+   which registers its builtins via alcove_register_cmd; on a nonzero return
+   the host reports a generic load failure, so the module should print its own
+   diagnostic (it has no env_t to call error() with). */
 env_t *alcove_init(void);
 exp_t *alcove_eval_string(const char *src);
 exp_t *make_tree(exp_t *root, exp_t *node1);
 
+/* Value constructors for embedders/modules. OWNERSHIP: make_string / make_symbol
+   / make_floatf return a fresh HEAP value (nref=1) you must unrefexp when done
+   (or hand to a sink — e.g. set_get_keyval_dict / a builtin return — that takes
+   it). make_integeri / make_char / alcove_make_int return a TAGGED IMMEDIATE
+   (no heap, never refcounted — do NOT unref). nil/t (NIL_EXP/TRUE_EXP) are
+   immortal singletons (no unref). See examples/embed/README.md. */
 exp_t *make_string(char *str, int length);
 exp_t *make_symbol(char *str, int length);
 
