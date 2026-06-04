@@ -159,6 +159,9 @@ exp_t *vecexpcmd(exp_t *e, env_t *env);
 exp_t *vecsigmoidcmd(exp_t *e, env_t *env);
 exp_t *vectanhcmd(exp_t *e, env_t *env);
 exp_t *vecsoftmaxcmd(exp_t *e, env_t *env);
+extern const char doc_matvec[], doc_matmul[];
+exp_t *matveccmd(exp_t *e, env_t *env);
+exp_t *matmulcmd(exp_t *e, env_t *env);
 extern const char doc_vector[];
 extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
 /* Redis keyspace bridge builtins. Defined below the `#include "resp.c"`

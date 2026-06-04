@@ -2294,6 +2294,42 @@
 (vec-sum 'not-a-vec)
 (assert "vec-sum: recovers after type error" 42 42)
 
+;; ---------- matrix ops ----------
+;; A = [[1 2 3],[4 5 6]] (2x3, row-major flat), x = [1 1 1] -> y = [6 15]
+(= mvA (vec 6 0)) (= mvi 0)
+(while (< mvi 6) (do (vec-set! mvA mvi (float (+ mvi 1))) (= mvi (+ mvi 1))))
+(= mvY (mat-vec mvA (vec 3 1.0)))
+(assert "mat-vec: y[0]" (vec-ref mvY 0) 6.0)
+(assert "mat-vec: y[1]" (vec-ref mvY 1) 15.0)
+(assert "mat-vec: result length = m" (vec-len mvY) 2)
+;; A=[[1 2],[3 4]] · B=[[5 6],[7 8]] (k=2) = [[19 22],[43 50]] flat [19 22 43 50]
+(= mmA (vec 4 0)) (vec-set! mmA 0 1.0)(vec-set! mmA 1 2.0)(vec-set! mmA 2 3.0)(vec-set! mmA 3 4.0)
+(= mmB (vec 4 0)) (vec-set! mmB 0 5.0)(vec-set! mmB 1 6.0)(vec-set! mmB 2 7.0)(vec-set! mmB 3 8.0)
+(= mmC (mat-mul mmA mmB 2))
+(assert "mat-mul: C[0,0]" (vec-ref mmC 0) 19.0)
+(assert "mat-mul: C[0,1]" (vec-ref mmC 1) 22.0)
+(assert "mat-mul: C[1,0]" (vec-ref mmC 2) 43.0)
+(assert "mat-mul: C[1,1]" (vec-ref mmC 3) 50.0)
+;; A · I = A
+(= mmI (vec 4 0)) (vec-set! mmI 0 1.0) (vec-set! mmI 3 1.0)
+(= mmAI (mat-mul mmA mmI 2))
+(assert "mat-mul: A·I preserves A[0]" (vec-ref mmAI 0) 1.0)
+(assert "mat-mul: A·I preserves A[3]" (vec-ref mmAI 3) 4.0)
+;; non-square: A 2x3 · B 3x1 (k=3) -> 2x1
+(= nsA (vec 6 0)) (= nsi 0)
+(while (< nsi 6) (do (vec-set! nsA nsi (float (+ nsi 1))) (= nsi (+ nsi 1))))
+(= nsB (vec 3 1.0))
+(= nsC (mat-mul nsA nsB 3))
+(assert "mat-mul: non-square shape (2x1)" (vec-len nsC) 2)
+(assert "mat-mul: non-square C[0]" (vec-ref nsC 0) 6.0)   ; 1+2+3
+(assert "mat-mul: non-square C[1]" (vec-ref nsC 1) 15.0)  ; 4+5+6
+;; int vectors promote to float
+(assert "mat-mul: int vecs promote" (vec-ref (mat-mul (vec 4 2) (vec 4 1) 2) 0) 4.0)
+(mat-vec (vec 5 1.0) (vec 3 1.0))
+(assert "mat-vec: recovers after bad dims" 42 42)
+(mat-mul (vec 6 1.0) (vec 6 1.0) 4)
+(assert "mat-mul: recovers after bad k" 42 42)
+
 (vec-len 'not-a-vec)
 (assert "vec-len: recovers after type error" 42 42)
 (sqrt-int 'not-a-number)

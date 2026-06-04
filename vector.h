@@ -1098,6 +1098,129 @@ exp_t *vecsoftmaxcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(vexp, ret);
 }
 
+/* ---------- matrix ops (dense, row-major, over flat F64 vectors) ----------
+   A matrix is a plain vector holding rows back-to-back; the shapes are derived
+   from the vector lengths so the call stays minimal. Result is always a fresh
+   F64 vector. F64 inputs hit a raw-double path (the inner loop is an axpy →
+   SIMD); other kinds go through vec_read_double. */
+
+const char doc_matvec[] =
+    "(mat-vec A x) — matrix·vector. A is a flat row-major m×n matrix, x has "
+    "length n; n = (len x), m = (len A)/n. Returns a fresh length-m F64 vector "
+    "y where y[i] = sum_j A[i*n+j]*x[j].";
+exp_t *matveccmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(aexp, xexp);
+  if (!isvector(aexp) || !isvector(xexp))
+    CLEAN_RETURN_2(aexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(mat-vec A x): both must be vectors"));
+  int64_t alen = vec_len(aexp), n = vec_len(xexp);
+  if (n <= 0 || alen % n != 0)
+    CLEAN_RETURN_2(aexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-vec: (len A)=%lld must be a positive multiple of "
+                         "(len x)=%lld",
+                         (long long)alen, (long long)n));
+  int64_t m = alen / n;
+  exp_t *zero = make_floatf(0.0);
+  exp_t *out = make_vector(m, zero);
+  unrefexp(zero);
+  if (!out)
+    CLEAN_RETURN_2(aexp, xexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env, "mat-vec: alloc failed"));
+  int err = 0;
+  double *y = VEC_F64_CELLS(out);
+  if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
+    double *A = VEC_F64_CELLS(aexp);
+    double *X = VEC_F64_CELLS(xexp);
+    for (int64_t i = 0; i < m; i++) {
+      double s = 0.0;
+      const double *row = A + i * n;
+      for (int64_t j = 0; j < n; j++)
+        s += row[j] * X[j];
+      y[i] = s;
+    }
+  } else {
+    for (int64_t i = 0; i < m && !err; i++) {
+      double s = 0.0;
+      for (int64_t j = 0; j < n; j++)
+        s += vec_read_double(aexp, i * n + j, &err) *
+             vec_read_double(xexp, j, &err);
+      y[i] = s;
+    }
+  }
+  if (err) {
+    unrefexp(out);
+    CLEAN_RETURN_2(aexp, xexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                                     "mat-vec: non-numeric element"));
+  }
+  CLEAN_RETURN_2(aexp, xexp, out);
+}
+
+const char doc_matmul[] =
+    "(mat-mul A B k) — matrix·matrix. A is a flat row-major m×k matrix, B a "
+    "flat k×n matrix (k is the shared inner dimension); m = (len A)/k, n = "
+    "(len B)/k. Returns a fresh row-major m×n F64 vector C[i*n+j] = "
+    "sum_p A[i*k+p]*B[p*n+j].";
+exp_t *matmulcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(aexp, bexp, kexp);
+  if (!isvector(aexp) || !isvector(bexp) || !isnumber(kexp))
+    CLEAN_RETURN_3(aexp, bexp, kexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(mat-mul A B k): vectors A, B and integer k"));
+  int64_t k = FIX_VAL(kexp);
+  int64_t alen = vec_len(aexp), blen = vec_len(bexp);
+  if (k <= 0 || alen % k != 0 || blen % k != 0)
+    CLEAN_RETURN_3(aexp, bexp, kexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-mul: k=%lld must be positive and divide both "
+                         "(len A)=%lld and (len B)=%lld",
+                         (long long)k, (long long)alen, (long long)blen));
+  int64_t m = alen / k, n = blen / k;
+  exp_t *zero = make_floatf(0.0);
+  exp_t *out = make_vector(m * n, zero); /* zero-initialised — accumulated into */
+  unrefexp(zero);
+  if (!out)
+    CLEAN_RETURN_3(aexp, bexp, kexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-mul: result %lldx%lld too large",
+                         (long long)m, (long long)n));
+  int err = 0;
+  double *C = VEC_F64_CELLS(out);
+  if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(bexp) == VEC_KIND_F64) {
+    double *A = VEC_F64_CELLS(aexp);
+    double *B = VEC_F64_CELLS(bexp);
+    /* i,p,j order: the inner j loop is C[i*n+..] += aip*B[p*n+..] — a contiguous
+       axpy that vectorises; C was zero-initialised above. */
+    for (int64_t i = 0; i < m; i++) {
+      double *crow = C + i * n;
+      const double *arow = A + i * k;
+      for (int64_t p = 0; p < k; p++) {
+        double aip = arow[p];
+        const double *brow = B + p * n;
+        VEC_SIMD
+        for (int64_t j = 0; j < n; j++)
+          crow[j] += aip * brow[j];
+      }
+    }
+  } else {
+    for (int64_t i = 0; i < m && !err; i++)
+      for (int64_t j = 0; j < n; j++) {
+        double s = 0.0;
+        for (int64_t p = 0; p < k; p++)
+          s += vec_read_double(aexp, i * k + p, &err) *
+               vec_read_double(bexp, p * n + j, &err);
+        C[i * n + j] = s;
+      }
+  }
+  if (err) {
+    unrefexp(out);
+    CLEAN_RETURN_3(aexp, bexp, kexp, error(ERROR_NUMBER_EXPECTED, e, env,
+                                           "mat-mul: non-numeric element"));
+  }
+  CLEAN_RETURN_3(aexp, bexp, kexp, out);
+}
+
 /* ---------- deque ops ----------
    vec-push! / vec-pop! at the back; vec-unshift! / vec-shift! at the
    front. Amortised O(1) via the cap/start/end window — pops bump the

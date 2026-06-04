@@ -378,6 +378,8 @@ lispProc lispProcList[] = {
     LISPCMD("vec-sigmoid!", vecsigmoidcmd, doc_vecsigmoid),
     LISPCMD("vec-tanh!", vectanhcmd, doc_vectanh),
     LISPCMD("vec-softmax!", vecsoftmaxcmd, doc_vecsoftmax),
+    LISPCMD("mat-vec", matveccmd, doc_matvec),
+    LISPCMD("mat-mul", matmulcmd, doc_matmul),
     /* Deque ops on vec — amortised O(1) push/pop at both ends via the
        cap/start/end window. Growth: 1.5x on realloc; slide-left when
        start >= cap/4 instead of reallocating; recenter on unshift-grow. */
