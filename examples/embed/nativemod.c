@@ -25,18 +25,28 @@
  * Return a fresh value built with make_integeri / make_floatf / make_string /
  * alcove_make_int. Register names qualified (here "nm/...") so they don't
  * collide with the host's globals — references are just `nm/add` etc.
+ *
+ * OWNERSHIP — a builtin MUST consume its call form: call `unrefexp(e)` exactly
+ * once before returning (read every arg first). The interpreter hands `e` with
+ * one ref it expects the builtin to release — exactly like every core builtin
+ * (e.g. conscmd does `unrefexp(e)`). Forgetting it leaks one form per call when
+ * the builtin is invoked from a compiled function body (the bytecode VM
+ * synthesizes a fresh call form per call); the cost is unbounded in a hot loop.
  */
 #include "alcove.h"
 #include <string.h>
 
 static exp_t *nm_add(exp_t *e, env_t *env) {
-  return alcove_make_int(alcove_arg_int(e, env, 0) + alcove_arg_int(e, env, 1));
+  exp_t *r = alcove_make_int(alcove_arg_int(e, env, 0) + alcove_arg_int(e, env, 1));
+  unrefexp(e); /* consume the call form — see the OWNERSHIP note above */
+  return r;
 }
 
 static exp_t *nm_scale(exp_t *e, env_t *env) { /* (nm/scale x) -> 2.5 * x */
   exp_t *xv = EVAL(cadr(e), env);              /* we eval, so we own xv */
   double x = isfloat(xv) ? xv->f : (double)FIX_VAL(xv);
   unrefexp(xv);
+  unrefexp(e);
   return make_floatf(2.5 * x);
 }
 
@@ -44,7 +54,9 @@ static exp_t *nm_greet(exp_t *e, env_t *env) { /* (nm/greet name) -> string */
   const char *who = alcove_arg_string(e, env, 0); /* borrowed, valid this call */
   char buf[256];
   int n = snprintf(buf, sizeof buf, "native hello, %s", who ? who : "?");
-  return make_string(buf, n);
+  exp_t *r = make_string(buf, n);
+  unrefexp(e);
+  return r;
 }
 
 /* ---- a CUSTOM OBJECT TYPE: nm/counter (a heap C struct) ----
@@ -83,13 +95,16 @@ static exp_t *counter_load(exp_t *e, FILE *s) {
 static exp_t *counter_make(exp_t *e, env_t *env) { /* (nm/counter n) */
   counter_t *c = malloc(sizeof *c);
   c->n = alcove_arg_int(e, env, 0);
-  return alcove_make_foreign(NM_COUNTER, c);
+  exp_t *r = alcove_make_foreign(NM_COUNTER, c);
+  unrefexp(e);
+  return r;
 }
 static exp_t *counter_inc(exp_t *e, env_t *env) { /* (nm/inc! c) -> c */
   exp_t *o = EVAL(cadr(e), env);
   counter_t *c = (counter_t *)alcove_foreign_ptr(o);
   if (c)
     c->n++;
+  unrefexp(e);
   return o; /* owned ref returned */
 }
 static exp_t *counter_get(exp_t *e, env_t *env) { /* (nm/get c) -> int */
@@ -97,6 +112,7 @@ static exp_t *counter_get(exp_t *e, env_t *env) { /* (nm/get c) -> int */
   counter_t *c = (counter_t *)alcove_foreign_ptr(o);
   exp_t *r = alcove_make_int(c ? (int)c->n : -1);
   unrefexp(o);
+  unrefexp(e);
   return r;
 }
 

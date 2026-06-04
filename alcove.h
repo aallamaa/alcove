@@ -786,7 +786,18 @@ exp_t *make_internal(lispCmd *cmd, int flags);
 /* Runtime registration of a name → C function as an alcove builtin.
    Returns 0 on success, -1 if called before alcove's init has set up
    the reserved-symbol dict. The web build's JS shim uses this with
-   Module.addFunction to inject browser-side builtins. */
+   Module.addFunction to inject browser-side builtins.
+
+   OWNERSHIP CONTRACT — the `fn` you register MUST consume its call form:
+   `unrefexp(e)` exactly once before returning (after reading every arg). The
+   interpreter passes `e` with one ref it expects you to release, exactly as
+   every core builtin does (e.g. conscmd). This always mattered; it became
+   load-bearing once non-tail-aware builtins (FLAG_APPLICATIVE) compile to a
+   real OP_CALL_GLOBAL — the bytecode VM then synthesizes a FRESH call form per
+   call, so forgetting unrefexp(e) leaks one form per call (unbounded in a hot
+   loop). tail_aware!=0 builtins are special forms and are exempt from the
+   FLAG_APPLICATIVE fast path (but still must consume e). See
+   examples/embed/nativemod.c. */
 int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware);
 /* Helpers for embedders implementing builtins outside the alcove TU
    (e.g. JS-side builtins in the WASM build). Evaluate the Nth (0-indexed)

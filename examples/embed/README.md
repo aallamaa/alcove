@@ -65,10 +65,22 @@ The flip side of embedding: instead of *your* program hosting Alcove, a
 ```c
 #include "alcove.h"
 static exp_t *nm_add(exp_t *e, env_t *env) {
-  return alcove_make_int(alcove_arg_int(e,env,0) + alcove_arg_int(e,env,1));
+  exp_t *r = alcove_make_int(alcove_arg_int(e,env,0) + alcove_arg_int(e,env,1));
+  unrefexp(e);   /* a builtin MUST consume its call form — see below */
+  return r;
 }
 int alcove_module_init(void) { return alcove_register_cmd("nm/add", nm_add, 0); }
 ```
+
+**Ownership: a builtin must consume its call form.** Read every argument, then
+`unrefexp(e)` exactly once before returning — just like every core builtin
+(`conscmd` etc.). The interpreter hands `e` with one ref it expects you to
+release. This always held, but it became load-bearing once non-tail-aware
+builtins compile to a real fast call (`OP_CALL_GLOBAL`): the bytecode VM then
+builds a **fresh** call form per call, so a builtin that forgets `unrefexp(e)`
+leaks one form on every call — unbounded inside a hot loop. (Pull args with
+`alcove_arg_int`/`alcove_arg_string`, which borrow; if you `EVAL` an arg you own
+the result and must `unrefexp` it too.)
 
 ```sh
 cc -shared -fPIC -I. -o nm.so nm.c        # Linux  (.dylib on macOS)
