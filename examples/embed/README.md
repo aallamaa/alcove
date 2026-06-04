@@ -86,6 +86,42 @@ enabled** (it links `-rdynamic` then — the default when libffi is present).
 Name your builtins qualified (`nm/...`) so they don't collide with host
 globals. See [`nativemod.c`](nativemod.c) (`make native-module-example`).
 
+## Custom object types (with persistence)
+
+A native module can define its **own value type** — a tagged heap object holding
+a C struct — with serializers so instances survive `savedb`/`loaddb`:
+
+```c
+static unsigned short MY = 0;                 /* runtime type id */
+static void my_destroy(exp_t *e){ free(e->ptr); }          /* at refcount 0 */
+static void my_print(exp_t *e){ printf("#<my %d>", ...); } /* optional */
+static exp_t *my_dump(exp_t *e, FILE *s){     /* tag THEN payload */
+  if (dumptype(s, &e->type) <= 0) return NULL;
+  /* fwrite the struct fields */ return e; }
+static exp_t *my_load(exp_t *e, FILE *s){     /* payload only (tag consumed) */
+  my_t *p = malloc(sizeof *p); /* fread fields */ e->ptr = p; return e; }
+
+int alcove_module_init(void){
+  exp_tfunc ops; memset(&ops,0,sizeof ops);
+  ops.destroy=my_destroy; ops.print=my_print; ops.dump=my_dump; ops.load=my_load;
+  MY = alcove_register_type("mymod/my", &ops);   /* qualified, durable name */
+  /* register constructors that call alcove_make_foreign(MY, ptr) */
+}
+```
+
+- `alcove_register_type(name, ops)` reserves a 2-byte runtime type id and is
+  **idempotent by name** (re-`require` reuses it). `name` is the durable
+  identity stored in `db.dump`; the runtime id is per-process.
+- `alcove_make_foreign(id, ptr)` builds an instance; `alcove_foreign_ptr(e)` /
+  `alcove_is_foreign(e, id)` read it back. The `destroy` hook frees the C
+  payload at refcount zero.
+- **Persistence:** `savedb` writes a header type-table (id → name → module spec)
+  and the object's payload; `loaddb` remaps the id by name and **auto-`require`s
+  the module** if it isn't loaded, so a dump opens in a fresh process. Run with
+  `--safe` to disable that auto-load (the object then won't reconstruct).
+
+See [`nativemod.c`](nativemod.c)'s `nm/counter` (`make native-module-example`).
+
 ## Security / trust model
 
 `require` resolves a module by searching, in order: the requiring file's

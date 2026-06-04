@@ -80,7 +80,32 @@ dict_t *user_doc = NULL;
    db-aware chokepoint resp_kv_current(). */
 #define ALC_NDB 16
 ALCOVE_TLS int alcove_kv_db = 0;
-exp_tfunc *exp_tfuncList[EXP_MAXSIZE];
+/* Per-type dispatch table (dump/load/destroy/print/clone). Built-ins fill ids
+   1..EXP_MAXSIZE-1 in alcove_init; custom module types fill EXP_MAXSIZE.. via
+   alcove_register_type. Sized to ALCOVE_TYPE_CAP so a 2-byte type id is always
+   in range. */
+exp_tfunc *exp_tfuncList[ALCOVE_TYPE_CAP];
+/* Durable metadata for each custom type id (>= EXP_MAXSIZE): the registered
+   (module-qualified) name and the module spec to re-(require) on db load.
+   Indexed by type id. name==NULL means the slot is unused. */
+static struct {
+  char *name;        /* module-qualified type name — the persistent identity */
+  char *module_spec; /* what (require) loaded the module (for db auto-require) */
+} g_custom_types[ALCOVE_TYPE_CAP];
+static unsigned short g_next_type_id = 0; /* lazily set to EXP_MAXSIZE on first use */
+/* The module spec currently being loaded by load_native_module, so a type
+   registered inside its alcove_module_init records where it came from. */
+static const char *g_current_module_spec = NULL;
+/* --safe: disable db-load auto-(require) of a missing custom type's module. */
+static int g_safe_mode = 0;
+/* Load-scoped: dump-session custom type id → this process's id (0 = unresolved).
+   Built by alcove_load_unified from the v3 type table; read by load_exp_t.
+   Declared here (before load_exp_t) since load_exp_t precedes the dump code. */
+static unsigned short g_type_remap[ALCOVE_TYPE_CAP];
+/* The db.dump format version being loaded; alcove_load_unified sets it before
+   any load fn runs (the initializer is just a safe default). Defined here so
+   load_exp_t and persist.h both see it. Kept in sync with ALCOVE_DUMP_VERSION. */
+static int alcove_load_dump_version = 3;
 
 /* Canonical singletons — pointer set at main() startup. */
 exp_t *nil_singleton = NULL;
@@ -888,6 +913,14 @@ int unrefexp_free(exp_t *e, int ret) { /* non-static: see alcove.h (native modul
         unrefexp(e->content);
       break;
     default:
+      /* Custom (foreign) module type: its destroy hook frees the C payload
+         (e->ptr) + unrefs any exp_t it owns. Do NOT recurse on e->content —
+         a foreign value's slot is a void* C struct, not an exp_t car. */
+      if (e->type >= EXP_MAXSIZE) {
+        if (exp_tfuncList[e->type] && exp_tfuncList[e->type]->destroy)
+          exp_tfuncList[e->type]->destroy(e);
+        break;
+      }
       /* EXP_PAIR (incl. nil), EXP_TREE, EXP_PAIR_CIRCULAR: recurse on the
          child; e->next is released by the next loop iteration. */
       unrefexp(e->content);
@@ -1148,6 +1181,56 @@ int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware) {
   set_get_keyval_dict(reserved_symbol, (char *)name, val);
   unrefexp(val);
   return 0;
+}
+
+/* Look up a registered custom type by name; returns its id or 0 if none. */
+static unsigned short custom_type_id_by_name(const char *name) {
+  if (!name)
+    return 0;
+  for (unsigned short i = EXP_MAXSIZE; i < g_next_type_id; i++)
+    if (g_custom_types[i].name && strcmp(g_custom_types[i].name, name) == 0)
+      return i;
+  return 0;
+}
+
+unsigned short alcove_register_type(const char *name, const exp_tfunc *ops) {
+  if (!name || !ops)
+    return 0;
+  if (g_next_type_id < EXP_MAXSIZE)
+    g_next_type_id = EXP_MAXSIZE; /* first custom id sits above the built-ins */
+  /* Idempotent: a module re-(require)d, or two registrations of the same name,
+     reuse the existing id (and keep live objects of that type valid). */
+  unsigned short existing = custom_type_id_by_name(name);
+  if (existing)
+    return existing;
+  if (g_next_type_id >= ALCOVE_TYPE_CAP)
+    return 0; /* table full — raise ALCOVE_TYPE_CAP if you truly need >~225 */
+  unsigned short id = g_next_type_id++;
+  exp_tfuncList[id] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  *exp_tfuncList[id] = *ops; /* copy the dump/load/destroy/print pointers */
+  g_custom_types[id].name = strdup(name);
+  g_custom_types[id].module_spec =
+      g_current_module_spec ? strdup(g_current_module_spec) : NULL;
+  GEN_BUMP(); /* a new type may shadow nothing, but keep caches honest */
+  return id;
+}
+
+exp_t *alcove_make_foreign(unsigned short type_id, void *ptr) {
+  if (type_id < EXP_MAXSIZE || type_id >= ALCOVE_TYPE_CAP ||
+      !exp_tfuncList[type_id])
+    return NIL_EXP; /* not a registered custom type */
+  exp_t *e = make_nil();
+  e->type = type_id;
+  e->ptr = ptr;
+  return e;
+}
+
+void *alcove_foreign_ptr(const exp_t *e) {
+  return (is_ptr(e) && e->type >= EXP_MAXSIZE) ? e->ptr : NULL;
+}
+
+int alcove_is_foreign(const exp_t *e, unsigned short type_id) {
+  return is_ptr(e) && e->type == type_id && type_id >= EXP_MAXSIZE;
 }
 
 /* Embedder helpers — evaluate the Nth argument of an in-flight builtin
@@ -1474,11 +1557,24 @@ exp_t *load_exp_t(FILE *stream) {
     unrefexp(resp);
     return NULL;
   }
+  /* v3: a custom-type id in the body is the DUMP session's id — remap it to
+     this process's id by durable name (table built in alcove_load_unified)
+     BEFORE validating against exp_tfuncList. Unresolved (module absent / --safe)
+     → abort this value's load. */
+  if (alcove_load_dump_version >= 3 && resp->type >= EXP_MAXSIZE) {
+    unsigned short cur =
+        (resp->type < ALCOVE_TYPE_CAP) ? g_type_remap[resp->type] : 0;
+    if (!cur) {
+      unrefexp(resp);
+      return NULL;
+    }
+    resp->type = cur;
+  }
   /* Validate the type tag against the dispatch table BEFORE __LOAD__
      indexes exp_tfuncList[type]. A malicious db.dump with type=0xFFFF
      would otherwise read out-of-bounds and indirect-call whatever
      pointer-shaped bytes are there at startup. */
-  if (resp->type < 1 || resp->type >= EXP_MAXSIZE ||
+  if (resp->type < 1 || resp->type >= ALCOVE_TYPE_CAP ||
       !exp_tfuncList[resp->type] || !exp_tfuncList[resp->type]->load) {
     unrefexp(resp);
     return NULL;
@@ -3005,8 +3101,13 @@ static void alcove_set_db_path(const char *p) {
        I64 writes len*int64 raw, for F64 writes len*double raw. v1 dumps
        still load (load_vec_v1); dump_vec always writes v2. */
 #define ALCOVE_DUMP_MAGIC "ALCV"
-#define ALCOVE_DUMP_VERSION 2
+/* v3 adds a custom-type table after the header (count + {id, name, spec}) so
+   foreign module types persist: the body keeps the 2-byte runtime id, the table
+   maps it to a durable name, and the loader remaps id→name→this-process's-id
+   (auto-(require)ing the module unless --safe). v1/v2 dumps still load. */
+#define ALCOVE_DUMP_VERSION 3
 #define ALCOVE_DUMP_VERSION_MIN 1
+static void auto_require_native(const char *spec); /* defined after require */
 #define ALCOVE_SEC_LISP 'L'
 #define ALCOVE_SEC_RESP 'R'
 
@@ -3120,6 +3221,30 @@ int alcove_dump_unified(env_t *global, struct lfkv *kv, FILE *stream) {
   uint16_t ver = ALCOVE_DUMP_VERSION;
   if (fwrite(&ver, 2, 1, stream) != 1)
     return 0;
+
+  /* v3 custom-type table: count, then {id:2, name, module_spec} for every
+     registered custom type, so the loader can remap dump ids by durable name
+     and (auto-)require the module. Usually empty (count 0). */
+  {
+    uint16_t ntypes = 0;
+    for (unsigned short i = EXP_MAXSIZE; i < g_next_type_id; i++)
+      if (g_custom_types[i].name)
+        ntypes++;
+    if (fwrite(&ntypes, 2, 1, stream) != 1)
+      return 0;
+    for (unsigned short i = EXP_MAXSIZE; i < g_next_type_id; i++) {
+      if (!g_custom_types[i].name)
+        continue;
+      uint16_t id = i;
+      const char *spec =
+          g_custom_types[i].module_spec ? g_custom_types[i].module_spec : "";
+      if (fwrite(&id, 2, 1, stream) != 1 ||
+          !dump_strn(g_custom_types[i].name, strlen(g_custom_types[i].name),
+                     stream) ||
+          !dump_strn(spec, strlen(spec), stream))
+        return 0;
+    }
+  }
 
   /* Walk to the global env (savedb is allowed from a nested env, and
      callers that don't have an env handy may pass NULL to skip the
@@ -3237,6 +3362,44 @@ int alcove_load_unified(env_t *global, struct lfkv *kv, FILE *stream,
     return -1;
   }
   alcove_load_dump_version = (int)ver;
+
+  /* v3 custom-type table → build the dump-id → this-process-id remap, keyed by
+     the durable type name. A name not registered here is (auto-)required from
+     its module spec (unless --safe); if it still can't be resolved its remap
+     stays 0, and any value of that type aborts the load in load_exp_t. */
+  memset(g_type_remap, 0, sizeof g_type_remap);
+  if (ver >= 3) {
+    uint16_t ntypes;
+    if (fread(&ntypes, 2, 1, stream) != 1)
+      return -1;
+    for (uint16_t t = 0; t < ntypes; t++) {
+      uint16_t dump_id;
+      char *name = NULL, *spec = NULL;
+      size_t nlen = 0, slen = 0;
+      if (fread(&dump_id, 2, 1, stream) != 1 ||
+          !load_strn(&name, &nlen, stream) ||
+          !load_strn(&spec, &slen, stream)) {
+        free(name);
+        free(spec);
+        return -1;
+      }
+      unsigned short cur = custom_type_id_by_name(name);
+      if (!cur && !g_safe_mode && spec[0]) {
+        auto_require_native(spec); /* dlopen + alcove_module_init */
+        cur = custom_type_id_by_name(name);
+      }
+      if (dump_id < ALCOVE_TYPE_CAP)
+        g_type_remap[dump_id] = cur; /* 0 stays unresolved */
+      if (!cur)
+        fprintf(stderr,
+                "loaddb: custom type '%s' unavailable%s — values of it won't "
+                "load\n",
+                name, g_safe_mode ? " (--safe: module auto-load disabled)" : "");
+      free(name);
+      free(spec);
+    }
+  }
+
   env_t *root = global;
   while (root && root->root)
     root = root->root;
@@ -4848,7 +5011,8 @@ static void refer_all(const char *ns) {
 
 /* Defined after the ffi.h include (it uses dlopen). A .so/.dylib require routes
    here instead of eval_file_forms. */
-static exp_t *load_native_module(const char *path, env_t *env);
+static exp_t *load_native_module(const char *path, const char *spec,
+                                 env_t *env);
 
 const char doc_require[] =
     "(require \"path\") — load an Alcove module once. \".alc\" is appended if "
@@ -4902,8 +5066,9 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
       /* Native module: dlopen + alcove_module_init registers its own builtins.
          No source namespace, so :refer below is a no-op (the module names its
          own exports, qualified as it likes). */
-      exp_t *nret = load_native_module(canon, env); /* canon: the realpath we
-                       deduped on — avoids a symlink swap between check & load */
+      exp_t *nret = load_native_module(canon, (char *)exp_text(spec), env);
+      /* canon: the realpath we deduped on (avoids a symlink swap between check
+         & load); spec: the user's arg, recorded for db re-(require). */
       del_keyval_dict(g_loading_modules, canon);
       if (iserror(nret))
         CLEAN_RETURN_1(spec, nret);
@@ -4953,6 +5118,29 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
       refer_all(module_ns); /* :refer with no explicit names → import all */
   }
   CLEAN_RETURN_1(spec, loaded ? NIL_EXP : TRUE_EXP);
+}
+
+/* db-load auto-(require): resolve `spec` and, if it's a native module, dlopen +
+   alcove_module_init it so its custom types register. Best-effort — failure
+   leaves the type unresolved and the value's load aborts. Gated by --safe at
+   the call site (alcove_load_unified). */
+static void auto_require_native(const char *spec) {
+  if (!spec || !*spec)
+    return;
+  char found[PATH_MAX];
+  if (!resolve_module_path(spec, found))
+    return;
+  size_t fl = strlen(found);
+  int native = (fl >= 3 && strcmp(found + fl - 3, ".so") == 0) ||
+               (fl >= 6 && strcmp(found + fl - 6, ".dylib") == 0);
+  if (!native)
+    return; /* only native modules define custom types */
+  char canon[PATH_MAX];
+  if (!realpath(found, canon))
+    snprintf(canon, sizeof(canon), "%s", found);
+  exp_t *r = load_native_module(canon, spec, g_global_env);
+  if (r && iserror(r))
+    unrefexp(r);
 }
 
 /* Forward decls needed by HOFs and alc_apply helpers below. */
@@ -5023,7 +5211,11 @@ const char doc_ffiunpack[] =
    resolves the host's alcove_register_cmd / make_* symbols at load). Defined
    here, after ffi.h, where dlopen/dlsym and alc_ffi_dlopen are available;
    forward-declared up by requirecmd. */
-static exp_t *load_native_module(const char *path, env_t *env) {
+/* path = the file to dlopen (canonical); spec = the user's original require
+   argument, recorded against any type the module registers so a db.dump can
+   re-(require) it on load. */
+static exp_t *load_native_module(const char *path, const char *spec,
+                                 env_t *env) {
 #ifdef ALCOVE_FFI
   void *h = alc_ffi_dlopen(path);
   if (!h)
@@ -5039,13 +5231,18 @@ static exp_t *load_native_module(const char *path, env_t *env) {
                  path);
   int (*init)(void);
   memcpy(&init, &sym, sizeof init);
-  if (init() != 0)
+  const char *prev_spec = g_current_module_spec;
+  g_current_module_spec = spec; /* alcove_register_type reads this */
+  int rc = init();
+  g_current_module_spec = prev_spec;
+  if (rc != 0)
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "require: native module '%s' alcove_module_init failed", path);
   GEN_BUMP(); /* new builtins registered → invalidate global-resolution caches */
   return TRUE_EXP;
 #else
   (void)path;
+  (void)spec;
   return error(ERROR_ILLEGAL_VALUE, NULL, env,
                "require: native (.so/.dylib) modules need an FFI-enabled build "
                "(rebuild with libffi installed)");
@@ -10789,6 +10986,10 @@ int main(int argc, char *argv[]) {
     for (src = 1; src < argc; src++) {
       if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
         auto_load = 0;
+      } else if (strcmp(argv[src], "--safe") == 0) {
+        /* Don't let a db.dump auto-(require) native modules to resolve its
+           custom types — loading a dump then can't execute module code. */
+        g_safe_mode = 1;
       } else if (strcmp(argv[src], "--no-init") == 0 ||
                  strcmp(argv[src], "--noinit") == 0) {
         run_init = 0;
@@ -11065,6 +11266,12 @@ endcleanly:
   free(exp_tfuncList[EXP_DICT]);
   free(exp_tfuncList[EXP_LIST]);
   free(exp_tfuncList[EXP_HAMT]);
+  /* Custom module types registered via alcove_register_type. */
+  for (unsigned short ti = EXP_MAXSIZE; ti < g_next_type_id; ti++) {
+    free(exp_tfuncList[ti]);
+    free(g_custom_types[ti].name);
+    free(g_custom_types[ti].module_spec);
+  }
   /* (t / nil were the immortal singletons — no unref needed; freed below.) */
   /* Immortal singletons. We can't free() the exp_t pointer itself
      anymore (it lives inside the bump-allocator chunk, not a separate

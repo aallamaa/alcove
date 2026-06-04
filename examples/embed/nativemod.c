@@ -47,12 +47,79 @@ static exp_t *nm_greet(exp_t *e, env_t *env) { /* (nm/greet name) -> string */
   return make_string(buf, n);
 }
 
+/* ---- a CUSTOM OBJECT TYPE: nm/counter (a heap C struct) ----
+   Shows defining your own value type with dump/load so instances persist
+   through savedb/loaddb (the dump records the durable type name "nm/counter";
+   loaddb auto-(require)s this module to reconstruct it). */
+#include <stdlib.h>
+#include <string.h>
+typedef struct {
+  long long n;
+} counter_t;
+static unsigned short NM_COUNTER = 0; /* runtime type id, set in init */
+
+static void counter_destroy(exp_t *e) { free(e->ptr); } /* free the C struct */
+static void counter_print(exp_t *e) {
+  printf("#<counter %lld>", ((counter_t *)e->ptr)->n);
+}
+/* dump writes the 2-byte type tag (via dumptype) then the payload; load reads
+   only the payload — load_exp_t already consumed + remapped the tag. */
+static exp_t *counter_dump(exp_t *e, FILE *s) {
+  if (dumptype(s, &e->type) <= 0)
+    return NULL;
+  if (fwrite(&((counter_t *)e->ptr)->n, sizeof(long long), 1, s) != 1)
+    return NULL;
+  return e;
+}
+static exp_t *counter_load(exp_t *e, FILE *s) {
+  counter_t *c = malloc(sizeof *c);
+  if (!c || fread(&c->n, sizeof(long long), 1, s) != 1) {
+    free(c);
+    return NULL;
+  }
+  e->ptr = c;
+  return e;
+}
+static exp_t *counter_make(exp_t *e, env_t *env) { /* (nm/counter n) */
+  counter_t *c = malloc(sizeof *c);
+  c->n = alcove_arg_int(e, env, 0);
+  return alcove_make_foreign(NM_COUNTER, c);
+}
+static exp_t *counter_inc(exp_t *e, env_t *env) { /* (nm/inc! c) -> c */
+  exp_t *o = EVAL(cadr(e), env);
+  counter_t *c = (counter_t *)alcove_foreign_ptr(o);
+  if (c)
+    c->n++;
+  return o; /* owned ref returned */
+}
+static exp_t *counter_get(exp_t *e, env_t *env) { /* (nm/get c) -> int */
+  exp_t *o = EVAL(cadr(e), env);
+  counter_t *c = (counter_t *)alcove_foreign_ptr(o);
+  exp_t *r = alcove_make_int(c ? (int)c->n : -1);
+  unrefexp(o);
+  return r;
+}
+
 int alcove_module_init(void) {
   if (alcove_register_cmd("nm/add", nm_add, 0) != 0)
     return -1;
   if (alcove_register_cmd("nm/scale", nm_scale, 0) != 0)
     return -1;
   if (alcove_register_cmd("nm/greet", nm_greet, 0) != 0)
+    return -1;
+  /* Register the custom type (idempotent by name) + its constructors. */
+  exp_tfunc ops;
+  memset(&ops, 0, sizeof ops);
+  ops.destroy = counter_destroy;
+  ops.print = counter_print;
+  ops.dump = counter_dump;
+  ops.load = counter_load;
+  NM_COUNTER = alcove_register_type("nm/counter", &ops);
+  if (!NM_COUNTER)
+    return -1;
+  if (alcove_register_cmd("nm/counter", counter_make, 0) != 0 ||
+      alcove_register_cmd("nm/inc!", counter_inc, 0) != 0 ||
+      alcove_register_cmd("nm/get", counter_get, 0) != 0)
     return -1;
   return 0;
 }

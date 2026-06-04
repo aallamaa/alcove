@@ -321,6 +321,16 @@ test-all:
 	  else echo "  NATIVE MODULE FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	  rm -f "$$nso"; \
 	else echo "  skipped (no libffi → alcove not built -rdynamic)"; fi; \
+	printf '\n=== custom type persistence (savedb a foreign object, reload in a fresh process) ===\n'; \
+	if [ "$(FFI_OK)" = yes ]; then \
+	  cso=/tmp/alcove-ct.$$$$.$(NATIVE_EXT); cdb=/tmp/alcove-ctdb.$$$$; \
+	  if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) -shared -fPIC -I. -o "$$cso" examples/embed/nativemod.c >"$$bld" 2>&1 \
+	     && ./alcove --noload -e "(require \"$$cso\") (= c (nm/counter 41)) (nm/inc! c) (persist (quote c)) (savedb \"$$cdb\")" >/dev/null 2>&1 \
+	     && ./alcove --noload -e "(loaddb \"$$cdb\") (prn (nm/get c))" 2>/dev/null | grep -q 42; then \
+	    echo "  OK — foreign object persisted + auto-reloaded its module on load"; \
+	  else echo "  CUSTOM TYPE PERSIST FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
+	  rm -f "$$cso" "$$cdb"; \
+	else echo "  skipped (no libffi)"; fi; \
 	printf '\n=== script exit code (file/-e error → non-zero) ===\n'; \
 	./alcove --noload -e '(prn (+ 1 2))' >/dev/null 2>&1; gc=$$?; \
 	./alcove --noload -e '(this_is_unbound)'   >/dev/null 2>&1; bc=$$?; \

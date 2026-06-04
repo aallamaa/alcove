@@ -488,10 +488,9 @@ static int vec_tighten(exp_t *vexp);
 
 /* Set by alcove_load_unified to the version read from the file header;
    read by load_vec to choose between v1/v2 record layouts. Single
-   loader at a time — there's no concurrent loadu path. Initialised to
-   2 (current version) so any dump path that bypasses the header-read
-   still writes/reads v2-compatible records. */
-static int alcove_load_dump_version = 2;
+   loader at a time — there's no concurrent loadu path.
+   NOTE: the definition moved to alcove.c (near exp_tfuncList) so it's visible
+   to load_exp_t, which precedes this fragment in the single TU. */
 
 /* EXP_VECTOR — v2 record (dump_vec always writes v2):
      [u8 kind][u32 len][payload]

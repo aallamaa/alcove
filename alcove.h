@@ -190,7 +190,8 @@ enum {
 #define isatom(e)                                                              \
   (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
                                ((e)->type >= EXP_BLOB &&                       \
-                                (e)->type <= EXP_HAMT))))
+                                (e)->type <= EXP_HAMT) ||                      \
+                               (e)->type >= EXP_MAXSIZE)))
 
 /* Helper for fast-path refcounting */
 #define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton || (e) == gen_done_singleton)
@@ -553,7 +554,18 @@ typedef struct exp_tfunc {
                  FILE *stream); /* load object as serialized data from stream */
   exp_t *(*dump)(exp_t *this,
                  FILE *stream); /* serialized object this to stream */
+  /* Custom (foreign) types only: destroy frees the C payload (this->ptr) and
+     unrefs any exp_t it owns, at refcount zero — the exp_t shell is reclaimed
+     by the host. print writes a representation (optional; a default #<name@ptr>
+     is used when NULL). Built-in types leave these NULL. */
+  void (*destroy)(exp_t *this);
+  void (*print)(exp_t *this);
 } exp_tfunc;
+/* Capacity of the exp_tfuncList dispatch table. Built-in types occupy ids
+   1..EXP_MAXSIZE-1; custom types registered by native modules
+   (alcove_register_type) get ids EXP_MAXSIZE..ALCOVE_TYPE_CAP-1. The 2-byte
+   exp_t->type field holds any of these with room to spare. */
+#define ALCOVE_TYPE_CAP 256
 
 #define __CLONE__(e)                                                           \
   (exp_tfuncList[e->type] && exp_tfuncList[e->type]->clone                     \
@@ -794,6 +806,19 @@ exp_t      *alcove_make_int(int v);
    diagnostic (it has no env_t to call error() with). */
 env_t *alcove_init(void);
 exp_t *alcove_eval_string(const char *src);
+/* Custom (foreign) object types — a native module defines its own value type
+   with dump/load serialization. alcove_register_type(name, ops) reserves a
+   2-byte runtime type id and copies `ops` (its dump/load/destroy/print);
+   idempotent — re-registering the same name returns the same id. `name` should
+   be module-qualified (e.g. "mymod/matrix"); it's the DURABLE identity used in
+   db.dump (the runtime id is per-process). Returns 0 if the table is full.
+   alcove_make_foreign(id, ptr) builds a value of that type carrying `ptr` (the
+   module's C struct, freed by the type's destroy hook at refcount zero).
+   alcove_foreign_ptr / alcove_is_foreign read it back. */
+unsigned short alcove_register_type(const char *name, const exp_tfunc *ops);
+exp_t        *alcove_make_foreign(unsigned short type_id, void *ptr);
+void         *alcove_foreign_ptr(const exp_t *e);
+int           alcove_is_foreign(const exp_t *e, unsigned short type_id);
 exp_t *make_tree(exp_t *root, exp_t *node1);
 
 /* Value constructors for embedders/modules. OWNERSHIP: make_string / make_symbol

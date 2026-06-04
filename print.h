@@ -206,6 +206,17 @@ void print_node(exp_t *node) {
     printf("\x1B[92m#<macro-builtin>\x1B[39m");
   } else if (node->type == EXP_FFI) {
     printf("\x1B[92m#<ffi>\x1B[39m");
+  } else if (node->type >= EXP_MAXSIZE && node->type < ALCOVE_TYPE_CAP &&
+             exp_tfuncList[node->type]) {
+    /* Custom (foreign) module type: use its print hook, else a default
+       #<name@ptr> from the registered type name. */
+    if (exp_tfuncList[node->type]->print)
+      exp_tfuncList[node->type]->print(node);
+    else
+      printf("\x1B[92m#<%s@%p>\x1B[39m",
+             g_custom_types[node->type].name ? g_custom_types[node->type].name
+                                             : "foreign",
+             node->ptr);
   } else {
     printf("\x1B[92m#<type %d>\x1B[39m", node->type);
   }
