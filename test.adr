@@ -1572,6 +1572,12 @@ assert "inline vs heap sym differ" (is 'abcdefg 'abcdefgh) nil
 
 assert "inline keyword self-eval" :short :short
 
+assert "keyword as compiled body" ((fn () :hello)) :hello
+
+assert "keyword as fn return tail" ((fn () (+ 1 1) :done)) :done
+
+assert "keyword in if branch (fn)" ((fn (x) (if x :yes :no)) 1) :yes
+
 assert "inline str as set key" (set-has? (set "k" "kk") "k") t
 
 assert "inline keyword as set key" (set-has? (set :a :bb) :a) t

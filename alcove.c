@@ -7136,6 +7136,20 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
     return;
   }
   if (issymbol(e)) {
+    /* A keyword (:foo) self-evaluates — mirror evaluate()'s keyword arm
+       (the `exp_text(e)[0] == ':'` check there). Without this, a keyword used
+       as a value in a compiled body — e.g. (def f () :hello) or any body whose
+       tail expression is a bare keyword — would emit OP_LOAD_GLOBAL and fail at
+       runtime with "Unbound variable :hello". As an argument it already worked
+       (it round-trips through the const pool); this fixes the value/return
+       position. */
+    const char *nm = exp_text(e);
+    if (nm[0] == ':') {
+      int k = add_const(c, e);
+      emit_u8(c, OP_LOAD_CONST);
+      emit_u8(c, (uint8_t)k);
+      return;
+    }
     int slot = find_slot(c, exp_text(e));
     if (slot >= 0) {
       emit_u8(c, OP_LOAD_SLOT);
