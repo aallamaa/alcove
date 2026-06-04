@@ -1177,7 +1177,10 @@ inline exp_t *make_internal(lispCmd *cmd, int flags) {
 int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware) {
   if (!reserved_symbol || !name || !fn)
     return -1;
-  exp_t *val = make_internal(fn, tail_aware ? FLAG_TAIL_AWARE : 0);
+  /* Non-tail-aware module builtins are applicative (they eval all their args),
+     so mark them FLAG_APPLICATIVE — the compiler can then emit a fast
+     OP_CALL_GLOBAL for them instead of the OP_EVAL_AST tree-walk. */
+  exp_t *val = make_internal(fn, tail_aware ? FLAG_TAIL_AWARE : FLAG_APPLICATIVE);
   set_get_keyval_dict(reserved_symbol, (char *)name, val);
   unrefexp(val);
   return 0;
@@ -7481,9 +7484,28 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
        lambdas (not in reserved_symbol) fall through to compile_call. */
     keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)s, NULL);
     if (kv && isinternal(kv->val)) {
-      if ((kv->val->flags & FLAG_TAIL_AWARE) || !strcmp(s, "fn") ||
-          !strcmp(s, "lambda") || !strcmp(s, "def") || !strcmp(s, "defn") ||
-          !strcmp(s, "defc") || !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
+      /* Applicative module builtin (alcove_register_cmd, non-tail-aware): emit a
+         real OP_CALL_GLOBAL so a hot loop calling it isn't a per-call AST
+         tree-walk. Try the fast compile; if an argument won't compile (e.g. a
+         (fn ...) literal that would mis-capture this frame, or a const-pool
+         overflow), roll the emit + consts back and fall through to OP_EVAL_AST —
+         identical behavior to before, just for that call. tail=0: a builtin
+         call never self-TCOs, and OP_TAIL_CALL rejects non-lambdas. */
+      if (kv->val->flags & FLAG_APPLICATIVE) {
+        int save_ncode = c->ncode, save_nconsts = c->nconsts;
+        compile_call(c, e, 0);
+        if (!c->failed)
+          return;
+        c->failed = 0;
+        for (int z = save_nconsts; z < c->nconsts; z++)
+          unrefexp(c->consts[z]);
+        c->nconsts = save_nconsts;
+        c->ncode = save_ncode;
+        /* fall through to the OP_EVAL_AST emit below */
+      } else if ((kv->val->flags & FLAG_TAIL_AWARE) || !strcmp(s, "fn") ||
+                 !strcmp(s, "lambda") || !strcmp(s, "def") ||
+                 !strcmp(s, "defn") || !strcmp(s, "defc") ||
+                 !strcmp(s, "defmacro") || !strcmp(s, "macro")) {
         c->failed = 1;
         return;
       }
@@ -9030,6 +9052,14 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     return alc_ffi_call((alc_ffi_t *)fn->ptr, nargs, argv);
   }
 #endif
+  if (isinternal(fn)) {
+    /* An applicative builtin called from compiled bytecode (FLAG_APPLICATIVE —
+       see compile_expr's fast path). Args are already evaluated; alc_apply_n
+       wraps them in the canonical (fn args...) form, calls fn->fnc with
+       in_tail_position cleared, and consumes the argv refs — same contract as
+       the lambda path. */
+    return alc_apply_n(fn, nargs, argv, env);
+  }
   if (!islambda(fn)) {
     int i;
     for (i = 0; i < nargs; i++)

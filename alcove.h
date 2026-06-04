@@ -243,6 +243,15 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
    (invoke / vm_invoke_values) intercept this flag and dispatch to the clause
    whose arity matches before any code reads content as params. Bit 7. */
 #define FLAG_MULTI 128
+/* EXP_INTERNAL registered via alcove_register_cmd as a NON-tail-aware builtin:
+   an applicative C function that evaluates all its args (the module/embedding
+   convention). The compiler may emit a real OP_CALL_GLOBAL for such a call
+   (args compiled to bytecode, then a fast dispatch) instead of the OP_EVAL_AST
+   tree-walk it falls back to for unflagged builtins — so a hot loop calling a
+   native-module builtin (e.g. lmi/get) isn't a per-call AST re-resolve. Core
+   special forms (while/each/time/…) are installed via make_internal directly,
+   never get this bit, and keep the AST path. Bit 8. */
+#define FLAG_APPLICATIVE 256
 
 /* For EXP_VECTOR only: element kind, encoded in bits 4-5 of exp_t->flags.
    GEN keeps the old behavior — each slot is an owning exp_t* ref. I64/F64
