@@ -208,6 +208,13 @@ struct keyval_t;
 struct exp_t;
 struct env_t;
 typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
+/* "Values" builtin ABI (fast path): receives the already-EVALuated args as an
+   owned argv (the callee must unrefexp each, like vm_invoke_values' contract)
+   and returns an owned result. No call form is synthesized, so there is no `e`
+   to forget freeing — this sidesteps the consume-e footgun entirely. A builtin
+   registers BOTH a normal lispCmd (for the AST / apply / map paths) and an
+   optional lispCmdV; the compiled fast path calls the lispCmdV when present. */
+typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv, struct env_t *env);
 
 #define FLAG_TAILREC 1
 /* Internal cmd is tail-aware: evaluate will expose in_tail_position to
@@ -799,6 +806,12 @@ exp_t *make_internal(lispCmd *cmd, int flags);
    FLAG_APPLICATIVE fast path (but still must consume e). See
    examples/embed/nativemod.c. */
 int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware);
+/* Attach a "values" fast-path implementation (lispCmdV) to an already-registered
+   non-tail-aware builtin. The compiled fast path then calls `fnv` directly with
+   the evaluated args (no synthesized call form). The normal lispCmd stays as the
+   fallback for the AST / apply / map paths. Returns 0 on success, -1 if `name`
+   isn't a registered internal. */
+int alcove_set_cmd_values(const char *name, lispCmdV *fnv);
 /* Helpers for embedders implementing builtins outside the alcove TU
    (e.g. JS-side builtins in the WASM build). Evaluate the Nth (0-indexed)
    argument of the in-flight call and return it as a C int / C string;

@@ -1186,6 +1186,20 @@ int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware) {
   return 0;
 }
 
+/* Attach a values fast-path (lispCmdV) to an already-registered builtin. Stored
+   in the internal's `meta` field (unused by internals; make_internal leaves it
+   NULL, so a NULL meta means "no fast path"). vm_invoke_values' internal arm
+   calls it directly with the evaluated argv when present. */
+int alcove_set_cmd_values(const char *name, lispCmdV *fnv) {
+  if (!reserved_symbol || !name || !fnv)
+    return -1;
+  keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)name, NULL);
+  if (!kv || !isinternal((exp_t *)kv->val))
+    return -1;
+  ((exp_t *)kv->val)->meta = (keyval_t *)(void *)fnv;
+  return 0;
+}
+
 /* Look up a registered custom type by name; returns its id or 0 if none. */
 static unsigned short custom_type_id_by_name(const char *name) {
   if (!name)
@@ -9068,10 +9082,19 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
 #endif
   if (isinternal(fn)) {
     /* An applicative builtin called from compiled bytecode (FLAG_APPLICATIVE —
-       see compile_expr's fast path). Args are already evaluated; alc_apply_n
-       wraps them in the canonical (fn args...) form, calls fn->fnc with
-       in_tail_position cleared, and consumes the argv refs — same contract as
-       the lambda path. */
+       see compile_expr's fast path). If it registered a values fast-path
+       (lispCmdV in ->meta), call it directly with the evaluated argv — no call
+       form synthesized, so nothing to leak. Otherwise alc_apply_n wraps the
+       args in the canonical (fn args...) form and calls fn->fnc (which must
+       consume that form). Both consume the argv refs. */
+    if (fn->meta) {
+      lispCmdV *fv = (lispCmdV *)(void *)fn->meta;
+      int was_tail = in_tail_position;
+      in_tail_position = 0;
+      exp_t *ret = fv(nargs, argv, env);
+      in_tail_position = was_tail;
+      return ret;
+    }
     return alc_apply_n(fn, nargs, argv, env);
   }
   if (!islambda(fn)) {
