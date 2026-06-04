@@ -55,3 +55,33 @@ cc -I. -O2 -fno-strict-aliasing -o host examples/embed/host.c -lm
 
 See [`host.c`](host.c) for a worked example covering callbacks, float/string
 results, error handling, and passing a C-built value into the engine.
+
+## Native modules (separately-compiled extensions)
+
+The flip side of embedding: instead of *your* program hosting Alcove, a
+**shared library** extends a *running* Alcove. A native module `#include`s
+`alcove.h`, defines builtins, and exports one hook:
+
+```c
+#include "alcove.h"
+static exp_t *nm_add(exp_t *e, env_t *env) {
+  return alcove_make_int(alcove_arg_int(e,env,0) + alcove_arg_int(e,env,1));
+}
+int alcove_module_init(void) { return alcove_register_cmd("nm/add", nm_add, 0); }
+```
+
+```sh
+cc -shared -fPIC -I. -o nm.so nm.c        # Linux  (.dylib on macOS)
+```
+
+```lisp
+(require "nm.so")     ; dlopens it and calls alcove_module_init
+(nm/add 20 22)        ; => 42
+```
+
+`require` recognizes a `.so`/`.dylib` path and loads it natively (load-once,
+like source modules). The module resolves the host's `alcove_register_cmd` /
+`make_*` symbols at `dlopen`, so **the alcove binary must be built with FFI
+enabled** (it links `-rdynamic` then — the default when libffi is present).
+Name your builtins qualified (`nm/...`) so they don't collide with host
+globals. See [`nativemod.c`](nativemod.c) (`make native-module-example`).

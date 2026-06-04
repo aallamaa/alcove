@@ -764,7 +764,7 @@ static ALCOVE_TLS int exp_bump_left = 0;
    inline in the wrapper and never call here. e is always a heap object.
    Recurses (through the wrapper, so immediate children are free) for e->content
    and vector/list elements. */
-static int unrefexp_free(exp_t *e, int ret) {
+int unrefexp_free(exp_t *e, int ret) { /* non-static: see alcove.h (native modules) */
   SAFE_ASSERT(is_ptr(e)); /* wrapper's contract — checked under ALCOVE_SAFE */
   while (1) {
     /* Detect double-free: a refcount that went negative means this exp_t
@@ -4715,8 +4715,13 @@ static int module_try_dir(char *out, const char *dir, char cand[][PATH_MAX],
    returns 1; returns 0 if nothing exists. */
 static int resolve_module_path(const char *spec, char *out) {
   size_t sl = strlen(spec);
-  int explicit_ext = sl >= 4 && (strcmp(spec + sl - 4, ".alc") == 0 ||
-                                 strcmp(spec + sl - 4, ".adr") == 0);
+  /* An explicit source (.alc/.adr) or native-module (.so/.dylib) extension is
+     used verbatim; a bare name is tried as <spec>.alc then <spec>.adr (source
+     modules are primary — a native module must be named with its extension). */
+  int explicit_ext = (sl >= 4 && (strcmp(spec + sl - 4, ".alc") == 0 ||
+                                  strcmp(spec + sl - 4, ".adr") == 0)) ||
+                     (sl >= 3 && strcmp(spec + sl - 3, ".so") == 0) ||
+                     (sl >= 6 && strcmp(spec + sl - 6, ".dylib") == 0);
   char cand[2][PATH_MAX];
   int ncand = 0;
   /* Bound the spec with a precision so the ".alc"/".adr" suffix always fits —
@@ -4819,11 +4824,17 @@ static void refer_all(const char *ns) {
   GEN_BUMP();
 }
 
+/* Defined after the ffi.h include (it uses dlopen). A .so/.dylib require routes
+   here instead of eval_file_forms. */
+static exp_t *load_native_module(const char *path, env_t *env);
+
 const char doc_require[] =
     "(require \"path\") — load an Alcove module once. \".alc\" is appended if "
     "absent; the file is searched relative to the requiring file, then "
-    "$ALCOVE_PATH, then cwd. Already-loaded (or mid-load, for cycles) modules "
-    "are not re-run. Returns t when it loaded the file, nil when already loaded. "
+    "$ALCOVE_PATH, then cwd. A \".so\"/\".dylib\" path instead loads a native "
+    "module (dlopen + its alcove_module_init). Already-loaded (or mid-load, for "
+    "cycles) modules are not re-run. Returns t when it loaded, nil when already "
+    "loaded. "
     "(require \"path\" :refer) also binds every name the module's namespace "
     "defines unqualified; (require \"path\" :refer a b) binds only a and b — so "
     "you can call `parse` instead of `json/parse`.";
@@ -4862,6 +4873,20 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_1(spec, NIL_EXP); /* cyclic: mid-load, names not all defined */
   } else {
     set_get_keyval_dict(g_loading_modules, canon, TRUE_EXP);
+    size_t fl = strlen(found);
+    int is_native = (fl >= 3 && strcmp(found + fl - 3, ".so") == 0) ||
+                    (fl >= 6 && strcmp(found + fl - 6, ".dylib") == 0);
+    if (is_native) {
+      /* Native module: dlopen + alcove_module_init registers its own builtins.
+         No source namespace, so :refer below is a no-op (the module names its
+         own exports, qualified as it likes). */
+      exp_t *nret = load_native_module(found, env);
+      del_keyval_dict(g_loading_modules, canon);
+      if (iserror(nret))
+        CLEAN_RETURN_1(spec, nret);
+      set_get_keyval_dict(g_loaded_modules, canon, TRUE_EXP);
+      CLEAN_RETURN_1(spec, TRUE_EXP);
+    }
     /* require always loads into the GLOBAL env, regardless of caller scope, so
        a module's defs are top-level (and (ns ...)-qualifiable). */
     exp_t *ret = eval_file_forms(found, g_global_env);
@@ -4966,6 +4991,42 @@ const char doc_ffiunpack[] =
 /* The libffi binding (impl + non-FFI stubs) lives in a dedicated
    #included fragment. */
 #include "ffi.h"
+
+/* Load a native (shared-library) module: dlopen `path`, then call its
+   `int alcove_module_init(void)` hook (returns 0 on success), which registers
+   builtins via alcove_register_cmd. Returns TRUE_EXP on success or an error.
+   Needs an FFI-enabled build: the dlopen machinery + -rdynamic (so the module
+   resolves the host's alcove_register_cmd / make_* symbols at load). Defined
+   here, after ffi.h, where dlopen/dlsym and alc_ffi_dlopen are available;
+   forward-declared up by requirecmd. */
+static exp_t *load_native_module(const char *path, env_t *env) {
+#ifdef ALCOVE_FFI
+  void *h = alc_ffi_dlopen(path);
+  if (!h)
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "require: cannot load native module '%s': %s", path,
+                 dlerror());
+  /* void* → function pointer: not strictly portable C, but POSIX dlsym
+     guarantees it (memcpy to dodge the -pedantic cast warning). */
+  void *sym = dlsym(h, "alcove_module_init");
+  if (!sym)
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "require: native module '%s' exports no alcove_module_init",
+                 path);
+  int (*init)(void);
+  memcpy(&init, &sym, sizeof init);
+  if (init() != 0)
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "require: native module '%s' alcove_module_init failed", path);
+  GEN_BUMP(); /* new builtins registered → invalidate global-resolution caches */
+  return TRUE_EXP;
+#else
+  (void)path;
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "require: native (.so/.dylib) modules need an FFI-enabled build "
+               "(rebuild with libffi installed)");
+#endif
+}
 
 /* The standard-library builtins live in a dedicated #included fragment. */
 #include "builtins_stdlib.h"

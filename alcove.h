@@ -3,6 +3,9 @@
 
 #include "char.h"
 #include <stdint.h>
+#include <stdio.h> /* FILE — used in the dump/load declarations below; keeps
+                      alcove.h self-contained for native-module authors who
+                      #include it on its own. */
 #include "mpsc.h"
 /* Structure definition */
 
@@ -720,8 +723,11 @@ void *memalloc(size_t count, size_t size);
    and calling out only when a refcount actually reaches 0 avoids a function
    call for the overwhelmingly common cases (drop a fixnum, or decrement a
    still-shared object). unrefexp_free assumes ret<=0; SAFE_ASSERT verifies the
-   object invariants under -DALCOVE_SAFE=1. */
-static int unrefexp_free(exp_t *e, int ret);
+   object invariants under -DALCOVE_SAFE=1. NOT static: the inline unrefexp()
+   below calls it, so a native module (which includes only alcove.h) must
+   resolve it against the host binary at dlopen (-rdynamic) rather than need a
+   local definition. */
+int unrefexp_free(exp_t *e, int ret);
 static inline int unrefexp(exp_t *e);
 
 /* env management and exception handling inside env*/

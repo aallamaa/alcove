@@ -309,6 +309,15 @@ test-all:
 	  else echo "  EMBED RAN WRONG:"; "$$ebin" | sed 's/^/    /'; ok=0; fi; \
 	else echo "  EMBED BUILD FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
 	rm -f "$$ebin"; \
+	printf '\n=== native module (examples/embed/nativemod.so via require) ===\n'; \
+	if [ "$(FFI_OK)" = yes ]; then \
+	  nso=/tmp/alcove-nativemod.$$$$.so; \
+	  if $(CC) $(SAFE_FLAGS) -O2 -shared -fPIC -I. -o "$$nso" examples/embed/nativemod.c >"$$bld" 2>&1 \
+	     && ./alcove --noload -e "(require \"$$nso\") (prn (nm/add 20 22))" 2>/dev/null | grep -q 42; then \
+	    echo "  OK — native module built, required, and called"; \
+	  else echo "  NATIVE MODULE FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
+	  rm -f "$$nso"; \
+	else echo "  skipped (no libffi → alcove not built -rdynamic)"; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
@@ -318,6 +327,12 @@ test-all:
 embed-example:
 	$(CC) $(SAFE_FLAGS) -O2 $(MARCH) -I. -o examples/embed/host examples/embed/host.c -lm
 	@./examples/embed/host
+# Native-module demo: compile examples/embed/nativemod.c into a .so and load it
+# with (require ...). Needs an FFI-enabled alcove (built -rdynamic so the module
+# resolves alcove_register_cmd / make_* at dlopen). Builds the JIT alcove first.
+native-module-example: jit
+	$(CC) $(SAFE_FLAGS) -O2 -shared -fPIC -I. -o examples/embed/nativemod.so examples/embed/nativemod.c
+	@./alcove --noload -e '(require "examples/embed/nativemod.so") (prn (nm/add 20 22)) (prn (nm/scale 4)) (prn (nm/greet "world"))'
 benchmark: speed
 	./benchmark/run.sh
 # Build mono and run the bench suite against it.
@@ -534,4 +549,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
