@@ -156,6 +156,93 @@
 (equiv "qq"             `(1 ,(+ 1 1) 3))
 (equiv "qq splice"      `(0 ,@(list 1 2) 3))
 
+;; ── fused superinstructions (slot ± fix, slot cmp fix): VM-only, no AST twin ──
+(equiv "slot+fix"       (let (i 5) (+ i 1)))
+(equiv "slot-fix"       (let (i 5) (- i 3)))
+(equiv "slot+fix neg"   (let (i -3) (+ i 1)))
+(equiv "slot+fix i16max" (let (i 5) (+ i 32767)))
+(equiv "slot-fix i16min" (let (i 5) (- i 32768)))
+(equiv "slot+ big"      (let (i 5) (+ i 100000)))
+(equiv "slot<fix"       (let (i 5) (< i 10)))
+(equiv "slot<fix eq"    (let (i 10) (< i 10)))
+(equiv "slot<=fix"      (let (i 5) (<= i 5)))
+(equiv "slot>fix"       (let (i 5) (> i 10)))
+(equiv "slot>=fix neg"  (let (i -5) (>= i -32768)))
+(equiv "slot cmp loop"  (let (i 0) (if (< i 1000000) :lo :hi)))
+
+;; ── arithmetic boundaries / overflow / sign ───────────────────────────────
+(equiv "fixnum near max" (+ 1152921504606846975 0))
+(equiv "mul overflow"   (* 1000000000 1000000000))
+(equiv "add overflow"   (+ 1152921504606846975 1000000000))
+(equiv "div neg trunc"  (/ -7 2))
+(equiv "div pos neg"    (/ 7 -2))
+(equiv "mod neg divd"   (mod -7 3))
+(equiv "mod neg divs"   (mod 7 -3))
+(equiv "mod both neg"   (mod -7 -3))
+(equiv "neg of min"     (- 0 1152921504606846975))
+(equiv "float int eq"   (is 5 5.0))
+(equiv "float iso int"  (iso 5 5.0))
+(equiv "int+float promote" (+ 9223372036854775 0.0))
+
+;; ── comparison chains / equality across types ─────────────────────────────
+(equiv "lt chain t"     (< 1 2 3))
+(equiv "lt chain f"     (< 1 3 2))
+(equiv "eq chain"       (is 7 7))
+(equiv "iso nested"     (iso (list 1 (list 2)) (list 1 (list 2))))
+(equiv "iso vec"        (iso (vector 1 2) (vector 1 2)))
+(equiv "is sym"         (is 'foo 'foo))
+(equiv "is char"        (is #\a #\a))
+
+;; ── nested control flow in tail / value position ──────────────────────────
+(equiv "if of if"       (if (if t nil t) :a :b))
+(equiv "cond nested"    (cond (if t nil t) :x (and 1 2) :y :else :z))
+(equiv "case in if"     (if t (case 2 1 :a 2 :b) :no))
+(equiv "and value"      (and 1 2 3))
+(equiv "or first true"  (or nil 0 5))
+(equiv "and empty"      (and))
+(equiv "or empty"       (or))
+(equiv "no zero"        (no 0))
+(equiv "no empty str"   (no ""))
+(equiv "no nil"         (no nil))
+(equiv "deeply nested"  (if (< 1 2) (if (> 3 2) (cond t (case 0 0 :deep)) :x) :y))
+
+;; ── let nesting / mutation / let* sequential ──────────────────────────────
+(equiv "let nest 3"     (let (a 1) (let (b 2) (let (c 3) (+ a b c)))))
+(equiv "let mutate ret" (let (x 5) (= x (+ x 1)) x))
+(equiv "let* rebind"    (let* (a 1 a (+ a 1)) a))
+(equiv "let* sees prev" (let* (a 2 b (* a 10) c (+ a b)) c))
+(equiv "let in tail rec-ish" (let (n 5) (let (m (- n 1)) (* n m))))
+(equiv "let shadow param-like" (let (x 1) (let (x (+ x 10)) x)))
+
+;; ── lists / vectors edge cases ────────────────────────────────────────────
+(equiv "car cdr chain"  (car (cdr (cons 1 (cons 2 nil)))))
+(equiv "cdr of nil"     (cdr nil))
+(equiv "cons improper"  (cons 1 2))
+(equiv "list empty"     (list))
+(equiv "length empty"   (length (list)))
+(equiv "vec mutate"     (let (v (vector 1 2 3)) (vec-set! v 0 9) (vec-ref v 0)))
+(equiv "vec-len empty"  (vec-len (vector)))
+
+;; ── quasiquote nested / edge ──────────────────────────────────────────────
+(equiv "qq nested"      `(1 (2 ,(+ 1 2)) ,(* 2 3)))
+(equiv "qq splice mid"  `(a ,@(list 1 2 3) z))
+(equiv "qq empty splice" `(x ,@(list) y))
+
+;; ── bitwise ops ───────────────────────────────────────────────────────────
+(equiv "bit-and"       (bit-and 12 10))
+(equiv "bit-or"        (bit-or 5 2))
+(equiv "bit-xor"       (bit-xor 12 10))
+(equiv "bit-not"       (bit-not 0))
+(equiv "shl"           (shl 1 8))
+(equiv "shr"           (shr 1024 3))
+(equiv "shl big"       (shl 1 40))
+(equiv "bit in let"    (let (m 12) (bit-and m 10)))
+
+;; ── nested fused ops ──────────────────────────────────────────────────────
+(equiv "nested fused"  (let (i 5) (let (j (+ i 1)) (< j 10))))
+(equiv "fused in cond"  (let (i 7) (cond (< i 5) :lo (< i 10) :mid :hi)))
+(equiv "fused chain"    (let (i 3) (+ (+ i 1) (- i 1))))
+
 ;; ── error parity (both should error the same way) ─────────────────────────
 (equiv "div by zero"    (/ 1 0))
 (equiv "unbound var"    (some-undefined-name))
@@ -165,3 +252,5 @@
 (pr "EQUIV SWEEP: ") (pr _tested) (pr " tested, ")
 (pr _mismatch) (pr " MISMATCH, ")
 (pr _astonly) (prn " ast-only (body not compiled)")
+;; machine-checkable verdict for `make test-all`
+(if (is _mismatch 0) (prn "EQUIV SWEEP: OK") (prn "EQUIV SWEEP: FAIL"))

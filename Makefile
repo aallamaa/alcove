@@ -337,6 +337,11 @@ test-all:
 	if [ $$gc -eq 0 ] && [ $$bc -ne 0 ]; then echo "  OK — good exits 0, error exits $$bc"; \
 	else echo "  EXIT-CODE WRONG: good=$$gc (want 0), error=$$bc (want nonzero)"; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
+	printf '\n=== AST-vs-VM equivalence sweep (tools/equiv_sweep.alc) ===\n'; \
+	es=$$(./alcove --noload tools/equiv_sweep.alc 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	echo "$$es" | grep "EQUIV SWEEP:" | grep -vE "OK|FAIL" | sed 's/^/  /'; \
+	if echo "$$es" | grep -q "EQUIV SWEEP: OK"; then echo "  OK — AST and bytecode VM agree on every compiled form"; \
+	else echo "  EQUIV SWEEP MISMATCH:"; echo "$$es" | grep MISMATCH | sed 's/^/    /'; ok=0; fi; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
 	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi
