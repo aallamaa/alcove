@@ -3709,7 +3709,7 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
         }                                                                      \
         if ((IS_DIV) && i > 1) {                                               \
           if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) { \
-            ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");       \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");       \
             unrefexp(v);                                                       \
             goto finish;                                                       \
           }                                                                    \
@@ -3777,13 +3777,13 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
       } else if (IS_DIV) {                                                     \
         if (saw_float) {                                                       \
           if (sum_f == 0) {                                                    \
-            ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");       \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");       \
             goto finish;                                                       \
           }                                                                    \
           sum_f = 1 / sum_f;                                                   \
         } else {                                                               \
           if (sum_i == 0) {                                                    \
-            ret = error(ERROR_DIV_BY0, e, env, "Illegal Division by 0");       \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");       \
             goto finish;                                                       \
           }                                                                    \
           sum_i = 1 / sum_i;                                                   \
@@ -9475,10 +9475,10 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         const char *_nm = (const char *)exp_text(e);
         const char *_sg = alc_suggest_symbol(_nm, env);
         ret = _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
-                          "Error unbound variable %s (did you mean '%s'?)", _nm,
+                          "Unbound variable %s (did you mean '%s'?)", _nm,
                           _sg)
                   : error(ERROR_UNBOUND_VARIABLE, e, env,
-                          "Error unbound variable %s", _nm);
+                          "Unbound variable %s", _nm);
         unrefexp(e);
         return ret;
       }
@@ -9613,10 +9613,10 @@ exp_t *evaluate(exp_t *e, env_t *env) {
           const char *_nm = (const char *)exp_text(tmpexp);
           const char *_sg = alc_suggest_symbol(_nm, env);
           ret = _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
-                            "Error unbound variable %s (did you mean '%s'?)",
+                            "Unbound variable %s (did you mean '%s'?)",
                             _nm, _sg)
                     : error(ERROR_UNBOUND_VARIABLE, e, env,
-                            "Error unbound variable %s", _nm);
+                            "Unbound variable %s", _nm);
           goto finish;
         }
         ret = e; // what is happening here?
