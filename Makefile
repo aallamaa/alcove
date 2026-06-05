@@ -14,14 +14,27 @@ BINDIR       ?= $(PREFIX)/bin
 SAFE_FLAGS   := -fno-strict-aliasing
 # Tune codegen for the EXACT host CPU (AVX-512 / FMA / etc. where present).
 # You recompile per machine, so a host-specific binary is fine — and this is
-# self-adapting: `-march=native` targets whatever the build host supports.
-# It also stays safe everywhere: the probe blanks it out if the compiler
-# rejects it (older toolchains / odd targets still build), and you can
-# override — `make MARCH='-march=x86-64-v3'` for a portable baseline, or
-# `make MARCH=` to disable. Native (non-emcc) builds only; the wasm target
-# never sees it.
-MARCH        ?= -march=native
-MARCH        := $(shell $(CC) $(MARCH) -xc -S -o /dev/null /dev/null >/dev/null 2>&1 && printf '%s' '$(MARCH)')
+# self-adapting: it targets whatever the build host supports. Apple clang on
+# arm64 (Apple Silicon) REJECTS -march=native, so there we fall back to the arm
+# idiom -mcpu=native (then -mcpu=apple-m1) — without it a Mac build runs untuned
+# and benchmarks noticeably below an equivalently-tuned x86 build. The probe
+# picks the first candidate the compiler accepts, blank if none (older toolchains
+# / odd targets still build). Override with `make MARCH='-march=x86-64-v3'` for a
+# portable baseline, or `make MARCH=` to disable. Native (non-emcc) builds only.
+ifeq ($(origin MARCH),undefined)
+  # Auto-detect: on arm64 try -mcpu fallbacks after -march=native.
+  ifneq (,$(filter arm64 aarch64,$(ARCH)))
+    MARCH_TRY  := -march=native -mcpu=native -mcpu=apple-m1
+  else
+    MARCH_TRY  := -march=native
+  endif
+  MARCH      := $(strip $(shell for f in $(MARCH_TRY); do \
+                  if $(CC) $$f -xc -S -o /dev/null /dev/null >/dev/null 2>&1; \
+                  then echo $$f; break; fi; done))
+else
+  # Explicit override (incl. empty to disable): validate it compiles, blank if not.
+  MARCH      := $(shell $(CC) $(MARCH) -xc -S -o /dev/null /dev/null >/dev/null 2>&1 && printf '%s' '$(MARCH)')
+endif
 ifneq ($(JIT_OK),)
   JIT_FLAGS  := -DALCOVE_JIT=1
 else
