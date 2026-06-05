@@ -322,6 +322,16 @@ assert "nth out of range" (nth 9 (vector 1 2)) nil
 assert "map deque" (let (q (deque)) (push-right! q 1) (push-right! q 2) (map (fn (x) (* x 10)) q)):
   list 10 20
 
+assert "seq set members" (sort (seq (set 3 1 2))) (list 1 2 3)
+
+assert "map over set" (sort (map (fn (x) (* x x)) (set 1 2 3))) (list 1 4 9)
+
+assert "reduce over set" (reduce + 0 (set 1 2 3 4)) 10
+
+assert "seq dict entry" (seq (hash-map "a" 1)) (list (list "a" 1))
+
+assert "seq dict count" (length (seq (hash-map "a" 1 "b" 2))) 2
+
 assert "append" (append (list 1 2) (list 3 4)) (list 1 2 3 4)
 
 assert "sort" (sort (list 3 1 2)) (list 1 2 3)

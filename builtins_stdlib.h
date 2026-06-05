@@ -238,9 +238,11 @@ done:
    (unrefexp when done): an already-cons list / nil is returned via refexp (no
    copy); a vector, string (per codepoint), or deque is materialized into a
    fresh list. Returns NULL if `coll` isn't a sequence. Associative collections
-   (set/dict/hamt) are intentionally NOT sequenced here — "element of a map" is
-   a separate design choice. This is what makes seq/first/rest/map/filter/
-   reduce/nth work uniformly across list, vector, string, and deque. */
+   (set → members, dict → (key value) entries) are handled by coll_assoc_to_list,
+   defined after set.h/hamt.h since it needs their iterators (HAMT not yet
+   sequenced). This is what makes seq/first/rest/map/filter/reduce/nth work
+   uniformly across list, vector, string, deque, set, and dict. */
+static exp_t *coll_assoc_to_list(exp_t *coll); /* defined post-set.h/hamt.h */
 static exp_t *coll_to_list(exp_t *coll) {
   if (!coll || coll == NIL_EXP || ispair(coll))
     return refexp(coll ? coll : NIL_EXP);
@@ -259,14 +261,14 @@ static exp_t *coll_to_list(exp_t *coll) {
     for (alc_listnode_t *nd = l ? l->head : NULL; nd; nd = nd->next)
       list_append_owned(&head, &tail, refexp(nd->val));
   } else {
-    return NULL;
+    return coll_assoc_to_list(coll); /* set/dict (or NULL if not a sequence) */
   }
   return head ? head : refexp(NIL_EXP);
 }
 
 const char doc_seq[] =
-    "(seq coll) — list of coll's elements (list/vector/string/deque); nil for "
-    "an empty/absent sequence.";
+    "(seq coll) — list of coll's elements: list/vector/string/deque; set "
+    "members; dict (key value) entries. nil for an empty/absent sequence.";
 exp_t *seqcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(a);
   exp_t *s = coll_to_list(a);

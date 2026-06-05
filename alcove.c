@@ -10628,6 +10628,33 @@ static exp_t *alc_cstr_to_key(const char *k) {
 /* HAMT ops + builtins live in a dedicated #included fragment. */
 #include "hamt.h"
 
+/* Associative-collection arm of the generic seq protocol (forward-declared in
+   builtins_stdlib.h's coll_to_list). Defined here because it needs set.h's
+   DICT_FOREACH/set_value_clone. Set → members; dict → (key value) entries.
+   HAMT (persistent map) is not sequenced yet (return NULL → "not a sequence").
+   Returns a fresh owned list, or NULL if coll isn't an associative collection. */
+static exp_t *coll_assoc_to_list(exp_t *coll) {
+  exp_t *head = NULL, *tail = NULL;
+  if (isset(coll)) {
+    dict_t *d = (dict_t *)coll->ptr;
+    if (d)
+      DICT_FOREACH(d, k, 0, 0)
+    list_append_owned(&head, &tail, set_value_clone(k->val));
+  } else if (isdict(coll)) {
+    dict_t *d = (dict_t *)coll->ptr;
+    if (d)
+      DICT_FOREACH(d, k, 0, 0) {
+        exp_t *entry =
+            make_node(make_string((char *)k->key, strlen((char *)k->key)));
+        entry->next = make_node(refexp(k->val));
+        list_append_owned(&head, &tail, entry);
+      }
+  } else {
+    return NULL; /* hamt and non-collections: not sequenced here */
+  }
+  return head ? head : refexp(NIL_EXP);
+}
+
 /* MessagePack codec lives in a dedicated #included fragment. */
 #include "msgpack.h"
 
