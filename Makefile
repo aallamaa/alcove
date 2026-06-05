@@ -33,6 +33,15 @@ UNAME_S      := $(shell uname -s)
 # Shared-library extension for native modules: .dylib on macOS, .so elsewhere
 # (matches the (dylib-suffix) builtin and require's explicit-extension handling).
 NATIVE_EXT   := $(if $(filter Darwin,$(UNAME_S)),dylib,so)
+# Link flags for a loadable native module (dlopen'd via require). Linux allows
+# undefined symbols in a .so and resolves them at dlopen time against the host
+# (built -rdynamic); macOS's linker REJECTS undefined symbols in a .dylib at link
+# time, so it needs -undefined dynamic_lookup to defer resolution to load (the
+# host exports its symbols there too via -rdynamic/-export_dynamic). Linux-neutral.
+MODULE_LDFLAGS := -shared -fPIC
+ifeq ($(UNAME_S),Darwin)
+  MODULE_LDFLAGS += -undefined dynamic_lookup
+endif
 ifeq ($(UNAME_S),Darwin)
   PKG_RL     := brew install readline
   PKG_FFI    := brew install libffi
@@ -315,7 +324,7 @@ test-all:
 	printf '\n=== native module (examples/embed/nativemod.$(NATIVE_EXT) via require) ===\n'; \
 	if [ "$(FFI_OK)" = yes ]; then \
 	  nso=/tmp/alcove-nativemod.$$$$.$(NATIVE_EXT); \
-	  if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) -shared -fPIC -I. -o "$$nso" examples/embed/nativemod.c >"$$bld" 2>&1 \
+	  if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) $(MODULE_LDFLAGS) -I. -o "$$nso" examples/embed/nativemod.c >"$$bld" 2>&1 \
 	     && ./alcove --noload -e "(require \"$$nso\") (prn (nm/add 20 22))" 2>/dev/null | grep -q 42; then \
 	    echo "  OK — native module built, required, and called"; \
 	  else echo "  NATIVE MODULE FAILED:"; sed 's/^/    /' "$$bld"; ok=0; fi; \
@@ -324,7 +333,7 @@ test-all:
 	printf '\n=== custom type persistence (savedb a foreign object, reload in a fresh process) ===\n'; \
 	if [ "$(FFI_OK)" = yes ]; then \
 	  cso=/tmp/alcove-ct.$$$$.$(NATIVE_EXT); cdb=/tmp/alcove-ctdb.$$$$; \
-	  if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) -shared -fPIC -I. -o "$$cso" examples/embed/nativemod.c >"$$bld" 2>&1 \
+	  if $(CC) $(SAFE_FLAGS) -O2 $(MARCH) $(MODULE_LDFLAGS) -I. -o "$$cso" examples/embed/nativemod.c >"$$bld" 2>&1 \
 	     && ./alcove --noload -e "(require \"$$cso\") (= c (nm/counter 41)) (nm/inc! c) (persist (quote c)) (savedb \"$$cdb\")" >/dev/null 2>&1 \
 	     && ./alcove --noload -e "(loaddb \"$$cdb\") (prn (nm/get c))" 2>/dev/null | grep -q 42; then \
 	    echo "  OK — foreign object persisted + auto-reloaded its module on load"; \
@@ -362,7 +371,7 @@ embed-example:
 # with (require ...). Needs an FFI-enabled alcove (built -rdynamic so the module
 # resolves alcove_register_cmd / make_* at dlopen). Builds the JIT alcove first.
 native-module-example: jit
-	$(CC) $(SAFE_FLAGS) -O2 $(MARCH) -shared -fPIC -I. -o examples/embed/nativemod.$(NATIVE_EXT) examples/embed/nativemod.c
+	$(CC) $(SAFE_FLAGS) -O2 $(MARCH) $(MODULE_LDFLAGS) -I. -o examples/embed/nativemod.$(NATIVE_EXT) examples/embed/nativemod.c
 	@./alcove --noload -e '(require "examples/embed/nativemod.$(NATIVE_EXT)") (prn (nm/add 20 22)) (prn (nm/scale 4)) (prn (nm/greet "world"))'
 benchmark: speed
 	./benchmark/run.sh
