@@ -233,30 +233,100 @@ done:
   CLEAN_RETURN_1(a, ret);
 }
 
-/* (nth n list) — 0-indexed; returns nil if out of range. */
-const char doc_nth[] = "(nth xs i) — 0-based element of list/string/vector.";
+/* ── generic sequence protocol ────────────────────────────────────────────
+   coll_to_list coerces any supported sequence to a cons list the caller OWNS
+   (unrefexp when done): an already-cons list / nil is returned via refexp (no
+   copy); a vector, string (per codepoint), or deque is materialized into a
+   fresh list. Returns NULL if `coll` isn't a sequence. Associative collections
+   (set/dict/hamt) are intentionally NOT sequenced here — "element of a map" is
+   a separate design choice. This is what makes seq/first/rest/map/filter/
+   reduce/nth work uniformly across list, vector, string, and deque. */
+static exp_t *coll_to_list(exp_t *coll) {
+  if (!coll || coll == NIL_EXP || ispair(coll))
+    return refexp(coll ? coll : NIL_EXP);
+  exp_t *head = NULL, *tail = NULL;
+  if (isvector(coll)) {
+    int64_t n = vec_len(coll);
+    for (int64_t i = 0; i < n; i++)
+      list_append_owned(&head, &tail, vec_get_boxed(coll, i));
+  } else if (isstring(coll)) {
+    const char *s = exp_text(coll);
+    size_t off = 0;
+    while (s[off])
+      list_append_owned(&head, &tail, make_char(utf8_decode_at(s, &off)));
+  } else if (islist(coll)) { /* deque (EXP_LIST) */
+    alc_list_t *l = (alc_list_t *)coll->ptr;
+    for (alc_listnode_t *nd = l ? l->head : NULL; nd; nd = nd->next)
+      list_append_owned(&head, &tail, refexp(nd->val));
+  } else {
+    return NULL;
+  }
+  return head ? head : refexp(NIL_EXP);
+}
+
+const char doc_seq[] =
+    "(seq coll) — list of coll's elements (list/vector/string/deque); nil for "
+    "an empty/absent sequence.";
+exp_t *seqcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(a);
+  exp_t *s = coll_to_list(a);
+  if (!s)
+    CLEAN_RETURN_1(a, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "seq: argument is not a sequence"));
+  CLEAN_RETURN_1(a, s);
+}
+
+const char doc_first[] = "(first coll) — first element of a sequence, or nil.";
+exp_t *firstcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(a);
+  exp_t *s = coll_to_list(a), *ret = NIL_EXP;
+  if (s) {
+    if (ispair(s) && s->content)
+      ret = refexp(s->content);
+    unrefexp(s);
+  }
+  CLEAN_RETURN_1(a, ret);
+}
+
+const char doc_rest[] =
+    "(rest coll) — sequence of all but the first element (a list), or nil.";
+exp_t *restcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(a);
+  exp_t *s = coll_to_list(a), *ret = NIL_EXP;
+  if (s) {
+    /* rest shares the tail of the materialized list; refexp it and drop s */
+    if (ispair(s) && s->next && s->next->content)
+      ret = refexp(s->next);
+    unrefexp(s);
+  }
+  CLEAN_RETURN_1(a, ret);
+}
+
+/* (nth i coll) — 0-indexed element; nil if out of range. Accepts either arg
+   order (nth i coll) / (nth coll i) since a collection is never a number.
+   Works across list/vector/string/deque via coll_to_list. */
+const char doc_nth[] = "(nth i coll) — 0-based element of a list/string/vector/"
+                       "deque (arg order is flexible). nil if out of range.";
 exp_t *nthcmd(exp_t *e, env_t *env) {
   exp_t *ret = NIL_EXP;
   EVAL_ARG_2(a, b);
-  if (a && b) {
-    if (isnumber(a)) {
-      /* b must be a heap pair (or nil) — without is_ptr we'd dereference
-         the tag bits of a tagged immediate. Same fix pattern as
-         appendcmd / reversecmd. nil/empty list is a clean miss. */
-      if (NOT_A_LIST(b)) {
-        CLEAN_RETURN_2(a, b,
-                       error(ERROR_ILLEGAL_VALUE, NULL, env,
-                             "nth: second argument is not a list"));
-      }
-      int64_t idx = FIX_VAL(a);
-      exp_t *cur = b;
-      while (idx > 0 && ispair(cur) && cur->next) {
-        cur = cur->next;
-        idx--;
-      }
-      if (idx == 0 && ispair(cur) && cur->content)
-        ret = refexp(cur->content);
+  exp_t *idxv = isnumber(a) ? a : (isnumber(b) ? b : NULL);
+  exp_t *collv = isnumber(a) ? b : a;
+  if (idxv && collv) {
+    exp_t *seq = coll_to_list(collv);
+    if (!seq)
+      CLEAN_RETURN_2(a, b,
+                     error(ERROR_ILLEGAL_VALUE, NULL, env,
+                           "nth: not a sequence"));
+    int64_t idx = FIX_VAL(idxv);
+    exp_t *cur = seq;
+    while (idx > 0 && ispair(cur) && cur->next) {
+      cur = cur->next;
+      idx--;
     }
+    if (idx == 0 && ispair(cur) && cur->content)
+      ret = refexp(cur->content);
+    unrefexp(seq);
   }
   CLEAN_RETURN_2(a, b, ret);
 }
@@ -454,17 +524,19 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next)
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_MISSING_PARAMETER, e, env, "(map fn list)"));
-  if (NOT_A_LIST(xs))
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq)
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "map: second argument is not a list"));
+                         "map: second argument is not a sequence"));
 
-  exp_t *cur = xs;
+  exp_t *cur = xseq;
   while (ispair(cur) && cur->content) {
     exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
+      unrefexp(xseq);
       CLEAN_RETURN_2(fn, xs, res);
     }
     if (!res)
@@ -479,6 +551,7 @@ exp_t *mapcmd(exp_t *e, env_t *env) {
     }
     cur = cur->next;
   }
+  unrefexp(xseq);
   CLEAN_RETURN_2(fn, xs, head ? head : NIL_EXP);
 }
 /* (filter pred list) — keep elements where (pred x) is truthy. */
@@ -490,17 +563,19 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(
         fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(filter pred list)"));
-  if (NOT_A_LIST(xs))
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq)
     CLEAN_RETURN_2(fn, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "filter: second argument is not a list"));
+                         "filter: second argument is not a sequence"));
 
-  exp_t *cur = xs;
+  exp_t *cur = xseq;
   while (ispair(cur) && cur->content) {
     exp_t *res = alc_apply1(fn, cur->content, env);
     if (res && iserror(res)) {
       if (head)
         unrefexp(head);
+      unrefexp(xseq);
       CLEAN_RETURN_2(fn, xs, res);
     }
     int keep = (res != NULL && res != NIL_EXP);
@@ -518,6 +593,7 @@ exp_t *filtercmd(exp_t *e, env_t *env) {
     }
     cur = cur->next;
   }
+  unrefexp(xseq);
   CLEAN_RETURN_2(fn, xs, head ? head : NIL_EXP);
 }
 /* (reduce fn init list) — left fold: ((fn (fn init x0) x1) x2 ...). */
@@ -534,10 +610,11 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
         error(ERROR_MISSING_PARAMETER, e, env, "(reduce fn init list)"));
   if (!acc)
     acc = NIL_EXP; /* NULL init seed → nil */
-  if (NOT_A_LIST(xs))
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq)
     CLEAN_RETURN_3(fn, acc, xs,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "reduce: third argument is not a list"));
+                         "reduce: third argument is not a sequence"));
 
   /* Fast path: detect a simple 6-byte binary-arithmetic lambda
      (fn (a b) (op a b)) — bytecode is LOAD_SLOT 0, LOAD_SLOT 1, OP, RET.
@@ -561,7 +638,7 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
     }
   }
 
-  exp_t *cur = xs;
+  exp_t *cur = xseq;
   if (fast_op) {
     while (ispair(cur) && cur->content) {
       exp_t *x = cur->content;
@@ -573,8 +650,10 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
         acc = MAKE_FIX(r);
       } else {
         acc = alc_apply2(fn, acc, refexp(x), env);
-        if (acc && iserror(acc))
+        if (acc && iserror(acc)) {
+          unrefexp(xseq);
           CLEAN_RETURN_2(fn, xs, acc);
+        }
         if (!acc)
           acc = NIL_EXP;
       }
@@ -583,13 +662,16 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
   } else {
     while (ispair(cur) && cur->content) {
       acc = alc_apply2(fn, acc, refexp(cur->content), env);
-      if (acc && iserror(acc))
+      if (acc && iserror(acc)) {
+        unrefexp(xseq);
         CLEAN_RETURN_2(fn, xs, acc);
+      }
       if (!acc)
         acc = NIL_EXP;
       cur = cur->next;
     }
   }
+  unrefexp(xseq);
   CLEAN_RETURN_2(fn, xs, acc);
 }
 

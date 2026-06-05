@@ -166,6 +166,24 @@
 (assert "drop"                  (drop 2 (list 1 2 3)) (list 3))
 (assert "range exclusive end"   (range 0 3) (list 0 1 2))
 (assert "nth"                   (nth 1 (list 10 20 30)) 20)
+;; generic seq protocol: map/filter/reduce/nth/seq/first/rest across collections
+(assert "map vector"            (map (fn (x) (* x x)) (vector 1 2 3)) (list 1 4 9))
+(assert "map string"            (map (fn (c) c) "ab") (list #\a #\b))
+(assert "filter vector"         (filter (fn (x) (> x 2)) (vector 1 2 3 4)) (list 3 4))
+(assert "reduce vector"         (reduce + 0 (vector 1 2 3 4)) 10)
+(assert "seq vector"            (seq (vector 1 2 3)) (list 1 2 3))
+(assert "seq string"            (seq "hi") (list #\h #\i))
+(assert "seq list identity"     (seq (list 4 5)) (list 4 5))
+(assert "first vector"          (first (vector 9 8 7)) 9)
+(assert "first string"          (first "hello") #\h)
+(assert "first empty"           (first (list)) nil)
+(assert "rest vector"           (rest (vector 9 8 7)) (list 8 7))
+(assert "rest singleton"        (rest (list 1)) nil)
+(assert "nth vector"            (nth 1 (vector 10 20 30)) 20)
+(assert "nth string"            (nth 1 "hello") #\e)
+(assert "nth flexible order"    (nth (vector 10 20 30) 2) 30)
+(assert "nth out of range"      (nth 9 (vector 1 2)) nil)
+(assert "map deque"             (let (q (deque)) (push-right! q 1) (push-right! q 2) (map (fn (x) (* x 10)) q)) (list 10 20))
 (assert "append"                (append (list 1 2) (list 3 4)) (list 1 2 3 4))
 (assert "sort"                  (sort (list 3 1 2)) (list 1 2 3))
 ; --- conversions / predicates ---
@@ -227,8 +245,8 @@
 (defc e0d-find (n) (each x (list 1 2 3 4) (if (is x n) (return 'found))) 'no)
 (assert "defc return from each hit"  (e0d-find 3) 'found)
 (assert "defc return from each miss" (e0d-find 9) 'no)
-(assert "rest params count"     ((fn (a b . rest) (length rest)) 1 2 3 4 5) 3)
-(assert "rest params empty"     ((fn (a . rest) (length rest)) 1) 0)
+(assert "rest params count"     ((fn (a b . more) (length more)) 1 2 3 4 5) 3)
+(assert "rest params empty"     ((fn (a . more) (length more)) 1) 0)
 
 ; ============================================================================
 ; 0e. Containers — dict / set / hamt / blob / deque, with edge cases (missing
@@ -1526,7 +1544,7 @@
 (assert "type hint: two params"       (ta-g 1.5 2.5)                 4.0)
 (def ta-h (x :int) :f64 (+ x 1))
 (assert "type hint: return type"      (ta-h 4)                       5)
-(def ta-r (a :int . rest) (+ a (count rest)))
+(def ta-r (a :int . more) (+ a (count more)))
 (assert "type hint: with rest param"  (ta-r 10 1 2)                  12)
 (def ta-cd (n :int acc :int) (if (is n 0) acc (ta-cd (- n 1) (+ acc 1))))
 (assert "type hint: deep recursion keeps TCO" (ta-cd 200000 0)       200000)
@@ -3181,7 +3199,7 @@
 ;; --- rest params: bare-symbol and dotted ---
 (def restfn-all args args)
 (assert "rest: bare-symbol collects"  (iso (restfn-all 1 2 3) (list 1 2 3))      t)
-(def restfn-dot (a . rest) rest)
+(def restfn-dot (a . more) more)
 (assert "rest: dotted after fixed"    (iso (restfn-dot 1 2 3) (list 2 3))        t)
 (assert "rest: anon fn bare-symbol"   (iso ((fn xs xs) 7 8) (list 7 8))          t)
 
