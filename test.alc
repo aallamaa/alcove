@@ -244,6 +244,20 @@
 (defstruct isopt x y)
 (assert "iso struct by content"  (iso (isopt 1 2) (isopt 1 2)) t)
 (assert "iso struct diff"        (iso (isopt 1 2) (isopt 1 9)) nil)
+;; audit regressions (deep-review 2026-06-05): these used to crash or swallow errors.
+;; iso on two distinct CYCLIC collections must terminate (depth guard), not stack-overflow.
+(assert "iso cyclic dict bails"  (let (a (hash-map) b (hash-map))
+                                   (assoc! a "s" a) (assoc! b "s" b) (iso a b)) nil)
+(assert "iso cyclic vec bails"   (let (a (vector) b (vector))
+                                   (vec-push! a a) (vec-push! b b) (iso a b)) nil)
+(assert "iso deep nested ok"     (let (build (fn (n acc) (if (is n 0) acc (build (- n 1) (list acc)))))
+                                   (iso (build 400 (list)) (build 400 (list)))) t)
+;; conj/into must PROPAGATE errors from in-place ops, not swallow them.
+(assert "conj bad map entry err" (error? (conj (hash-map) 5)) t)
+(assert "conj propagates err"    (error? (try (conj (vector) (no-such-var-xyz)) (fn (e) e))) t)
+;; apply on a non-list 2nd arg must error cleanly (was a SEGV walking a fixnum as a cons).
+(assert "apply non-list errors"  (error? (apply + 5)) t)
+(assert "apply empty list"       (apply + (list)) 0)
 (assert "append"                (append (list 1 2) (list 3 4)) (list 1 2 3 4))
 (assert "sort"                  (sort (list 3 1 2)) (list 1 2 3))
 ; --- conversions / predicates ---

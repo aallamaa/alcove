@@ -360,7 +360,10 @@ static exp_t *conj_one(exp_t *coll, exp_t *x, env_t *env) {
     const char *op =
         isvector(coll) ? "vec-push!" : isset(coll) ? "set-add!" : "push-right!";
     exp_t *args[2] = {coll, x};
-    unrefexp(apply_builtin(op, env, 2, args)); /* mutates coll, drop the echo */
+    exp_t *r = apply_builtin(op, env, 2, args); /* mutates coll */
+    if (iserror(r))
+      return r; /* propagate, don't swallow the echo */
+    unrefexp(r);
     return refexp(coll);
   }
   if (isdict(coll) || ishamt(coll)) {
@@ -369,7 +372,10 @@ static exp_t *conj_one(exp_t *coll, exp_t *x, env_t *env) {
                    "conj: map entry must be a (key value) list");
     exp_t *args[3] = {coll, car(x), cadr(x)};
     if (isdict(coll)) {
-      unrefexp(apply_builtin("assoc!", env, 3, args)); /* mutates */
+      exp_t *r = apply_builtin("assoc!", env, 3, args); /* mutates */
+      if (iserror(r))
+        return r;
+      unrefexp(r);
       return refexp(coll);
     }
     return apply_builtin("hamt-assoc", env, 3, args); /* fresh hamt */
@@ -397,6 +403,11 @@ exp_t *conjcmd(exp_t *e, env_t *env) {
   }
   for (exp_t *p = e->next->next; p; p = p->next) {
     exp_t *x = EVAL(p->content, env);
+    if (iserror(x)) {
+      unrefexp(coll);
+      unrefexp(e);
+      return x;
+    }
     exp_t *nc = conj_one(coll, x, env);
     unrefexp(x);
     unrefexp(coll); /* drop the old/echo ref; nc is the new owned coll */
@@ -1068,6 +1079,16 @@ exp_t *applycmd(exp_t *e, env_t *env) {
       unrefexp(fn);
       unrefexp(e);
       return args;
+    }
+    /* The 2nd arg must be a proper list; a tagged immediate (e.g. (apply + 5))
+       would otherwise be walked as a cons and deref a non-pointer → SEGV. */
+    if (args != NIL_EXP && !ispair(args)) {
+      exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(apply fn args): args must be a list");
+      unrefexp(fn);
+      unrefexp(args);
+      unrefexp(e);
+      return err;
     }
     /* Materialize args as an exp_t** so vm_invoke_values can take it. */
     int n = 0;
@@ -2013,6 +2034,15 @@ int isequal(exp_t *cur1, exp_t *cur2) {
 
 static int hamt_iso(exp_t *a, exp_t *b); /* deep map equality; HAMT section */
 
+/* Recursion-depth guard: two distinct cyclic collections (e.g. a dict that
+   contains itself under different identities) would recurse forever and blow
+   the C stack. Depth tracks NESTING (lists/vectors/dicts walk their spine in a
+   loop and only recurse per element), so a few thousand levels is far beyond any
+   real data while staying well under an 8 MB stack — even with ASan's fat frames.
+   Hitting the cap means "give up — treat as not equal" rather than crash. */
+#define ISO_MAX_DEPTH 2000
+static ALCOVE_TLS int g_iso_depth = 0;
+
 int isoequal(exp_t *cur1, exp_t *cur2) {
   /* borrow ref to cur1 and cur2 */
   int ret = 0;
@@ -2023,6 +2053,9 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
     return 1;
   if (!is_ptr(cur1) || !is_ptr(cur2))
     return 0;
+  if (g_iso_depth >= ISO_MAX_DEPTH)
+    return 0; /* runaway recursion (cyclic structure) — bail out */
+  g_iso_depth++;
   if (cur1->type == cur2->type) {
     if (ispair(cur1)) {
       cur1n = cur1;
@@ -2092,6 +2125,7 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
     } else
       ret = isequal(cur1, cur2);
   }
+  g_iso_depth--;
   return ret;
 }
 
