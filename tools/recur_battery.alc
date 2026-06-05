@@ -1,0 +1,75 @@
+;; recur_battery.alc — recursion / closure / TCO battery for the compiled-vs-
+;; interpreted differential. Run the SAME script twice:
+;;   ./alcove --noload    tools/recur_battery.alc   > /tmp/compiled.txt   (bytecode VM)
+;;   ./alcove --interpret --noload tools/recur_battery.alc > /tmp/interp.txt  (AST)
+;; then diff. Any difference is a compile-vs-interpret divergence in recursive/
+;; closure code — the axis the equiv_sweep thunk harness can't reach (a nested
+;; fn there forces AST fallback). Depths are bounded: --interpret has no TCO.
+
+(def show (label v) (pr label) (pr "\t") (prn v))
+
+;; ── classic recursion ─────────────────────────────────────────────────────
+(def fact (n) (if (< n 2) 1 (* n (fact (- n 1)))))
+(show "fact10" (fact 10))
+(def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+(show "fib25" (fib 25))
+(def ack (m n) (if (is m 0) (+ n 1)
+                  (if (is n 0) (ack (- m 1) 1)
+                      (ack (- m 1) (ack m (- n 1))))))
+(show "ack-2-3" (ack 2 3))
+(show "ack-3-3" (ack 3 3))
+
+;; ── tail-recursive accumulators (bounded; no TCO in --interpret) ──────────
+(def sum-to (n acc) (if (< n 1) acc (sum-to (- n 1) (+ acc n))))
+(show "sum-to-5000" (sum-to 5000 0))
+(def count-down (n) (if (< n 1) :done (count-down (- n 1))))
+(show "countdown-5000" (count-down 5000))
+(def rev-build (n acc) (if (< n 1) acc (rev-build (- n 1) (cons n acc))))
+(show "rev-build-200-len" (length (rev-build 200 nil)))
+
+;; ── tail recursion through let / cond / and-or (compiler TCO paths) ───────
+(def loop-let (n) (let (m (- n 1)) (if (< n 1) :ok (loop-let m))))
+(show "loop-let-3000" (loop-let 3000))
+(def loop-cond (n) (cond (< n 1) :ok :else (loop-cond (- n 1))))
+(show "loop-cond-3000" (loop-cond 3000))
+(def loop-when (n acc) (if (< n 1) acc (loop-when (- n 1) (+ acc 1))))
+(show "loop-when-3000" (loop-when 3000 0))
+
+;; ── mutual recursion ──────────────────────────────────────────────────────
+(def my-even? (n) (if (is n 0) t (my-odd? (- n 1))))
+(def my-odd? (n) (if (is n 0) nil (my-even? (- n 1))))
+(show "even-1000" (my-even? 1000))
+(show "odd-777" (my-odd? 777))
+
+;; ── closures ──────────────────────────────────────────────────────────────
+(def make-adder (x) (fn (y) (+ x y)))
+(show "adder" ((make-adder 10) 32))
+(def make-counter () (let (n 0) (fn () (= n (+ n 1)) n)))
+(= c1 (make-counter))
+(c1) (c1)
+(show "counter3" (c1))
+(def compose (f g) (fn (x) (f (g x))))
+(show "compose" ((compose (fn (x) (* x x)) (fn (x) (+ x 1))) 4))
+
+;; ── higher-order with named + lambda fns ──────────────────────────────────
+(show "map-sq" (map (fn (x) (* x x)) (list 1 2 3 4 5)))
+(show "filter-even" (filter my-even? (list 1 2 3 4 5 6)))
+(show "reduce-sum" (reduce (fn (a b) (+ a b)) 0 (list 1 2 3 4 5)))
+(def apply-twice (f x) (f (f x)))
+(show "apply-twice" (apply-twice (fn (n) (* n 2)) 5))
+
+;; ── recursion building/consuming lists ────────────────────────────────────
+(def my-map (f xs) (if xs (cons (f (car xs)) (my-map f (cdr xs))) nil))
+(show "my-map" (my-map (fn (x) (+ x 100)) (list 1 2 3)))
+(def my-len (xs) (if xs (+ 1 (my-len (cdr xs))) 0))
+(show "my-len" (my-len (list 1 2 3 4 5 6 7)))
+(def range-up (lo hi) (if (< lo hi) (cons lo (range-up (+ lo 1) hi)) nil))
+(show "range" (range-up 0 10))
+
+;; ── numeric algorithms ────────────────────────────────────────────────────
+(def gcd (a b) (if (is b 0) a (gcd b (mod a b))))
+(show "gcd" (gcd 1071 462))
+(def pow (b e) (if (is e 0) 1 (* b (pow b (- e 1)))))
+(show "pow" (pow 2 16))
+
+(prn "RECUR BATTERY DONE")

@@ -98,6 +98,11 @@ static unsigned short g_next_type_id = 0; /* lazily set to EXP_MAXSIZE on first 
 static const char *g_current_module_spec = NULL;
 /* --safe: disable db-load auto-(require) of a missing custom type's module. */
 static int g_safe_mode = 0;
+/* --interpret: force every lambda body to run on the AST tree-walker (skip the
+   bytecode compiler). Used to differential-test compiled-vs-interpreted on the
+   same source (run twice, diff). Deep tail recursion has no TCO in this mode, so
+   keep test depths bounded. */
+static int g_no_compile = 0;
 /* Load-scoped: dump-session custom type id → this process's id (0 = unresolved).
    Built by alcove_load_unified from the v3 type table; read by load_exp_t.
    Declared here (before load_exp_t) since load_exp_t precedes the dump code. */
@@ -7725,6 +7730,8 @@ int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
                    uint8_t ret_hint) {
   if (!fn || !islambda(fn))
     return 0;
+  if (g_no_compile)
+    return 0; /* --interpret: force AST tree-walker (differential testing) */
   if (fn->flags & FLAG_COMPILED)
     return 1; /* idempotent */
   exp_t *params = fn->content;
@@ -11183,6 +11190,10 @@ int main(int argc, char *argv[]) {
         /* Don't let a db.dump auto-(require) native modules to resolve its
            custom types — loading a dump then can't execute module code. */
         g_safe_mode = 1;
+      } else if (strcmp(argv[src], "--interpret") == 0) {
+        /* Force the AST tree-walker (no bytecode compile) — differential
+           testing vs the default compiled path. No TCO; keep recursion bounded. */
+        g_no_compile = 1;
       } else if (strcmp(argv[src], "--no-init") == 0 ||
                  strcmp(argv[src], "--noinit") == 0) {
         run_init = 0;

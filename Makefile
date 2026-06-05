@@ -342,6 +342,14 @@ test-all:
 	echo "$$es" | grep "EQUIV SWEEP:" | grep -vE "OK|FAIL" | sed 's/^/  /'; \
 	if echo "$$es" | grep -q "EQUIV SWEEP: OK"; then echo "  OK — AST and bytecode VM agree on every compiled form"; \
 	else echo "  EQUIV SWEEP MISMATCH:"; echo "$$es" | grep MISMATCH | sed 's/^/    /'; ok=0; fi; \
+	printf '\n=== recursion/closure compiled-vs-interpreted differential ===\n'; \
+	rc=/tmp/alcove-recur-c.$$$$; ri=/tmp/alcove-recur-i.$$$$; \
+	./alcove --noload tools/recur_battery.alc 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >"$$rc"; \
+	./alcove --interpret --noload tools/recur_battery.alc 2>&1 | sed 's/\x1b\[[0-9;]*m//g' >"$$ri"; \
+	if diff -q "$$rc" "$$ri" >/dev/null && grep -q "RECUR BATTERY DONE" "$$rc"; then \
+	  echo "  OK — bytecode VM == AST tree-walker on $$(grep -c "	" "$$rc") recursion/closure results"; \
+	else echo "  RECUR DIFFERENTIAL MISMATCH:"; diff "$$rc" "$$ri" | sed 's/^/    /' | head -20; ok=0; fi; \
+	rm -f "$$rc" "$$ri"; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
 	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi
