@@ -10628,11 +10628,26 @@ static exp_t *alc_cstr_to_key(const char *k) {
 /* HAMT ops + builtins live in a dedicated #included fragment. */
 #include "hamt.h"
 
+/* hamt_node_foreach visitor: append a (key value) 2-list to acc[0]/acc[1].
+   Matches the dict entry shape so (seq hamt) reads like (seq dict). */
+static int hamt_collect_entries(exp_t *key, exp_t *val, void *ctx) {
+  exp_t **acc = (exp_t **)ctx; /* acc[0]=head, acc[1]=tail */
+  exp_t *entry = make_node(refexp(key));
+  entry->next = make_node(refexp(val));
+  exp_t *node = make_node(entry);
+  if (!acc[0])
+    acc[0] = node;
+  else
+    acc[1]->next = node;
+  acc[1] = node;
+  return 1;
+}
+
 /* Associative-collection arm of the generic seq protocol (forward-declared in
    builtins_stdlib.h's coll_to_list). Defined here because it needs set.h's
-   DICT_FOREACH/set_value_clone. Set → members; dict → (key value) entries.
-   HAMT (persistent map) is not sequenced yet (return NULL → "not a sequence").
-   Returns a fresh owned list, or NULL if coll isn't an associative collection. */
+   DICT_FOREACH/set_value_clone + hamt's iterator. Set → members; dict and HAMT
+   → (key value) entries. Returns a fresh owned list, or NULL if coll isn't an
+   associative collection. */
 static exp_t *coll_assoc_to_list(exp_t *coll) {
   exp_t *head = NULL, *tail = NULL;
   if (isset(coll)) {
@@ -10649,8 +10664,13 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
         entry->next = make_node(refexp(k->val));
         list_append_owned(&head, &tail, entry);
       }
+  } else if (ishamt(coll)) {
+    exp_t *acc[2] = {NULL, NULL};
+    if (coll->ptr)
+      hamt_node_foreach(((hamt_t *)coll->ptr)->root, hamt_collect_entries, acc);
+    head = acc[0];
   } else {
-    return NULL; /* hamt and non-collections: not sequenced here */
+    return NULL; /* not an associative collection */
   }
   return head ? head : refexp(NIL_EXP);
 }

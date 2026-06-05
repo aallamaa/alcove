@@ -332,6 +332,11 @@ assert "seq dict entry" (seq (hash-map "a" 1)) (list (list "a" 1))
 
 assert "seq dict count" (length (seq (hash-map "a" 1 "b" 2))) 2
 
+assert "seq hamt entry" (seq (hamt "a" 1)) (list (list "a" 1))
+
+assert "reduce over hamt" (reduce (fn (acc kv) (+ acc (nth 1 kv))) 0 (hamt "a" 10 "b" 20)):
+  30
+
 assert "append" (append (list 1 2) (list 3 4)) (list 1 2 3 4)
 
 assert "sort" (sort (list 3 1 2)) (list 1 2 3)
