@@ -154,7 +154,7 @@ const LISP = [
   ["(set-has? #{1 2 3} 2)", "t"],
   ["(set-has? #{1 2 3} 9)", "nil"],
   ["(eval (list (quote +) 1 2 3))", "6"],
-  ["(apply + (list 1 2 3 4))", "Error: apply: first arg not a fn"],
+  ["(apply + (list 1 2 3 4))", "10"],
   ["(number? 5)", "t"],
   ["(number? 5.0)", "t"],
   ["(pair? (list 1))", "t"],
@@ -192,6 +192,6 @@ const ADDER = [
   ["msgpack-decode (msgpack-encode 3.5)", "3.5"],
   ["let x 10 (* x x)", "100"],
   ["do (+ 1 1) (* 3 3)", "9"],
-  ["apply + (list 10 20 30)", "Error: apply: first arg not a fn"],
+  ["apply + (list 10 20 30)", "60"],
 ];
 module.exports = { LISP, ADDER };
