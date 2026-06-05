@@ -213,7 +213,13 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
    and returns an owned result. No call form is synthesized, so there is no `e`
    to forget freeing — this sidesteps the consume-e footgun entirely. A builtin
    registers BOTH a normal lispCmd (for the AST / apply / map paths) and an
-   optional lispCmdV; the compiled fast path calls the lispCmdV when present. */
+   optional lispCmdV; the compiled fast path calls the lispCmdV when present.
+   TWO obligations on the implementor:
+     1. VALIDATE nargs — the VM passes the raw call arity (a wrong-arity compiled
+        call reaches you as-is); index argv only after checking nargs.
+     2. CONSUME every argv ref exactly once (unrefexp), on every path.
+   The lispCmdV and the lispCmd MUST be behaviorally + ownership equivalent — the
+   AST path runs one, the compiled path the other; nothing enforces parity. */
 typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv, struct env_t *env);
 
 #define FLAG_TAILREC 1
