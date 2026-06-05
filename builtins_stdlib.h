@@ -333,6 +333,110 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(a, b, ret);
 }
 
+/* Apply a reserved builtin to already-evaluated VALUE args by name, quoting each
+   so the builtin's own EVAL passes them through unchanged. Returns the builtin's
+   result (owned), or an error if `name` isn't a builtin. Used by conj/into to
+   reuse the tested per-type add ops instead of re-implementing container
+   internals. The synthesized form is consumed by the builtin (consume-e). */
+static exp_t *apply_builtin(const char *name, env_t *env, int n, exp_t **args) {
+  keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)name, NULL);
+  if (!kv || !isinternal((exp_t *)kv->val))
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "conj/into: missing %s", name);
+  exp_t *form = make_node(refexp((exp_t *)kv->val)), *cur = form;
+  for (int i = 0; i < n; i++)
+    cur = cur->next = make_node(make_quote(refexp(args[i])));
+  return evaluate(form, env);
+}
+
+/* conj one element into coll, dispatched by type: mutable collections
+   (vector/set/deque/dict) are updated IN PLACE and coll is returned; immutable
+   ones (list/hamt) return a fresh collection. For dict/hamt, `x` is a (key
+   value) 2-list. Returns the (owned) resulting collection, or an error. The
+   caller's `coll` ref is consumed only when a fresh collection is returned
+   (it does `coll = conj_one(coll, ...)`); for in-place updates the same object
+   comes back (an extra ref), so the caller must unref the return either way. */
+static exp_t *conj_one(exp_t *coll, exp_t *x, env_t *env) {
+  if (isvector(coll) || isset(coll) || islist(coll)) {
+    const char *op =
+        isvector(coll) ? "vec-push!" : isset(coll) ? "set-add!" : "push-right!";
+    exp_t *args[2] = {coll, x};
+    unrefexp(apply_builtin(op, env, 2, args)); /* mutates coll, drop the echo */
+    return refexp(coll);
+  }
+  if (isdict(coll) || ishamt(coll)) {
+    if (!ispair(x) || !car(x) || !cadr(x))
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "conj: map entry must be a (key value) list");
+    exp_t *args[3] = {coll, car(x), cadr(x)};
+    if (isdict(coll)) {
+      unrefexp(apply_builtin("assoc!", env, 3, args)); /* mutates */
+      return refexp(coll);
+    }
+    return apply_builtin("hamt-assoc", env, 3, args); /* fresh hamt */
+  }
+  /* list / nil → prepend (immutable): (cons x coll), a fresh list. */
+  if (ispair(coll) || coll == NIL_EXP) {
+    exp_t *args[2] = {x, coll};
+    return apply_builtin("cons", env, 2, args);
+  }
+  return error(ERROR_ILLEGAL_VALUE, NULL, env, "conj: not a collection");
+}
+
+const char doc_conj[] =
+    "(conj coll x ...) — add elements to coll. Mutable collections "
+    "(vector/set/deque/dict) are updated in place; list/hamt return a fresh "
+    "collection (list prepends). For dict/hamt each x is a (key value) list.";
+exp_t *conjcmd(exp_t *e, env_t *env) {
+  if (!e->next)
+    CLEAN_RETURN_1(NIL_EXP, error(ERROR_MISSING_PARAMETER, e, env,
+                                  "(conj coll x ...)"));
+  exp_t *coll = EVAL(e->next->content, env);
+  if (iserror(coll)) {
+    unrefexp(e);
+    return coll;
+  }
+  for (exp_t *p = e->next->next; p; p = p->next) {
+    exp_t *x = EVAL(p->content, env);
+    exp_t *nc = conj_one(coll, x, env);
+    unrefexp(x);
+    unrefexp(coll); /* drop the old/echo ref; nc is the new owned coll */
+    coll = nc;
+    if (iserror(coll)) {
+      unrefexp(e);
+      return coll;
+    }
+  }
+  unrefexp(e);
+  return coll;
+}
+
+const char doc_into[] =
+    "(into dest src) — conj every element of (seq src) into dest, left to "
+    "right. (into [] s) / (into #{} s) / (into {} entries) convert collections.";
+exp_t *intocmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(dest, src);
+  if (!dest || !e->next->next)
+    CLEAN_RETURN_2(dest, src,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(into dest src)"));
+  exp_t *seq = coll_to_list(src);
+  if (!seq)
+    CLEAN_RETURN_2(dest, src,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "into: src is not a sequence"));
+  exp_t *coll = refexp(dest);
+  for (exp_t *c = seq; ispair(c) && c->content; c = c->next) {
+    exp_t *nc = conj_one(coll, c->content, env);
+    unrefexp(coll);
+    coll = nc;
+    if (iserror(coll)) {
+      unrefexp(seq);
+      CLEAN_RETURN_2(dest, src, coll);
+    }
+  }
+  unrefexp(seq);
+  CLEAN_RETURN_2(dest, src, coll);
+}
+
 /* (reverse list) — non-destructive; returns a new list. */
 const char doc_reverse[] =
     "(reverse xs) — list with elements in reverse order.";

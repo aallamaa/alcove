@@ -383,6 +383,8 @@ lispProc lispProcList[] = {
     LISPCMD("seq", seqcmd, doc_seq),
     LISPCMD("first", firstcmd, doc_first),
     LISPCMD("rest", restcmd, doc_rest),
+    LISPCMD("conj", conjcmd, doc_conj),
+    LISPCMD("into", intocmd, doc_into),
     LISPCMD("reverse", reversecmd, doc_reverse),
     LISPCMD("append", appendcmd, doc_append),
     /* Vectors — O(1) random-access array */

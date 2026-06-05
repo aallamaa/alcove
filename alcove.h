@@ -990,6 +990,8 @@ exp_t *nthcmd(exp_t *e, env_t *env);
 exp_t *seqcmd(exp_t *e, env_t *env);
 exp_t *firstcmd(exp_t *e, env_t *env);
 exp_t *restcmd(exp_t *e, env_t *env);
+exp_t *conjcmd(exp_t *e, env_t *env);
+exp_t *intocmd(exp_t *e, env_t *env);
 exp_t *reversecmd(exp_t *e, env_t *env);
 exp_t *appendcmd(exp_t *e, env_t *env);
 exp_t *numberpcmd(exp_t *e, env_t *env);
