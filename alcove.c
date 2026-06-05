@@ -8079,6 +8079,18 @@ tail_reentry:
       unrefexp(fn);                                                            \
     return vm_unwind_handlers(_err, handler_base);                             \
   } while (0)
+/* Like RUNTIME_ERR but with two printf args — for arity errors, so the VM
+   wording matches the AST path's "too few/many arguments to NAME". */
+#define RUNTIME_ERR_FMT(fmt, a1, a2)                                           \
+  do {                                                                         \
+    exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, fmt, a1, a2);            \
+    int _i;                                                                    \
+    for (_i = 0; _i < sp; _i++)                                                \
+      unrefexp(stack[_i]);                                                     \
+    if (fn_owned)                                                              \
+      unrefexp(fn);                                                            \
+    return vm_unwind_handlers(_err, handler_base);                            \
+  } while (0)
 /* Like RUNTIME_ERR but for an unbound symbol: names the symbol and appends a
    "did you mean 'X'?" hint when a near-match exists. `symexp` is the symbol. */
 #define RUNTIME_ERR_UNBOUND(symexp)                                            \
@@ -8606,7 +8618,8 @@ l_tail_self: {
      stack, keep keys as-is (same fn → same params), jump to PC 0. */
   uint8_t n = READ_U8;
   if (n != bc->nparams)
-    RUNTIME_ERR("Wrong number of arguments");
+    RUNTIME_ERR_FMT("too %s arguments to %s", n < bc->nparams ? "few" : "many",
+                    fn->meta ? (const char *)fn->meta : "function");
   int base = sp - n;
   int i;
   for (i = 0; i < env->n_inline; i++)
@@ -8750,7 +8763,9 @@ l_tail_call: {
   }
 
   if (n != new_fn->bc->nparams)
-    RUNTIME_ERR("Wrong number of arguments");
+    RUNTIME_ERR_FMT("too %s arguments to %s",
+                    n < new_fn->bc->nparams ? "few" : "many",
+                    new_fn->meta ? (const char *)new_fn->meta : "function");
 
   /* Compiled target: stash args, unwind, rebind, jump. */
   if (n > ENV_INLINE_SLOTS) {
@@ -9268,9 +9283,11 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
       for (i = 0; i < nargs; i++)
         unrefexp(argv[i]);
       destroy_env(newenv);
-      return error(ERROR_ILLEGAL_VALUE, fn, env,
-                   "wrong number of args: expected %d, got %d", fn->bc->nparams,
-                   nargs);
+      /* Same wording as the AST path (var2env) so arity errors read identically
+         whether the callee was reached interpreted or compiled. */
+      return error(ERROR_ILLEGAL_VALUE, fn, env, "too %s arguments to %s",
+                   nargs < fn->bc->nparams ? "few" : "many",
+                   fn->meta ? (const char *)fn->meta : "function");
     }
     exp_t *p = lambda_params(fn);
     int i = 0;
@@ -9303,7 +9320,8 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
         for (j = i; j < nargs; j++) unrefexp(argv[j]);
         destroy_env(newenv);
         return error(ERROR_MISSING_PARAMETER, fn, env,
-                     "wrong number of args");
+                     "too few arguments to %s",
+                     fn->meta ? (const char *)fn->meta : "function");
       }
       var2env_bind((char *)exp_text(p->content), argv[i], newenv);
       p = p->next;

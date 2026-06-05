@@ -428,6 +428,18 @@ assert "rest params count" ((fn (a b . more) (length more)) 1 2 3 4 5) 3
 
 assert "rest params empty" ((fn (a . more) (length more)) 1) 0
 
+assert "arity too few" (error? (try ((fn (a b) a) 1) (fn (er) er))) t
+
+assert "arity too many" (error? (try ((fn (a b) a) 1 2 3) (fn (er) er))) t
+
+assert "arity too many 0-arg" (error? (try ((fn () 0) 1) (fn (er) er))) t
+
+def arity-g (x y):
+  + x y
+
+assert "arity msg names fn" (try (arity-g 1 2 3) (fn (er) (string-contains? (error-message er) "arguments to arity-g"))):
+  t
+
 assert "dict get hit" (get (hash-map "a" 1 "b" 2) "a") 1
 
 assert "dict get miss -> nil" (get (hash-map "a" 1) "z") nil
