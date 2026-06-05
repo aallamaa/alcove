@@ -428,6 +428,36 @@ static void als_head_remap(als_node *node) {
   }
 }
 
+/* ---- source map: generated s-expr line -> original Adder line ----
+   als_to_sexpr emits exactly ONE generated line per top-level form, so the map
+   is a flat array: generated line N (1-based) came from Adder line map->line[N-1].
+   Lets an error in transpiled .adr code point at the user's real source line. */
+typedef struct {
+  int *line;
+  int n, cap;
+} als_map;
+static void als_map_push(als_map *m, int adder_line) {
+  if (!m)
+    return;
+  if (m->n == m->cap) {
+    m->cap = m->cap ? m->cap * 2 : 16;
+    m->line = (int *)realloc(m->line, (size_t)m->cap * sizeof *m->line);
+  }
+  m->line[m->n++] = adder_line;
+}
+static int als_map_lookup(const als_map *m, int gen_line) {
+  if (!m || gen_line < 1 || gen_line > m->n)
+    return 0;
+  return m->line[gen_line - 1];
+}
+static void als_map_free(als_map *m) {
+  if (m) {
+    free(m->line);
+    m->line = NULL;
+    m->n = m->cap = 0;
+  }
+}
+
 /* ---- serialize node -> s-expression text ---- */
 static void als_emit(als_node *x, als_buf *b) {
   if (!x)
@@ -451,12 +481,15 @@ static int als_starts_with(const char *s, const char *kw, size_t kwlen) {
          (s[kwlen] == '\0' || s[kwlen] == ' ' || s[kwlen] == '\t');
 }
 
-/* ---- top level: src -> s-expr string ---- */
-char *als_to_sexpr(const char *src) {
+/* ---- top level: src -> s-expr string (+ optional source map) ----
+   When `map` is non-NULL it is filled with one entry per emitted top-level line,
+   each the 1-based Adder source line that form began on. */
+char *als_to_sexpr_mapped(const char *src, als_map *map) {
   /* split into lines (keep leading whitespace for indent calc) */
   size_t slen = strlen(src);
   als_buf out;
   als_buf_init(&out);
+  int cur_line = 0; /* 1-based Adder source line of the current iteration */
 
   /* indentation stack: parent list to append children into */
   enum { MAXD = 256 };
@@ -470,6 +503,7 @@ char *als_to_sexpr(const char *src) {
 
   size_t i = 0;
   while (i <= slen) {
+    cur_line++; /* at the top so every `continue` still advances the line count */
     size_t j = i;
     while (j < slen && src[j] != '\n')
       j++;
@@ -583,7 +617,8 @@ char *als_to_sexpr(const char *src) {
     if (sp > 0) {
       als_push(node_stack[sp - 1], node);
     } else {
-      als_push(roots, node); /* defer emit until tree is complete */
+      als_push(roots, node);      /* defer emit until tree is complete */
+      als_map_push(map, cur_line); /* this root → its Adder start line */
     }
 
     if (block && sp < MAXD) {
@@ -600,5 +635,8 @@ char *als_to_sexpr(const char *src) {
   als_free(roots);
   return out.p;
 }
+
+/* Back-compat entry point: transpile without building a source map. */
+char *als_to_sexpr(const char *src) { return als_to_sexpr_mapped(src, NULL); }
 
 #endif /* ALCOVE_ALS_H */

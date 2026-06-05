@@ -366,6 +366,11 @@ test-all:
 	  echo "  OK — file error shows src:line + caret, -e shows source line + caret"; \
 	else echo "  CARET MISSING:"; echo "$$cf" | sed 's/^/    /'; echo "    --"; echo "$$ce" | sed 's/^/    /'; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
+	printf '\n=== adder error caret (maps generated line back to Adder source) ===\n'; \
+	ac=$$(printf '= x 1\n\n+ x undefined_adr_zz\n' | ./adder --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	if echo "$$ac" | grep -q ':3:' && echo "$$ac" | grep -qF '+ x undefined_adr_zz' && echo "$$ac" | grep -qE '^[[:space:]]*\^'; then \
+	  echo "  OK — .adr error reports the Adder source line (3) + caret, not the generated line"; \
+	else echo "  ADDER CARET WRONG:"; echo "$$ac" | sed 's/^/    /'; ok=0; fi; \
 	printf '\n=== AST-vs-VM equivalence sweep (tools/equiv_sweep.alc) ===\n'; \
 	es=$$(./alcove --noload tools/equiv_sweep.alc 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	echo "$$es" | grep "EQUIV SWEEP:" | grep -vE "OK|FAIL" | sed 's/^/  /'; \

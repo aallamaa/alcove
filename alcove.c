@@ -1644,6 +1644,20 @@ static ALCOVE_TLS const char *g_reader_src = NULL;
    s-expr), paired with g_adder_map (see als_map). */
 static ALCOVE_TLS const char *g_reader_srctext = NULL;
 static ALCOVE_TLS size_t g_reader_srctext_len = 0;
+/* When the current source is Adder, this maps a GENERATED s-expr line back to
+   the original Adder source line (als_map, from adr.h). NULL for plain s-expr
+   input. With it set, g_reader_srctext points at the Adder source and the
+   reader's line numbers are translated through the map before display. */
+static ALCOVE_TLS als_map *g_adder_map = NULL;
+/* Translate a reader (generated) line to the line to DISPLAY: the Adder source
+   line when a map is active, else the reader line unchanged. */
+static int display_line(int gen_line) {
+  if (g_adder_map) {
+    int a = als_map_lookup(g_adder_map, gen_line);
+    return a > 0 ? a : gen_line;
+  }
+  return gen_line;
+}
 /* Module system (see requirecmd / nscmd):
    g_reader_dir  — directory of the file currently being loaded, so `require`
                    can resolve a sibling module relative to the requirer first.
@@ -1765,8 +1779,8 @@ static exp_t *annotate_error_loc(exp_t *err, const char *src, int line) {
    `srctext`/`len` is the in-memory source; `line`/`col` are 1-based. */
 static void render_error_caret(FILE *out, const char *srctext, size_t len,
                                int line, int col) {
-  if (!srctext || line < 1 || col < 1)
-    return;
+  if (!srctext || line < 1)
+    return; /* col < 1 means "auto" — caret under the first non-blank char */
   /* Walk to the start of the target line. */
   size_t i = 0;
   int curline = 1;
@@ -1786,12 +1800,32 @@ static void render_error_caret(FILE *out, const char *srctext, size_t len,
   if (vis > ls && srctext[vis - 1] == '\r')
     vis--;
   int linelen = (int)(vis - ls);
+  if (col < 1) {
+    /* auto: caret under the first non-whitespace char (used for Adder, whose
+       indentation doesn't map to a generated-s-expr column). */
+    col = 1;
+    while (col - 1 < linelen &&
+           (srctext[ls + col - 1] == ' ' || srctext[ls + col - 1] == '\t'))
+      col++;
+  }
   if (col - 1 > linelen)
     col = linelen + 1; /* clamp caret to just past the line */
   fprintf(out, "  %.*s\n  ", linelen, srctext + ls);
   for (int c = 0; c < col - 1; c++)
     fputc((c < linelen && srctext[ls + c] == '\t') ? '\t' : ' ', out);
   fprintf(out, "\x1B[91m^\x1B[39m\n");
+}
+
+/* Render the caret for a reader (generated) position, translating to the Adder
+   source line when a map is active (where the generated column is meaningless,
+   so the caret auto-targets the line's first non-blank char). */
+static void render_form_caret(FILE *out, int gen_line, int gen_col) {
+  if (g_adder_map)
+    render_error_caret(out, g_reader_srctext, g_reader_srctext_len,
+                       display_line(gen_line), 0 /* auto column */);
+  else
+    render_error_caret(out, g_reader_srctext, g_reader_srctext_len, gen_line,
+                       gen_col);
 }
 
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
@@ -4798,9 +4832,10 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
   if (!filetext)
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot read '%s'", path);
   char *transpiled = NULL;
+  als_map amap = {0}; /* generated-line → Adder-line, for .adr error carets */
   size_t plen = strlen(path);
   if (plen >= 4 && strcmp(path + plen - 4, ".adr") == 0) {
-    transpiled = als_to_sexpr(filetext);
+    transpiled = als_to_sexpr_mapped(filetext, &amap);
     fp = transpiled ? fmemopen(transpiled, strlen(transpiled), "r") : NULL;
     if (!fp) {
       free(transpiled);
@@ -4826,14 +4861,16 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
   int prev_line = g_reader_line;
   const char *prev_srctext = g_reader_srctext;
   size_t prev_srctext_len = g_reader_srctext_len;
+  als_map *prev_adder_map = g_adder_map;
   int prev_col = g_reader_col;
   long prev_off = g_reader_off;
-  g_reader_src = transpiled ? NULL : src_basename(path);
-  /* The caret renders against the original file text. (.adr line/offset → Adder
-     source is handled by the map; for now a .adr error renders against the
-     generated s-expr only via g_reader_line, matching the dropped label.) */
-  g_reader_srctext = transpiled ? NULL : filetext;
-  g_reader_srctext_len = transpiled ? 0 : filelen;
+  /* Label and caret-render against the ORIGINAL file text (Adder source for a
+     .adr module); the source map translates the reader's generated lines back
+     to Adder lines, so we keep the label instead of dropping it. */
+  g_reader_src = src_basename(path);
+  g_reader_srctext = filetext;
+  g_reader_srctext_len = filelen;
+  g_adder_map = transpiled ? &amap : NULL;
   g_reader_line = 1;
   g_reader_col = 1;
   g_reader_off = 0;
@@ -4858,13 +4895,13 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
       }
       /* Reader syntax error: its line is g_reader_line at the failure point. */
       fclose(fp);
-      result = annotate_error_loc(form, g_reader_src, g_reader_line);
+      result = annotate_error_loc(form, g_reader_src, display_line(g_reader_line));
       goto done;
     }
     exp_t *ret = evaluate(form, env);
     if (iserror(ret)) {
       fclose(fp);
-      result = annotate_error_loc(ret, g_reader_src, g_form_line);
+      result = annotate_error_loc(ret, g_reader_src, display_line(g_form_line));
       goto done;
     }
     unrefexp(ret);
@@ -4875,6 +4912,7 @@ done:
   g_reader_line = prev_line;
   g_reader_srctext = prev_srctext;
   g_reader_srctext_len = prev_srctext_len;
+  g_adder_map = prev_adder_map;
   g_reader_col = prev_col;
   g_reader_off = prev_off;
   free(g_reader_dir);
@@ -4887,6 +4925,7 @@ done:
   g_current_ns = prev_ns;
   free(transpiled); /* NULL when the file was read directly (.alc) */
   free(filetext);   /* the slurped original source */
+  als_map_free(&amap);
   return result;
 }
 
@@ -10929,8 +10968,7 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
       printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
       print_node(res);
       if (iserror(res)) /* show the offending line + caret under the message */
-        render_error_caret(stdout, g_reader_srctext, g_reader_srctext_len,
-                           g_form_line, g_form_col);
+        render_form_caret(stdout, g_form_line, g_form_col);
     } else
       printf("nil");
     printf("\n\n");
@@ -10943,10 +10981,9 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
        start line, captured in g_form_line); -e / piped input has no label,
        so print the bare message. */
     if (g_reader_src)
-      annotate_error_loc(res, g_reader_src, g_form_line);
+      annotate_error_loc(res, g_reader_src, display_line(g_form_line));
     fprintf(stderr, "%s\n", (const char *)res->ptr);
-    render_error_caret(stderr, g_reader_srctext, g_reader_srctext_len,
-                       g_form_line, g_form_col);
+    render_form_caret(stderr, g_form_line, g_form_col);
     g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
   }
   if (res)
@@ -10966,10 +11003,14 @@ static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
     return 0;
   memcpy(tmp, src, n);
   tmp[n] = 0;
-  char *body = als_to_sexpr(tmp); /* malloc'd s-expression source */
-  free(tmp);
-  if (!body)
+  als_map amap = {0};
+  char *body = als_to_sexpr_mapped(tmp, &amap); /* + generated→Adder line map */
+  if (!body) {
+    free(tmp);
+    als_map_free(&amap);
     return 0;
+  }
+  /* tmp (the Adder source) is kept until the end so the caret can render it. */
 #else
   char *body = (char *)malloc(n + 1); /* already s-expressions */
   if (!body)
@@ -10997,12 +11038,17 @@ static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
      plain build's buffer already IS the user's s-expr input.) */
   const char *prev_srctext = g_reader_srctext;
   size_t prev_srctext_len = g_reader_srctext_len;
+  als_map *prev_adder_map = g_adder_map;
   int prev_line = g_reader_line, prev_col = g_reader_col;
   long prev_off = g_reader_off;
   g_reader_line = 1;
   g_reader_col = 1;
   g_reader_off = 0;
-#ifndef ALCOVE_ALS
+#ifdef ALCOVE_ALS
+  g_reader_srctext = tmp; /* the user's Adder source */
+  g_reader_srctext_len = n;
+  g_adder_map = &amap;
+#else
   g_reader_srctext = buf;
   g_reader_srctext_len = blen;
 #endif
@@ -11026,10 +11072,15 @@ static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
   }
   g_reader_srctext = prev_srctext;
   g_reader_srctext_len = prev_srctext_len;
+  g_adder_map = prev_adder_map;
   g_reader_line = prev_line;
   g_reader_col = prev_col;
   g_reader_off = prev_off;
   free(buf);
+#ifdef ALCOVE_ALS
+  free(tmp);
+  als_map_free(&amap);
+#endif
   return quit;
 }
 
@@ -11582,15 +11633,28 @@ int main(int argc, char *argv[]) {
       als_buf_putn(&slurp, chunk, got);
     if (stream != stdin)
       fclose(stream);
-    char *sx = als_to_sexpr(slurp.p);
-    free(slurp.p);
+    als_map *m = (als_map *)calloc(1, sizeof *m);
+    char *sx = als_to_sexpr_mapped(slurp.p, m);
     stream = fmemopen(sx, strlen(sx), "r");
     /* sx intentionally outlives this scope: it backs `stream` for the
        remainder of the run and is reclaimed by the OS at exit. */
-    /* The Adder front end transpiled the source into s-expressions, so the
-       reader's line count no longer maps to the user's original file. Drop
-       the source label rather than report misleading transpiled lines. */
-    script_src = NULL;
+    if (evaluatingfile) {
+      /* A .adr file or -e: keep the ORIGINAL Adder source + the generated→Adder
+         line map so an error renders an Adder-source caret (and keeps the file
+         label, since the map translates the reader's lines back). slurp.p and m
+         outlive this scope and are reclaimed at exit. */
+      g_reader_srctext = slurp.p;
+      g_reader_srctext_len = slurp.len;
+      g_adder_map = m;
+    } else {
+      /* Piped stdin: no retained source (keeps the generated web battery, which
+         pipes expressions through stdin, identical — web carets are a separate
+         step). */
+      free(slurp.p);
+      als_map_free(m);
+      free(m);
+      script_src = NULL;
+    }
   }
 #endif
 
@@ -11697,10 +11761,9 @@ int main(int argc, char *argv[]) {
        the failure point. Surface it on stderr with the source location and
        move on to the next form instead of feeding the error exp to eval. */
     if (iserror(stre) && g_reader_src) {
-      annotate_error_loc(stre, g_reader_src, g_reader_line);
+      annotate_error_loc(stre, g_reader_src, display_line(g_reader_line));
       fprintf(stderr, "%s\n", (const char *)stre->ptr);
-      render_error_caret(stderr, g_reader_srctext, g_reader_srctext_len,
-                         g_reader_line, g_reader_col);
+      render_form_caret(stderr, g_reader_line, g_reader_col);
       g_script_error = 1; /* syntax error in a script → non-zero exit */
       unrefexp(stre);
       continue;
