@@ -2059,6 +2059,36 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
       }
     } else if (ishamt(cur1)) {
       ret = hamt_iso(cur1, cur2); /* same entries (deep), order-independent */
+    } else if (isdict(cur1)) {
+      /* same number of keys, and every key maps to an iso-equal value */
+      dict_t *d1 = (dict_t *)cur1->ptr, *d2 = (dict_t *)cur2->ptr;
+      if (!d1 || !d2)
+        ret = (d1 == d2);
+      else if (d1->ht[0].used != d2->ht[0].used)
+        ret = 0;
+      else {
+        ret = 1;
+        DICT_FOREACH(d1, k, 0, 0) {
+          keyval_t *k2 = set_get_keyval_dict(d2, (char *)k->key, NULL);
+          if (ret && (!k2 || !isoequal(k->val, k2->val)))
+            ret = 0;
+        }
+      }
+    } else if (isset(cur1)) {
+      /* same number of members, and every member of cur1 is in cur2 (members
+         are the keys, so matching keys is enough — no value compare needed) */
+      dict_t *d1 = (dict_t *)cur1->ptr, *d2 = (dict_t *)cur2->ptr;
+      if (!d1 || !d2)
+        ret = (d1 == d2);
+      else if (d1->ht[0].used != d2->ht[0].used)
+        ret = 0;
+      else {
+        ret = 1;
+        DICT_FOREACH(d1, k, 0, 0) {
+          if (ret && !set_get_keyval_dict(d2, (char *)k->key, NULL))
+            ret = 0;
+        }
+      }
     } else
       ret = isequal(cur1, cur2);
   }
