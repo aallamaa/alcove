@@ -282,7 +282,7 @@ Example of the *actual* surface:
 
 ```lisp
 (try (/ 1 0)
-     (fn (e) (error-message e))     ; → "Illegal Division by 0"
+     (fn (e) (error-message e))     ; → "Illegal division by 0"
      (prn "cleanup always runs"))   ; optional finally
 ```
 

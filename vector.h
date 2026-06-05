@@ -1342,10 +1342,11 @@ exp_t *vecpushcmd(exp_t *e, env_t *env) {
   exp_t *ret = refexp(valexp);
   if (!vec_set_boxed(vexp, off, valexp)) {
     vexp->vec_win.end--; /* roll back */
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "vec-push!: write failed");
     unrefexp(ret);
     unrefexp(vexp);
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "vec-push!: write failed");
+    return err;
   }
   /* valexp consumed by vec_set_boxed. */
   unrefexp(vexp);

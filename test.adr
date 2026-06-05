@@ -375,6 +375,10 @@ assert "type-of list" (type-of (list 1)) 'list
 
 assert "type-of vector" (type-of (vector 1)) 'vector
 
+assert "type-of error" (type-of (try (/ 1 0) (fn (e) e))) 'error
+
+assert "defstruct keyword field rejects" (error? (defstruct kkbad :x)) t
+
 defstruct tpoint px py
 
 setf _tp (tpoint 3 4)

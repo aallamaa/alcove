@@ -292,7 +292,7 @@ Missing elements get `nil`. Works with rest params:
 ```
 ; catch an error
 (try (/ 1 0) (fn (e) (str "caught: " (error-message e))))
-; → "caught: Illegal Division by 0"
+; → "caught: Illegal division by 0"
 
 ; body succeeds — handler not called
 (try (+ 1 2) (fn (e) "err"))   ; → 3
@@ -456,7 +456,7 @@ them:
 
 ```
 (error? (/ 1 0))                ; t
-(error-message (/ 1 0))         ; "Illegal Division by 0"
+(error-message (/ 1 0))         ; "Illegal division by 0"
 (try (/ 1 0) (fn (e) 'caught))  ; 'caught — handler runs on error
 (try (+ 1 2) (fn (e) 'caught))  ; 3 — body succeeded, handler ignored
 ```

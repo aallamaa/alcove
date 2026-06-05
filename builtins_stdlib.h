@@ -491,7 +491,11 @@ const char doc_typeof[] =
     "(type-of x) — type tag as a symbol: int/float/string/symbol/keyword/char/"
     "bool/nil/list/vector/set/dict/hamt/deque/fn; or a defstruct's type name.";
 exp_t *typeofcmd(exp_t *e, env_t *env) {
-  EVAL_ARG_1(a);
+  /* Evaluate by hand (not EVAL_ARG_1): an error value is a thing whose type we
+     report as 'error, not something to re-raise — (type-of (try ...)) → 'error. */
+  exp_t *a = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  if (iserror(a))
+    CLEAN_RETURN_1(a, make_symbol("error", 5));
   if (isdict(a) && a->ptr) {
     keyval_t *kv = set_get_keyval_dict((dict_t *)a->ptr, "__type__", NULL);
     if (kv && kv->val)
@@ -511,15 +515,28 @@ const char doc_defstruct[] =
 exp_t *defstructcmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm)) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(defstruct name field...)");
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "(defstruct name field...)");
+    return err;
   }
+  /* Each field must be a PLAIN symbol. A keyword (:x) or other token would be
+     emitted verbatim into the generated (def NAME (fields...) ...) param list,
+     where :x reads as a JIT type-hint and the whole expansion fails opaquely. */
+  for (exp_t *f = cddr(e); f && f->content; f = f->next)
+    if (!issymbol(f->content) ||
+        ((const char *)exp_text(f->content))[0] == ':') {
+      exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                         "defstruct: field names must be plain symbols");
+      unrefexp(e);
+      return err;
+    }
   char nbuf[128];
   snprintf(nbuf, sizeof nbuf, "%s", (const char *)exp_text(nm));
   char *src = malloc(8192);
   if (!src) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "defstruct: out of memory");
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "defstruct: out of memory");
+    return err;
   }
   int o = 0, ok = 1;
 #define DS_ADD(...)                                                            \
@@ -596,8 +613,9 @@ const char doc_defmulti[] =
 exp_t *defmulticmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e), *disp = caddr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm) || !disp) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(defmulti name dispatch-fn)");
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "(defmulti name dispatch-fn)");
+    return err;
   }
   char mname[160];
   snprintf(mname, sizeof mname, "%s__m", (const char *)exp_text(nm));
@@ -632,9 +650,10 @@ exp_t *defmethodcmd(exp_t *e, env_t *env) {
      cdddr(e) is the (params body...) tail, so cdr of it is (body...). */
   exp_t *bodyforms = cdddr(e) ? cdr(cdddr(e)) : NULL;
   if (!nm || !is_ptr(nm) || !issymbol(nm) || !dval || !params) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                       "(defmethod name dispatch-val params body...)");
     unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env,
-                 "(defmethod name dispatch-val params body...)");
+    return err;
   }
   char mname[160];
   snprintf(mname, sizeof mname, "%s__m", (const char *)exp_text(nm));
@@ -1563,11 +1582,14 @@ exp_t *stringreplacecmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return ret;
   }
-bad:
+bad: {
+  exp_t *err =
+      error(ERROR_MISSING_PARAMETER, e, env, "(string-replace s old new)");
   unrefexp(s);
   unrefexp(old);
   unrefexp(e);
-  return error(ERROR_MISSING_PARAMETER, e, env, "(string-replace s old new)");
+  return err;
+}
 }
 
 /* (error? x) — t if x is an error value. */
@@ -1580,9 +1602,7 @@ exp_t *errorpcmd(exp_t *e, env_t *env) {
     if (a && iserror(a))
       ret = TRUE_EXP;
   }
-  if (a && !iserror(a))
-    unrefexp(a);
-  else if (a)
+  if (a)
     unrefexp(a);
   unrefexp(e);
   return ret;
