@@ -91,12 +91,20 @@
 (equiv "nested if/and"  (if (and t (or nil 5)) :ok :no))
 
 ;; ── let / binding forms ───────────────────────────────────────────────────
-(equiv "let"            (let (a 1 b 2) (+ a b)))
-(equiv "let shadow"     (let (x 10) (let (x 20) x)))
+(equiv "let flat"       (let (a 1 b 2) (+ a b)))
+(equiv "let flat 1"     (let (x 10) (let (x 20) x)))
+(equiv "let clojure"    (let ((x 5) (y 6)) (+ x y)))
+(equiv "let compound"   (let (m (- 9 1)) m))
+(equiv "let empty"      (let () 42))
 (equiv "let multi-body" (let (x 5) (+ x 1) (* x 2)))
 (equiv "let*"           (let* (a 2 b (* a 3)) b))
 (equiv "with"           (with (a 1 b 2) (list a b)))
-(equiv "let empty-ish"  (let (a 1) a))
+(equiv "let single"     (let (a 1) a))
+;; PARALLEL binding: inner value references the OUTER shadowed name, not the
+;; sibling being bound. (no nested fn, so the thunk compiles → exercises the VM)
+(equiv "let parallel"   (let a 5 (let (a 10 b a) (list a b))))
+(equiv "clj parallel"   (let a 5 (let ((a 10) (b a)) (list a b))))
+(equiv "with parallel"  (let a 5 (with (a 10 b a) (list a b))))
 
 ;; ── keywords in many positions (the bug class) ───────────────────────────
 (equiv "kw body"        :hello)

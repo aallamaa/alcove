@@ -59,7 +59,7 @@ const LISP = [
   ["(msgpack-decode (msgpack-encode 12345))", "12345"],
   ["(blob->string (msgpack-encode \"x\"))", "Error: blob->string: invalid UTF-8 at offset 0"],
   ["(cond ((> 1 2) :a) (t :b))", "t"],
-  ["(let ((x 5) (y 6)) (+ x y))", "Error: Unbound variable x"],
+  ["(let ((x 5) (y 6)) (+ x y))", "11"],
   ["(do (+ 1 1) (* 3 3))", "9"],
   ["(case 2 (1 'one) (2 'two) (t 'other))", "t"],
   ["((fn (n) (if (< n 2) 1 (* n ((fn (m) m) n)))) 5)", "25"],

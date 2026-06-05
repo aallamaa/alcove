@@ -333,6 +333,42 @@ assert "let* sequential" (let* (a 1 b (+ a 1)) (+ a b)) 3
 
 assert "with multi-binding" (with (a 2 b 3) (* a b)) 6
 
+assert "let flat single" (let (x 5) (+ x 1)) 6
+
+assert "let flat multi" (let (a 1 b 2) (+ a b)) 3
+
+assert "let flat compound val" (let (m (- 9 1)) m) 8
+
+assert "let flat keyword val" (let (k :v) k) :v
+
+assert "let flat kw + more" (let (k :v n 3) (list k n)) (list :v 3)
+
+assert "let clojure pairs" (let ((x 5) (y 6)) (+ x y)) 11
+
+assert "let clojure single" (let ((x 41)) (+ x 1)) 42
+
+assert "let empty bindings" (let () 42) 42
+
+assert "let flat parallel" (let x 1 (let (x 10 y x) (list x y))) (list 10 1)
+
+assert "let parallel compiled" ((fn (x) (let (x 10 y x) (list x y))) 1):
+  list 10 1
+
+assert "let clojure compiled" ((fn (x) (let ((x 10) (y x)) (list x y))) 1):
+  list 10 1
+
+assert "with parallel compiled" ((fn (x) (with (x 10 y x) (list x y))) 1):
+  list 10 1
+
+assert "let destructure kept" (let (a b) (list 1 2) (+ a b)) 3
+
+assert "let flat multi-body" (let (x 5) (+ x 1) (* x 2)) 10
+
+def _let_loop (n):
+  let (m (- n 1)) (if (< n 1) :done (_let_loop m))
+
+assert "let-body deep TCO" (_let_loop 200000) :done
+
 assert "mutate let slot" (let x 10 (do (setf x 20) x)) 20
 
 def e0d-shadow (v):

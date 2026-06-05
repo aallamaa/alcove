@@ -5724,10 +5724,65 @@ exp_t *evalcmd(exp_t *e, env_t *env) {
 
 static void var2env_bind(char *name, exp_t *val, env_t *env);
 
+/* Shapes the first argument of a `let` can take. Shared by letcmd (AST) and
+   compile_let (bytecode) so both agree. The parens disambiguate:
+     (let x 5 body)               LET_SINGLE      — bare symbol
+     (let (a b) listval body)     LET_DESTRUCTURE — all-symbol list + a val arg
+     (let (x 5 y 6) body)         LET_FLAT        — name/value pairs flattened
+     (let ((x 5) (y 6)) body)     LET_CLOJURE     — list of (name val) pairs
+   FLAT/CLOJURE are the universally-expected forms; they used to error (mis-read
+   as destructuring), so accepting them is backward-compatible. An all-symbol
+   list stays destructuring (it needs the separate value arg). */
+typedef enum {
+  LET_SINGLE,
+  LET_DESTRUCTURE,
+  LET_FLAT,
+  LET_CLOJURE,
+  LET_BAD
+} let_shape_t;
+
+/* A valid binding NAME is a symbol that isn't a keyword. Keywords (:foo) are
+   symbols too, but they self-evaluate as values, so a name list like (k :v)
+   must be read as a flat name/value pair, NOT an all-symbol destructure list. */
+#define IS_LET_NAME(e) (issymbol(e) && ((const char *)exp_text(e))[0] != ':')
+
+static let_shape_t let_classify(exp_t *first) {
+  if (first && issymbol(first))
+    return first && ((const char *)exp_text(first))[0] == ':' ? LET_BAD
+                                                              : LET_SINGLE;
+  if (!ispair(first))
+    return LET_BAD;
+  if (!first->content)
+    return LET_FLAT; /* () — zero bindings */
+  int all_names = 1, all_pairs = 1, n = 0;
+  for (exp_t *p = first; p && p->content; p = p->next) {
+    exp_t *el = p->content;
+    n++;
+    if (!IS_LET_NAME(el))
+      all_names = 0;
+    if (!(ispair(el) && el->content && IS_LET_NAME(el->content) && el->next &&
+          el->next->content))
+      all_pairs = 0;
+  }
+  if (all_pairs)
+    return LET_CLOJURE; /* ((x 5) (y 6)) */
+  if (all_names)
+    return LET_DESTRUCTURE; /* (a b) + listval */
+  if (n % 2 == 0) {         /* (x 5 y 6): even count, names in even positions */
+    int i = 0;
+    for (exp_t *p = first; p && p->content; p = p->next, i++)
+      if ((i & 1) == 0 && !IS_LET_NAME(p->content))
+        return LET_BAD;
+    return LET_FLAT;
+  }
+  return LET_BAD;
+}
+
 const char doc_let[] =
-    "(let var val body) — bind var to val in body; (let (a b) val body) — "
-    "destructure val as a list, binding each name to the corresponding "
-    "element (missing elements get nil). Binding is local to body.";
+    "(let (x 5 y 6) body...) or (let ((x 5) (y 6)) body...) — parallel "
+    "bindings, local to body. (let x 5 body) — single bare binding. "
+    "(let (a b) listval body) — destructure listval (all-symbol list) into a, b "
+    "(missing elements get nil).";
 exp_t *letcmd(exp_t *e, env_t *env) {
   int outer_tail = in_tail_position;
   env_t *newenv = make_env(env);
@@ -5735,64 +5790,92 @@ exp_t *letcmd(exp_t *e, env_t *env) {
   exp_t *curvar;
   exp_t *curval;
 
-  if ((curvar = e->next)) {
-    if ((curval = curvar->next)) {
-      CHECK_RESERVED_BIND(curvar->content, ret, "in let", goto finish);
-      in_tail_position = 0;
-      if (issymbol(curvar->content)) {
-        if ((ret = EVAL(curval->content, env)) == NULL)
-          ret = NIL_EXP;
-        if iserror (ret)
-          goto finish;
-        var2env_bind(exp_text(curvar->content), ret, newenv);
-        ret = NULL;
-      } else if (ispair(curvar->content)) {
-        /* Destructuring: (let (a b ...) val body)
-           Eval val once, then bind each name to the corresponding list
-           element; names without a matching element get nil. */
-        ret = EVAL(curval->content, env);
-        if (ret == NULL) ret = NIL_EXP;
-        if (iserror(ret)) goto finish;
-        exp_t *dnames = curvar->content;
-        exp_t *dvals  = ret;
-        while (dnames && ispair(dnames) && istrue(dnames)) {
-          exp_t *nm = dnames->content;
-          if (!issymbol(nm)) {
-            unrefexp(ret);
-            ret = error(ERROR_ILLEGAL_VALUE, e, env,
-                        "let: destructuring name must be a symbol");
-            goto finish;
-          }
-          int have_val = dvals && ispair(dvals) && istrue(dvals);
-          var2env_bind(exp_text(nm),
-                       refexp(have_val ? dvals->content : NIL_EXP),
-                       newenv);
-          dnames = dnames->next;
-          if (have_val) dvals = dvals->next;
-        }
-        unrefexp(ret);
-        ret = NULL;
-      } else {
-        ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in let");
-        goto finish;
-      }
-      if (curval->next) {
-        exp_t *body = curval->next;
-        while (body->next) {
-          in_tail_position = 0;
-          ret = EVAL(body->content, newenv);
-          if (iserror(ret)) goto finish;
-          unrefexp(ret); ret = NULL;
-          body = body->next;
-        }
-        in_tail_position = outer_tail;
-        ret = EVAL(body->content, newenv);
-        goto finish;
-      }
-    }
+  exp_t *body = NULL;
+  if (!(curvar = e->next)) {
+    ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in let");
+    goto finish;
   }
-  ret = error(ERROR_MISSING_PARAMETER, e, env,
-              "Missing parameter in let"); /* MISSING PARAMETER*/
+  exp_t *first = curvar->content;
+  let_shape_t shape = let_classify(first);
+  in_tail_position = 0;
+
+  if (shape == LET_SINGLE) {
+    if (!(curval = curvar->next)) {
+      ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in let");
+      goto finish;
+    }
+    CHECK_RESERVED_BIND(first, ret, "in let", goto finish);
+    if ((ret = EVAL(curval->content, env)) == NULL)
+      ret = NIL_EXP;
+    if iserror (ret)
+      goto finish;
+    var2env_bind(exp_text(first), ret, newenv);
+    ret = NULL;
+    body = curval->next;
+  } else if (shape == LET_DESTRUCTURE) {
+    /* (let (a b ...) val body): eval val once, bind each name to the matching
+       list element; names without a matching element get nil. */
+    if (!(curval = curvar->next)) {
+      ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in let");
+      goto finish;
+    }
+    ret = EVAL(curval->content, env);
+    if (ret == NULL) ret = NIL_EXP;
+    if (iserror(ret)) goto finish;
+    exp_t *dnames = first, *dvals = ret;
+    while (dnames && ispair(dnames) && istrue(dnames)) {
+      exp_t *nm = dnames->content;
+      int have_val = dvals && ispair(dvals) && istrue(dvals);
+      var2env_bind(exp_text(nm),
+                   refexp(have_val ? dvals->content : NIL_EXP), newenv);
+      dnames = dnames->next;
+      if (have_val) dvals = dvals->next;
+    }
+    unrefexp(ret);
+    ret = NULL;
+    body = curval->next;
+  } else if (shape == LET_FLAT) {
+    /* (let (v1 e1 v2 e2 ...) body): parallel — each ei is evaluated in the
+       OUTER env, then all are bound. */
+    for (exp_t *p = (first && first->content) ? first : NULL; p && p->content;) {
+      exp_t *nm = p->content, *vp = p->next;
+      CHECK_RESERVED_BIND(nm, ret, "in let", goto finish);
+      ret = EVAL(vp->content, env);
+      if (iserror(ret)) goto finish;
+      var2env_bind(exp_text(nm), ret, newenv);
+      ret = NULL;
+      p = vp->next;
+    }
+    body = curvar->next;
+  } else if (shape == LET_CLOJURE) {
+    /* (let ((v1 e1) (v2 e2) ...) body): same, pairs grouped. */
+    for (exp_t *p = first; p && p->content; p = p->next) {
+      exp_t *pair = p->content, *nm = pair->content;
+      CHECK_RESERVED_BIND(nm, ret, "in let", goto finish);
+      ret = EVAL(pair->next->content, env);
+      if (iserror(ret)) goto finish;
+      var2env_bind(exp_text(nm), ret, newenv);
+      ret = NULL;
+    }
+    body = curvar->next;
+  } else {
+    ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in let");
+    goto finish;
+  }
+
+  if (!body) {
+    ret = error(ERROR_MISSING_PARAMETER, e, env, "Missing parameter in let");
+    goto finish;
+  }
+  while (body->next) {
+    in_tail_position = 0;
+    ret = EVAL(body->content, newenv);
+    if (iserror(ret)) goto finish;
+    unrefexp(ret); ret = NULL;
+    body = body->next;
+  }
+  in_tail_position = outer_tail;
+  ret = EVAL(body->content, newenv);
 finish:
   in_tail_position = outer_tail;
   destroy_env(newenv);
@@ -6588,44 +6671,117 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
 /* (let var val body ...) — single binding, evaluates body in extended
    scope. Destructuring (let (a b) val body) falls back to AST (var is a
    pair, not a symbol). Falls back if slot count would overflow. */
-static void compile_let(compiler_t *c, exp_t *form, int tail) {
-  exp_t *var = cadr(form);
-  exp_t *val = caddr(form);
-  exp_t *body = form->next ? (form->next->next ? form->next->next->next : NULL)
-                           : NULL;
-  if (!issymbol(var) || !body) {
+/* Emit N PARALLEL bindings (let/with semantics): every value is compiled while
+   none of the new names is in scope yet — so a value referencing a name also
+   bound here resolves to the OUTER binding, matching the tree-walker (which
+   evaluates all values in the enclosing env). The incremental "bind as you go"
+   approach would instead make later values see earlier ones (let* semantics) —
+   a real AST-vs-VM divergence. Compile all values first (stack: v0..v(n-1)),
+   then pop-bind v(n-1)->slot(n-1) down to v0->slot0, register names, run body. */
+static void compile_parallel_let(compiler_t *c, exp_t **vars, exp_t **vals,
+                                  int n, exp_t *body, int tail) {
+  int start = c->nslots;
+  if (start + n > ENV_INLINE_SLOTS) {
     c->failed = 1;
     return;
   }
-  if (c->nslots >= ENV_INLINE_SLOTS) {
-    c->failed = 1;
-    return;
+  for (int i = 0; i < n; i++) {
+    if (!issymbol(vars[i])) {
+      c->failed = 1;
+      return;
+    }
+    compile_expr(c, vals[i], 0); /* outer scope: new names not yet registered */
+    if (c->failed)
+      return;
   }
-  int slot = c->nslots;
-  compile_expr(c, val, 0);
-  if (c->failed)
-    return;
-  emit_bind_named(c, slot, var);
-  if (c->failed)
-    return;
-  c->slot_names[slot] = (char *)exp_text(var);
-  c->nslots++;
+  for (int i = n - 1; i >= 0; i--) { /* stack top is v(n-1) → bind it first */
+    c->slot_names[start + i] = (char *)exp_text(vars[i]);
+    emit_bind_named(c, start + i, vars[i]);
+    if (c->failed)
+      return;
+  }
+  c->nslots = start + n;
   c->nlet_depth++;
   compile_body_seq(c, body, tail);
   if (c->failed)
     return;
   c->nlet_depth--;
-  c->nslots--;
-  /* Body's value is on the stack; the binding's owning ref is still in
-     the slot. UNBIND_SLOT unrefs and NULLs it, leaving the result. */
-  emit_u8(c, OP_UNBIND_SLOT);
-  emit_u8(c, (uint8_t)slot);
+  for (int i = n - 1; i >= 0; i--) {
+    emit_u8(c, OP_UNBIND_SLOT);
+    emit_u8(c, (uint8_t)(start + i));
+  }
+  c->nslots -= n;
 }
 
-/* (with (v1 e1 v2 e2 ...) body) — N parallel-like bindings then body.
-   In alcove's semantics, bindings evaluate left-to-right against the
-   enclosing env (each val doesn't see earlier v's in the same with,
-   matching the tree-walker's withcmd). */
+static void compile_let(compiler_t *c, exp_t *form, int tail) {
+  exp_t *first = cadr(form);
+  let_shape_t shape = let_classify(first);
+
+  if (shape == LET_SINGLE) {
+    exp_t *var = first;
+    exp_t *val = caddr(form);
+    exp_t *body = form->next && form->next->next ? form->next->next->next : NULL;
+    if (!body || c->nslots >= ENV_INLINE_SLOTS) {
+      c->failed = 1;
+      return;
+    }
+    int slot = c->nslots;
+    compile_expr(c, val, 0);
+    if (c->failed)
+      return;
+    emit_bind_named(c, slot, var);
+    if (c->failed)
+      return;
+    c->slot_names[slot] = (char *)exp_text(var);
+    c->nslots++;
+    c->nlet_depth++;
+    compile_body_seq(c, body, tail);
+    if (c->failed)
+      return;
+    c->nlet_depth--;
+    c->nslots--;
+    /* Body's value is on the stack; the binding's owning ref is still in
+       the slot. UNBIND_SLOT unrefs and NULLs it, leaving the result. */
+    emit_u8(c, OP_UNBIND_SLOT);
+    emit_u8(c, (uint8_t)slot);
+    return;
+  }
+
+  /* FLAT (x 5 y 6) / CLOJURE ((x 5) (y 6)) — parallel bindings, then body.
+     DESTRUCTURE / BAD defer to the AST. */
+  if (shape != LET_FLAT && shape != LET_CLOJURE) {
+    c->failed = 1;
+    return;
+  }
+  exp_t *body = form->next ? form->next->next : NULL;
+  if (!body) {
+    c->failed = 1;
+    return;
+  }
+  exp_t *vars[ENV_INLINE_SLOTS], *vals[ENV_INLINE_SLOTS];
+  int n = 0;
+  for (exp_t *p = (first && first->content) ? first : NULL; p && p->content;) {
+    if (n >= ENV_INLINE_SLOTS) { c->failed = 1; return; }
+    if (shape == LET_CLOJURE) {
+      vars[n] = p->content->content;       /* (name val) */
+      vals[n] = p->content->next->content;
+      p = p->next;
+    } else {
+      vars[n] = p->content;                /* name val name val */
+      if (!p->next) { c->failed = 1; return; }
+      vals[n] = p->next->content;
+      p = p->next->next;
+    }
+    n++;
+  }
+  compile_parallel_let(c, vars, vals, n, body, tail);
+}
+
+/* (with (v1 e1 v2 e2 ...) body) — N PARALLEL bindings then body: each value is
+   evaluated against the enclosing env (a value doesn't see earlier v's in the
+   same with), matching the tree-walker's withcmd. Routed through the shared
+   parallel emitter so the VM matches the AST (the old incremental emit was
+   sequential — a with whose value referenced a sibling binding diverged). */
 static void compile_with(compiler_t *c, exp_t *form, int tail) {
   exp_t *pairs = cadr(form);
   exp_t *body = form->next ? form->next->next : NULL;
@@ -6633,49 +6789,19 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
     c->failed = 1;
     return;
   }
-  /* Collect (var, val) pairs. */
-  int start_slot = c->nslots;
-  int nbindings = 0;
-  exp_t *p = pairs;
-  while (p && p->content) {
-    exp_t *var = p->content;
-    exp_t *nxt = p->next;
-    if (!nxt) {
+  exp_t *vars[ENV_INLINE_SLOTS], *vals[ENV_INLINE_SLOTS];
+  int n = 0;
+  for (exp_t *p = pairs; p && p->content;) {
+    if (n >= ENV_INLINE_SLOTS || !p->next) {
       c->failed = 1;
       return;
     }
-    exp_t *val = nxt->content;
-    if (!issymbol(var)) {
-      c->failed = 1;
-      return;
-    }
-    if (c->nslots >= ENV_INLINE_SLOTS) {
-      c->failed = 1;
-      return;
-    }
-    compile_expr(c, val, 0);
-    if (c->failed)
-      return;
-    emit_bind_named(c, c->nslots, var);
-    if (c->failed)
-      return;
-    c->slot_names[c->nslots] = (char *)exp_text(var);
-    c->nslots++;
-    nbindings++;
-    p = nxt->next;
+    vars[n] = p->content;
+    vals[n] = p->next->content;
+    n++;
+    p = p->next->next;
   }
-  c->nlet_depth++;
-  compile_body_seq(c, body, tail);
-  if (c->failed)
-    return;
-  c->nlet_depth--;
-  /* Unbind in reverse order. */
-  int i;
-  for (i = nbindings - 1; i >= 0; i--) {
-    emit_u8(c, OP_UNBIND_SLOT);
-    emit_u8(c, (uint8_t)(start_slot + i));
-  }
-  c->nslots -= nbindings;
+  compile_parallel_let(c, vars, vals, n, body, tail);
 }
 
 /* (let* (v1 e1 v2 e2 ...) body ...) — sequential bindings: each val sees
