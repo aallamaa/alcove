@@ -50,6 +50,8 @@ extern const char doc_cons[], doc_car[], doc_cdr[], doc_list[];
 extern const char doc_length[], doc_nth[], doc_reverse[], doc_append[];
 extern const char doc_seq[], doc_first[], doc_rest[];
 extern const char doc_conj[], doc_into[];
+extern const char doc_typeof[], doc_defstruct[];
+extern const char doc_defmulti[], doc_defmethod[];
 extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
 extern const char doc_def[], doc_defn[], doc_fn[], doc_defc[], doc_defmacro[],
     doc_macroexpand[];

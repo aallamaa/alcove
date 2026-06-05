@@ -437,6 +437,211 @@ exp_t *intocmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(dest, src, coll);
 }
 
+/* ── user types: type-of + defstruct ──────────────────────────────────────
+   A struct instance is a dict carrying its type name under the string key
+   "__type__"; type-of reads it (else returns the built-in type name). */
+static const char *type_name_of(exp_t *a) {
+  if (a == NULL || a == NIL_EXP)
+    return "nil";
+  if (a == TRUE_EXP)
+    return "bool";
+  if (isnumber(a))
+    return "int";
+  if (ischar(a))
+    return "char";
+  if (isfloat(a))
+    return "float";
+  if (isstring(a))
+    return "string";
+  if (issymbol(a))
+    return ((const char *)exp_text(a))[0] == ':' ? "keyword" : "symbol";
+  if (ispair(a))
+    return "list";
+  if (isvector(a))
+    return "vector";
+  if (isset(a))
+    return "set";
+  if (isdict(a))
+    return "dict";
+  if (ishamt(a))
+    return "hamt";
+  if (islist(a))
+    return "deque";
+  if (isblob(a))
+    return "blob";
+  if (islambda(a) || isinternal(a))
+    return "fn";
+  if (iserror(a))
+    return "error";
+  return "unknown";
+}
+
+const char doc_typeof[] =
+    "(type-of x) — type tag as a symbol: int/float/string/symbol/keyword/char/"
+    "bool/nil/list/vector/set/dict/hamt/deque/fn; or a defstruct's type name.";
+exp_t *typeofcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(a);
+  if (isdict(a) && a->ptr) {
+    keyval_t *kv = set_get_keyval_dict((dict_t *)a->ptr, "__type__", NULL);
+    if (kv && kv->val)
+      CLEAN_RETURN_1(a, refexp(kv->val));
+  }
+  const char *t = type_name_of(a);
+  CLEAN_RETURN_1(a, make_symbol((char *)t, (int)strlen(t)));
+}
+
+/* (defstruct NAME field...) — define a record type. Expands (by building source
+   and evaluating it) to: a constructor NAME, a predicate NAME?, and per-field
+   accessors NAME-field. Instances are dicts tagged with "__type__" → NAME, so
+   (type-of inst) is NAME. Top-level (defines globals). */
+const char doc_defstruct[] =
+    "(defstruct point x y) — record type: constructor (point 3 4), predicate "
+    "(point? v), accessors (point-x v); (type-of v) is 'point.";
+exp_t *defstructcmd(exp_t *e, env_t *env) {
+  exp_t *nm = cadr(e);
+  if (!nm || !is_ptr(nm) || !issymbol(nm)) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(defstruct name field...)");
+  }
+  char nbuf[128];
+  snprintf(nbuf, sizeof nbuf, "%s", (const char *)exp_text(nm));
+  char *src = malloc(8192);
+  if (!src) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "defstruct: out of memory");
+  }
+  int o = 0, ok = 1;
+#define DS_ADD(...)                                                            \
+  do {                                                                         \
+    int _n = snprintf(src + o, 8192 - o, __VA_ARGS__);                         \
+    if (_n < 0 || _n >= 8192 - o)                                              \
+      ok = 0;                                                                  \
+    else                                                                       \
+      o += _n;                                                                 \
+  } while (0)
+  DS_ADD("(do (def %s (", nbuf);
+  for (exp_t *f = cddr(e); f && f->content; f = f->next)
+    if (issymbol(f->content))
+      DS_ADD("%s ", (const char *)exp_text(f->content));
+  DS_ADD(") (hash-map \"__type__\" (quote %s)", nbuf);
+  for (exp_t *f = cddr(e); f && f->content; f = f->next)
+    if (issymbol(f->content)) {
+      const char *fn = (const char *)exp_text(f->content);
+      DS_ADD(" \"%s\" %s", fn, fn);
+    }
+  DS_ADD("))");
+  DS_ADD(" (def %s? (o) (and (dict? o) (is (type-of o) (quote %s))))", nbuf,
+         nbuf);
+  for (exp_t *f = cddr(e); f && f->content; f = f->next)
+    if (issymbol(f->content)) {
+      const char *fn = (const char *)exp_text(f->content);
+      DS_ADD(" (def %s-%s (o) (get o \"%s\"))", nbuf, fn, fn);
+    }
+  DS_ADD(")");
+#undef DS_ADD
+  exp_t *ret;
+  if (!ok) {
+    ret = error(ERROR_ILLEGAL_VALUE, e, env, "defstruct: too large");
+  } else {
+    exp_t *r = alcove_eval_string(src);
+    if (iserror(r))
+      ret = r;
+    else {
+      unrefexp(r);
+      ret = make_symbol(nbuf, (int)strlen(nbuf));
+    }
+  }
+  free(src);
+  unrefexp(e);
+  return ret;
+}
+
+/* ── multimethods: defmulti / defmethod ───────────────────────────────────
+   A multimethod NAME is an ordinary fn that dispatches: it applies a dispatch
+   fn to its args to get a value, looks that value up in a per-multimethod dict
+   NAME__m, and applies the found method to the args. defmethod adds an entry.
+   Implemented by constructing the expansion forms (they embed the arbitrary
+   dispatch fn / method body, so build-by-string won't do) and evaluating. */
+static exp_t *sx_sym(const char *s) { return make_symbol((char *)s, (int)strlen(s)); }
+static exp_t *sx_lst(int n, ...) { /* build a proper list from n owned exps */
+  va_list ap;
+  va_start(ap, n);
+  exp_t *head = NULL, *tail = NULL;
+  for (int i = 0; i < n; i++) {
+    exp_t *node = make_node(va_arg(ap, exp_t *));
+    if (tail)
+      tail->next = node;
+    else
+      head = node;
+    tail = node;
+  }
+  va_end(ap);
+  return head ? head : refexp(NIL_EXP);
+}
+
+const char doc_defmulti[] =
+    "(defmulti area type-of) — define a multimethod: calling (area x ...) "
+    "applies the dispatch fn to the args and runs the matching defmethod.";
+exp_t *defmulticmd(exp_t *e, env_t *env) {
+  exp_t *nm = cadr(e), *disp = caddr(e);
+  if (!nm || !is_ptr(nm) || !issymbol(nm) || !disp) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "(defmulti name dispatch-fn)");
+  }
+  char mname[160];
+  snprintf(mname, sizeof mname, "%s__m", (const char *)exp_text(nm));
+  exp_t *ret = make_symbol((char *)exp_text(nm), (int)strlen(exp_text(nm)));
+  /* (do (= NAME__m (hash-map))           ; = binds a VALUE; def would read the
+         (def NAME (. args)               ;   (hash-map) as a param list
+              (apply (get NAME__m (apply DISP args)) args))) */
+  exp_t *d1 = sx_lst(3, sx_sym("="), sx_sym(mname), sx_lst(1, sx_sym("hash-map")));
+  exp_t *dispcall = sx_lst(3, sx_sym("apply"), refexp(disp), sx_sym("args"));
+  exp_t *getcall = sx_lst(3, sx_sym("get"), sx_sym(mname), dispcall);
+  exp_t *body = sx_lst(3, sx_sym("apply"), getcall, sx_sym("args"));
+  exp_t *params = sx_lst(2, sx_sym("."), sx_sym("args"));
+  exp_t *d2 = sx_lst(4, sx_sym("def"), refexp(nm), params, body);
+  exp_t *form = sx_lst(3, sx_sym("do"), d1, d2);
+  exp_t *r = evaluate(form, env);
+  unrefexp(e);
+  if (iserror(r)) {
+    unrefexp(ret);
+    return r;
+  }
+  unrefexp(r);
+  return ret;
+}
+
+const char doc_defmethod[] =
+    "(defmethod area :circle (c) ...) — add a method to multimethod `area` for "
+    "the dispatch value :circle (matched against (dispatch-fn args)).";
+exp_t *defmethodcmd(exp_t *e, env_t *env) {
+  /* e = (defmethod NAME dval params body...) */
+  exp_t *nm = cadr(e), *dval = caddr(e), *params = cadddr(e);
+  /* body = forms after params. e = (defmethod NAME dval params body...);
+     cdddr(e) is the (params body...) tail, so cdr of it is (body...). */
+  exp_t *bodyforms = cdddr(e) ? cdr(cdddr(e)) : NULL;
+  if (!nm || !is_ptr(nm) || !issymbol(nm) || !dval || !params) {
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env,
+                 "(defmethod name dispatch-val params body...)");
+  }
+  char mname[160];
+  snprintf(mname, sizeof mname, "%s__m", (const char *)exp_text(nm));
+  /* method fn: (fn params body...) */
+  exp_t *fnform = make_node(sx_sym("fn"));
+  fnform->next = make_node(refexp(params));
+  exp_t *tl = fnform->next;
+  for (exp_t *b = bodyforms; b && b->content; b = b->next)
+    tl = tl->next = make_node(refexp(b->content));
+  /* (assoc! NAME__m dval fnform) — dval is used as-is: the user writes a quoted
+     symbol ('circle), keyword (:hi), or literal, which assoc! evaluates to the
+     dispatch key. (Re-quoting would store the (quote circle) FORM as the key.) */
+  exp_t *form = sx_lst(4, sx_sym("assoc!"), sx_sym(mname), refexp(dval), fnform);
+  exp_t *r = evaluate(form, env);
+  unrefexp(e);
+  return r; /* the method fn (assoc! returns the value), or an error */
+}
+
 /* (reverse list) — non-destructive; returns a new list. */
 const char doc_reverse[] =
     "(reverse xs) — list with elements in reverse order.";
@@ -878,13 +1083,10 @@ exp_t *applycmd(exp_t *e, env_t *env) {
       argv[i++] = refexp(c->content);
       c = c->next;
     }
-    if (islambda(fn)) {
-      ret = vm_invoke_values(fn, n, argv, env);
-    } else {
-      ret = error(ERROR_ILLEGAL_VALUE, e, env, "apply: first arg not a fn");
-      for (i = 0; i < n; i++)
-        unrefexp(argv[i]);
-    }
+    /* alc_apply_n dispatches lambda / builtin / continuation and consumes argv
+       (errors + frees argv for a non-callable) — so apply works with a builtin
+       like type-of, not just lambdas. */
+    ret = alc_apply_n(fn, n, argv, env);
     free(argv);
   } else
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(apply fn args)");

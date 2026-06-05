@@ -359,6 +359,54 @@ assert "into list reverses" (into (list) (vector 1 2 3)) (list 3 2 1)
 assert "into dict from entries" (get (into (hash-map) (seq (hash-map "x" 9))) "x"):
   9
 
+assert "apply builtin type-of" (apply type-of (list 5)) 'int
+
+assert "apply builtin +" (apply + (list 1 2 3)) 6
+
+assert "type-of int" (type-of 5) 'int
+
+assert "type-of float" (type-of 3.0) 'float
+
+assert "type-of string" (type-of "x") 'string
+
+assert "type-of keyword" (type-of :k) 'keyword
+
+assert "type-of list" (type-of (list 1)) 'list
+
+assert "type-of vector" (type-of (vector 1)) 'vector
+
+defstruct tpoint px py
+
+setf _tp (tpoint 3 4)
+
+assert "defstruct accessor x" (tpoint-px _tp) 3
+
+assert "defstruct accessor y" (tpoint-py _tp) 4
+
+assert "defstruct predicate" (tpoint? _tp) t
+
+assert "defstruct pred neg" (tpoint? (hash-map)) nil
+
+assert "defstruct type-of" (type-of _tp) 'tpoint
+
+defstruct tcirc cr
+
+defmulti tarea type-of
+
+defmethod tarea 'tcirc (c) (* 3 (tcirc-cr c) (tcirc-cr c))
+
+defmethod tarea 'int (n) n
+
+assert "defmethod struct" (tarea (tcirc 10)) 300
+
+assert "defmethod builtin type" (tarea 7) 7
+
+defmulti tgreet (fn (x) x)
+
+defmethod tgreet :hi (x) "hi!"
+
+assert "defmethod keyword disp" (tgreet :hi) "hi!"
+
 assert "append" (append (list 1 2) (list 3 4)) (list 1 2 3 4)
 
 assert "sort" (sort (list 3 1 2)) (list 1 2 3)

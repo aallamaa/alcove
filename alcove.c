@@ -385,6 +385,10 @@ lispProc lispProcList[] = {
     LISPCMD("rest", restcmd, doc_rest),
     LISPCMD("conj", conjcmd, doc_conj),
     LISPCMD("into", intocmd, doc_into),
+    LISPCMD("type-of", typeofcmd, doc_typeof),
+    LISPCMD("defstruct", defstructcmd, doc_defstruct),
+    LISPCMD("defmulti", defmulticmd, doc_defmulti),
+    LISPCMD("defmethod", defmethodcmd, doc_defmethod),
     LISPCMD("reverse", reversecmd, doc_reverse),
     LISPCMD("append", appendcmd, doc_append),
     /* Vectors — O(1) random-access array */
