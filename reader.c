@@ -362,6 +362,9 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
        arm flag is set by the driver before each top-level reader() call. */
     if (g_form_line_arm && !(x <= 255 && x >= 0 && (ISWHITESPACE & chrmap[x]))) {
       g_form_line = g_reader_line;
+      /* RGETC already advanced past x, so x itself sits one column/byte back. */
+      g_form_col = g_reader_col > 1 ? g_reader_col - 1 : 1;
+      g_form_off = g_reader_off > 0 ? g_reader_off - 1 : 0;
       g_form_line_arm = 0;
     }
     if (x > 127) { /* UTF-8 SUPPORT */

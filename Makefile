@@ -345,6 +345,13 @@ test-all:
 	./alcove --noload -e '(this_is_unbound)'   >/dev/null 2>&1; bc=$$?; \
 	if [ $$gc -eq 0 ] && [ $$bc -ne 0 ]; then echo "  OK — good exits 0, error exits $$bc"; \
 	else echo "  EXIT-CODE WRONG: good=$$gc (want 0), error=$$bc (want nonzero)"; ok=0; fi; \
+	printf '\n=== error caret (source line + ^ under the offending form) ===\n'; \
+	cf=$$(printf '(println 1)\n(+ 2 undefined_caret_zz)\n' | ./alcove --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	ce=$$(./alcove --noload -e '(+ 2 undefined_caret_zz)' 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	if echo "$$cf" | grep -q ':2:' && echo "$$cf" | grep -qF '(+ 2 undefined_caret_zz)' && echo "$$cf" | grep -qE '^[[:space:]]*\^' \
+	   && echo "$$ce" | grep -qF '(+ 2 undefined_caret_zz)' && echo "$$ce" | grep -qE '^[[:space:]]*\^'; then \
+	  echo "  OK — file error shows src:line + caret, -e shows source line + caret"; \
+	else echo "  CARET MISSING:"; echo "$$cf" | sed 's/^/    /'; echo "    --"; echo "$$ce" | sed 's/^/    /'; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n=== AST-vs-VM equivalence sweep (tools/equiv_sweep.alc) ===\n'; \
 	es=$$(./alcove --noload tools/equiv_sweep.alc 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \

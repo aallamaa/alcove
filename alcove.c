@@ -1631,7 +1631,19 @@ exp_t *load_exp_t(FILE *stream) {
    save/restore both on the C stack so a nested (load …) reports the inner
    file's lines and resumes the outer file's afterwards. */
 static ALCOVE_TLS int g_reader_line = 1;
+/* Column (1-based) and absolute byte offset within the current source, kept in
+   sync with g_reader_line by the getc/ungetc wrappers. Cold parse path only —
+   never read in the VM hot loop or JIT. Used to place the error caret. */
+static ALCOVE_TLS int g_reader_col = 1;
+static ALCOVE_TLS long g_reader_off = 0;
 static ALCOVE_TLS const char *g_reader_src = NULL;
+/* The in-memory text of the current source, retained by the drivers so the
+   error caret can print the offending line. NULL when no buffer is available
+   (e.g. piped stdin). Borrowed — the driver owns the storage. For the Adder
+   surface this points at the ORIGINAL Adder source (not the transpiled
+   s-expr), paired with g_adder_map (see als_map). */
+static ALCOVE_TLS const char *g_reader_srctext = NULL;
+static ALCOVE_TLS size_t g_reader_srctext_len = 0;
 /* Module system (see requirecmd / nscmd):
    g_reader_dir  — directory of the file currently being loaded, so `require`
                    can resolve a sibling module relative to the requirer first.
@@ -1676,6 +1688,12 @@ static char *ns_qualify(const char *bare, env_t *env) {
    form preceded by blank/comment lines reports correctly. */
 static ALCOVE_TLS int g_form_line = 1;
 static ALCOVE_TLS int g_form_line_arm = 0;
+/* Column (1-based) and absolute byte offset of the current top-level form's
+   first significant byte — stamped together with g_form_line. The column drives
+   the caret renderer (Alcove); the offset is what the Adder offset→line map is
+   keyed on (the form's position in the GENERATED s-expr text). */
+static ALCOVE_TLS int g_form_col = 1;
+static ALCOVE_TLS long g_form_off = 0;
 
 /* getc/ungetc wrappers that keep g_reader_line in sync. RGETC bumps the
    line on a consumed newline; RUNGETC decrements when a newline is pushed
@@ -1683,13 +1701,29 @@ static ALCOVE_TLS int g_form_line_arm = 0;
    the reader's raw getc(stream) sites. */
 static inline int reader_getc(FILE *s) {
   int c = getc(s);
-  if (c == '\n')
-    g_reader_line++;
+  if (c != EOF) {
+    g_reader_off++;
+    if (c == '\n') {
+      g_reader_line++;
+      g_reader_col = 1;
+    } else
+      g_reader_col++;
+  }
   return c;
 }
 static inline int reader_ungetc(int c, FILE *s) {
-  if (c == '\n' && g_reader_line > 1)
-    g_reader_line--;
+  if (c != EOF) {
+    if (g_reader_off > 0)
+      g_reader_off--;
+    if (c == '\n') {
+      if (g_reader_line > 1)
+        g_reader_line--;
+      /* column of the prior line's end isn't tracked; the next getc re-reads
+         this newline and resets col=1, so any read in between is at worst off
+         by a column on the caret — never out of bounds. */
+    } else if (g_reader_col > 1)
+      g_reader_col--;
+  }
   return ungetc(c, s);
 }
 #define RGETC(s) reader_getc(s)
@@ -1721,6 +1755,43 @@ static exp_t *annotate_error_loc(exp_t *err, const char *src, int line) {
     err->ptr = combined;
   }
   return err;
+}
+
+/* Print the offending source line and a caret under column `col` (1-based),
+   gcc/clang-style, beneath an already-printed error message. No-op (safe) when
+   there is no retained source text, the line/col are out of range, or the byte
+   span can't be located — so callers can fire it unconditionally. The caret
+   padding mirrors leading tabs in the source so it lines up under tab indents.
+   `srctext`/`len` is the in-memory source; `line`/`col` are 1-based. */
+static void render_error_caret(FILE *out, const char *srctext, size_t len,
+                               int line, int col) {
+  if (!srctext || line < 1 || col < 1)
+    return;
+  /* Walk to the start of the target line. */
+  size_t i = 0;
+  int curline = 1;
+  while (i < len && curline < line) {
+    if (srctext[i] == '\n')
+      curline++;
+    i++;
+  }
+  if (curline != line)
+    return; /* line beyond EOF — give up quietly */
+  size_t ls = i;
+  size_t le = ls;
+  while (le < len && srctext[le] != '\n')
+    le++;
+  /* Drop a trailing CR so a CRLF file doesn't print a stray ^M. */
+  size_t vis = le;
+  if (vis > ls && srctext[vis - 1] == '\r')
+    vis--;
+  int linelen = (int)(vis - ls);
+  if (col - 1 > linelen)
+    col = linelen + 1; /* clamp caret to just past the line */
+  fprintf(out, "  %.*s\n  ", linelen, srctext + ls);
+  for (int c = 0; c < col - 1; c++)
+    fputc((c < linelen && srctext[ls + c] == '\t') ? '\t' : ' ', out);
+  fprintf(out, "\x1B[91m^\x1B[39m\n");
 }
 
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
@@ -4662,6 +4733,51 @@ static char *path_dirname(const char *path) {
   return d;
 }
 
+/* Read an entire stream into a malloc'd, NUL-terminated buffer. Tries a
+   seek/size/read fast path; falls back to a chunked read for non-seekable
+   streams (pipes). Returns NULL on OOM; *out_len gets the byte length. */
+static char *slurp_stream(FILE *fp, size_t *out_len) {
+  if (fseek(fp, 0, SEEK_END) == 0) {
+    long sz = ftell(fp);
+    if (sz >= 0) {
+      rewind(fp);
+      char *buf = malloc((size_t)sz + 1);
+      if (!buf)
+        return NULL;
+      size_t got = fread(buf, 1, (size_t)sz, fp);
+      buf[got] = 0;
+      if (out_len)
+        *out_len = got;
+      return buf;
+    }
+  }
+  /* non-seekable: chunked grow */
+  size_t cap = 4096, len = 0;
+  char *buf = malloc(cap);
+  if (!buf)
+    return NULL;
+  size_t got;
+  char chunk[4096];
+  while ((got = fread(chunk, 1, sizeof chunk, fp)) > 0) {
+    if (len + got + 1 > cap) {
+      while (len + got + 1 > cap)
+        cap *= 2;
+      char *nb = realloc(buf, cap);
+      if (!nb) {
+        free(buf);
+        return NULL;
+      }
+      buf = nb;
+    }
+    memcpy(buf + len, chunk, got);
+    len += got;
+  }
+  buf[len] = 0;
+  if (out_len)
+    *out_len = len;
+  return buf;
+}
+
 static exp_t *eval_file_forms(const char *path, env_t *env) {
   FILE *fp = fopen(path, "r");
   if (!fp)
@@ -4672,23 +4788,32 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
      memstream. ".alc" (and anything else) is read directly as s-expressions.
      This is what lets an .alc program (require) a .adr module and vice versa,
      in either binary. `transpiled` backs the memstream and is freed at the end. */
+  /* Slurp the whole file: we both (maybe) transpile it and keep the text so an
+     error can render a source-line caret. `filetext` is the original source
+     (Adder or s-expr); `transpiled` (when set) is the generated s-expr that
+     backs the reader for a .adr module. */
+  size_t filelen = 0;
+  char *filetext = slurp_stream(fp, &filelen);
+  fclose(fp);
+  if (!filetext)
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot read '%s'", path);
   char *transpiled = NULL;
   size_t plen = strlen(path);
   if (plen >= 4 && strcmp(path + plen - 4, ".adr") == 0) {
-    als_buf slurp;
-    als_buf_init(&slurp);
-    char chunk[4096];
-    size_t got;
-    while ((got = fread(chunk, 1, sizeof chunk, fp)) > 0)
-      als_buf_putn(&slurp, chunk, got);
-    fclose(fp);
-    transpiled = als_to_sexpr(slurp.p ? slurp.p : "");
-    free(slurp.p);
+    transpiled = als_to_sexpr(filetext);
     fp = transpiled ? fmemopen(transpiled, strlen(transpiled), "r") : NULL;
     if (!fp) {
       free(transpiled);
+      free(filetext);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "require: failed to transpile Adder module '%s'", path);
+    }
+  } else {
+    fp = fmemopen(filetext, filelen, "r");
+    if (!fp) {
+      free(filetext);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot read '%s'",
+                   path);
     }
   }
   /* Save/restore the reader location so a nested (load …) reports the inner
@@ -4699,8 +4824,19 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
      makes for Adder input). */
   const char *prev_src = g_reader_src;
   int prev_line = g_reader_line;
+  const char *prev_srctext = g_reader_srctext;
+  size_t prev_srctext_len = g_reader_srctext_len;
+  int prev_col = g_reader_col;
+  long prev_off = g_reader_off;
   g_reader_src = transpiled ? NULL : src_basename(path);
+  /* The caret renders against the original file text. (.adr line/offset → Adder
+     source is handled by the map; for now a .adr error renders against the
+     generated s-expr only via g_reader_line, matching the dropped label.) */
+  g_reader_srctext = transpiled ? NULL : filetext;
+  g_reader_srctext_len = transpiled ? 0 : filelen;
   g_reader_line = 1;
+  g_reader_col = 1;
+  g_reader_off = 0;
   /* Track this file's directory (for require's sibling-first search) and give
      the file a fresh namespace slate — (ns ...) it declares stays local to it
      and the outer file's namespace resumes afterward. */
@@ -4737,6 +4873,10 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
 done:
   g_reader_src = prev_src;
   g_reader_line = prev_line;
+  g_reader_srctext = prev_srctext;
+  g_reader_srctext_len = prev_srctext_len;
+  g_reader_col = prev_col;
+  g_reader_off = prev_off;
   free(g_reader_dir);
   g_reader_dir = prev_dir;
   /* Expose the namespace this file declared (if any) for require's :refer,
@@ -4745,7 +4885,8 @@ done:
   g_last_module_ns = g_current_ns ? strdup(g_current_ns) : NULL;
   free(g_current_ns);
   g_current_ns = prev_ns;
-  free(transpiled); /* no-op when the file was read directly (.alc) */
+  free(transpiled); /* NULL when the file was read directly (.alc) */
+  free(filetext);   /* the slurped original source */
   return result;
 }
 
@@ -10787,6 +10928,9 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     if (res) {
       printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
       print_node(res);
+      if (iserror(res)) /* show the offending line + caret under the message */
+        render_error_caret(stdout, g_reader_srctext, g_reader_srctext_len,
+                           g_form_line, g_form_col);
     } else
       printf("nil");
     printf("\n\n");
@@ -10801,6 +10945,8 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     if (g_reader_src)
       annotate_error_loc(res, g_reader_src, g_form_line);
     fprintf(stderr, "%s\n", (const char *)res->ptr);
+    render_error_caret(stderr, g_reader_srctext, g_reader_srctext_len,
+                       g_form_line, g_form_col);
     g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
   }
   if (res)
@@ -10846,8 +10992,24 @@ static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
   free(body);
   FILE *fs = fmemopen(buf, blen + 1, "r");
   int quit = 0;
+  /* Save reader location state; the interactive caret renders against this
+     input buffer. (Adder maps back to the user's surface source in Step 4; the
+     plain build's buffer already IS the user's s-expr input.) */
+  const char *prev_srctext = g_reader_srctext;
+  size_t prev_srctext_len = g_reader_srctext_len;
+  int prev_line = g_reader_line, prev_col = g_reader_col;
+  long prev_off = g_reader_off;
+  g_reader_line = 1;
+  g_reader_col = 1;
+  g_reader_off = 0;
+#ifndef ALCOVE_ALS
+  g_reader_srctext = buf;
+  g_reader_srctext_len = blen;
+#endif
   if (fs) {
     for (;;) {
+      g_form_line = g_reader_line; /* fallback if no significant byte is read */
+      g_form_line_arm = 1;         /* reader() stamps the true form position */
       exp_t *form = reader(fs, 0, 0);
       if (!form)
         break;
@@ -10862,6 +11024,11 @@ static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
     }
     fclose(fs);
   }
+  g_reader_srctext = prev_srctext;
+  g_reader_srctext_len = prev_srctext_len;
+  g_reader_line = prev_line;
+  g_reader_col = prev_col;
+  g_reader_off = prev_off;
   free(buf);
   return quit;
 }
@@ -11427,6 +11594,27 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
+#ifndef ALCOVE_ALS
+  /* Retain the source text so an error can render a caret on the offending
+     line. -e already holds it; a file argument is slurped into a memstream
+     (the FILE* alone gives no text). Piped/interactive stdin is left as-is. */
+  if (eval_string) {
+    g_reader_srctext = eval_string;
+    g_reader_srctext_len = strlen(eval_string);
+  } else if (evaluatingfile && stream != stdin) {
+    size_t slen = 0;
+    char *txt = slurp_stream(stream, &slen);
+    fclose(stream);
+    stream = txt ? fmemopen(txt, slen, "r") : NULL;
+    if (!stream) {
+      printf("Error reading %s\n", argv[argc - 1]);
+      exit(1);
+    }
+    g_reader_srctext = txt; /* outlives the run; reclaimed at exit */
+    g_reader_srctext_len = slen;
+  }
+#endif
+
 #ifdef ALCOVE_READLINE
   /* Enable line editing + tab completion + history when stdin is a tty.
      Non-interactive (pipe / file redirect / scripted) stays on the plain
@@ -11477,6 +11665,8 @@ int main(int argc, char *argv[]) {
      leaves error messages unprefixed. */
   g_reader_src = (evaluatingfile && script_src) ? script_src : NULL;
   g_reader_line = 1;
+  g_reader_col = 1;
+  g_reader_off = 0;
   while (1) {
     idx++;
     if (!evaluatingfile)
@@ -11509,6 +11699,8 @@ int main(int argc, char *argv[]) {
     if (iserror(stre) && g_reader_src) {
       annotate_error_loc(stre, g_reader_src, g_reader_line);
       fprintf(stderr, "%s\n", (const char *)stre->ptr);
+      render_error_caret(stderr, g_reader_srctext, g_reader_srctext_len,
+                         g_reader_line, g_reader_col);
       g_script_error = 1; /* syntax error in a script → non-zero exit */
       unrefexp(stre);
       continue;
