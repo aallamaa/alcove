@@ -1,16 +1,15 @@
-; mandelbrot-sdl.alc — a native, JIT-accelerated, animated Mandelbrot zoom in an
-; SDL2 window. Reuses the mario graphics shim (examples/mario/libmariogfx.so).
+; mandelbrot-sdl.alc — native, animated Mandelbrot zoom in an SDL2 window, with
+; every frame computed DATA-PARALLEL over all pixels at once using alcove's SIMD
+; tensor ops (vec-mul!/sub!/add!/scale!/axpy! + vec-count-le!). No per-pixel
+; scalar loop and no reliance on the JIT — the tensor kernels are SIMD C, so this
+; is fast on amd64 and arm64 alike. (The same math, per-pixel, is what the
+; numeric-loop JIT compiles; here we go wide instead of compiling.)
 ;
-; Build the shim once (needs SDL2 — same deps as the mario demo):
+; Build the shim once (needs SDL2, same deps as the mario demo):
 ;     cd examples/mario && make
 ; Then run from the repo root:
 ;     ./alcove --noload examples/mandelbrot-sdl.alc
-;
-; The per-pixel escape loop `mb` is a scalar-float self-tail loop the JIT compiles
-; to native machine code (the :f64 hints type its 4 float locals). On arm64 it
-; JITs (run prints "mb JIT-compiled: t"); on amd64 it exceeds the 8-xmm register
-; budget and runs on the bytecode VM (still correct, just slower). Press Esc or
-; close the window to quit.
+; Press Esc or close the window to quit.
 
 (= GFX "examples/mario/libmariogfx.so")
 (= gfx-init         (ffi-fn GFX "gfx_init"         "int" "int" "int"))
@@ -18,53 +17,76 @@
 (= gfx-pump         (ffi-fn GFX "gfx_pump"         "int"))
 (= gfx-should-close (ffi-fn GFX "gfx_should_close" "int"))
 (= gfx-quit-pressed (ffi-fn GFX "gfx_quit_pressed" "int"))
-(= gfx-clear        (ffi-fn GFX "gfx_clear"        "int" "int"))
 (= gfx-fill         (ffi-fn GFX "gfx_fill"         "int" "int" "int" "int" "int" "int"))
 (= gfx-present      (ffi-fn GFX "gfx_present"      "int"))
-(= gfx-now-ms       (ffi-fn GFX "gfx_now_ms"       "int"))
 
-(= W 200)      ; grid columns
-(= H 130)      ; grid rows
-(= S 4)        ; pixels per cell  →  800×520 window
-(= ASPECT 0.65) ; H / W as a float, for a square aspect in the complex plane
+(= W 400)       ; grid columns
+(= S 2)         ; pixels per cell → 800×520 window
+(= ASPECT 0.65)
+(= H (int (* W ASPECT)))
+(= N (* W H))
+(= MAXIT 100)
 
-; escape iteration count for one point — the JIT'd kernel
-(def mb (cr :f64 ci :f64 zr :f64 zi :f64 i)
-  (if (>= i 80)
-      i
-      (if (> (+ (* zr zr) (* zi zi)) 4.0)
-          i
-          (mb cr ci
-              (+ (- (* zr zr) (* zi zi)) cr)
-              (+ (* 2.0 (* zr zi)) ci)
-              (+ i 1)))))
+; ── per-frame scratch (allocated once) ───────────────────────────────────────
+(= cr  (vec N 0.0)) (= ci  (vec N 0.0))   ; per-pixel c = cr + i·ci
+(= zr  (vec N 0.0)) (= zi  (vec N 0.0))   ; z, iterated
+(= cnt (vec N 0.0))                        ; escape count per pixel
+(= zr2 (vec N 0.0)) (= zi2 (vec N 0.0)) (= zrzi (vec N 0.0))
+(= mag (vec N 0.0)) (= tmp (vec N 0.0))
+; index ramps: px-ramp[i] = column, py-ramp[i] = row (built once; constant)
+(= px-ramp (vec N 0.0)) (= py-ramp (vec N 0.0))
+(for py 0 (- H 1)
+  (for px 0 (- W 1)
+    (let idx (+ (* py W) px)
+      (do (vec-set! px-ramp idx (* px 1.0))
+          (vec-set! py-ramp idx (* py 1.0))))))
 
 ; escape count → packed 0xRRGGBB (in-set = black)
 (def col (c)
-  (if (>= c 80)
+  (if (>= c MAXIT)
       0
       (+ (* (mod (* c 9) 256) 65536)
-         (+ (* (mod (* c 7) 256) 256)
-            (mod (* c 13) 256)))))
+         (+ (* (mod (* c 7) 256) 256) (mod (* c 13) 256)))))
 
-; draw one full frame for the view centred at (cx,cy) with half-width hw
-(def render (cx cy hw)
+; compute the whole frame's escape counts at once — all tensor ops
+(def compute (cx cy hw)
   (let hh (* hw ASPECT)
     (let dx (/ (* 2.0 hw) W)
       (let dy (/ (* 2.0 hh) H)
-        (let cx0 (- cx hw)
-          (let cy0 (- cy hh)
-            (for py 0 (- H 1)
-              (for px 0 (- W 1)
-                (gfx-fill (* px S) (* py S) S S
-                          (col (mb (+ cx0 (* dx px))
-                                   (+ cy0 (* dy py))
-                                   0.0 0.0 0)))))))))))
+        (do
+          (vec-fill! cr (- cx hw)) (vec-axpy! cr dx px-ramp)   ; cr = cx0 + dx·col
+          (vec-fill! ci (- cy hh)) (vec-axpy! ci dy py-ramp)   ; ci = cy0 + dy·row
+          (vec-fill! zr 0.0) (vec-fill! zi 0.0) (vec-fill! cnt 0.0)
+          (for it 0 (- MAXIT 1)
+            (do
+              (vec-copy! zr2 zr) (vec-mul! zr2 zr)             ; zr²
+              (vec-copy! zi2 zi) (vec-mul! zi2 zi)             ; zi²
+              (vec-copy! mag zr2) (vec-add! mag zi2)           ; |z|²
+              (vec-count-le! cnt mag 4.0)                      ; count the bounded
+              (vec-copy! zrzi zr) (vec-mul! zrzi zi)           ; zr·zi
+              (vec-copy! tmp zr2) (vec-sub! tmp zi2) (vec-add! tmp cr) ; zr²-zi²+cr
+              (vec-scale! zrzi 2.0) (vec-add! zrzi ci)         ; 2·zr·zi+ci
+              (vec-copy! zr tmp) (vec-copy! zi zrzi))))))))     ; commit
 
-(prn (string-concat "mb JIT-compiled: " (str (jit? mb))))
+; draw the count grid, coalescing same-colour horizontal runs into one fill
+(def draw ()
+  (for py 0 (- H 1)
+    (let base (* py W)
+      (let runc -1
+        (let runx 0
+          (do
+            (for px 0 (- W 1)
+              (let c (int (vec-ref cnt (+ base px)))
+                (when (no (is c runc))
+                  (do
+                    (when (>= runc 0)
+                      (gfx-fill (* runx S) (* py S) (* (- px runx) S) S (col runc)))
+                    (= runc c)
+                    (= runx px)))))
+            (when (>= runc 0)
+              (gfx-fill (* runx S) (* py S) (* (- W runx) S) S (col runc)))))))))
+
 (gfx-init (* W S) (* H S))
-
-; zoom into a point in seahorse valley, then loop back out
 (= TX -0.743643887)
 (= TY 0.131825904)
 (= hw 1.75)
@@ -72,11 +94,11 @@
 (while (is go 1)
   (do
     (gfx-pump)
-    (when (or (> (gfx-should-close) 0) (> (gfx-quit-pressed) 0))
-      (= go 0))
+    (when (or (> (gfx-should-close) 0) (> (gfx-quit-pressed) 0)) (= go 0))
     (when (is go 1)
       (do
-        (render TX TY hw)
+        (compute TX TY hw)
+        (draw)
         (gfx-present)
         (= hw (* hw 0.94))
         (when (< hw 0.0000000000001) (= hw 1.75))))))
