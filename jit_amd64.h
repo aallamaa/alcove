@@ -273,6 +273,18 @@ static int x64_movq_xmm_reg(uint8_t *buf, int xmm, int gp) {
   buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
   return 5;
 }
+/* ucomisd xmm_a, xmm_b  →  66 0F 2E /r (mod=11).  Unordered FP compare: sets
+   ZF/PF/CF (PF=1 on NaN/unordered). After it, `ja` = ordered strictly-greater
+   (NaN → not taken, matching the VM's `>`/`<` which are false for NaN). Used by
+   the numeric-loop compiler for float comparisons. */
+__attribute__((unused)) static int x64_ucomisd_xmm_xmm(uint8_t *buf, int a,
+                                                       int b) {
+  buf[0] = 0x66;
+  buf[1] = 0x0F;
+  buf[2] = 0x2E;
+  buf[3] = (uint8_t)(0xC0 | ((a & 7) << 3) | (b & 7));
+  return 4;
+}
 /* movsd xmm_dst, xmm_src  →  F2 0F 10 /r (mod=11).  Register copy (divsd is
    destructive, so a term's numerator is copied to a scratch before dividing). */
 static int x64_movsd_xmm_xmm(uint8_t *buf, int dst, int src) {

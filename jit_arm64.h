@@ -307,6 +307,16 @@ static uint32_t arm64_fdiv_d(int dd, int dn, int dm) {
   return 0x1E601800u | ((uint32_t)(dm & 0x1f) << 16) |
          ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
 }
+/* FCMP Dn, Dm — double compare, sets NZCV (unordered/NaN → N=0,Z=0,C=1,V=1):
+   0x1E602000 | (Dm<<16) | (Dn<<5). Used by the numeric-loop compiler. */
+__attribute__((unused)) static uint32_t arm64_fcmp_d(int dn, int dm) {
+  return 0x1E602000u | ((uint32_t)(dm & 0x1f) << 16) |
+         ((uint32_t)(dn & 0x1f) << 5);
+}
+/* FCMP Dn, #0.0 — compare a double to zero: 0x1E602008 | (Dn<<5). */
+__attribute__((unused)) static uint32_t arm64_fcmp_d_zero(int dn) {
+  return 0x1E602008u | ((uint32_t)(dn & 0x1f) << 5);
+}
 
 /* arm64 shape-emitter helpers. PATCH_DEOPT_* and the EMIT macros below
    require `out`, `n`, and `deopt_pc` to be in scope. Note: the inline
