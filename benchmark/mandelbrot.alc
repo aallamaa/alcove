@@ -1,0 +1,24 @@
+; mandelbrot.alc — sum of escape iteration counts over a 300×200 grid of the
+; Mandelbrot set (a deterministic integer). The inner escape loop `mb` is a
+; scalar-float self-tail loop the numeric-loop JIT compiles (the :f64 hints type
+; the 4 float locals); the outer grid walk is interpreted. The C/Python twins
+; compute the identical sum (same IEEE doubles → same escape counts).
+(def mb (cr :f64 ci :f64 zr :f64 zi :f64 i)
+  (if (>= i 255)
+      i
+      (if (> (+ (* zr zr) (* zi zi)) 4.0)
+          i
+          (mb cr ci
+              (+ (- (* zr zr) (* zi zi)) cr)
+              (+ (* 2.0 (* zr zi)) ci)
+              (+ i 1)))))
+(def run (w h)
+  (let s 0
+    (do
+      (for py 0 (- h 1)
+        (for px 0 (- w 1)
+          (let cr (+ -2.5 (* (/ 3.5 w) px))
+            (let ci (+ -1.25 (* (/ 2.5 h) py))
+              (= s (+ s (mb cr ci 0.0 0.0 0)))))))
+      s)))
+(prn (run 300 200))

@@ -35,6 +35,10 @@ fi
 
 # All deterministic micro-benchmarks have a C twin; mlp does not.
 DETERMINISTIC="fib fact forsum countdown ackermann listsum sieve sieve-fast nqueens nqueens-vec tak pi logistic"
+# mandelbrot.{alc,c,py} exist + verify alcove=C=python, but its inner escape loop
+# needs 4 float locals — it JITs on arm64 (roomy regs) yet exceeds the amd64
+# 8-xmm budget (→ VM there), so it's left out of the default suite to avoid a
+# misleading amd64 number. Run it directly to see the arm64 JIT win.
 STOCHASTIC="mlp"
 
 # Compile the C twins (and the empty.c startup baseline) into a temp dir.
