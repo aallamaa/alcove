@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mandelbrot — computed by alcove in your browser</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0d12; color: #cdd3de;
+         font: 15px/1.5 system-ui, sans-serif; display: flex;
+         flex-direction: column; align-items: center; padding: 24px 16px 40px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  p  { max-width: 640px; text-align: center; margin: 6px 0; color: #9aa3b2; }
+  a  { color: #6af; }
+  canvas { margin: 16px 0 8px; border-radius: 8px; image-rendering: pixelated;
+           box-shadow: 0 8px 40px #0008; width: 600px; height: 375px;
+           max-width: 92vw; height: auto; aspect-ratio: 8 / 5; background:#000; }
+  #status { font: 12px ui-monospace, monospace; color: #6b7384; min-height: 1.2em; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  button { background:#1b2030; color:#cdd3de; border:1px solid #2c3346;
+           border-radius:6px; padding:6px 12px; font:14px system-ui; cursor:pointer; }
+  button:hover { background:#232a3d; }
+  code { background:#161a24; padding:1px 5px; border-radius:4px; color:#c9d3e6; }
+</style>
+</head>
+<body>
+  <h1>The Mandelbrot set, computed by <a href="https://github.com/aallamaa/alcove">alcove</a></h1>
+  <p>Every pixel's escape count is computed by a Lisp program — the kernel below —
+     running as WebAssembly <em>in your browser</em>. The same scalar-float loop
+     compiles to native machine code (≈ C speed) when alcove runs natively.</p>
+  <canvas id="cv" width="160" height="100"></canvas>
+  <div id="status">loading the alcove runtime…</div>
+  <div class="row">
+    <button id="toggle">pause</button>
+    <button id="reset">reset zoom</button>
+  </div>
+  <p style="margin-top:18px"><strong>The kernel</strong> (run for every pixel):</p>
+  <pre style="background:#161a24;border-radius:8px;padding:12px 16px;max-width:92vw;overflow:auto;color:#c9d3e6;font:13px ui-monospace,monospace"><code>(def mb (cr ci zr zi i)
+  (if (>= i 100) i
+    (if (> (+ (* zr zr) (* zi zi)) 4.0) i
+      (mb cr ci (+ (- (* zr zr) (* zi zi)) cr)
+                (+ (* 2.0 (* zr zi)) ci)
+                (+ i 1)))))</code></pre>
+  <p style="font-size:13px"><a href="index.html">› alcove REPL playground</a> &nbsp;·&nbsp;
+     <a href="learn.html">› learn alcove</a></p>
+
+<script src="alcove.js"></script>
+<script>
+(function () {
+  "use strict";
+  const W = 160, H = 100, MAXIT = 100;
+  const cv = document.getElementById("cv");
+  const ctx = cv.getContext("2d");
+  const img = ctx.createImageData(W, H);
+  const statusEl = document.getElementById("status");
+
+  // A smooth palette: escape count → RGB. In-set (count == MAXIT) is black.
+  const palette = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / MAXIT;
+    // warm-to-cool cyclic-ish ramp
+    palette[i*3]   = Math.floor(140 + 115 * Math.sin(6.283 * t + 0.0));
+    palette[i*3+1] = Math.floor(120 + 110 * Math.sin(6.283 * t + 2.1));
+    palette[i*3+2] = Math.floor(140 + 115 * Math.sin(6.283 * t + 4.2));
+  }
+
+  // capture alcove output for one frame
+  let buf = "";
+  Alcove.setOutput(function (s) { buf += s; });
+
+  function draw(counts) {
+    const d = img.data;
+    for (let i = 0; i < W * H; i++) {
+      let c = counts[i];
+      if (c === undefined) c = 0;
+      const off = i * 4;
+      if (c >= MAXIT) { d[off]=8; d[off+1]=8; d[off+2]=14; }
+      else {
+        const p = (c & 255) * 3;
+        d[off] = palette[p]; d[off+1] = palette[p+1]; d[off+2] = palette[p+2];
+      }
+      d[off+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function parseCounts(text) {
+    // The output sink receives RAW text (with ANSI colour codes like ESC[92m,
+    // whose digits would otherwise be mis-parsed) — strip them, then collect the
+    // integers from the printed rows "(n n n ...)" in order.
+    const clean = text.replace(/\x1B\[[0-9;]*m/g, "");
+    const nums = clean.match(/-?\d+/g);
+    return nums ? nums.map(Number) : [];
+  }
+
+  // zoom path: into a point in seahorse valley
+  const TX = -0.743643887, TY = 0.131825904;
+  const START_HW = 1.75;       // half-width at full view
+  let hw = START_HW;
+  let running = true, busy = false;
+
+  async function frame() {
+    if (!running || busy) return;
+    busy = true;
+    const hh = hw * (H / W);
+    const cx0 = TX - hw, dx = (2 * hw) / W;
+    const cy0 = TY - hh, dy = (2 * hh) / H;
+    buf = "";
+    const t0 = performance.now();
+    await Alcove.eval(
+      `(render ${W} ${H} ${cx0.toFixed(15)} ${dx.toFixed(17)} ` +
+      `${cy0.toFixed(15)} ${dy.toFixed(17)})`);
+    draw(parseCounts(buf));
+    const ms = (performance.now() - t0) | 0;
+    statusEl.textContent =
+      `alcove-computed frame: ${W}×${H} px in ${ms} ms  ·  zoom ${(START_HW/hw).toExponential(1)}×`;
+    hw *= 0.90;                       // zoom in
+    if (hw < 1e-13) hw = START_HW;    // loop back out
+    busy = false;
+    if (running) requestAnimationFrame(frame);
+  }
+
+  document.getElementById("toggle").onclick = function () {
+    running = !running; this.textContent = running ? "pause" : "play";
+    if (running) requestAnimationFrame(frame);
+  };
+  document.getElementById("reset").onclick = function () { hw = START_HW; };
+
+  Alcove.ready.then(async function () {
+    statusEl.textContent = "compiling the kernel…";
+    await Alcove.eval(`
+      (def mb (cr ci zr zi i)
+        (if (>= i ${MAXIT}) i
+          (if (> (+ (* zr zr) (* zi zi)) 4.0) i
+            (mb cr ci (+ (- (* zr zr) (* zi zi)) cr)
+                      (+ (* 2.0 (* zr zi)) ci)
+                      (+ i 1)))))
+      (def rowlist (px w cx0 dx cy)
+        (if (>= px w) (list)
+          (cons (mb (+ cx0 (* dx px)) cy 0.0 0.0 0)
+                (rowlist (+ px 1) w cx0 dx cy))))
+      (def render (w h cx0 dx cy0 dy)
+        (for py 0 (- h 1) (prn (rowlist 0 w cx0 dx (+ cy0 (* dy py))))))
+    `);
+    buf = "";  // discard the defs' output
+    requestAnimationFrame(frame);
+  }).catch(function (e) {
+    statusEl.textContent = "failed to start: " + e;
+  });
+})();
+</script>
+</body>
+</html>
