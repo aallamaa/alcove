@@ -1,0 +1,83 @@
+; mandelbrot-sdl.alc — a native, JIT-accelerated, animated Mandelbrot zoom in an
+; SDL2 window. Reuses the mario graphics shim (examples/mario/libmariogfx.so).
+;
+; Build the shim once (needs SDL2 — same deps as the mario demo):
+;     cd examples/mario && make
+; Then run from the repo root:
+;     ./alcove --noload examples/mandelbrot-sdl.alc
+;
+; The per-pixel escape loop `mb` is a scalar-float self-tail loop the JIT compiles
+; to native machine code (the :f64 hints type its 4 float locals). On arm64 it
+; JITs (run prints "mb JIT-compiled: t"); on amd64 it exceeds the 8-xmm register
+; budget and runs on the bytecode VM (still correct, just slower). Press Esc or
+; close the window to quit.
+
+(= GFX "examples/mario/libmariogfx.so")
+(= gfx-init         (ffi-fn GFX "gfx_init"         "int" "int" "int"))
+(= gfx-quit         (ffi-fn GFX "gfx_quit"         "int"))
+(= gfx-pump         (ffi-fn GFX "gfx_pump"         "int"))
+(= gfx-should-close (ffi-fn GFX "gfx_should_close" "int"))
+(= gfx-quit-pressed (ffi-fn GFX "gfx_quit_pressed" "int"))
+(= gfx-clear        (ffi-fn GFX "gfx_clear"        "int" "int"))
+(= gfx-fill         (ffi-fn GFX "gfx_fill"         "int" "int" "int" "int" "int" "int"))
+(= gfx-present      (ffi-fn GFX "gfx_present"      "int"))
+(= gfx-now-ms       (ffi-fn GFX "gfx_now_ms"       "int"))
+
+(= W 200)      ; grid columns
+(= H 130)      ; grid rows
+(= S 4)        ; pixels per cell  →  800×520 window
+(= ASPECT 0.65) ; H / W as a float, for a square aspect in the complex plane
+
+; escape iteration count for one point — the JIT'd kernel
+(def mb (cr :f64 ci :f64 zr :f64 zi :f64 i)
+  (if (>= i 80)
+      i
+      (if (> (+ (* zr zr) (* zi zi)) 4.0)
+          i
+          (mb cr ci
+              (+ (- (* zr zr) (* zi zi)) cr)
+              (+ (* 2.0 (* zr zi)) ci)
+              (+ i 1)))))
+
+; escape count → packed 0xRRGGBB (in-set = black)
+(def col (c)
+  (if (>= c 80)
+      0
+      (+ (* (mod (* c 9) 256) 65536)
+         (+ (* (mod (* c 7) 256) 256)
+            (mod (* c 13) 256)))))
+
+; draw one full frame for the view centred at (cx,cy) with half-width hw
+(def render (cx cy hw)
+  (let hh (* hw ASPECT)
+    (let dx (/ (* 2.0 hw) W)
+      (let dy (/ (* 2.0 hh) H)
+        (let cx0 (- cx hw)
+          (let cy0 (- cy hh)
+            (for py 0 (- H 1)
+              (for px 0 (- W 1)
+                (gfx-fill (* px S) (* py S) S S
+                          (col (mb (+ cx0 (* dx px))
+                                   (+ cy0 (* dy py))
+                                   0.0 0.0 0)))))))))))
+
+(prn (string-concat "mb JIT-compiled: " (str (jit? mb))))
+(gfx-init (* W S) (* H S))
+
+; zoom into a point in seahorse valley, then loop back out
+(= TX -0.743643887)
+(= TY 0.131825904)
+(= hw 1.75)
+(= go 1)
+(while (is go 1)
+  (do
+    (gfx-pump)
+    (when (or (> (gfx-should-close) 0) (> (gfx-quit-pressed) 0))
+      (= go 0))
+    (when (is go 1)
+      (do
+        (render TX TY hw)
+        (gfx-present)
+        (= hw (* hw 0.94))
+        (when (< hw 0.0000000000001) (= hw 1.75))))))
+(gfx-quit)
