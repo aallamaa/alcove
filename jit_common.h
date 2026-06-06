@@ -1942,9 +1942,16 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
             (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
         uint8_t r = (a == NLC_FLOAT || b == NLC_FLOAT) ? NLC_FLOAT : NLC_INT;
         /* First increment: only FLOAT arithmetic (int counter uses SLOT_*_FIX).
-           Pure-int +−×÷ → bail, but only on the strict pass (phase 1 tolerates
-           it so slot classes can still promote via the tail-self fixed point). */
+           Pure-int +−×÷ → bail (only on the strict pass; phase 1 tolerates it so
+           slot classes can still promote via the tail-self fixed point). */
         if (r == NLC_INT && strict) { ok = 0; goto stop; }
+        /* MIXED int/float operands (e.g. (* 3 x)): the emitter has no int→double
+           conversion — it would read the int GPR operand as an xmm. Bail; the VM
+           coerces correctly. (Settled only on the strict pass.) */
+        if (strict && r == NLC_FLOAT && (a != NLC_FLOAT || b != NLC_FLOAT)) {
+          ok = 0;
+          goto stop;
+        }
         nd -= 2;
         st[nd++] = r;
         break;
@@ -1957,6 +1964,14 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
         uint8_t b = st[nd - 1], a = st[nd - 2];
         if ((a != NLC_INT && a != NLC_FLOAT) ||
             (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
+        /* MIXED int/float compare: the emitter picks int-cmp or float-cmp from
+           pf_float = (either float) and reads BOTH operands accordingly, so a
+           mixed pair would read an int GPR as xmm (or vice versa). Bail — the VM
+           coerces. (Both-INT and both-FLOAT are fine.) */
+        if (strict && ((a == NLC_FLOAT) != (b == NLC_FLOAT))) {
+          ok = 0;
+          goto stop;
+        }
         nd -= 2;
         st[nd++] = NLC_BOOL;
         break;

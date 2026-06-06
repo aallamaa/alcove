@@ -210,8 +210,33 @@ def gen_numloop(rng, idx):
     return name, defn, args, "numloop"
 
 
+def gen_numloop_mixed(rng, idx):
+    """Numeric self-tail loop that MIXES integer literals with float values in
+    the float arithmetic / comparison (e.g. (* 3 x), (< (* 2 x) 100)). The
+    numloop compiler has no int→double conversion path, so it must DECLINE these
+    (→ VM) — never miscompile. expect_jit=False; the byte-identical result check
+    is the regression guard (a past version read the int GPR operand as an xmm,
+    silently producing wrong finite doubles). Covers the mixed-operand bail."""
+    name = f"nlm{idx}"
+    limit = rng.choice([40000, 50000])
+    start = limit - rng.randint(0, 4)
+    iconst = lambda: str(rng.choice([2, 3, 5, 10, 100, -3]))
+    fc = lambda: rng.choice(FLOAT_CONSTS)
+    # at least one update mixes an int literal with the float local
+    upd = rng.choice([
+        f"(* {iconst()} a0)",
+        f"(+ {iconst()} (* a0 {fc()}))",
+        f"(- (* a0 {fc()}) {iconst()})",
+    ])
+    defn = (f"(def {name} (n a0) "
+            f"(if (< n {limit}) ({name} (+ n 1) {upd}) a0))")
+    seeds = ["0.5", "1.5", "2.0", "-0.5"]
+    args = [(f"{start} {rng.choice(seeds)}", False) for _ in range(3)]
+    return name, defn, args, "numloop-mixed"
+
+
 GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown,
-              gen_float_series, gen_numloop]
+              gen_float_series, gen_numloop, gen_numloop_mixed]
 
 
 def generate(rng, count):
@@ -220,14 +245,18 @@ def generate(rng, count):
         g = rng.choice(GENERATORS)
         name, defn, args, cat = g(rng, i)
         defs.append(defn)
-        probes.append((name, cat))
+        # a shape is "expected to JIT" iff any of its arg-cases expects it (some
+        # generators, e.g. numloop-mixed, deliberately bail → expect=False)
+        exp_any = any(e for _a, e in args)
+        probes.append((name, cat, exp_any))
         for a, _exp in args:
             call = f"({name} {a})" if a else f"({name})"
             checks.append(call)
     lines = list(defs)
-    # coverage probes: print "JIT <cat> <name>" / "VM  <cat> <name>"
-    for name, cat in probes:
-        lines.append(f'(prn (str "JITQ {cat} {name} " (jit? {name})))')
+    # coverage probes: "JITQ <cat> <name> <exp|noexp> <t|nil>"
+    for name, cat, exp_any in probes:
+        lines.append(f'(prn (str "JITQ {cat} {name} '
+                     f'{"exp" if exp_any else "noexp"} " (jit? {name})))')
     # result checks
     for call in checks:
         lines.append(f"(prn (msgpack-encode {call}))")
@@ -255,10 +284,10 @@ def extract(out):
     for ln in out.splitlines():
         s = ln.strip()
         if s.startswith("JITQ "):
-            parts = s.split(None, 3)
-            # JITQ <cat> <name> <t|nil>
-            if len(parts) >= 4:
-                jitq[parts[2]] = (parts[1], parts[3].strip())
+            parts = s.split(None, 4)
+            # JITQ <cat> <name> <exp|noexp> <t|nil>
+            if len(parts) >= 5:
+                jitq[parts[2]] = (parts[1], parts[3], parts[4].strip())
         elif "blob" in s and "|" in s:
             results.append(s)
     return jitq, results
@@ -308,13 +337,13 @@ def main():
     # 2) coverage: every probed shape should JIT in the jit build.
     by_cat = {}
     missed = []
-    for name, (cat, status) in jq.items():
+    for name, (cat, exp, status) in jq.items():
         d = by_cat.setdefault(cat, [0, 0])
         d[1] += 1
         if status == "t":
             d[0] += 1
-        else:
-            missed.append((cat, name))
+        elif exp == "exp":
+            missed.append((cat, name))  # only flag shapes that EXPECTED to JIT
     print("[jit-fuzz] coverage by category (jit'd / total):")
     for cat in sorted(by_cat):
         hit, tot = by_cat[cat]
