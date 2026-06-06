@@ -1,0 +1,35 @@
+; mandelbrot.alc — render the Mandelbrot set as ASCII art in the terminal.
+;   alcove examples/mandelbrot.alc
+; The escape loop `mb` is a scalar-float self-tail loop the JIT compiles to native
+; (the :f64 hints type the 4 float locals); the grid walk is interpreted.
+(def mb (cr :f64 ci :f64 zr :f64 zi :f64 i)
+  (if (>= i 48)
+      i
+      (if (> (+ (* zr zr) (* zi zi)) 4.0)
+          i
+          (mb cr ci
+              (+ (- (* zr zr) (* zi zi)) cr)
+              (+ (* 2.0 (* zr zi)) ci)
+              (+ i 1)))))
+
+; escape count → a shading character (denser = closer to the set). `=` binds a
+; value (def would read the value as a param list); ramp is a list of 1-char
+; strings so string-concat can append them directly.
+(= ramp (list " " "." ":" "-" "=" "+" "*" "#" "%" "@"))
+(def shade (c)
+  (if (>= c 48) "@" (nth (int (/ c 5)) ramp)))
+
+(def row (px w cx0 dx cy acc)
+  (if (>= px w)
+      acc
+      (row (+ px 1) w cx0 dx cy
+           (string-concat acc (shade (mb (+ cx0 (* dx px)) cy 0.0 0.0 0))))))
+
+(def draw (w h)
+  (let dx (/ 3.5 w)
+    (let dy (/ 2.4 h)
+      (for py 0 (- h 1)
+        (println (row 0 w -2.6 dx (+ -1.2 (* dy py)) ""))))))
+
+(draw 90 36)
+(println (string-concat "mb JIT-compiled: " (str (jit? mb))))
