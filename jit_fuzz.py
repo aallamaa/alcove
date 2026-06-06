@@ -171,8 +171,47 @@ def gen_float_series(rng, idx):
     return name, defn, args, "float-series"
 
 
+def gen_numloop(rng, idx):
+    """Random numeric self-tail loop for the general numeric-loop compiler:
+    int counter + 1-3 float locals, each updated by a small random float
+    expression (+ - *, and sometimes / by a nonzero const), with an int-counter
+    exit. Every float local's update is wrapped so it contains a float const
+    (→ the analyzer types the slot FLOAT and the strict-EXP_FLOAT entry guard
+    matches the float seeds → the loop JITs). Start near the limit so only a few
+    iterations run (keeps results finite and exact-comparable). This is the
+    differential safety net for the numloop codegen — the ONLY thing that catches
+    a wrong-but-finite miscompile."""
+    name = f"nl{idx}"
+    nf = rng.randint(1, 2)            # 1-2 float locals (+ counter): fits amd64 xmm budget
+    fs = [f"a{j}" for j in range(nf)]
+    limit = rng.choice([40000, 50000, 100000])
+    iters = rng.randint(0, 5)
+    start = limit - iters
+
+    def fexpr(depth):
+        if depth <= 0 or rng.random() < 0.5:
+            return (rng.choice(fs) if rng.random() < 0.6
+                    else rng.choice(FLOAT_CONSTS))
+        op = rng.choice(["+", "-", "*", "*", "/"])
+        a, b = fexpr(depth - 1), fexpr(depth - 1)
+        if op == "/":
+            b = rng.choice(["2.0", "0.5", "3.0", "1.5"])  # nonzero const divisor
+        return f"({op} {a} {b})"
+
+    # force a float const into each update so the slot types FLOAT; shallow so the
+    # operand stack stays inside the amd64 register budget (else it bails to VM)
+    newvals = [f"(+ {rng.choice(FLOAT_CONSTS)} {fexpr(1)})" for _ in range(nf)]
+    ret = rng.choice(fs)
+    defn = (f"(def {name} (n {' '.join(fs)}) "
+            f"(if (< n {limit}) ({name} (+ n 1) {' '.join(newvals)}) {ret}))")
+    seeds = ["0.5", "1.5", "-0.5", "2.0", "0.25", "-1.5"]
+    args = [(f"{start} " + " ".join(rng.choice(seeds) for _ in fs), True)
+            for _ in range(3)]
+    return name, defn, args, "numloop"
+
+
 GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown,
-              gen_float_series]
+              gen_float_series, gen_numloop]
 
 
 def generate(rng, count):

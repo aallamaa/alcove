@@ -34,7 +34,7 @@ fi
 . ./lib.sh
 
 # All deterministic micro-benchmarks have a C twin; mlp does not.
-DETERMINISTIC="fib fact forsum countdown ackermann listsum sieve sieve-fast nqueens nqueens-vec tak pi"
+DETERMINISTIC="fib fact forsum countdown ackermann listsum sieve sieve-fast nqueens nqueens-vec tak pi logistic"
 STOCHASTIC="mlp"
 
 # Compile the C twins (and the empty.c startup baseline) into a temp dir.

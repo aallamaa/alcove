@@ -925,10 +925,16 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (has_div && zero_xmm > 7)
     return 0;
 
+  /* Emit into a generous local buffer (ncode ≤ NL_MAXPC ops × max bytes/op can
+     exceed the caller's buf[512]); copy out only if the result actually fits. */
+  uint8_t local[4096];
+  uint8_t *out_buf = buf;
+  buf = local;
+
   int framed = nl.float_result;
   int n = 0;
-  int dj0[16], ndj0 = 0;   /* pre-frame deopt jumps */
-  int djf[64], ndjf = 0;   /* framed deopt jumps (div-by-0) */
+  int dj0[64], ndj0 = 0;   /* pre-frame deopt jumps */
+  int djf[300], ndjf = 0;  /* framed deopt jumps (div-by-0) */
 
   /* ---- entry: load + guard each slot home ---- */
   for (int s = 0; s < np; s++) {
@@ -969,7 +975,7 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     noff[i] = -1;
   struct {
     int at, target_pc, size;
-  } patch[160];
+  } patch[300];
   int npatch = 0;
   int loop_top = n;
 
@@ -1212,8 +1218,9 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     x64_patch_rel32(buf, patch[i].at, patch[i].size, tgt);
   }
 
-  if (n > 480)
+  if (n > 480) /* must fit the caller's buf[512] */
     return 0;
+  memcpy(out_buf, local, (size_t)n);
   *outn = n;
   return 1;
 }

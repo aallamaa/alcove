@@ -1,0 +1,8 @@
+; logistic.alc — the logistic map x' = r·x·(1-x) iterated, r=2.5 (converges to
+; 0.6). A scalar-float self-tail loop the general numeric-loop JIT compiles to an
+; unboxed mulsd/subsd register loop. The C twin computes the identical recurrence.
+(def logi (n x)
+  (if (< n 50000000)
+      (logi (+ n 1) (* 2.5 (* x (- 1.0 x))))
+      x))
+(prn (logi 0 0.3))

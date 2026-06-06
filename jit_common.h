@@ -1879,7 +1879,14 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
     nl->slot_class[i] =
         (bc->param_hints[i] == TYPE_HINT_F64) ? NLC_FLOAT : NLC_INT;
 
-  for (int iter = 0; iter <= ENV_INLINE_SLOTS; iter++) {
+  /* Two phases: (1) iterate the abstract sim to a fixed point, PROMOTING slot
+     classes (an int op whose operands haven't promoted yet is tolerated); then
+     (2) one `strict` pass that bails on any arithmetic still typed INT (the
+     increment-1 "float-only body" restriction) and records the final layout.
+     Bailing on int-arith during phase 1 would reject a kernel like
+     (+ c (* a b)) before the tail-self back-edge promotes a,b to FLOAT. */
+  int strict = 0;
+  for (int iter = 0;; iter++) {
     int changed = 0, ok = 1, saw_tail = 0;
     for (int p = 0; p < ncode; p++)
       nl->depth[p] = -1;
@@ -1935,8 +1942,9 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
             (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
         uint8_t r = (a == NLC_FLOAT || b == NLC_FLOAT) ? NLC_FLOAT : NLC_INT;
         /* First increment: only FLOAT arithmetic (int counter uses SLOT_*_FIX).
-           Pure-int +−×÷ in the body → bail (VM / other shapes handle it). */
-        if (r == NLC_INT) { ok = 0; goto stop; }
+           Pure-int +−×÷ → bail, but only on the strict pass (phase 1 tolerates
+           it so slot classes can still promote via the tail-self fixed point). */
+        if (r == NLC_INT && strict) { ok = 0; goto stop; }
         nd -= 2;
         st[nd++] = r;
         break;
@@ -2052,8 +2060,10 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
   stop:
     if (!ok || !saw_tail)
       return 0;
-    if (!changed)
-      break;
+    if (strict)
+      break; /* final validating pass complete */
+    if (!changed || iter >= ENV_INLINE_SLOTS)
+      strict = 1; /* classes converged → do one strict pass next */
   }
 
   nl->nfslots = nl->nislots = 0;
