@@ -25,6 +25,10 @@
 
 static SDL_Window   *g_win = NULL;
 static SDL_Renderer *g_ren = NULL;
+/* bulk-blit (gfx_blit_counts) state: a streaming texture + ARGB scratch buffer */
+static SDL_Texture *g_blit_tex = NULL;
+static uint32_t    *g_blit_buf = NULL;
+static int          g_blit_w = 0, g_blit_h = 0;
 
 static int g_left = 0, g_right = 0, g_jump = 0;
 static int g_quit_pressed = 0;
@@ -450,6 +454,8 @@ int gfx_init(int width, int height) {
 }
 
 int gfx_quit(void) {
+    if (g_blit_tex) { SDL_DestroyTexture(g_blit_tex); g_blit_tex = NULL; }
+    free(g_blit_buf); g_blit_buf = NULL; g_blit_w = g_blit_h = 0;
     if (g_ren) { SDL_DestroyRenderer(g_ren); g_ren = NULL; }
     if (g_win) { SDL_DestroyWindow(g_win);   g_win = NULL; }
     SDL_Quit();
@@ -508,6 +514,44 @@ int gfx_clear(int rgb) {
 }
 
 int gfx_present(void) { if (g_ren) SDL_RenderPresent(g_ren); return 0; }
+
+/* Bulk frame upload. `cnt` is a row-major double[w*h] of escape-iteration counts
+   (0..maxit) computed by the caller (e.g. a data-parallel Mandelbrot). Colours
+   every pixel in C, uploads the whole frame as one streaming texture, and lets
+   the GPU stretch it to fill the window — one call per frame instead of
+   thousands of gfx_fill rects. Returns 0. */
+int gfx_blit_counts(const double *cnt, int w, int h, int maxit) {
+    if (!g_ren || !cnt || w <= 0 || h <= 0) return 0;
+    if (!g_blit_tex || g_blit_w != w || g_blit_h != h) {
+        if (g_blit_tex) SDL_DestroyTexture(g_blit_tex);
+        free(g_blit_buf);
+        g_blit_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888,
+                                       SDL_TEXTUREACCESS_STREAMING, w, h);
+        g_blit_buf = (uint32_t *)malloc((size_t)w * (size_t)h * 4u);
+        g_blit_w = w; g_blit_h = h;
+        if (!g_blit_tex || !g_blit_buf) return 0;
+    }
+    int npx = w * h;
+    if (maxit <= 0) maxit = 1;
+    for (int i = 0; i < npx; i++) {
+        int c = (int)cnt[i];
+        uint32_t argb;
+        if (c >= maxit) {
+            argb = 0xFF000000u;                 /* in-set → black */
+        } else {
+            uint32_t r = (uint32_t)((c * 9)  & 255);
+            uint32_t g = (uint32_t)((c * 7)  & 255);
+            uint32_t b = (uint32_t)((c * 13) & 255);
+            argb = 0xFF000000u | (r << 16) | (g << 8) | b;
+        }
+        g_blit_buf[i] = argb;
+    }
+    SDL_UpdateTexture(g_blit_tex, NULL, g_blit_buf, w * 4);
+    SDL_RenderClear(g_ren);
+    SDL_RenderCopy(g_ren, g_blit_tex, NULL, NULL);  /* GPU-stretch to the window */
+    SDL_RenderPresent(g_ren);
+    return 0;
+}
 
 int gfx_fill(int x, int y, int w, int h, int rgb) {
     if (!g_ren) return 0;

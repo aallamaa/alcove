@@ -17,10 +17,12 @@
 (= gfx-pump         (ffi-fn GFX "gfx_pump"         "int"))
 (= gfx-should-close (ffi-fn GFX "gfx_should_close" "int"))
 (= gfx-quit-pressed (ffi-fn GFX "gfx_quit_pressed" "int"))
-(= gfx-fill         (ffi-fn GFX "gfx_fill"         "int" "int" "int" "int" "int" "int"))
-(= gfx-present      (ffi-fn GFX "gfx_present"      "int"))
+; one-shot frame upload: hands the whole escape-count vector to C, which colours
+; every pixel and GPU-stretches it to the window in a single call (the cells are
+; passed zero-copy as a "ptr" — no per-pixel FFI).
+(= gfx-blit-counts  (ffi-fn GFX "gfx_blit_counts" "int" "ptr" "int" "int" "int"))
 
-(= W 400)       ; grid columns
+(= W 800)       ; grid columns
 (= S 2)         ; pixels per cell → 800×520 window
 (= ASPECT 0.65)
 (= H (int (* W ASPECT)))
@@ -40,13 +42,6 @@
     (let idx (+ (* py W) px)
       (do (vec-set! px-ramp idx (* px 1.0))
           (vec-set! py-ramp idx (* py 1.0))))))
-
-; escape count → packed 0xRRGGBB (in-set = black)
-(def col (c)
-  (if (>= c MAXIT)
-      0
-      (+ (* (mod (* c 9) 256) 65536)
-         (+ (* (mod (* c 7) 256) 256) (mod (* c 13) 256)))))
 
 ; compute the whole frame's escape counts at once — all tensor ops
 (def compute (cx cy hw)
@@ -68,24 +63,6 @@
               (vec-scale! zrzi 2.0) (vec-add! zrzi ci)         ; 2·zr·zi+ci
               (vec-copy! zr tmp) (vec-copy! zi zrzi))))))))     ; commit
 
-; draw the count grid, coalescing same-colour horizontal runs into one fill
-(def draw ()
-  (for py 0 (- H 1)
-    (let base (* py W)
-      (let runc -1
-        (let runx 0
-          (do
-            (for px 0 (- W 1)
-              (let c (int (vec-ref cnt (+ base px)))
-                (when (no (is c runc))
-                  (do
-                    (when (>= runc 0)
-                      (gfx-fill (* runx S) (* py S) (* (- px runx) S) S (col runc)))
-                    (= runc c)
-                    (= runx px)))))
-            (when (>= runc 0)
-              (gfx-fill (* runx S) (* py S) (* (- W runx) S) S (col runc)))))))))
-
 (gfx-init (* W S) (* H S))
 (= TX -0.743643887)
 (= TY 0.131825904)
@@ -98,8 +75,7 @@
     (when (is go 1)
       (do
         (compute TX TY hw)
-        (draw)
-        (gfx-present)
+        (gfx-blit-counts cnt W H MAXIT)   ; whole frame uploaded in one call
         (= hw (* hw 0.94))
         (when (< hw 0.0000000000001) (= hw 1.75))))))
 (gfx-quit)

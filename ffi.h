@@ -1001,10 +1001,12 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
       ok = isstring(a);
       break;
     case AFFI_PTR:
-      /* A raw address (fixnum), nil (NULL), or an ffi-callback value whose
-         executable code pointer we pass as the function pointer. */
+      /* A raw address (fixnum), nil (NULL), an ffi-callback (its code pointer),
+         a blob (its bytes), or an f64 vector (its cells — zero-copy, so a C shim
+         can read/write a whole buffer alcove computed). */
       ok = isnumber(a) || a == NIL_EXP ||
-           (isffi(a) && ((alc_ffi_t *)a->ptr)->kind == AFFI_KIND_CB);
+           (isffi(a) && ((alc_ffi_t *)a->ptr)->kind == AFFI_KIND_CB) ||
+           isblob(a) || (isvector(a) && vec_kind(a) == VEC_KIND_F64);
       break;
     case AFFI_STRUCT: {
       /* A struct-by-value arg is a blob packed to the declared layout. */
@@ -1056,8 +1058,12 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
         slots[i].p = NULL;
       else if (isffi(a))
         slots[i].p = ((alc_ffi_t *)a->ptr)->code; /* callback fn pointer */
+      else if (isblob(a))
+        slots[i].p = (void *)blob_bytes(a); /* blob's raw bytes */
+      else if (isvector(a) && vec_kind(a) == VEC_KIND_F64)
+        slots[i].p = (void *)VEC_F64_CELLS(a); /* f64 vector's cells (zero-copy) */
       else
-        slots[i].p = (void *)(uintptr_t)FIX_VAL(a);
+        slots[i].p = (void *)(uintptr_t)FIX_VAL(a); /* integer address */
       avalues[i] = &slots[i].p;
       break;
     case AFFI_STRUCT:
