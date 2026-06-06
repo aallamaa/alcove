@@ -1827,3 +1827,273 @@ static int match_predicate_cons_loop(bytecode_t *bc) {
   BC_END();
   return 1;
 }
+
+/* ───────────────────────── numeric tail-loop compiler ─────────────────────
+   A general bytecode→native compiler for the numeric subset of self-tail loops,
+   replacing per-kernel curated shapes (subsumes float_acc/float_series; handles
+   Mandelbrot/Newton/logistic via ONE mechanism). numloop_analyze (here, arch-
+   neutral) validates + type-infers + lays out registers; the per-backend
+   try_jit_numloop emitters translate the result. SAFE BY CONSTRUCTION: any
+   unsupported construct returns 0 (no JIT → the VM runs it), never miscompiles.
+
+   Value classes: INT (tagged fixnum → GPR) / FLOAT (unboxed double → xmm/d) /
+   BOOL (a comparison result, produced then IMMEDIATELY consumed by BR_IF_*, so
+   it never needs a register — the emitter fuses compare+branch). Slot types are
+   inferred (float consts force FLOAT; :f64 param hints seed FLOAT; the tail-self
+   back-edge unifies tail-arg classes into slot classes at a fixed point), then
+   GUARDED at entry — a wrong guess merely deopts to the VM. */
+#define NLC_INT 1
+#define NLC_FLOAT 2
+#define NLC_BOOL 3
+#define NL_MAXPC 256
+#define NL_MAXSTK 16
+
+typedef struct {
+  uint8_t slot_class[ENV_INLINE_SLOTS]; /* NLC_INT / NLC_FLOAT per param slot */
+  int nparams;
+  int nfslots, nislots;       /* # float / # int slots */
+  int fidx[ENV_INLINE_SLOTS]; /* slot → float-home index (FLOAT slots), else -1 */
+  int iidx[ENV_INLINE_SLOTS]; /* slot → int-home index (INT slots), else -1 */
+  int8_t depth[NL_MAXPC];     /* stack depth before op @pc; -1 = unreached */
+  uint8_t scls[NL_MAXPC][NL_MAXSTK]; /* class of each stack entry before op @pc */
+  int max_ftmp, max_itmp;     /* peak operand-stack entries by class (reg budget) */
+  uint8_t float_result;       /* RET returns a FLOAT (needs frame + make_floatf) */
+} numloop_t;
+
+/* Validate + type-infer + register-budget a numeric self-tail loop. All bail
+   conditions live here so both backends bail identically. Returns 1 on success
+   (nl filled), 0 to decline (→ other shapes / VM). */
+static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
+  int np = bc->nparams;
+  if (np < 1 || np > ENV_INLINE_SLOTS)
+    return 0;
+  int ncode = bc->ncode;
+  if (ncode < 2 || ncode > NL_MAXPC)
+    return 0;
+  uint8_t *c = bc->code;
+  nl->nparams = np;
+
+  /* Seed slot classes from :f64/:int hints; default INT, promote to FLOAT via
+     the tail-self fixed point. (A wrong seed only costs a deopt.) */
+  for (int i = 0; i < np; i++)
+    nl->slot_class[i] =
+        (bc->param_hints[i] == TYPE_HINT_F64) ? NLC_FLOAT : NLC_INT;
+
+  for (int iter = 0; iter <= ENV_INLINE_SLOTS; iter++) {
+    int changed = 0, ok = 1, saw_tail = 0;
+    for (int p = 0; p < ncode; p++)
+      nl->depth[p] = -1;
+    nl->depth[0] = 0; /* loop entry: empty operand stack */
+    nl->max_ftmp = nl->max_itmp = 0;
+    nl->float_result = 0;
+
+    int pc = 0;
+    while (pc < ncode) {
+      int d = nl->depth[pc];
+      uint8_t op = c[pc];
+      int len = bc_oplen(op);
+      if (len == 0) {
+        ok = 0;
+        break;
+      }
+      if (d < 0) { /* unreached (e.g. the dead JUMP after TAIL_SELF) */
+        pc += len;
+        continue;
+      }
+      uint8_t st[NL_MAXSTK];
+      for (int k = 0; k < d; k++)
+        st[k] = nl->scls[pc][k];
+      int nd = d, nextpc = pc + len, target = -1, fall = 1;
+
+      switch (op) {
+      case OP_LOAD_SLOT: {
+        uint8_t s = c[pc + 1];
+        if (s >= np || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        st[nd++] = nl->slot_class[s];
+        break;
+      }
+      case OP_LOAD_CONST: {
+        uint8_t ci = c[pc + 1];
+        if (ci >= bc->nconsts || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        exp_t *k = bc->consts[ci];
+        uint8_t cl = isfloat(k) ? NLC_FLOAT : isnumber(k) ? NLC_INT : 0;
+        if (!cl) { ok = 0; goto stop; }
+        st[nd++] = cl;
+        break;
+      }
+      case OP_LOAD_FIX:
+        if (nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        st[nd++] = NLC_INT;
+        break;
+      case OP_ADD:
+      case OP_SUB:
+      case OP_MUL:
+      case OP_DIV: {
+        if (nd < 2) { ok = 0; goto stop; }
+        uint8_t b = st[nd - 1], a = st[nd - 2];
+        if ((a != NLC_INT && a != NLC_FLOAT) ||
+            (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
+        uint8_t r = (a == NLC_FLOAT || b == NLC_FLOAT) ? NLC_FLOAT : NLC_INT;
+        /* First increment: only FLOAT arithmetic (int counter uses SLOT_*_FIX).
+           Pure-int +−×÷ in the body → bail (VM / other shapes handle it). */
+        if (r == NLC_INT) { ok = 0; goto stop; }
+        nd -= 2;
+        st[nd++] = r;
+        break;
+      }
+      case OP_LT:
+      case OP_GT:
+      case OP_LE:
+      case OP_GE: {
+        if (nd < 2) { ok = 0; goto stop; }
+        uint8_t b = st[nd - 1], a = st[nd - 2];
+        if ((a != NLC_INT && a != NLC_FLOAT) ||
+            (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
+        nd -= 2;
+        st[nd++] = NLC_BOOL;
+        break;
+      }
+      case OP_SLOT_ADD_FIX:
+      case OP_SLOT_SUB_FIX: {
+        uint8_t s = c[pc + 1];
+        if (s >= np || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        st[nd++] = nl->slot_class[s]; /* non-mutating: push slot±imm */
+        break;
+      }
+      case OP_SLOT_LT_FIX:
+      case OP_SLOT_LE_FIX:
+      case OP_SLOT_GT_FIX:
+      case OP_SLOT_GE_FIX: {
+        uint8_t s = c[pc + 1];
+        if (s >= np || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        st[nd++] = NLC_BOOL;
+        break;
+      }
+      case OP_BR_IF_FALSE:
+      case OP_BR_IF_TRUE: {
+        if (nd < 1 || st[nd - 1] != NLC_BOOL) { ok = 0; goto stop; }
+        nd -= 1;
+        int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+        target = pc + len + off;
+        break;
+      }
+      case OP_JUMP: {
+        int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+        target = pc + len + off;
+        fall = 0;
+        break;
+      }
+      case OP_TAIL_SELF: {
+        uint8_t n = c[pc + 1];
+        if (n != np || nd < n) { ok = 0; goto stop; }
+        for (int i = 0; i < n; i++) {
+          uint8_t ac = st[nd - n + i];
+          if (ac == NLC_BOOL) { ok = 0; goto stop; }
+          if (ac == NLC_FLOAT && nl->slot_class[i] != NLC_FLOAT) {
+            nl->slot_class[i] = NLC_FLOAT;
+            changed = 1;
+          }
+        }
+        nd -= n;
+        saw_tail = 1;
+        fall = 0;
+        break;
+      }
+      case OP_RET: {
+        if (nd < 1) { ok = 0; goto stop; }
+        uint8_t r = st[nd - 1];
+        if (r == NLC_BOOL) { ok = 0; goto stop; }
+        if (r == NLC_FLOAT)
+          nl->float_result = 1;
+        nd -= 1;
+        fall = 0;
+        break;
+      }
+      default:
+        ok = 0;
+        goto stop;
+      }
+
+      { /* peak operand-stack register pressure by class */
+        int ft = 0, it = 0;
+        for (int k = 0; k < nd; k++) {
+          if (st[k] == NLC_FLOAT)
+            ft++;
+          else if (st[k] == NLC_INT)
+            it++;
+        }
+        if (ft > nl->max_ftmp)
+          nl->max_ftmp = ft;
+        if (it > nl->max_itmp)
+          nl->max_itmp = it;
+      }
+
+#define NL_PROP(tpc)                                                           \
+  do {                                                                         \
+    int _t = (tpc);                                                            \
+    if (_t < 0 || _t >= ncode) { ok = 0; goto stop; }                          \
+    if (nl->depth[_t] < 0) {                                                   \
+      nl->depth[_t] = nd;                                                      \
+      for (int k = 0; k < nd; k++)                                             \
+        nl->scls[_t][k] = st[k];                                              \
+    } else {                                                                   \
+      if (nl->depth[_t] != nd) { ok = 0; goto stop; }                          \
+      for (int k = 0; k < nd; k++)                                             \
+        if (nl->scls[_t][k] != st[k]) { ok = 0; goto stop; }                  \
+    }                                                                          \
+  } while (0)
+      if (fall)
+        NL_PROP(nextpc);
+      if (target >= 0)
+        NL_PROP(target);
+#undef NL_PROP
+      pc = nextpc;
+    }
+  stop:
+    if (!ok || !saw_tail)
+      return 0;
+    if (!changed)
+      break;
+  }
+
+  nl->nfslots = nl->nislots = 0;
+  for (int i = 0; i < np; i++) {
+    if (env_slot_off_checked((uint8_t)i) < 0)
+      return 0;
+    if (nl->slot_class[i] == NLC_FLOAT) {
+      nl->fidx[i] = nl->nfslots++;
+      nl->iidx[i] = -1;
+    } else {
+      nl->iidx[i] = nl->nislots++;
+      nl->fidx[i] = -1;
+    }
+  }
+  /* Loose sanity bound only (stack arrays are NL_MAXSTK). Each backend applies
+     its OWN register budget after analyze — amd64 is tight (xmm0-7, GPR pool
+     rcx/rax/rdx), arm64 is roomy — so a kernel can JIT on arm64 yet fall to the
+     VM on amd64. */
+  if (nl->nfslots + nl->max_ftmp >= NL_MAXSTK ||
+      nl->nislots + nl->max_itmp >= NL_MAXSTK)
+    return 0;
+  return 1;
+}
+
+/* Physical-register index for the operand-stack entry at position p, given the
+   stack-class row `scls` (entries below p decide how many regs are already in
+   use by that class). Float temps sit above the nfslots float homes; int temps
+   above the nislots int homes. The backend maps the returned index to a real
+   xmm/d (float) or GPR-pool slot (int). */
+static int nl_freg(const uint8_t *scls, int p, int nfslots) {
+  int c = 0;
+  for (int k = 0; k < p; k++)
+    if (scls[k] == NLC_FLOAT)
+      c++;
+  return nfslots + c;
+}
+static int nl_ireg(const uint8_t *scls, int p, int nislots) {
+  int c = 0;
+  for (int k = 0; k < p; k++)
+    if (scls[k] == NLC_INT)
+      c++;
+  return nislots + c;
+}

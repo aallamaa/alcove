@@ -303,6 +303,15 @@ static int x64_sse_arith_xmm(uint8_t *buf, uint8_t op2, int dst, int src) {
   buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
   return 4;
 }
+/* cmp dst, src  →  REX.W 39 /r (mod=11).  Sets flags for a signed compare;
+   used by the numeric-loop compiler for integer slot/temp comparisons. */
+__attribute__((unused)) static int x64_cmp_reg_reg(uint8_t *buf, int dst,
+                                                   int src) {
+  buf[0] = 0x48;
+  buf[1] = 0x39;
+  buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
+  return 3;
+}
 /* movzx r32, word [base + disp32]  →  0F B7 /r disp32 (mod=10).  Used to
    read the 16-bit exp_t.type field for the float-box guard. */
 static int x64_movzx_reg_mem16(uint8_t *buf, int dst, int base, int32_t disp) {
@@ -873,6 +882,338 @@ static int try_jit_float_series_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_deopt0, 6, deopt0_pc);
 
   JIT_GUARD(420);
+  *outn = n;
+  return 1;
+}
+
+/* General numeric self-tail-loop compiler (amd64). Translates the validated,
+   typed, register-budgeted plan from numloop_analyze (jit_common.h) into native
+   code: one INT counter slot (untagged in a GPR) + N FLOAT slots (unboxed in
+   xmm), float +−×÷ and int/float comparisons, if-chain exits, tail-self.
+   Subsumes float_acc/float_series and handles logistic/Newton/Mandelbrot via one
+   mechanism. The env is never mutated mid-loop, so any deopt (entry guard or
+   div-by-0) re-runs the VM on the untouched entry env. FLOAT slots are guarded
+   as strict EXP_FLOAT at entry, so a returned FLOAT is always make_floatf(reg),
+   bit-identical to the VM (no fixnum-vs-float zero-iter divergence). */
+static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
+  numloop_t nl;
+  if (!numloop_analyze(bc, &nl))
+    return 0;
+  /* amd64 register budget: float homes+temps must fit xmm0-7; int homes+temps
+     the small GPR pool rcx/rax/rdx. (arm64 has far more, so it may JIT kernels
+     this declines.) */
+  if (nl.nfslots + nl.max_ftmp > 8 || nl.nislots + nl.max_itmp > 3)
+    return 0;
+  if (nl.nislots > 1)
+    return 0; /* >1 int slot: the float-box guard scratch (rax/rdx) would clash
+                 with a second int home — defer */
+  uint8_t *c = bc->code;
+  int ncode = bc->ncode, np = nl.nparams;
+  const int ipool[3] = {X64_RCX, X64_RAX, X64_RDX};
+  const int FIMM = X64_RSI; /* scratch GPR for float-const imm → xmm */
+  int toff = (int)offsetof(exp_t, type), foff = (int)offsetof(exp_t, f);
+
+  /* has-div → need a dedicated zero xmm for the ±0/NaN divisor guard */
+  int has_div = 0;
+  for (int pc = 0; pc < ncode;) {
+    if (nl.depth[pc] >= 0 && c[pc] == OP_DIV)
+      has_div = 1;
+    int l = bc_oplen(c[pc]);
+    pc += l ? l : 1;
+  }
+  int zero_xmm = nl.nfslots + nl.max_ftmp; /* next free xmm */
+  if (has_div && zero_xmm > 7)
+    return 0;
+
+  int framed = nl.float_result;
+  int n = 0;
+  int dj0[16], ndj0 = 0;   /* pre-frame deopt jumps */
+  int djf[64], ndjf = 0;   /* framed deopt jumps (div-by-0) */
+
+  /* ---- entry: load + guard each slot home ---- */
+  for (int s = 0; s < np; s++) {
+    int off = env_slot_off((uint8_t)s);
+    if (nl.slot_class[s] == NLC_INT) {
+      int hr = ipool[nl.iidx[s]];
+      n += x64_mov_reg_mem(buf + n, hr, X64_RDI, off);
+      n += x64_test_reg8_imm8(buf + n, hr, 1);
+      dj0[ndj0++] = n;
+      n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt0 (not fixnum) */
+      n += x64_sar_imm8(buf + n, hr, 3);    /* untag counter */
+    } else {
+      int hx = nl.fidx[s];
+      n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off);
+      n += x64_test_reg8_imm8(buf + n, X64_RAX, 7); /* low-3 tag != 0 → not ptr */
+      dj0[ndj0++] = n;
+      n += x64_jcc_rel32(buf + n, 0x05, 0); /* jnz deopt0 */
+      n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+      dj0[ndj0++] = n;
+      n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt0 (null) */
+      n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX, toff);
+      n += x64_cmp_imm32(buf + n, X64_RDX, EXP_FLOAT);
+      dj0[ndj0++] = n;
+      n += x64_jcc_rel32(buf + n, 0x05, 0); /* jne deopt0 (not EXP_FLOAT) */
+      n += x64_movsd_xmm_mem(buf + n, hx, X64_RAX, foff); /* home = box->f */
+    }
+  }
+  if (framed)
+    n += x64_push_reg(buf + n, X64_RBX); /* 16-align for make_floatf */
+  if (has_div) {
+    n += x64_mov_imm64(buf + n, FIMM, 0);
+    n += x64_movq_xmm_reg(buf + n, zero_xmm, FIMM); /* zero_xmm = 0.0 */
+  }
+
+  /* ---- loop body ---- */
+  int noff[NL_MAXPC];
+  for (int i = 0; i < ncode; i++)
+    noff[i] = -1;
+  struct {
+    int at, target_pc, size;
+  } patch[160];
+  int npatch = 0;
+  int loop_top = n;
+
+  /* pending fused compare */
+  int pf = 0, pf_float = 0, pf_op = 0, pf_ra = 0, pf_rb = 0, pf_slotimm = 0,
+      pf_imm = 0;
+
+  for (int pc = 0; pc < ncode;) {
+    int len = bc_oplen(c[pc]);
+    if (nl.depth[pc] < 0) {
+      pc += len ? len : 1;
+      continue;
+    }
+    noff[pc] = n;
+    uint8_t op = c[pc];
+    int d = nl.depth[pc];
+    const uint8_t *st = nl.scls[pc];
+
+    switch (op) {
+    case OP_LOAD_SLOT: {
+      uint8_t s = c[pc + 1];
+      if (nl.slot_class[s] == NLC_FLOAT) {
+        int dst = nl_freg(st, d, nl.nfslots), src = nl.fidx[s];
+        n += x64_movsd_xmm_xmm(buf + n, dst, src);
+      } else {
+        int dst = ipool[nl_ireg(st, d, nl.nislots)], src = ipool[nl.iidx[s]];
+        n += x64_mov_reg_reg(buf + n, dst, src);
+      }
+      break;
+    }
+    case OP_LOAD_CONST: {
+      exp_t *k = bc->consts[c[pc + 1]];
+      if (isfloat(k)) {
+        uint64_t bits;
+        double dv = k->f;
+        memcpy(&bits, &dv, 8);
+        int dst = nl_freg(st, d, nl.nfslots);
+        n += x64_mov_imm64(buf + n, FIMM, bits);
+        n += x64_movq_xmm_reg(buf + n, dst, FIMM);
+      } else {
+        int dst = ipool[nl_ireg(st, d, nl.nislots)];
+        n += x64_mov_imm64(buf + n, dst, (uint64_t)FIX_VAL(k));
+      }
+      break;
+    }
+    case OP_LOAD_FIX: {
+      int16_t v = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+      int dst = ipool[nl_ireg(st, d, nl.nislots)];
+      n += x64_mov_imm64(buf + n, dst, (uint64_t)(int64_t)v);
+      break;
+    }
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DIV: {
+      /* float only (analyzer guarantees) — operands a@d-2, b@d-1, result→a */
+      int ra = nl_freg(st, d - 2, nl.nfslots), rb = nl_freg(st, d - 1, nl.nfslots);
+      uint8_t o2 = op == OP_ADD   ? 0x58
+                   : op == OP_SUB ? 0x5C
+                   : op == OP_MUL ? 0x59
+                                  : 0x5E;
+      if (op == OP_DIV) {
+        n += x64_ucomisd_xmm_xmm(buf + n, rb, zero_xmm); /* divisor ±0/NaN? */
+        djf[ndjf++] = n;
+        n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt_framed */
+      }
+      n += x64_sse_arith_xmm(buf + n, o2, ra, rb);
+      break;
+    }
+    case OP_LT:
+    case OP_GT:
+    case OP_LE:
+    case OP_GE: {
+      uint8_t a = st[d - 2], b = st[d - 1];
+      pf = 1;
+      pf_op = op;
+      pf_slotimm = 0;
+      pf_float = (a == NLC_FLOAT || b == NLC_FLOAT);
+      if (pf_float) {
+        pf_ra = nl_freg(st, d - 2, nl.nfslots);
+        pf_rb = nl_freg(st, d - 1, nl.nfslots);
+      } else {
+        pf_ra = ipool[nl_ireg(st, d - 2, nl.nislots)];
+        pf_rb = ipool[nl_ireg(st, d - 1, nl.nislots)];
+      }
+      break;
+    }
+    case OP_SLOT_LT_FIX:
+    case OP_SLOT_LE_FIX:
+    case OP_SLOT_GT_FIX:
+    case OP_SLOT_GE_FIX: {
+      uint8_t s = c[pc + 1];
+      if (nl.slot_class[s] != NLC_INT)
+        return 0; /* float slot fused-compare: defer */
+      pf = 1;
+      pf_slotimm = 1;
+      pf_float = 0;
+      pf_op = (op == OP_SLOT_LT_FIX)   ? OP_LT
+              : (op == OP_SLOT_LE_FIX) ? OP_LE
+              : (op == OP_SLOT_GT_FIX) ? OP_GT
+                                       : OP_GE;
+      pf_ra = ipool[nl.iidx[s]];
+      pf_imm = (int16_t)(c[pc + 2] | (c[pc + 3] << 8));
+      break;
+    }
+    case OP_BR_IF_FALSE:
+    case OP_BR_IF_TRUE: {
+      if (!pf)
+        return 0; /* BR not fed by a fused compare: defer */
+      int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+      int tgt = pc + len + off;
+      int br_true = (op == OP_BR_IF_TRUE);
+      uint8_t cc;
+      if (pf_float) {
+        /* operand-reversal so ja/jae exclude NaN (compare-true), jbe/jb include
+           it (compare-false) — matching the VM's NaN→false. */
+        int sw = (pf_op == OP_LT || pf_op == OP_LE);
+        int aa = sw ? pf_rb : pf_ra, bb = sw ? pf_ra : pf_rb;
+        n += x64_ucomisd_xmm_xmm(buf + n, aa, bb);
+        if (pf_op == OP_LT || pf_op == OP_GT)
+          cc = br_true ? 0x07 /*ja*/ : 0x06 /*jbe*/;
+        else
+          cc = br_true ? 0x03 /*jae*/ : 0x02 /*jb*/;
+      } else {
+        if (pf_slotimm)
+          n += x64_cmp_imm32(buf + n, pf_ra, pf_imm);
+        else
+          n += x64_cmp_reg_reg(buf + n, pf_ra, pf_rb);
+        switch (pf_op) {
+        case OP_LT:
+          cc = br_true ? 0x0C : 0x0D;
+          break;
+        case OP_GT:
+          cc = br_true ? 0x0F : 0x0E;
+          break;
+        case OP_LE:
+          cc = br_true ? 0x0E : 0x0F;
+          break;
+        default:
+          cc = br_true ? 0x0D : 0x0C;
+          break; /* GE */
+        }
+      }
+      pf = 0;
+      patch[npatch].at = n;
+      patch[npatch].size = 6;
+      patch[npatch].target_pc = tgt;
+      npatch++;
+      n += x64_jcc_rel32(buf + n, cc, 0);
+      break;
+    }
+    case OP_JUMP: {
+      int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+      patch[npatch].at = n;
+      patch[npatch].size = 5;
+      patch[npatch].target_pc = pc + len + off;
+      npatch++;
+      n += x64_jmp_rel32(buf + n, 0);
+      break;
+    }
+    case OP_SLOT_ADD_FIX:
+    case OP_SLOT_SUB_FIX: {
+      uint8_t s = c[pc + 1];
+      int16_t imm = (int16_t)(c[pc + 2] | (c[pc + 3] << 8));
+      if (nl.slot_class[s] == NLC_INT) {
+        int dst = ipool[nl_ireg(st, d, nl.nislots)], src = ipool[nl.iidx[s]];
+        n += x64_mov_reg_reg(buf + n, dst, src);
+        if (op == OP_SLOT_ADD_FIX)
+          n += x64_add_imm32(buf + n, dst, imm);
+        else
+          n += x64_sub_imm32(buf + n, dst, imm);
+      } else {
+        return 0; /* float SLOT_*_FIX: defer (rare for these kernels) */
+      }
+      break;
+    }
+    case OP_TAIL_SELF: {
+      /* move each tail-arg temp → its slot home (temps and homes are disjoint
+         register sets, so the parallel move is conflict-free), then loop. */
+      for (int i = 0; i < np; i++) {
+        if (nl.slot_class[i] == NLC_FLOAT) {
+          int src = nl_freg(st, i, nl.nfslots), dst = nl.fidx[i];
+          if (src != dst)
+            n += x64_movsd_xmm_xmm(buf + n, dst, src);
+        } else {
+          int src = ipool[nl_ireg(st, i, nl.nislots)], dst = ipool[nl.iidx[i]];
+          if (src != dst)
+            n += x64_mov_reg_reg(buf + n, dst, src);
+        }
+      }
+      patch[npatch].at = n;
+      patch[npatch].size = 5;
+      patch[npatch].target_pc = -1; /* loop_top sentinel */
+      npatch++;
+      n += x64_jmp_rel32(buf + n, 0);
+      break;
+    }
+    case OP_RET: {
+      uint8_t r = st[d - 1];
+      if (r == NLC_FLOAT) {
+        int rx = nl_freg(st, d - 1, nl.nfslots);
+        if (rx != X64_XMM0)
+          n += x64_movsd_xmm_xmm(buf + n, X64_XMM0, rx);
+        n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&make_floatf);
+        n += x64_call_reg(buf + n, X64_RAX);
+      } else {
+        int rr = ipool[nl_ireg(st, d - 1, nl.nislots)];
+        n += x64_imul_reg_reg_imm32(buf + n, X64_RAX, rr, 8); /* re-tag: v<<3 */
+        n += x64_add_imm32(buf + n, X64_RAX, 1);              /* | 1 */
+      }
+      if (framed)
+        n += x64_pop_reg(buf + n, X64_RBX);
+      n += x64_ret(buf + n);
+      break;
+    }
+    default:
+      return 0;
+    }
+    pc += len;
+  }
+
+  /* framed deopt sled (div-by-0): pop frame, return NULL */
+  int deoptf_pc = n;
+  if (framed)
+    n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+  /* pre-frame deopt sled */
+  int deopt0_pc = n;
+  X64_EMIT_DEOPT();
+
+  for (int i = 0; i < ndj0; i++)
+    x64_patch_rel32(buf, dj0[i], 6, deopt0_pc);
+  for (int i = 0; i < ndjf; i++)
+    x64_patch_rel32(buf, djf[i], 6, deoptf_pc);
+  for (int i = 0; i < npatch; i++) {
+    int tgt = patch[i].target_pc < 0 ? loop_top : noff[patch[i].target_pc];
+    if (tgt < 0)
+      return 0; /* branch into an unreached pc — shouldn't happen */
+    x64_patch_rel32(buf, patch[i].at, patch[i].size, tgt);
+  }
+
+  if (n > 480)
+    return 0;
   *outn = n;
   return 1;
 }
@@ -2844,6 +3185,8 @@ int jit_compile(bytecode_t *bc) {
     int deopt_pc = n;
     X64_EMIT_DEOPT();
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+  } else if (try_jit_numloop(bc, buf, &n)) {
+    JT("numloop"); /* general numeric self-tail loop (last-resort, after shapes) */
   } else {
     JT("miss");
     return 0; /* shape not recognized */
