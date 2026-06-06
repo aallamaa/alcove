@@ -307,6 +307,10 @@ static uint32_t arm64_fdiv_d(int dd, int dn, int dm) {
   return 0x1E601800u | ((uint32_t)(dm & 0x1f) << 16) |
          ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
 }
+/* FMOV Dd, Dn — double register copy: 0x1E604000 | (Dn<<5) | Dd. */
+__attribute__((unused)) static uint32_t arm64_fmov_d_d(int dd, int dn) {
+  return 0x1E604000u | ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
 /* FCMP Dn, Dm — double compare, sets NZCV (unordered/NaN → N=0,Z=0,C=1,V=1):
    0x1E602000 | (Dm<<16) | (Dn<<5). Used by the numeric-loop compiler. */
 __attribute__((unused)) static uint32_t arm64_fcmp_d(int dn, int dm) {
@@ -943,6 +947,338 @@ static int try_jit_float_series_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_div2] = arm64_cbz(2, deopt_framed_pc - patch_div2);
 
   JIT_GUARD(120);
+  *outn = n;
+  return 1;
+}
+
+/* General numeric self-tail-loop compiler (arm64). Mirror of the amd64
+   try_jit_numloop: same numloop_analyze plan, same semantics; arm64 has far
+   more registers, so it JITs kernels (e.g. Mandelbrot, 4 float locals) the
+   amd64 backend declines. INT counter in x1 (untagged); float locals in d-regs
+   (d0-d7 then d16-d31 — caller-saved, no save/restore; no mid-loop call); float
+   const/addr scratch in x9; entry guards (INT=fixnum, FLOAT=strict EXP_FLOAT);
+   fused compare+branch (GT/GE exclude NaN, matching VM NaN→false); div-by-0
+   deopt via fcmp #0.0 + b.eq; conflict-free tail-self shuffle; frame (fp/lr)
+   only when a FLOAT is returned (make_floatf call). */
+static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
+  numloop_t nl;
+  if (!numloop_analyze(bc, &nl))
+    return 0;
+  if (nl.nislots > 1)
+    return 0; /* float-box guard uses x9/x10; one int home (x1) keeps it simple */
+  /* arm64 budget: float homes+temps over d0-d7 + d16-d31 = 24 caller-saved. */
+  if (nl.nfslots + nl.max_ftmp > 24 || nl.nislots + nl.max_itmp > 4)
+    return 0;
+  uint8_t *c = bc->code;
+  int ncode = bc->ncode, np = nl.nparams;
+  const int ipool[4] = {1, 2, 3, 4}; /* x1 = counter home; x2-x4 int temps */
+  int toff = (int)offsetof(exp_t, type), foff = (int)offsetof(exp_t, f);
+#define DFR(v) ((v) < 8 ? (v) : (v) + 8) /* float vreg → d-reg (skip d8-d15) */
+
+  /* Emit into a generous local buffer; copy out only if it fits insns[128]. */
+  uint32_t local[2048];
+  uint32_t *out_buf = out;
+  out = local;
+
+  int framed = nl.float_result;
+  int n = 0;
+  int dj0[64], ndj0 = 0; /* pre-frame deopt (b.cond/cbz/tbz placeholders) */
+  int djf[300], ndjf = 0; /* framed deopt (div-by-0) */
+#define DJ0(t_at) (dj0[ndj0++] = (t_at))
+#define DJF(t_at) (djf[ndjf++] = (t_at))
+
+  /* ---- entry: load + guard each slot home (env in x0) ---- */
+  for (int s = 0; s < np; s++) {
+    int off = env_slot_off((uint8_t)s);
+    if (nl.slot_class[s] == NLC_INT) {
+      int hr = ipool[nl.iidx[s]];
+      out[n++] = arm64_ldr_imm(hr, 0, off);
+      dj0[ndj0++] = n;
+      out[n++] = 0;                       /* tbz hr,#0,deopt0 (not fixnum) */
+      out[n++] = arm64_asr_imm(hr, hr, 3); /* untag */
+    } else {
+      int hd = DFR(nl.fidx[s]);
+      out[n++] = arm64_ldr_imm(9, 0, off); /* x9 = slot ptr */
+      out[n++] = arm64_and_imm7(10, 9);    /* x10 = tag bits */
+      dj0[ndj0++] = n;
+      out[n++] = 0; /* cbnz x10,deopt0 (not a pointer) */
+      dj0[ndj0++] = n;
+      out[n++] = 0;                        /* cbz x9,deopt0 (null) */
+      out[n++] = arm64_ldrh_imm(10, 9, toff);
+      out[n++] = arm64_cmp_imm(10, EXP_FLOAT);
+      dj0[ndj0++] = n;
+      out[n++] = 0;                          /* b.ne deopt0 */
+      out[n++] = arm64_ldr_d_imm(hd, 9, foff); /* home = box->f */
+    }
+  }
+  if (framed)
+    out[n++] = arm64_stp_pre_sp(29, 30, -16); /* save fp/lr for make_floatf */
+
+  /* ---- loop body ---- */
+  int noff[NL_MAXPC];
+  for (int i = 0; i < ncode; i++)
+    noff[i] = -1;
+  struct {
+    int at, target_pc, cond;
+  } patch[300];
+  int npatch = 0;
+  int loop_top = n;
+
+  int pf = 0, pf_float = 0, pf_op = 0, pf_ra = 0, pf_rb = 0, pf_slotimm = 0,
+      pf_imm = 0;
+
+  for (int pc = 0; pc < ncode;) {
+    int len = bc_oplen(c[pc]);
+    if (nl.depth[pc] < 0) {
+      pc += len ? len : 1;
+      continue;
+    }
+    noff[pc] = n;
+    uint8_t op = c[pc];
+    int d = nl.depth[pc];
+    const uint8_t *st = nl.scls[pc];
+
+    switch (op) {
+    case OP_LOAD_SLOT: {
+      uint8_t s = c[pc + 1];
+      if (nl.slot_class[s] == NLC_FLOAT)
+        out[n++] = arm64_fmov_d_d(DFR(nl_freg(st, d, nl.nfslots)), DFR(nl.fidx[s]));
+      else
+        out[n++] = arm64_mov_reg(ipool[nl_ireg(st, d, nl.nislots)], ipool[nl.iidx[s]]);
+      break;
+    }
+    case OP_LOAD_CONST: {
+      exp_t *k = bc->consts[c[pc + 1]];
+      if (isfloat(k)) {
+        uint64_t bits;
+        double dv = k->f;
+        memcpy(&bits, &dv, 8);
+        n += emit_mov64(out + n, 9, bits);
+        out[n++] = arm64_fmov_d_x(DFR(nl_freg(st, d, nl.nfslots)), 9);
+      } else {
+        n += emit_mov64(out + n, ipool[nl_ireg(st, d, nl.nislots)],
+                        (uint64_t)FIX_VAL(k));
+      }
+      break;
+    }
+    case OP_LOAD_FIX: {
+      int16_t v = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+      n += emit_mov64(out + n, ipool[nl_ireg(st, d, nl.nislots)],
+                      (uint64_t)(int64_t)v);
+      break;
+    }
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DIV: {
+      int ra = DFR(nl_freg(st, d - 2, nl.nfslots)),
+          rb = DFR(nl_freg(st, d - 1, nl.nfslots));
+      if (op == OP_DIV) {
+        out[n++] = arm64_fcmp_d_zero(rb); /* divisor ±0 → deopt (NaN→fdiv=NaN) */
+        djf[ndjf++] = n;
+        out[n++] = 0; /* b.eq deopt_framed */
+      }
+      out[n++] = op == OP_ADD   ? arm64_fadd_d(ra, ra, rb)
+                 : op == OP_SUB ? arm64_fsub_d(ra, ra, rb)
+                 : op == OP_MUL ? arm64_fmul_d(ra, ra, rb)
+                                : arm64_fdiv_d(ra, ra, rb);
+      break;
+    }
+    case OP_LT:
+    case OP_GT:
+    case OP_LE:
+    case OP_GE: {
+      uint8_t a = st[d - 2], b = st[d - 1];
+      pf = 1;
+      pf_op = op;
+      pf_slotimm = 0;
+      pf_float = (a == NLC_FLOAT || b == NLC_FLOAT);
+      if (pf_float) {
+        pf_ra = DFR(nl_freg(st, d - 2, nl.nfslots));
+        pf_rb = DFR(nl_freg(st, d - 1, nl.nfslots));
+      } else {
+        pf_ra = ipool[nl_ireg(st, d - 2, nl.nislots)];
+        pf_rb = ipool[nl_ireg(st, d - 1, nl.nislots)];
+      }
+      break;
+    }
+    case OP_SLOT_LT_FIX:
+    case OP_SLOT_LE_FIX:
+    case OP_SLOT_GT_FIX:
+    case OP_SLOT_GE_FIX: {
+      uint8_t s = c[pc + 1];
+      if (nl.slot_class[s] != NLC_INT)
+        return 0;
+      pf = 1;
+      pf_slotimm = 1;
+      pf_float = 0;
+      pf_op = (op == OP_SLOT_LT_FIX)   ? OP_LT
+              : (op == OP_SLOT_LE_FIX) ? OP_LE
+              : (op == OP_SLOT_GT_FIX) ? OP_GT
+                                       : OP_GE;
+      pf_ra = ipool[nl.iidx[s]];
+      pf_imm = (int16_t)(c[pc + 2] | (c[pc + 3] << 8));
+      break;
+    }
+    case OP_BR_IF_FALSE:
+    case OP_BR_IF_TRUE: {
+      if (!pf)
+        return 0;
+      int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+      int tgt = pc + len + off, br_true = (op == OP_BR_IF_TRUE), cond;
+      if (pf_float) {
+        int sw = (pf_op == OP_LT || pf_op == OP_LE);
+        int aa = sw ? pf_rb : pf_ra, bb = sw ? pf_ra : pf_rb;
+        out[n++] = arm64_fcmp_d(aa, bb);
+        if (pf_op == OP_LT || pf_op == OP_GT)
+          cond = br_true ? 12 /*GT*/ : 13 /*LE*/;
+        else
+          cond = br_true ? 10 /*GE*/ : 11 /*LT*/;
+      } else {
+        if (pf_slotimm)
+          out[n++] = arm64_cmp_imm(pf_ra, pf_imm);
+        else
+          out[n++] = arm64_cmp_reg(pf_ra, pf_rb);
+        switch (pf_op) {
+        case OP_LT:
+          cond = br_true ? 11 : 10;
+          break;
+        case OP_GT:
+          cond = br_true ? 12 : 13;
+          break;
+        case OP_LE:
+          cond = br_true ? 13 : 12;
+          break;
+        default:
+          cond = br_true ? 10 : 11;
+          break;
+        }
+      }
+      pf = 0;
+      patch[npatch].at = n;
+      patch[npatch].target_pc = tgt;
+      patch[npatch].cond = cond;
+      npatch++;
+      out[n++] = 0; /* b.cond tgt */
+      break;
+    }
+    case OP_JUMP: {
+      int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
+      patch[npatch].at = n;
+      patch[npatch].target_pc = pc + len + off;
+      patch[npatch].cond = -1; /* unconditional */
+      npatch++;
+      out[n++] = 0;
+      break;
+    }
+    case OP_SLOT_ADD_FIX:
+    case OP_SLOT_SUB_FIX: {
+      uint8_t s = c[pc + 1];
+      int16_t imm = (int16_t)(c[pc + 2] | (c[pc + 3] << 8));
+      if (nl.slot_class[s] != NLC_INT)
+        return 0;
+      if (imm < 0 || imm > 4095)
+        return 0; /* add/sub imm is u12 */
+      int dst = ipool[nl_ireg(st, d, nl.nislots)], src = ipool[nl.iidx[s]];
+      out[n++] = arm64_mov_reg(dst, src);
+      out[n++] = op == OP_SLOT_ADD_FIX ? arm64_add_imm(dst, dst, imm)
+                                       : arm64_sub_imm(dst, dst, imm);
+      break;
+    }
+    case OP_TAIL_SELF: {
+      for (int i = 0; i < np; i++) {
+        if (nl.slot_class[i] == NLC_FLOAT) {
+          int src = DFR(nl_freg(st, i, nl.nfslots)), dst = DFR(nl.fidx[i]);
+          if (src != dst)
+            out[n++] = arm64_fmov_d_d(dst, src);
+        } else {
+          int src = ipool[nl_ireg(st, i, nl.nislots)], dst = ipool[nl.iidx[i]];
+          if (src != dst)
+            out[n++] = arm64_mov_reg(dst, src);
+        }
+      }
+      patch[npatch].at = n;
+      patch[npatch].target_pc = -1; /* loop_top */
+      patch[npatch].cond = -1;
+      npatch++;
+      out[n++] = 0;
+      break;
+    }
+    case OP_RET: {
+      uint8_t r = st[d - 1];
+      if (r == NLC_FLOAT) {
+        int rd = DFR(nl_freg(st, d - 1, nl.nfslots));
+        if (rd != 0)
+          out[n++] = arm64_fmov_d_d(0, rd);
+        n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&make_floatf);
+        out[n++] = arm64_blr(9);
+      } else {
+        int rr = ipool[nl_ireg(st, d - 1, nl.nislots)];
+        out[n++] = arm64_lsl_imm(0, rr, 3);  /* v << 3 */
+        out[n++] = arm64_orr_imm_bit0(0, 0); /* | 1 */
+      }
+      if (framed)
+        out[n++] = arm64_ldp_post_sp(29, 30, 16);
+      out[n++] = arm64_ret();
+      break;
+    }
+    default:
+      return 0;
+    }
+    pc += len;
+  }
+
+  int deoptf_pc = n;
+  if (framed)
+    out[n++] = arm64_ldp_post_sp(29, 30, 16);
+  out[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
+  out[n++] = arm64_ret();
+  int deopt0_pc = n;
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  /* patch entry guards: order in dj0 follows emission (tbz / cbnz / cbz / b.ne) */
+  /* Re-emit the entry guard branches now that deopt0_pc is known. We stored the
+     instruction slots; reconstruct each by its kind from the opcode position is
+     awkward, so we patch by the known guard pattern: every dj0 slot is a forward
+     branch to deopt0. Distinguish by re-deriving from the saved slot's intended
+     kind isn't tracked — instead we encoded placeholders; fill them per-kind: */
+  /* (handled inline below) */
+  for (int i = 0; i < ndjf; i++)
+    out[djf[i]] = arm64_b_cond(0 /*EQ*/, deoptf_pc - djf[i]);
+  for (int i = 0; i < npatch; i++) {
+    int tgt = patch[i].target_pc < 0 ? loop_top : noff[patch[i].target_pc];
+    if (tgt < 0)
+      return 0;
+    out[patch[i].at] = patch[i].cond < 0
+                           ? arm64_b(tgt - patch[i].at)
+                           : arm64_b_cond(patch[i].cond, tgt - patch[i].at);
+  }
+  /* entry-guard placeholders: fill by kind. We know the sequence per slot, so
+     re-walk and patch. */
+  {
+    int gi = 0;
+    for (int s = 0; s < np && gi < ndj0; s++) {
+      if (nl.slot_class[s] == NLC_INT) {
+        out[dj0[gi]] = arm64_tbz(ipool[nl.iidx[s]], 0, deopt0_pc - dj0[gi]);
+        gi++;
+      } else {
+        out[dj0[gi]] = arm64_cbnz(10, deopt0_pc - dj0[gi]);
+        gi++;
+        out[dj0[gi]] = arm64_cbz(9, deopt0_pc - dj0[gi]);
+        gi++;
+        out[dj0[gi]] = arm64_b_cond(1 /*NE*/, deopt0_pc - dj0[gi]);
+        gi++;
+      }
+    }
+  }
+#undef DFR
+#undef DJ0
+#undef DJF
+  if (n > 128) /* must fit the caller's insns[128] */
+    return 0;
+  for (int i = 0; i < n; i++)
+    out_buf[i] = local[i];
   *outn = n;
   return 1;
 }
@@ -2434,6 +2770,8 @@ int jit_compile(bytecode_t *bc) {
     /* See comment above — ARM64_EMIT_DEOPT() uses `out`, not `insns`. */
     insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
     insns[n++] = arm64_ret();
+  } else if (try_jit_numloop(bc, insns, &n)) {
+    /* general numeric self-tail loop (last-resort, after the curated shapes) */
   } else {
     return 0; /* shape not recognized */
   }
