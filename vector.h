@@ -699,6 +699,56 @@ exp_t *vecaddcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(yexp, xexp, ret);
 }
 
+/* Data-parallel masked counter: count[i] += (src[i] <= limit) ? 1 : 0, in one
+   SIMD pass. The building block for vectorized escape-time fractals — one call
+   advances the iteration count of every still-bounded pixel at once. A NaN src
+   (an escaped point whose z overflowed) compares false, so it stops counting,
+   exactly matching a scalar escape loop. */
+const char doc_veccountle[] =
+    "(vec-count-le! count src limit) — in place count[i] += (src[i] <= limit ? 1 "
+    ": 0), one SIMD pass (NaN src counts as 0). Returns count.";
+exp_t *veccountlecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(cexp, sexp, limexp);
+  if (!isvector(cexp) || !isvector(sexp))
+    CLEAN_RETURN_3(cexp, sexp, limexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-count-le! count src limit): count, src vectors"));
+  if (!isnumber(limexp) && !isfloat(limexp))
+    CLEAN_RETURN_3(cexp, sexp, limexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-count-le!: limit must be a number"));
+  int64_t n = vec_len(cexp);
+  if (n != vec_len(sexp))
+    CLEAN_RETURN_3(cexp, sexp, limexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-count-le!: length mismatch"));
+  double lim = isfloat(limexp) ? limexp->f : (double)FIX_VAL(limexp);
+  VEC_REQUIRE_FLOAT_WRITABLE(cexp, "vec-count-le!",
+                             CLEAN_RETURN_3(cexp, sexp, limexp, _alc_e));
+  int err = 0;
+  if (vec_kind(cexp) == VEC_KIND_F64 && vec_kind(sexp) == VEC_KIND_F64) {
+    double *cc = VEC_F64_CELLS(cexp);
+    double *sc = VEC_F64_CELLS(sexp);
+    VEC_SIMD
+    for (int64_t i = 0; i < n; i++)
+      cc[i] += (sc[i] <= lim) ? 1.0 : 0.0;
+  } else {
+    for (int64_t i = 0; i < n; i++) {
+      double cv = vec_read_double(cexp, i, &err);
+      double sv = vec_read_double(sexp, i, &err);
+      if (err)
+        break;
+      vec_write_double(cexp, i, cv + ((sv <= lim) ? 1.0 : 0.0));
+    }
+  }
+  if (err)
+    CLEAN_RETURN_3(
+        cexp, sexp, limexp,
+        error(ERROR_NUMBER_EXPECTED, e, env, "vec-count-le!: non-numeric"));
+  exp_t *ret = refexp(cexp);
+  CLEAN_RETURN_3(cexp, sexp, limexp, ret);
+}
+
 const char doc_vecfill[] = "(vec-fill! v a) — in place v[i] = a. Returns v.";
 exp_t *vecfillcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(vexp, aexp);

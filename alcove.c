@@ -403,6 +403,7 @@ lispProc lispProcList[] = {
     LISPCMD("vec-axpy!", vecaxpycmd, doc_vecaxpy),
     LISPCMD("vec-scale!", vecscalecmd, doc_vecscale),
     LISPCMD("vec-add!", vecaddcmd, doc_vecadd),
+    LISPCMD("vec-count-le!", veccountlecmd, doc_veccountle),
     LISPCMD("vec-copy!", veccopycmd, doc_veccopy),
     LISPCMD("vec-fill!", vecfillcmd, doc_vecfill),
     LISPCMD("vec-relu!", vecrelucmd, doc_vecrelu),

@@ -150,7 +150,7 @@ extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
                   doc_blob2string[], doc_string2blob[], doc_readbytes[];
 extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
                   doc_vecfill[], doc_vecrelu[], doc_vecargmax[], doc_vecmax[],
-                  doc_veccopy[];
+                  doc_veccopy[], doc_veccountle[];
 extern const char doc_vecmul[], doc_vecsub[], doc_vecsum[], doc_vecmin[],
                   doc_vecargmin[], doc_vecexp[], doc_vecsigmoid[],
                   doc_vectanh[], doc_vecsoftmax[];
@@ -243,6 +243,7 @@ exp_t *vecdotcmd(exp_t *e, env_t *env);
 exp_t *vecaxpycmd(exp_t *e, env_t *env);
 exp_t *vecscalecmd(exp_t *e, env_t *env);
 exp_t *vecaddcmd(exp_t *e, env_t *env);
+exp_t *veccountlecmd(exp_t *e, env_t *env);
 exp_t *vecfillcmd(exp_t *e, env_t *env);
 exp_t *vecrelucmd(exp_t *e, env_t *env);
 exp_t *vecargmaxcmd(exp_t *e, env_t *env);
