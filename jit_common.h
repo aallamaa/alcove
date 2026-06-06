@@ -784,6 +784,119 @@ static int match_float_acc_loop(bytecode_t *bc,
   return 1;
 }
 
+/* float_series_loop captured operands (36-byte shape):
+     (def f (k acc) (if (<cmp> k LIM)
+                        (f (k step= S) (+ acc (- (/ N1 k) (/ N2 (k + OFF2)))))
+                        acc))
+   A telescoping reciprocal series (e.g. Leibniz π: (- (/ 4.0 k) (/ 4.0 (+ k 2)))
+   over k += 4). k is an integer counter slot, acc a float accumulator slot, LIM
+   a fixnum const, N1/N2 float consts, OFF2 a small int offset. Shares the
+   counter/accumulator skeleton and the `acc` exit arm with float_acc_loop; the
+   body adds the two divisions + counter-derived divisor. */
+struct match_float_series_loop {
+  uint8_t cmp_op, step_op;
+  uint8_t cslot, aslot;
+  int16_t step_imm, off2;
+  int64_t lim_val;
+  uint64_t n1_bits, n2_bits;
+  int coff, aoff;
+};
+
+static int match_float_series_loop(bytecode_t *bc,
+                                   struct match_float_series_loop *m) {
+  if (bc->nparams != 2)
+    return 0;
+  uint8_t *c = bc->code;
+  int pc = 0, at_c, at_lim, at_step, at_a, at_n1, at_k, at_n2, at_step2, at_tail,
+                 at_a2;
+  uint8_t cmp_op, step_op, step2_op;
+  BC_TAKE(at_c, OP_LOAD_SLOT);
+  uint8_t cslot = BC_ARG(at_c, 0);
+  BC_TAKE(at_lim, OP_LOAD_CONST);
+  uint8_t lim_idx = BC_ARG(at_lim, 0);
+  BC_EAT_ANY(cmp_op);
+  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+    return 0;
+  BC_EAT(OP_BR_IF_FALSE);
+  BC_TAKE_ANY(at_step, step_op); /* counter step → tail arg 0 */
+  if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
+    return 0;
+  if (BC_ARG(at_step, 0) != cslot)
+    return 0;
+  int16_t step_imm = BC_I16(at_step, 1);
+  BC_TAKE(at_a, OP_LOAD_SLOT); /* acc (tail arg 1 base) */
+  uint8_t aslot = BC_ARG(at_a, 0);
+  BC_TAKE(at_n1, OP_LOAD_CONST); /* N1 */
+  uint8_t n1_idx = BC_ARG(at_n1, 0);
+  BC_TAKE(at_k, OP_LOAD_SLOT); /* divisor 1 == k */
+  if (BC_ARG(at_k, 0) != cslot)
+    return 0;
+  BC_EAT(OP_DIV); /* N1 / k */
+  BC_TAKE(at_n2, OP_LOAD_CONST); /* N2 */
+  uint8_t n2_idx = BC_ARG(at_n2, 0);
+  BC_TAKE_ANY(at_step2, step2_op); /* divisor 2 == k + OFF2 (non-mutating) */
+  if (step2_op != OP_SLOT_ADD_FIX)
+    return 0;
+  if (BC_ARG(at_step2, 0) != cslot)
+    return 0;
+  int16_t off2 = BC_I16(at_step2, 1);
+  BC_EAT(OP_DIV); /* N2 / (k+OFF2) */
+  BC_EAT(OP_SUB); /* (N1/k) - (N2/(k+OFF2)) */
+  BC_EAT(OP_ADD); /* acc + term */
+  BC_TAKE(at_tail, OP_TAIL_SELF);
+  if (BC_ARG(at_tail, 0) != 2)
+    return 0;
+  BC_EAT(OP_JUMP);
+  BC_TAKE(at_a2, OP_LOAD_SLOT); /* exit arm: return acc */
+  if (BC_ARG(at_a2, 0) != aslot)
+    return 0;
+  BC_EAT(OP_RET);
+  BC_END();
+
+  if (cslot == aslot)
+    return 0;
+  int coff = env_slot_off_checked(cslot);
+  int aoff = env_slot_off_checked(aslot);
+  if (coff < 0 || aoff < 0)
+    return 0;
+  if (lim_idx >= bc->nconsts || n1_idx >= bc->nconsts || n2_idx >= bc->nconsts)
+    return 0;
+
+  /* Static type gate: counter limit fixnum, both numerators floats. */
+  exp_t *lim = bc->consts[lim_idx];
+  exp_t *n1 = bc->consts[n1_idx];
+  exp_t *n2 = bc->consts[n2_idx];
+  if (!isnumber(lim) || !isfloat(n1) || !isfloat(n2))
+    return 0;
+
+  int64_t lim_val = FIX_VAL(lim);
+  if (lim_val > (INT64_MAX >> 3) || lim_val < (INT64_MIN >> 3))
+    return 0;
+
+  uint64_t n1_bits, n2_bits;
+  {
+    double d = n1->f;
+    memcpy(&n1_bits, &d, 8);
+  }
+  {
+    double d = n2->f;
+    memcpy(&n2_bits, &d, 8);
+  }
+
+  m->cmp_op = cmp_op;
+  m->step_op = step_op;
+  m->cslot = cslot;
+  m->aslot = aslot;
+  m->step_imm = step_imm;
+  m->off2 = off2;
+  m->lim_val = lim_val;
+  m->n1_bits = n1_bits;
+  m->n2_bits = n2_bits;
+  m->coff = coff;
+  m->aoff = aoff;
+  return 1;
+}
+
 /* wide_counter_loop captured operands (20-byte shape): the generic-compare
    twin of simple_tail_loop — the limit is a fixnum const wider than i16, so
    the compiler emits LOAD_SLOT/LOAD_CONST/<cmp> instead of the fused

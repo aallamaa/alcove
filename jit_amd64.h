@@ -273,8 +273,17 @@ static int x64_movq_xmm_reg(uint8_t *buf, int xmm, int gp) {
   buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
   return 5;
 }
-/* addsd/subsd/mulsd xmm_dst, xmm_src  →  F2 0F {58,5C,59} /r (mod=11).
-   `op2` is the third opcode byte: 0x58 add, 0x5C sub, 0x59 mul. */
+/* movsd xmm_dst, xmm_src  →  F2 0F 10 /r (mod=11).  Register copy (divsd is
+   destructive, so a term's numerator is copied to a scratch before dividing). */
+static int x64_movsd_xmm_xmm(uint8_t *buf, int dst, int src) {
+  buf[0] = 0xF2;
+  buf[1] = 0x0F;
+  buf[2] = 0x10;
+  buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  return 4;
+}
+/* addsd/subsd/mulsd/divsd xmm_dst, xmm_src  →  F2 0F {58,5C,59,5E} /r (mod=11).
+   `op2` is the third opcode byte: 0x58 add, 0x5C sub, 0x59 mul, 0x5E div. */
 static int x64_sse_arith_xmm(uint8_t *buf, uint8_t op2, int dst, int src) {
   buf[0] = 0xF2;
   buf[1] = 0x0F;
@@ -485,6 +494,10 @@ static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint8_t *buf,
 
 #define X64_XMM0 0
 #define X64_XMM1 1
+#define X64_XMM2 2
+#define X64_XMM3 3
+#define X64_XMM4 4
+#define X64_XMM6 6
 
 /* Float-accumulator self-tail loop. Two-slot shape (25 bytes), produced by:
      (def f (n acc) (if (< n LIM) (f (+ n 1) (<fop> acc FC)) acc))
@@ -669,6 +682,185 @@ static int try_jit_float_acc_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Largest path ≈ 210 bytes (entry guard + frame + acc int/float coerce +
      const load + loop body + 3 exits). Caller's buf is 512. */
   JIT_GUARD(300);
+  *outn = n;
+  return 1;
+}
+
+/* Float telescoping-series self-tail loop (36-byte shape):
+     (def f (k acc) (if (<cmp> k LIM)
+                        (f (k step= S) (+ acc (- (/ N1 k) (/ N2 (k + OFF2)))))
+                        acc))
+   Same skeleton as float_acc_loop — tagged counter in rcx, unboxed accumulator
+   in xmm0, integer compare against the tagged limit, identical entry guard /
+   acc coerce / zero-iter / make_floatf exit / deopt sleds. Only the body
+   differs: per iteration it computes acc += N1/k - N2/(k+OFF2), guarding each
+   divisor against 0 (the VM raises an error on /0, so a 0 divisor deopts and
+   the bytecode re-runs to produce the identical error). N1→xmm1, N2→xmm6 are
+   loaded once before the loop. */
+static int try_jit_float_series_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
+  struct match_float_series_loop m;
+  if (!match_float_series_loop(bc, &m))
+    return 0;
+
+  uint8_t cmp_op = m.cmp_op, step_op = m.step_op;
+  int coff = m.coff, aoff = m.aoff;
+
+  int64_t lim_tagged64 = (m.lim_val << 3) | 1;
+  if (lim_tagged64 > INT32_MAX || lim_tagged64 < INT32_MIN)
+    return 0;
+  int32_t cmp_tagged = (int32_t)lim_tagged64;
+  int32_t step_delta = ((int32_t)m.step_imm) << 3;
+  int32_t off2 = (int32_t)m.off2;
+
+  int foff = (int)offsetof(exp_t, f);
+  int toff = (int)offsetof(exp_t, type);
+
+  uint8_t cont_cc, exit_cc;
+  switch (cmp_op) {
+  case OP_LT:
+    cont_cc = 0x0C;
+    exit_cc = 0x0D;
+    break;
+  case OP_GT:
+    cont_cc = 0x0F;
+    exit_cc = 0x0E;
+    break;
+  case OP_LE:
+    cont_cc = 0x0E;
+    exit_cc = 0x0F;
+    break;
+  case OP_GE:
+    cont_cc = 0x0D;
+    exit_cc = 0x0C;
+    break;
+  default:
+    return 0;
+  }
+
+  int n = 0;
+
+  /* Entry guard: counter must be a fixnum (deopt before any frame). */
+  n += x64_mov_reg_mem(buf + n, X64_RCX, X64_RDI, coff);
+  n += x64_test_reg8_imm8(buf + n, X64_RCX, 1);
+  int jz_deopt0 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+
+  /* Frame: push rbx (16-align for the call); rbx = env. */
+  n += x64_push_reg(buf + n, X64_RBX);
+  n += x64_mov_reg_reg(buf + n, X64_RBX, X64_RDI);
+
+  /* First compare. If the loop won't run, return the seed UNCHANGED. */
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  int jcc_zero = n;
+  n += x64_jcc_rel32(buf + n, exit_cc, 0);
+
+  /* >=1 iteration: load + coerce the accumulator into xmm0 (fixnum→cvtsi2sd or
+     float box→->f; anything else → deopt_framed). Identical to float_acc. */
+  n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RBX, aoff);
+  n += x64_mov_reg_reg(buf + n, X64_RDX, X64_RAX);
+  n += x64_and_imm32(buf + n, X64_RDX, 7);
+  n += x64_cmp_imm32(buf + n, X64_RDX, 1);
+  int jne_float = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);
+  n += x64_sar_imm8(buf + n, X64_RAX, 3);
+  n += x64_cvtsi2sd_xmm_reg(buf + n, X64_XMM0, X64_RAX);
+  int jmp_ready = n;
+  n += x64_jmp_rel32(buf + n, 0);
+  int check_float_pc = n;
+  n += x64_test_reg_reg(buf + n, X64_RDX, X64_RDX);
+  int jnz_deopt1 = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+  int jz_deopt1 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+  n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX, toff);
+  n += x64_cmp_imm32(buf + n, X64_RDX, EXP_FLOAT);
+  int jne_deopt1 = n;
+  n += x64_jcc_rel32(buf + n, 0x05, 0);
+  n += x64_movsd_xmm_mem(buf + n, X64_XMM0, X64_RAX, foff);
+  int acc_ready_pc = n;
+
+  /* Load the two numerators once: N1→xmm1, N2→xmm6. */
+  n += x64_mov_imm64(buf + n, X64_RAX, m.n1_bits);
+  n += x64_movq_xmm_reg(buf + n, X64_XMM1, X64_RAX);
+  n += x64_mov_imm64(buf + n, X64_RAX, m.n2_bits);
+  n += x64_movq_xmm_reg(buf + n, X64_XMM6, X64_RAX);
+
+  /* Track the two divisor-zero guards (forward jumps to deopt_framed). */
+  int jz_div1 = -1, jz_div2 = -1;
+
+  /* Loop body: acc += N1/k - N2/(k+OFF2); counter += step; while (cmp) loop. */
+  int loop_top = n;
+  /* untag k → rax */
+  n += x64_mov_reg_reg(buf + n, X64_RAX, X64_RCX);
+  n += x64_sar_imm8(buf + n, X64_RAX, 3);
+  /* guard k != 0 */
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+  jz_div1 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* xmm3 = N1 / (double)k */
+  n += x64_cvtsi2sd_xmm_reg(buf + n, X64_XMM2, X64_RAX);
+  n += x64_movsd_xmm_xmm(buf + n, X64_XMM3, X64_XMM1);
+  n += x64_sse_arith_xmm(buf + n, 0x5E, X64_XMM3, X64_XMM2); /* divsd */
+  /* k += OFF2; guard (k+OFF2) != 0 */
+  n += x64_add_imm32(buf + n, X64_RAX, off2);
+  n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+  jz_div2 = n;
+  n += x64_jcc_rel32(buf + n, 0x04, 0);
+  /* xmm4 = N2 / (double)(k+OFF2) */
+  n += x64_cvtsi2sd_xmm_reg(buf + n, X64_XMM2, X64_RAX);
+  n += x64_movsd_xmm_xmm(buf + n, X64_XMM4, X64_XMM6);
+  n += x64_sse_arith_xmm(buf + n, 0x5E, X64_XMM4, X64_XMM2); /* divsd */
+  /* term = xmm3 - xmm4; acc += term */
+  n += x64_sse_arith_xmm(buf + n, 0x5C, X64_XMM3, X64_XMM4); /* subsd */
+  n += x64_sse_arith_xmm(buf + n, 0x58, X64_XMM0, X64_XMM3); /* addsd */
+  /* counter step + back-edge */
+  if (step_op == OP_SLOT_SUB_FIX)
+    n += x64_sub_imm32(buf + n, X64_RCX, step_delta);
+  else
+    n += x64_add_imm32(buf + n, X64_RCX, step_delta);
+  n += x64_cmp_imm32(buf + n, X64_RCX, cmp_tagged);
+  {
+    int jcc_start = n;
+    n += x64_jcc_rel32(buf + n, cont_cc, 0);
+    x64_patch_rel32(buf, jcc_start, 6, loop_top);
+  }
+
+  /* >=1-iter exit: box xmm0 via make_floatf, tear down frame, return. */
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&make_floatf);
+  n += x64_call_reg(buf + n, X64_RAX);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* zero_iter: return refexp(seed) unchanged (matches the VM's `acc` arm). */
+  int zero_iter_pc = n;
+  n += x64_mov_reg_mem(buf + n, X64_RDI, X64_RBX, aoff);
+  n += x64_mov_imm64(buf + n, X64_RAX, (uint64_t)(uintptr_t)&refexp);
+  n += x64_call_reg(buf + n, X64_RAX);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_ret(buf + n);
+
+  /* deopt_framed: a tag/type/divisor guard failed after the frame was set up. */
+  int deopt_framed_pc = n;
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
+  /* deopt0: counter guard failed before the frame. */
+  int deopt0_pc = n;
+  X64_EMIT_DEOPT();
+
+  x64_patch_rel32(buf, jcc_zero, 6, zero_iter_pc);
+  x64_patch_rel32(buf, jne_float, 6, check_float_pc);
+  x64_patch_rel32(buf, jmp_ready, 5, acc_ready_pc);
+  x64_patch_rel32(buf, jnz_deopt1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jz_deopt1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jne_deopt1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jz_div1, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jz_div2, 6, deopt_framed_pc);
+  x64_patch_rel32(buf, jz_deopt0, 6, deopt0_pc);
+
+  JIT_GUARD(420);
   *outn = n;
   return 1;
 }
@@ -2551,6 +2743,8 @@ int jit_compile(bytecode_t *bc) {
     JT("simple_tail_loop");
   } else if (try_jit_simple_tail_loop_eq(bc, buf, &n)) {
     JT("simple_tail_loop_eq");
+  } else if (try_jit_float_series_loop(bc, buf, &n)) {
+    JT("float_series_loop");
   } else if (try_jit_float_acc_loop(bc, buf, &n)) {
     JT("float_acc_loop");
   } else if (try_jit_wide_counter_loop(bc, buf, &n)) {

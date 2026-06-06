@@ -142,7 +142,37 @@ def gen_eq_countdown(rng, idx):
     return name, defn, args, "eq-countdown"
 
 
-GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown]
+def gen_float_series(rng, idx):
+    """(def f (k acc) (if (< k LIM)
+                          (f (+ k STEP) (+ acc (- (/ N1 k) (/ N2 (+ k OFF2)))))
+                          acc)) — telescoping reciprocal float series.
+
+    The Leibniz/Nilakantha π shape (float_series_loop): two divisions, the second
+    by a counter-derived divisor. k stays strictly positive across the run (start
+    >= 1, positive step, positive OFF2) so no divisor ever hits 0 — the /0 deopt
+    path is covered separately by a unit test, since an error result can't be
+    msgpack-compared. Start near the limit so only a few iterations run."""
+    name = f"fs{idx}"
+    n1 = rng.choice(FLOAT_CONSTS)
+    n2 = rng.choice(FLOAT_CONSTS)
+    step = rng.choice([2, 4, 6])
+    off2 = rng.choice([1, 2, 3])
+    limit = rng.choice([40000, 50000, 100000, 200000])
+    iters = rng.randint(0, 6)            # incl. 0-iteration passthrough
+    start = limit - iters * step
+    if start < 1:
+        start = 1
+    defn = (f"(def {name} (k acc) "
+            f"(if (< k {limit}) "
+            f"({name} (+ k {step}) (+ acc (- (/ {n1} k) (/ {n2} (+ k {off2}))))) "
+            f"acc))")
+    seeds = ["0.0", "1.0", "-3.5", "0", "7", "-2"]  # float + int seeds
+    args = [(f"{start} {rng.choice(seeds)}", True) for _ in range(3)]
+    return name, defn, args, "float-series"
+
+
+GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown,
+              gen_float_series]
 
 
 def generate(rng, count):

@@ -1,0 +1,9 @@
+; pi.alc — π via a telescoped Leibniz series: π = Σ (4/k - 4/(k+2)) for k=1,5,9,…
+; A scalar-float self-tail loop the JIT compiles to an unboxed divsd/subsd/addsd
+; register loop (the float_series_loop shape), beating CPython's boxed-float
+; interpreter by a wide margin. The C twin computes the identical sum.
+(def leib (k acc)
+  (if (< k 40000000)
+      (leib (+ k 4) (+ acc (- (/ 4.0 k) (/ 4.0 (+ k 2)))))
+      acc))
+(prn (leib 1 0.0))

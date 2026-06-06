@@ -302,6 +302,11 @@ static uint32_t arm64_fmul_d(int dd, int dn, int dm) {
   return 0x1E600800u | ((uint32_t)(dm & 0x1f) << 16) |
          ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
 }
+/* FDIV Dd, Dn, Dm — double divide (type=01, opcode=0001): 0x1E601800. */
+static uint32_t arm64_fdiv_d(int dd, int dn, int dm) {
+  return 0x1E601800u | ((uint32_t)(dm & 0x1f) << 16) |
+         ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
+}
 
 /* arm64 shape-emitter helpers. PATCH_DEOPT_* and the EMIT macros below
    require `out`, `n`, and `deopt_pc` to be in scope. Note: the inline
@@ -758,6 +763,176 @@ static int try_jit_float_acc_loop(bytecode_t *bc, uint32_t *out, int *outn) {
      materialization + acc coerce + loop body + 3 exits). Caller's buffer is
      uint32_t insns[128]. */
   JIT_GUARD(110);
+  *outn = n;
+  return 1;
+}
+
+/* Float telescoping-series self-tail loop (36-byte shape):
+     (def f (k acc) (if (<cmp> k LIM)
+                        (f (k step= S) (+ acc (- (/ N1 k) (/ N2 (k + OFF2)))))
+                        acc))
+   arm64 mirror of try_jit_float_series_loop in jit_amd64.h: same skeleton as
+   float_acc (tagged counter in x1, unboxed accumulator in d0, integer compare
+   against the materialized tagged limit, identical entry guard / acc coerce /
+   zero-iter / make_floatf exit / deopt sleds). The body computes
+   acc += N1/k - N2/(k+OFF2), guarding each divisor against 0 (a 0 divisor
+   deopts so the VM raises the identical "Illegal division by 0"). N1→d1, N2→d6
+   are materialized once before the loop. */
+static int try_jit_float_series_loop(bytecode_t *bc, uint32_t *out, int *outn) {
+  struct match_float_series_loop m;
+  if (!match_float_series_loop(bc, &m))
+    return 0;
+
+  uint8_t cmp_op = m.cmp_op, step_op = m.step_op;
+  int coff = m.coff, aoff = m.aoff;
+
+  int64_t lim_tagged = (m.lim_val << 3) | 1;
+
+  int step_delta = ((int)m.step_imm) << 3;
+  if (step_delta < 0 || step_delta > 4095)
+    return 0;
+  int off2 = (int)m.off2;
+  if (off2 < 0 || off2 > 4095) /* ADD imm is a u12 */
+    return 0;
+
+  int toff = (int)offsetof(exp_t, type);
+  int foff = (int)offsetof(exp_t, f);
+
+  int cont_cc, exit_cc;
+  switch (cmp_op) {
+  case OP_LT:
+    cont_cc = 11;
+    exit_cc = 10;
+    break;
+  case OP_GT:
+    cont_cc = 12;
+    exit_cc = 13;
+    break;
+  case OP_LE:
+    cont_cc = 13;
+    exit_cc = 12;
+    break;
+  case OP_GE:
+    cont_cc = 10;
+    exit_cc = 11;
+    break;
+  default:
+    return 0;
+  }
+
+  int n = 0;
+
+  /* Entry guard: counter must be a tagged fixnum (leaf deopt, no frame). */
+  out[n++] = arm64_ldr_imm(1, 0, coff);
+  int patch_deopt0 = n;
+  out[n++] = 0; /* tbz x1,#0,deopt0 */
+
+  /* Frame: save fp/lr + x19/x20; x19 = env. */
+  out[n++] = arm64_stp_pre_sp(29, 30, -32);
+  out[n++] = arm64_stp_off_sp(19, 20, 16);
+  out[n++] = arm64_mov_from_sp(29);
+  out[n++] = arm64_mov_reg(19, 0);
+
+  /* x4 = tagged limit; first compare → zero_iter if the loop won't run. */
+  n += emit_mov64(out + n, 4, (uint64_t)lim_tagged);
+  out[n++] = arm64_cmp_reg(1, 4);
+  int patch_zero = n;
+  out[n++] = 0; /* b.<exit_cc> zero_iter */
+
+  /* >=1 iteration: load + coerce the accumulator into d0 (identical to
+     float_acc: fixnum→scvtf, float box→ldr d0,[box,#foff], else deopt). */
+  out[n++] = arm64_ldr_imm(2, 19, aoff);
+  out[n++] = arm64_and_imm7(3, 2);
+  out[n++] = arm64_cmp_imm(3, 1);
+  int patch_check_float = n;
+  out[n++] = 0; /* b.ne check_float */
+  out[n++] = arm64_asr_imm(2, 2, 3);
+  out[n++] = arm64_scvtf_d_x(0, 2);
+  int patch_acc_ready = n;
+  out[n++] = 0; /* b acc_ready */
+  int check_float_pc = n;
+  int patch_df_tag = n;
+  out[n++] = 0; /* cbnz x3,deopt_framed */
+  int patch_df_null = n;
+  out[n++] = 0;
+  out[n++] = arm64_ldrh_imm(3, 2, toff);
+  out[n++] = arm64_cmp_imm(3, EXP_FLOAT);
+  int patch_df_type = n;
+  out[n++] = 0; /* b.ne deopt_framed */
+  out[n++] = arm64_ldr_d_imm(0, 2, foff);
+
+  int acc_ready_pc = n;
+  out[patch_acc_ready] = arm64_b(acc_ready_pc - patch_acc_ready);
+
+  /* d1 = N1, d6 = N2 (materialized once). */
+  n += emit_mov64(out + n, 5, m.n1_bits);
+  out[n++] = arm64_fmov_d_x(1, 5);
+  n += emit_mov64(out + n, 5, m.n2_bits);
+  out[n++] = arm64_fmov_d_x(6, 5);
+
+  /* Loop body: acc += N1/k - N2/(k+OFF2); counter += step; while (cmp) loop. */
+  int patch_div1 = -1, patch_div2 = -1;
+  int loop_top = n;
+  out[n++] = arm64_asr_imm(2, 1, 3); /* x2 = k (untagged) */
+  patch_div1 = n;
+  out[n++] = 0;                     /* cbz x2,deopt_framed (k != 0) */
+  out[n++] = arm64_scvtf_d_x(2, 2);     /* d2 = (double)k (x2 preserved) */
+  out[n++] = arm64_fdiv_d(3, 1, 2);     /* d3 = N1/k */
+  out[n++] = arm64_add_imm(2, 2, off2); /* x2 = k+OFF2 */
+  patch_div2 = n;
+  out[n++] = 0;                     /* cbz x2,deopt_framed ((k+OFF2) != 0) */
+  out[n++] = arm64_scvtf_d_x(2, 2); /* d2 = (double)(k+OFF2) */
+  out[n++] = arm64_fdiv_d(4, 6, 2); /* d4 = N2/(k+OFF2) */
+  out[n++] = arm64_fsub_d(3, 3, 4); /* d3 = term */
+  out[n++] = arm64_fadd_d(0, 0, 3); /* acc += term */
+  if (step_op == OP_SLOT_SUB_FIX)
+    out[n++] = arm64_sub_imm(1, 1, step_delta);
+  else
+    out[n++] = arm64_add_imm(1, 1, step_delta);
+  out[n++] = arm64_cmp_reg(1, 4);
+  {
+    int cur = n++;
+    out[cur] = arm64_b_cond(cont_cc, loop_top - cur);
+  }
+
+  /* >=1-iter exit: box d0 via make_floatf, tear down frame, return. */
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&make_floatf);
+  out[n++] = arm64_blr(9);
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  /* zero_iter: return refexp(seed) unchanged. */
+  int zero_iter_pc = n;
+  out[n++] = arm64_ldr_imm(0, 19, aoff);
+  n += emit_mov64(out + n, 9, (uint64_t)(uintptr_t)&refexp);
+  out[n++] = arm64_blr(9);
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_ret();
+
+  /* deopt_framed: a tag/type/divisor guard failed after the frame was set up. */
+  int deopt_framed_pc = n;
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
+  out[n++] = arm64_movz(0, 0, 0);
+  out[n++] = arm64_ret();
+
+  /* deopt0 (leaf, pre-frame). */
+  int deopt_pc = n;
+  ARM64_EMIT_DEOPT();
+
+  PATCH_DEOPT_TBZ(patch_deopt0, 1, 0);
+  out[patch_zero] = arm64_b_cond(exit_cc, zero_iter_pc - patch_zero);
+  out[patch_check_float] =
+      arm64_b_cond(1 /*NE*/, check_float_pc - patch_check_float);
+  out[patch_df_tag] = arm64_cbnz(3, deopt_framed_pc - patch_df_tag);
+  out[patch_df_null] = arm64_cbz(2, deopt_framed_pc - patch_df_null);
+  out[patch_df_type] = arm64_b_cond(1 /*NE*/, deopt_framed_pc - patch_df_type);
+  out[patch_div1] = arm64_cbz(2, deopt_framed_pc - patch_div1);
+  out[patch_div2] = arm64_cbz(2, deopt_framed_pc - patch_div2);
+
+  JIT_GUARD(120);
   *outn = n;
   return 1;
 }
@@ -2149,6 +2324,8 @@ int jit_compile(bytecode_t *bc) {
     /* matched — fall through to mmap+install */
   } else if (try_jit_simple_tail_loop_eq(bc, insns, &n)) {
     /* swapped-polarity equality-base self-tail loop (is-base countdown) */
+  } else if (try_jit_float_series_loop(bc, insns, &n)) {
+    /* telescoping reciprocal float series (Leibniz/Nilakantha π) */
   } else if (try_jit_float_acc_loop(bc, insns, &n)) {
     /* integer-counter + unboxed-float-accumulator self-tail loop */
   } else if (try_jit_wide_counter_loop(bc, insns, &n)) {
