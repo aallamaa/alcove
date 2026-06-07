@@ -223,6 +223,36 @@
 (equiv "vec mutate"     (let (v (vector 1 2 3)) (vec-set! v 0 9) (vec-ref v 0)))
 (equiv "vec-len empty"  (vec-len (vector)))
 
+;; ── tensor / vec bulk ops (LISPCMD_APP → compile to OP_CALL_GLOBAL) ────────
+;; These now compile to a real call instead of an OP_EVAL_AST tree-walk; the
+;; sweep locks AST≡VM for each. The set!-of-list / set!-of-symbol cases below
+;; guard alc_apply_n's quote-protection (a re-evaluated list/symbol value
+;; would otherwise miscompile under the new compiled path).
+(equiv "vec-dot"        (vec-dot (vector 1.0 2.0 3.0) (vector 4.0 5.0 6.0)))
+(equiv "vec-axpy!"      (let (v (vector 1.0 2.0)) (vec-axpy! v 2.0 (vector 3.0 4.0)) (vec-ref v 0)))
+(equiv "vec-scale!"     (let (v (vector 2.0 4.0)) (vec-scale! v 0.5) (vec-ref v 1)))
+(equiv "vec-add!"       (let (v (vector 1.0 2.0)) (vec-add! v (vector 10.0 20.0)) (vec-ref v 1)))
+(equiv "vec-mul!"       (let (v (vector 2.0 3.0)) (vec-mul! v (vector 4.0 5.0)) (vec-ref v 0)))
+(equiv "vec-sub!"       (let (v (vector 5.0 9.0)) (vec-sub! v (vector 1.0 2.0)) (vec-ref v 1)))
+(equiv "vec-copy!"      (let (v (vector 0.0 0.0)) (vec-copy! v (vector 7.0 8.0)) (vec-ref v 0)))
+(equiv "vec-fill!"      (let (v (vector 0.0 0.0)) (vec-fill! v 3.0) (vec-ref v 1)))
+(equiv "vec-relu!"      (let (v (vector -1.0 2.0)) (vec-relu! v) (vec-ref v 0)))
+(equiv "vec-count-le!"  (let (c (vector 0.0 0.0)) (vec-count-le! c (vector 1.0 9.0) 4.0) (vec-ref c 0)))
+(equiv "vec-sum"        (vec-sum (vector 1.0 2.0 3.0)))
+(equiv "vec-max"        (vec-max (vector 1.0 5.0 3.0)))
+(equiv "vec-min"        (vec-min (vector 4.0 1.0 3.0)))
+(equiv "vec-argmax"     (vec-argmax (vector 1.0 5.0 3.0)))
+(equiv "vec-argmin"     (vec-argmin (vector 4.0 1.0 3.0)))
+(equiv "vec-softmax!"   (let (v (vector 1.0 2.0 3.0)) (vec-softmax! v) (round (* 1000.0 (vec-sum v)))))
+(equiv "mat-vec"        (vec-ref (mat-vec (vector 1.0 2.0 3.0 4.0) (vector 1.0 1.0)) 1))
+(equiv "mat-mul"        (vec-ref (mat-mul (vector 1.0 0.0 0.0 1.0) (vector 5.0 6.0 7.0 8.0) 2) 0))
+(equiv "vec-push!"      (let (v (vector 1 2)) (vec-push! v 3) (vec-len v)))
+(equiv "vec-pop!"       (let (v (vector 1 2 3)) (vec-pop! v)))
+(equiv "vec-shift!"     (let (v (vector 7 8 9)) (vec-shift! v)))
+(equiv "vec-set! list"  (let (v (vector 0 0)) (vec-set! v 0 (list 1 2 3)) (vec-ref v 0)))
+(equiv "vec-set! sym"   (let (v (vector 0 0)) (vec-set! v 0 'hello) (vec-ref v 0)))
+(equiv "vec-set! ret"   (let (v (vector 0 0)) (vec-set! v 1 (list 'a 'b))))
+
 ;; ── quasiquote nested / edge ──────────────────────────────────────────────
 (equiv "qq nested"      `(1 (2 ,(+ 1 2)) ,(* 2 3)))
 (equiv "qq splice mid"  `(a ,@(list 1 2 3) z))

@@ -277,6 +277,16 @@ static env_t *vm_handler_make_env(const vm_handler_t *h) {
    in_tail_position to them. */
 #define LISPCMD(name, fn, doc) {name, -1, 0, 0, doc, fn}
 #define LISPCMD_TAIL(name, fn, doc) {name, -1, FLAG_TAIL_AWARE, 0, doc, fn}
+/* LISPCMD_APP: an APPLICATIVE builtin — evaluates ALL of its arguments in
+   applicative order, returns a value, and does NOT inspect its unevaluated
+   arg forms or depend on in_tail_position. The compiler emits a real
+   OP_CALL_GLOBAL for these (callee via gcache, args from slots/gcache)
+   instead of the OP_EVAL_AST tree-walk, which re-resolves every name by
+   string each call. Use ONLY for builtins that meet that contract — special
+   forms (quote/if/for/=/let/…), macros, and anything that reads its raw form
+   must stay LISPCMD/LISPCMD_TAIL. alc_apply_n quote-protects symbol/list arg
+   VALUES, so storing/forwarding arbitrary values stays correct. */
+#define LISPCMD_APP(name, fn, doc) {name, -1, FLAG_APPLICATIVE, 0, doc, fn}
 
 #include "builtins.h"
 
@@ -392,41 +402,44 @@ lispProc lispProcList[] = {
     LISPCMD("reverse", reversecmd, doc_reverse),
     LISPCMD("append", appendcmd, doc_append),
     /* Vectors — O(1) random-access array */
-    LISPCMD("vec", veccmd, doc_vec),
-    LISPCMD("vec-ref", vecrefcmd, doc_vecref),
-    LISPCMD("vec-set!", vecsetcmd, doc_vecset),
-    LISPCMD("vec-len", veclencmd, doc_veclen),
+    LISPCMD_APP("vec", veccmd, doc_vec),
+    LISPCMD_APP("vec-ref", vecrefcmd, doc_vecref),
+    LISPCMD_APP("vec-set!", vecsetcmd, doc_vecset),
+    LISPCMD_APP("vec-len", veclencmd, doc_veclen),
     /* Tensor bulk ops — read each element as a double, do the math in
        raw C, write fresh EXP_FLOATs back. ~100x faster than the
-       interpreted equivalent for MLP-style inner loops. */
-    LISPCMD("vec-dot", vecdotcmd, doc_vecdot),
-    LISPCMD("vec-axpy!", vecaxpycmd, doc_vecaxpy),
-    LISPCMD("vec-scale!", vecscalecmd, doc_vecscale),
-    LISPCMD("vec-add!", vecaddcmd, doc_vecadd),
-    LISPCMD("vec-count-le!", veccountlecmd, doc_veccountle),
-    LISPCMD("vec-copy!", veccopycmd, doc_veccopy),
-    LISPCMD("vec-fill!", vecfillcmd, doc_vecfill),
-    LISPCMD("vec-relu!", vecrelucmd, doc_vecrelu),
-    LISPCMD("vec-argmax", vecargmaxcmd, doc_vecargmax),
-    LISPCMD("vec-max", vecmaxcmd, doc_vecmax),
-    LISPCMD("vec-mul!", vecmulcmd, doc_vecmul),
-    LISPCMD("vec-sub!", vecsubcmd, doc_vecsub),
-    LISPCMD("vec-sum", vecsumcmd, doc_vecsum),
-    LISPCMD("vec-min", vecmincmd, doc_vecmin),
-    LISPCMD("vec-argmin", vecargmincmd, doc_vecargmin),
-    LISPCMD("vec-exp!", vecexpcmd, doc_vecexp),
-    LISPCMD("vec-sigmoid!", vecsigmoidcmd, doc_vecsigmoid),
-    LISPCMD("vec-tanh!", vectanhcmd, doc_vectanh),
-    LISPCMD("vec-softmax!", vecsoftmaxcmd, doc_vecsoftmax),
-    LISPCMD("mat-vec", matveccmd, doc_matvec),
-    LISPCMD("mat-mul", matmulcmd, doc_matmul),
+       interpreted equivalent for MLP-style inner loops. Applicative
+       (LISPCMD_APP): compile to OP_CALL_GLOBAL so a hot for-loop calling
+       them is not a per-call OP_EVAL_AST tree-walk (the MLP's dominant
+       cost — see benchmark/mlp.alc). */
+    LISPCMD_APP("vec-dot", vecdotcmd, doc_vecdot),
+    LISPCMD_APP("vec-axpy!", vecaxpycmd, doc_vecaxpy),
+    LISPCMD_APP("vec-scale!", vecscalecmd, doc_vecscale),
+    LISPCMD_APP("vec-add!", vecaddcmd, doc_vecadd),
+    LISPCMD_APP("vec-count-le!", veccountlecmd, doc_veccountle),
+    LISPCMD_APP("vec-copy!", veccopycmd, doc_veccopy),
+    LISPCMD_APP("vec-fill!", vecfillcmd, doc_vecfill),
+    LISPCMD_APP("vec-relu!", vecrelucmd, doc_vecrelu),
+    LISPCMD_APP("vec-argmax", vecargmaxcmd, doc_vecargmax),
+    LISPCMD_APP("vec-max", vecmaxcmd, doc_vecmax),
+    LISPCMD_APP("vec-mul!", vecmulcmd, doc_vecmul),
+    LISPCMD_APP("vec-sub!", vecsubcmd, doc_vecsub),
+    LISPCMD_APP("vec-sum", vecsumcmd, doc_vecsum),
+    LISPCMD_APP("vec-min", vecmincmd, doc_vecmin),
+    LISPCMD_APP("vec-argmin", vecargmincmd, doc_vecargmin),
+    LISPCMD_APP("vec-exp!", vecexpcmd, doc_vecexp),
+    LISPCMD_APP("vec-sigmoid!", vecsigmoidcmd, doc_vecsigmoid),
+    LISPCMD_APP("vec-tanh!", vectanhcmd, doc_vectanh),
+    LISPCMD_APP("vec-softmax!", vecsoftmaxcmd, doc_vecsoftmax),
+    LISPCMD_APP("mat-vec", matveccmd, doc_matvec),
+    LISPCMD_APP("mat-mul", matmulcmd, doc_matmul),
     /* Deque ops on vec — amortised O(1) push/pop at both ends via the
        cap/start/end window. Growth: 1.5x on realloc; slide-left when
        start >= cap/4 instead of reallocating; recenter on unshift-grow. */
-    LISPCMD("vec-push!", vecpushcmd, doc_vecpush),
-    LISPCMD("vec-pop!", vecpopcmd, doc_vecpop),
-    LISPCMD("vec-unshift!", vecunshiftcmd, doc_vecunshift),
-    LISPCMD("vec-shift!", vecshiftcmd, doc_vecshift),
+    LISPCMD_APP("vec-push!", vecpushcmd, doc_vecpush),
+    LISPCMD_APP("vec-pop!", vecpopcmd, doc_vecpop),
+    LISPCMD_APP("vec-unshift!", vecunshiftcmd, doc_vecunshift),
+    LISPCMD_APP("vec-shift!", vecshiftcmd, doc_vecshift),
     /* Functions and binding */
     LISPCMD("def", defcmd, doc_def),
     LISPCMD("defn", defncmd, doc_defn),
@@ -11377,7 +11390,8 @@ env_t *alcove_init(void) {
     set_get_keyval_dict(
         reserved_symbol, lispProcList[i].name,
         val = make_internal(lispProcList[i].cmd,
-                            lispProcList[i].flags & FLAG_TAIL_AWARE));
+                            lispProcList[i].flags &
+                                (FLAG_TAIL_AWARE | FLAG_APPLICATIVE)));
     unrefexp(val);
   }
   (void)t;

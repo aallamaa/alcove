@@ -1143,10 +1143,29 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   if (islambda(fn))
     return vm_invoke_values(fn, nargs, argv, env);
   if (isinternal(fn)) {
+    /* Build the canonical (fn args...) form and let fn->fnc evaluate it.
+       The args are already VALUES; for self-evaluating ones (numbers, floats,
+       strings, vectors, internals, …) evaluate() is the identity, so we pass
+       them through directly. A SYMBOL or a PAIR value is NOT self-evaluating
+       — a bare symbol would re-resolve as a variable, a list would be applied
+       as a call — so wrap those in (quote v) so the builtin's own arg-eval
+       returns them unchanged. (The symbol/pair case is rare in hot loops, so
+       the extra resolve+nodes cost nothing on the numeric/vector fast paths.) */
     exp_t *head = make_node(refexp(fn));
     exp_t *cur = head;
-    for (int i = 0; i < nargs; i++)
-      cur = cur->next = make_node(argv[i]);
+    for (int i = 0; i < nargs; i++) {
+      exp_t *content = argv[i];
+      if (content && (issymbol(content) || ispair(content))) {
+        keyval_t *qk = set_get_keyval_dict(reserved_symbol, "quote", NULL);
+        exp_t *qi = qk ? (exp_t *)qk->val : NULL;
+        if (qi) {
+          exp_t *qf = make_node(refexp(qi)); /* (quote . (value . nil)) */
+          qf->next = make_node(content);     /* takes argv[i]'s ref */
+          content = qf;
+        }
+      }
+      cur = cur->next = make_node(content);
+    }
     int was_tail = in_tail_position;
     in_tail_position = 0;
     exp_t *ret = fn->fnc(head, env);
