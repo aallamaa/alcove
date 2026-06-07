@@ -1207,6 +1207,197 @@ exp_t *matveccmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(aexp, xexp, out);
 }
 
+const char doc_matvecbang[] =
+    "(mat-vec! out A x [bias]) — in-place matrix·vector. A is a flat row-major "
+    "m×n matrix, x has length n, out a length-m F64 vector that receives "
+    "out[i] = sum_j A[i*n+j]*x[j] (+ bias[i] if a length-m bias vec is given). "
+    "No allocation — the fused dense-layer primitive (one C call replaces a "
+    "per-row vec-dot loop; ~8x faster). Returns out.";
+exp_t *matvecbangcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(outexp, aexp, xexp);
+  exp_t *bexp = NIL_EXP;
+  if (e->next && e->next->next && e->next->next->next &&
+      e->next->next->next->next)
+    bexp = EVAL(e->next->next->next->next->content, env);
+  if (iserror(bexp))
+    CLEAN_RETURN_3(outexp, aexp, xexp, bexp);
+  int has_bias = (bexp != NIL_EXP);
+  if (!isvector(outexp) || !isvector(aexp) || !isvector(xexp) ||
+      (has_bias && !isvector(bexp)))
+    CLEAN_RETURN_4(outexp, aexp, xexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(mat-vec! out A x [bias]): out, A, x [, bias] must "
+                         "be vectors"));
+  int64_t alen = vec_len(aexp), n = vec_len(xexp), m = vec_len(outexp);
+  if (n <= 0 || m <= 0 || alen != m * n)
+    CLEAN_RETURN_4(outexp, aexp, xexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-vec!: shape mismatch — (len A)=%lld must equal "
+                         "(len out)=%lld * (len x)=%lld",
+                         (long long)alen, (long long)m, (long long)n));
+  if (has_bias && vec_len(bexp) != m)
+    CLEAN_RETURN_4(outexp, aexp, xexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-vec!: bias length %lld != (len out)=%lld",
+                         (long long)vec_len(bexp), (long long)m));
+  VEC_REQUIRE_FLOAT_WRITABLE(outexp, "mat-vec!",
+                             CLEAN_RETURN_4(outexp, aexp, xexp, bexp, _alc_e));
+  int err = 0;
+  double *y = VEC_F64_CELLS(outexp);
+  if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64 &&
+      (!has_bias || vec_kind(bexp) == VEC_KIND_F64)) {
+    double *A = VEC_F64_CELLS(aexp);
+    double *X = VEC_F64_CELLS(xexp);
+    double *B = has_bias ? VEC_F64_CELLS(bexp) : NULL;
+    for (int64_t i = 0; i < m; i++) {
+      double s = B ? B[i] : 0.0;
+      const double *row = A + i * n;
+      for (int64_t j = 0; j < n; j++)
+        s += row[j] * X[j];
+      y[i] = s;
+    }
+  } else {
+    for (int64_t i = 0; i < m && !err; i++) {
+      double s = has_bias ? vec_read_double(bexp, i, &err) : 0.0;
+      for (int64_t j = 0; j < n; j++)
+        s += vec_read_double(aexp, i * n + j, &err) *
+             vec_read_double(xexp, j, &err);
+      y[i] = s;
+    }
+  }
+  if (err)
+    CLEAN_RETURN_4(outexp, aexp, xexp, bexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "mat-vec!: non-numeric element"));
+  exp_t *ret = refexp(outexp);
+  CLEAN_RETURN_4(outexp, aexp, xexp, bexp, ret);
+}
+
+const char doc_matvectbang[] =
+    "(mat-vec-t! out A v [bias]) — in-place TRANSPOSED matrix·vector. A is a "
+    "flat row-major m×n matrix, v length m, out length n; computes Aᵀ·v: "
+    "out[j] = sum_i A[i*n+j]*v[i] (+ bias[j]) without transposing A. The fused "
+    "input-gradient primitive for a dense layer's backward pass. Returns out.";
+exp_t *matvectbangcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(outexp, aexp, vexp);
+  exp_t *bexp = NIL_EXP;
+  if (e->next && e->next->next && e->next->next->next &&
+      e->next->next->next->next)
+    bexp = EVAL(e->next->next->next->next->content, env);
+  if (iserror(bexp))
+    CLEAN_RETURN_3(outexp, aexp, vexp, bexp);
+  int has_bias = (bexp != NIL_EXP);
+  if (!isvector(outexp) || !isvector(aexp) || !isvector(vexp) ||
+      (has_bias && !isvector(bexp)))
+    CLEAN_RETURN_4(outexp, aexp, vexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(mat-vec-t! out A v [bias]): out, A, v [, bias] must "
+                         "be vectors"));
+  int64_t alen = vec_len(aexp), m = vec_len(vexp), n = vec_len(outexp);
+  if (m <= 0 || n <= 0 || alen != m * n)
+    CLEAN_RETURN_4(outexp, aexp, vexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-vec-t!: shape mismatch — (len A)=%lld must equal "
+                         "(len v)=%lld * (len out)=%lld",
+                         (long long)alen, (long long)m, (long long)n));
+  if (has_bias && vec_len(bexp) != n)
+    CLEAN_RETURN_4(outexp, aexp, vexp, bexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "mat-vec-t!: bias length %lld != (len out)=%lld",
+                         (long long)vec_len(bexp), (long long)n));
+  VEC_REQUIRE_FLOAT_WRITABLE(outexp, "mat-vec-t!",
+                             CLEAN_RETURN_4(outexp, aexp, vexp, bexp, _alc_e));
+  int err = 0;
+  double *y = VEC_F64_CELLS(outexp);
+  if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(vexp) == VEC_KIND_F64 &&
+      (!has_bias || vec_kind(bexp) == VEC_KIND_F64)) {
+    double *A = VEC_F64_CELLS(aexp);
+    double *V = VEC_F64_CELLS(vexp);
+    double *B = has_bias ? VEC_F64_CELLS(bexp) : NULL;
+    for (int64_t j = 0; j < n; j++)
+      y[j] = B ? B[j] : 0.0;
+    /* Accumulate row by row so the inner walk over A is sequential. */
+    for (int64_t i = 0; i < m; i++) {
+      double vi = V[i];
+      const double *row = A + i * n;
+      VEC_SIMD
+      for (int64_t j = 0; j < n; j++)
+        y[j] += vi * row[j];
+    }
+  } else {
+    for (int64_t j = 0; j < n; j++)
+      y[j] = has_bias ? vec_read_double(bexp, j, &err) : 0.0;
+    for (int64_t i = 0; i < m && !err; i++) {
+      double vi = vec_read_double(vexp, i, &err);
+      for (int64_t j = 0; j < n; j++)
+        y[j] += vi * vec_read_double(aexp, i * n + j, &err);
+    }
+  }
+  if (err)
+    CLEAN_RETURN_4(outexp, aexp, vexp, bexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "mat-vec-t!: non-numeric element"));
+  exp_t *ret = refexp(outexp);
+  CLEAN_RETURN_4(outexp, aexp, vexp, bexp, ret);
+}
+
+const char doc_vecger[] =
+    "(vec-ger! A alpha u v) — in-place rank-1 update of a flat row-major m×n "
+    "matrix A: A[i*n+j] += alpha*u[i]*v[j], with u length m, v length n. The "
+    "fused weight-update / outer-product primitive (BLAS ger). Returns A.";
+exp_t *vecgercmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(aexp, alphaexp, uexp);
+  exp_t *vexp = NIL_EXP;
+  if (e->next && e->next->next && e->next->next->next &&
+      e->next->next->next->next)
+    vexp = EVAL(e->next->next->next->next->content, env);
+  if (iserror(vexp))
+    CLEAN_RETURN_3(aexp, alphaexp, uexp, vexp);
+  if (!isvector(aexp) || !(isnumber(alphaexp) || isfloat(alphaexp)) ||
+      !isvector(uexp) || !isvector(vexp))
+    CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-ger! A alpha u v): A,u,v vecs and alpha scalar"));
+  int64_t alen = vec_len(aexp), m = vec_len(uexp), n = vec_len(vexp);
+  if (m <= 0 || n <= 0 || alen != m * n)
+    CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "vec-ger!: shape mismatch — (len A)=%lld must equal "
+                         "(len u)=%lld * (len v)=%lld",
+                         (long long)alen, (long long)m, (long long)n));
+  double alpha = isfloat(alphaexp) ? alphaexp->f : (double)FIX_VAL(alphaexp);
+  VEC_REQUIRE_FLOAT_WRITABLE(aexp, "vec-ger!",
+                             CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp, _alc_e));
+  int err = 0;
+  if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(uexp) == VEC_KIND_F64 &&
+      vec_kind(vexp) == VEC_KIND_F64) {
+    double *A = VEC_F64_CELLS(aexp);
+    double *U = VEC_F64_CELLS(uexp);
+    double *V = VEC_F64_CELLS(vexp);
+    for (int64_t i = 0; i < m; i++) {
+      double au = alpha * U[i];
+      double *row = A + i * n;
+      VEC_SIMD
+      for (int64_t j = 0; j < n; j++)
+        row[j] += au * V[j];
+    }
+  } else {
+    for (int64_t i = 0; i < m && !err; i++) {
+      double au = alpha * vec_read_double(uexp, i, &err);
+      for (int64_t j = 0; j < n; j++) {
+        double a = vec_read_double(aexp, i * n + j, &err);
+        vec_write_double(aexp, i * n + j, a + au * vec_read_double(vexp, j, &err));
+      }
+    }
+  }
+  if (err)
+    CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp,
+                   error(ERROR_NUMBER_EXPECTED, e, env,
+                         "vec-ger!: non-numeric element"));
+  exp_t *ret = refexp(aexp);
+  CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp, ret);
+}
+
 const char doc_matmul[] =
     "(mat-mul A B k) — matrix·matrix. A is a flat row-major m×k matrix, B a "
     "flat k×n matrix (k is the shared inner dimension); m = (len A)/k, n = "

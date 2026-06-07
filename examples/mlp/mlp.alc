@@ -1,10 +1,10 @@
-;;; MLP digit classifier — alcove with tensor-style bulk ops.
+;;; MLP digit classifier — alcove with FUSED dense-layer tensor ops.
 ;;;
-;;; Same architecture as before (64 → 32 ReLU → 10 cross-entropy), but
-;;; every dot product, axpy, and elementwise op runs as a single C call
-;;; over the underlying vec rather than an interpreted per-element
-;;; loop. Layout: W is a vec-of-rows where each row is its own vec, so
-;;; (vec-dot W[k] x) reads a contiguous row in one walk.
+;;; Same architecture as before (64 → 32 ReLU → 10 cross-entropy). Each
+;;; weight matrix is a single flat row-major F64 vec, so an entire layer
+;;; runs as ONE C call: forward = mat-vec! (W·x + bias), input gradient =
+;;; mat-vec-t! (Wᵀ·grad), weight update = vec-ger! (rank-1 outer product).
+;;; No per-row vec-dot loop, no per-element interpreter dispatch.
 
 (= HIDDEN 32)
 (= LR     0.05)
@@ -12,17 +12,14 @@
 
 (def randf () (- (/ (random 1000000) 1000000.0) 0.5))
 
-;;; Per-row weight matrix: outer-vec of `rows`, each inner vec of `cols`
-;;; randomly initialised in [-scale, scale).
+;;; Flat row-major weight matrix: a single length rows*cols F64 vec (row r
+;;; at offset r*cols), randomly initialised in [-scale, scale). The flat
+;;; layout is what lets a whole layer run as one fused mat-vec!/vec-ger! call.
 (def init-mat (rows cols scale)
-  (let M (vec rows 0)
+  (let M (vec (* rows cols) 0.0)
     (do
-      (for r 0 (- rows 1)
-        (let row (vec cols 0.0)
-          (do
-            (for c 0 (- cols 1)
-              (vec-set! row c (* (randf) (* 2.0 scale))))
-            (vec-set! M r row))))
+      (for i 0 (- (* rows cols) 1)
+        (vec-set! M i (* (randf) (* 2.0 scale))))
       M)))
 
 (def zero-vec (n) (vec n 0.0))
@@ -43,18 +40,13 @@
 (= d-hidden   (zero-vec HIDDEN))
 
 ;;; ---------- forward ----------
-;;; hidden-pre[j] = dot(W1[j], x) + b1[j]   (then ReLU in place)
-;;; logits[k]    = dot(W2[k], hidden) + b2[k]
+;;; hidden-pre = W1·x + b1   (then ReLU in place);   logits = W2·hidden + b2
 (def forward (x)
   (do
-    (for j 0 (- HIDDEN 1)
-      (vec-set! hidden-pre j
-                (+ (vec-dot (vec-ref W1 j) x) (vec-ref b1 j))))
+    (mat-vec! hidden-pre W1 x b1)      ; one fused dense layer
     (vec-copy! hidden hidden-pre)
     (vec-relu! hidden)
-    (for k 0 (- N-CLASSES 1)
-      (vec-set! logits k
-                (+ (vec-dot (vec-ref W2 k) hidden) (vec-ref b2 k))))))
+    (mat-vec! logits W2 hidden b2)))
 
 ;;; Stable softmax: subtract max(logits) before exp; writes into probs.
 (def softmax-logits ()
@@ -72,8 +64,7 @@
 
 ;;; ---------- backward + SGD ----------
 ;;; With cross-entropy on softmax, d-logits = probs - one_hot(target).
-;;; d-hidden = sum_k W2[k] * d-logits[k]   (column-sum via per-row axpy)
-;;; gated by ReLU mask:  d-hidden[j] = 0 wherever hidden-pre[j] <= 0.
+;;; d-hidden = W2ᵀ·d-out, gated by the ReLU mask; weights get a rank-1 update.
 (def step (x target)
   (do
     (forward x)
@@ -83,26 +74,20 @@
     (vec-copy! d-out probs)
     (vec-set! d-out target (- (vec-ref d-out target) 1.0))
 
-    ;; d-hidden = sum_k W2[k] * d-out[k]   (linear part of backprop)
-    (vec-fill! d-hidden 0.0)
-    (for k 0 (- N-CLASSES 1)
-      (vec-axpy! d-hidden (vec-ref d-out k) (vec-ref W2 k)))
+    ;; d-hidden = W2ᵀ·d-out   (linear part of backprop — one fused call)
+    (mat-vec-t! d-hidden W2 d-out)
 
     ;; ReLU mask: zero where pre-activation was non-positive.
     (for j 0 (- HIDDEN 1)
       (if (no (> (vec-ref hidden-pre j) 0.0))
           (vec-set! d-hidden j 0.0)))
 
-    ;; W2 -= LR * outer(d-out, hidden)     ; per row: axpy
-    ;; b2 -= LR * d-out                    ; single axpy
-    (for k 0 (- N-CLASSES 1)
-      (vec-axpy! (vec-ref W2 k) (* -1.0 LR (vec-ref d-out k)) hidden))
+    ;; W2 -= LR * outer(d-out, hidden);  b2 -= LR * d-out
+    (vec-ger! W2 (* -1.0 LR) d-out hidden)
     (vec-axpy! b2 (* -1.0 LR) d-out)
 
-    ;; W1 -= LR * outer(d-hidden, x)
-    ;; b1 -= LR * d-hidden
-    (for j 0 (- HIDDEN 1)
-      (vec-axpy! (vec-ref W1 j) (* -1.0 LR (vec-ref d-hidden j)) x))
+    ;; W1 -= LR * outer(d-hidden, x);    b1 -= LR * d-hidden
+    (vec-ger! W1 (* -1.0 LR) d-hidden x)
     (vec-axpy! b1 (* -1.0 LR) d-hidden)))
 
 ;;; ---------- evaluation ----------

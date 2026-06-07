@@ -432,6 +432,9 @@ lispProc lispProcList[] = {
     LISPCMD_APP("vec-tanh!", vectanhcmd, doc_vectanh),
     LISPCMD_APP("vec-softmax!", vecsoftmaxcmd, doc_vecsoftmax),
     LISPCMD_APP("mat-vec", matveccmd, doc_matvec),
+    LISPCMD_APP("mat-vec!", matvecbangcmd, doc_matvecbang),
+    LISPCMD_APP("mat-vec-t!", matvectbangcmd, doc_matvectbang),
+    LISPCMD_APP("vec-ger!", vecgercmd, doc_vecger),
     LISPCMD_APP("mat-mul", matmulcmd, doc_matmul),
     /* Deque ops on vec — amortised O(1) push/pop at both ends via the
        cap/start/end window. Growth: 1.5x on realloc; slide-left when

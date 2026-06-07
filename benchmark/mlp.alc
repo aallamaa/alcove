@@ -57,15 +57,15 @@
 
 (def randf () (- (/ (random 1000000) 1000000.0) 0.5))
 
+;; Flat row-major weight matrix: a single length rows*cols F64 vec, row r at
+;; offset r*cols. Lets the whole layer run as one fused mat-vec!/vec-ger! C
+;; call instead of a per-row vec-dot loop. (Same randf draw order as the old
+;; per-row init, so the trained model is identical.)
 (def init-mat (rows cols scale)
-  (let M (vec rows 0)
+  (let M (vec (* rows cols) 0.0)
     (do
-      (for r 0 (- rows 1)
-        (let row (vec cols 0.0)
-          (do
-            (for c 0 (- cols 1)
-              (vec-set! row c (* (randf) (* 2.0 scale))))
-            (vec-set! M r row))))
+      (for i 0 (- (* rows cols) 1)
+        (vec-set! M i (* (randf) (* 2.0 scale))))
       M)))
 
 (def zero-vec (n) (vec n 0.0))
@@ -84,14 +84,10 @@
 
 (def forward (x)
   (do
-    (for j 0 (- HIDDEN 1)
-      (vec-set! hidden-pre j
-                (+ (vec-dot (vec-ref W1 j) x) (vec-ref b1 j))))
+    (mat-vec! hidden-pre W1 x b1)      ; hidden-pre = W1·x + b1   (one fused call)
     (vec-copy! hidden hidden-pre)
     (vec-relu! hidden)
-    (for k 0 (- N-CLASSES 1)
-      (vec-set! logits k
-                (+ (vec-dot (vec-ref W2 k) hidden) (vec-ref b2 k))))))
+    (mat-vec! logits W2 hidden b2)))   ; logits = W2·hidden + b2
 
 (def softmax-logits ()
   (let m (vec-max logits)
@@ -112,17 +108,13 @@
     (softmax-logits)
     (vec-copy! d-out probs)
     (vec-set! d-out target (- (vec-ref d-out target) 1.0))
-    (vec-fill! d-hidden 0.0)
-    (for k 0 (- N-CLASSES 1)
-      (vec-axpy! d-hidden (vec-ref d-out k) (vec-ref W2 k)))
-    (for j 0 (- HIDDEN 1)
+    (mat-vec-t! d-hidden W2 d-out)     ; d-hidden = W2ᵀ·d-out   (one fused call)
+    (for j 0 (- HIDDEN 1)              ; ReLU mask (small, stays a loop)
       (if (no (> (vec-ref hidden-pre j) 0.0))
           (vec-set! d-hidden j 0.0)))
-    (for k 0 (- N-CLASSES 1)
-      (vec-axpy! (vec-ref W2 k) (* -1.0 LR (vec-ref d-out k)) hidden))
+    (vec-ger! W2 (* -1.0 LR) d-out hidden)   ; W2 -= LR·outer(d-out, hidden)
     (vec-axpy! b2 (* -1.0 LR) d-out)
-    (for j 0 (- HIDDEN 1)
-      (vec-axpy! (vec-ref W1 j) (* -1.0 LR (vec-ref d-hidden j)) x))
+    (vec-ger! W1 (* -1.0 LR) d-hidden x)     ; W1 -= LR·outer(d-hidden, x)
     (vec-axpy! b1 (* -1.0 LR) d-hidden)))
 
 (def accuracy (X y)

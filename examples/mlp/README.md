@@ -9,17 +9,17 @@ held-out split, and finishes in well under a second.
 ```
 $ make
 ==================================================
- TENSOR OPS (vec-dot / vec-axpy! / vec-relu! …)
+ TENSOR OPS (mat-vec! / mat-vec-t! / vec-ger! …)
 ==================================================
 MLP 64-32-10 on UCI optdigits (tensor ops)
 train=3823 test=1797 lr=0.05 epochs=5
 
-epoch 0:  test acc 1656/1797  (155 ms cumulative)
+epoch 0:  test acc 1687/1797  (19 ms cumulative)
 …
-epoch 4:  test acc 1713/1797  (881 ms cumulative)
+epoch 4:  test acc 1709/1797  (108 ms cumulative)
 
-final train acc: 3752/3823    (98.1%)
-final test  acc: 1713/1797    (95.3%)
+final train acc: 3741/3823    (97.9%)
+final test  acc: 1709/1797    (95.1%)
 ```
 
 ## How to run
@@ -93,15 +93,17 @@ explicit:
 
 - **`mlp-baseline.alc`** — hand-rolled per-element loops in alcove,
   each multiply allocates an `EXP_FLOAT`.
-- **`mlp.alc`** — same math, but the inner loops are single calls to
-  C builtins (`vec-dot`, `vec-axpy!`, `vec-relu!`, …) that work on the
-  underlying vec storage in raw doubles.
+- **`mlp.alc`** — same math, but each layer is a single fused C call on
+  flat row-major weight matrices: `mat-vec!` (forward `W·x+b`),
+  `mat-vec-t!` (input gradient `Wᵀ·g`), `vec-ger!` (rank-1 weight
+  update), all working on the underlying vec storage in raw doubles.
 
 ```
                             5-epoch time      per-epoch       test acc
 baseline (per-elem loops)   30.8 s            6.2 s           95.0%
-tensor ops + in-place      0.88 s             176 ms          95.3%
-                            ───── ~35× ────►
+tensor ops (per-row dots)   0.88 s            176 ms          95.3%
+fused dense layers         0.11 s             22 ms           95.1%
+                            ──── ~280× ────►
 ```
 
 Accuracy is identical within run-to-run noise (random init re-seeds
@@ -134,13 +136,17 @@ This demo was the forcing function for several language additions:
 - **`istrue` honors container emptiness** — `(no v)` is now true iff
   the blob/vec/dict/list is empty, mirroring how nil works for
   lists. Previously every container was unconditionally falsy.
-- **9 tensor bulk ops** — `vec-dot`, `vec-axpy!`, `vec-scale!`,
+- **tensor bulk ops** — `vec-dot`, `vec-axpy!`, `vec-scale!`,
   `vec-add!`, `vec-copy!`, `vec-fill!`, `vec-relu!`, `vec-argmax`,
-  `vec-max`. Each operates on a `vec` of numeric elements (float or
-  fixnum), reads through `e->f`, does the math in raw C doubles, and
-  writes results back as `EXP_FLOAT`s — *in place* when the slot is
-  uniquely owned, with `nref == 1`. The in-place mutation alone is
-  worth ~3× on a typical MLP step.
+  `vec-max`, … Each operates on a `vec` of numeric elements (float or
+  fixnum), does the math in raw C doubles, and writes results back —
+  *in place* for the `!` ops, with no per-element interpreter dispatch.
+- **fused dense-layer ops** — `mat-vec!` (in-place `W·x + bias`),
+  `mat-vec-t!` (transposed `Wᵀ·v`, the input-gradient kernel), and
+  `vec-ger!` (rank-1 update `A += α·u·vᵀ`, the weight-update kernel).
+  A whole layer's forward or backward pass becomes one C call over a
+  flat row-major weight matrix — ~8× over the per-row `vec-dot` loop,
+  ~280× over the per-element baseline.
 
 All of these are covered by tests in the top-level `test.alc`
 (grep for `vec-`).

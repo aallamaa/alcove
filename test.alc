@@ -2445,6 +2445,27 @@
 (assert "mat-vec: y[0]" (vec-ref mvY 0) 6.0)
 (assert "mat-vec: y[1]" (vec-ref mvY 1) 15.0)
 (assert "mat-vec: result length = m" (vec-len mvY) 2)
+;; mat-vec! — in-place, same A/x; with optional bias [10 20] -> [16 35]
+(= mvO (vec 2 0.0))
+(mat-vec! mvO mvA (vec 3 1.0))
+(assert "mat-vec!: y[0]" (vec-ref mvO 0) 6.0)
+(assert "mat-vec!: y[1]" (vec-ref mvO 1) 15.0)
+(= mvB (vec 2 0.0)) (vec-set! mvB 0 10.0) (vec-set! mvB 1 20.0)
+(mat-vec! mvO mvA (vec 3 1.0) mvB)
+(assert "mat-vec! bias: y[0]" (vec-ref mvO 0) 16.0)
+(assert "mat-vec! bias: y[1]" (vec-ref mvO 1) 35.0)
+;; mat-vec-t! — Aᵀ·v, A 2x3, v=[1 2] -> [1+8, 2+10, 3+12] = [9 12 15]
+(= mvtO (vec 3 0.0)) (= mvtV (vec 2 0.0)) (vec-set! mvtV 0 1.0) (vec-set! mvtV 1 2.0)
+(mat-vec-t! mvtO mvA mvtV)
+(assert "mat-vec-t!: out[0]" (vec-ref mvtO 0) 9.0)
+(assert "mat-vec-t!: out[2]" (vec-ref mvtO 2) 15.0)
+;; vec-ger! — rank-1 update: A(2x3) += 1*u(2)·v(3); u=[1 2], v=[10 20 30]
+(= gerA (vec 6 0.0))
+(= gerU (vec 2 0.0)) (vec-set! gerU 0 1.0) (vec-set! gerU 1 2.0)
+(= gerV (vec 3 0.0)) (vec-set! gerV 0 10.0) (vec-set! gerV 1 20.0) (vec-set! gerV 2 30.0)
+(vec-ger! gerA 1.0 gerU gerV)
+(assert "vec-ger!: A[0,0]" (vec-ref gerA 0) 10.0)
+(assert "vec-ger!: A[1,2]" (vec-ref gerA 5) 60.0)
 ;; A=[[1 2],[3 4]] · B=[[5 6],[7 8]] (k=2) = [[19 22],[43 50]] flat [19 22 43 50]
 (= mmA (vec 4 0)) (vec-set! mmA 0 1.0)(vec-set! mmA 1 2.0)(vec-set! mmA 2 3.0)(vec-set! mmA 3 4.0)
 (= mmB (vec 4 0)) (vec-set! mmB 0 5.0)(vec-set! mmB 1 6.0)(vec-set! mmB 2 7.0)(vec-set! mmB 3 8.0)

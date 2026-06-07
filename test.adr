@@ -4002,6 +4002,62 @@ assert "mat-vec: y[1]" (vec-ref mvY 1) 15.0
 
 assert "mat-vec: result length = m" (vec-len mvY) 2
 
+setf mvO (vec 2 0.0)
+
+mat-vec! mvO mvA (vec 3 1.0)
+
+assert "mat-vec!: y[0]" (vec-ref mvO 0) 6.0
+
+assert "mat-vec!: y[1]" (vec-ref mvO 1) 15.0
+
+setf mvB (vec 2 0.0)
+
+vec-set! mvB 0 10.0
+
+vec-set! mvB 1 20.0
+
+mat-vec! mvO mvA (vec 3 1.0) mvB
+
+assert "mat-vec! bias: y[0]" (vec-ref mvO 0) 16.0
+
+assert "mat-vec! bias: y[1]" (vec-ref mvO 1) 35.0
+
+setf mvtO (vec 3 0.0)
+
+setf mvtV (vec 2 0.0)
+
+vec-set! mvtV 0 1.0
+
+vec-set! mvtV 1 2.0
+
+mat-vec-t! mvtO mvA mvtV
+
+assert "mat-vec-t!: out[0]" (vec-ref mvtO 0) 9.0
+
+assert "mat-vec-t!: out[2]" (vec-ref mvtO 2) 15.0
+
+setf gerA (vec 6 0.0)
+
+setf gerU (vec 2 0.0)
+
+vec-set! gerU 0 1.0
+
+vec-set! gerU 1 2.0
+
+setf gerV (vec 3 0.0)
+
+vec-set! gerV 0 10.0
+
+vec-set! gerV 1 20.0
+
+vec-set! gerV 2 30.0
+
+vec-ger! gerA 1.0 gerU gerV
+
+assert "vec-ger!: A[0,0]" (vec-ref gerA 0) 10.0
+
+assert "vec-ger!: A[1,2]" (vec-ref gerA 5) 60.0
+
 setf mmA (vec 4 0)
 
 vec-set! mmA 0 1.0
