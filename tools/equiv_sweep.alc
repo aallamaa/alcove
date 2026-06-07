@@ -257,6 +257,25 @@
 (equiv "vec-set! sym"   (let (v (vector 0 0)) (vec-set! v 0 'hello) (vec-ref v 0)))
 (equiv "vec-set! ret"   (let (v (vector 0 0)) (vec-set! v 1 (list 'a 'b))))
 
+;; ── blob / string / predicate builtins (LISPCMD_APP) ──────────────────────
+(equiv "blob-len"       (blob-len (string->blob "hello")))
+(equiv "blob-ref"       (blob-ref (string->blob "ABC") 1))
+(equiv "blob->string"   (blob->string (string->blob "xy")))
+(equiv "make-blob len"  (blob-len (make-blob 4)))
+(equiv "str"            (str "a" 1 "b" 2))
+(equiv "substr"         (substr "hello world" 0 5))
+(equiv "string-concat"  (string-concat "foo" "bar" "baz"))
+(equiv "string-upcase"  (string-upcase "abc"))
+(equiv "string-split"   (string-split "a,b,c" ","))
+(equiv "fmt"            (fmt "{} + {} = {}" 1 2 3))
+(equiv "number? t"      (number? 5))
+(equiv "number? f"      (number? "x"))
+(equiv "string? t"      (string? "x"))
+(equiv "list? t"        (list? (list 1 2)))
+(equiv "vec? t"         (vec? (vector 1)))
+(equiv "null? t"        (null? nil))
+(equiv "pair? t"        (pair? (cons 1 2)))
+
 ;; ── quasiquote nested / edge ──────────────────────────────────────────────
 (equiv "qq nested"      `(1 (2 ,(+ 1 2)) ,(* 2 3)))
 (equiv "qq splice mid"  `(a ,@(list 1 2 3) z))
