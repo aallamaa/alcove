@@ -9615,6 +9615,12 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
   env_t *newenv;
   exp_t *ret = NULL;
   refexp(fn);
+  /* Set when we re-enter via a cross-function tail marker (below): the marker's
+     arg nodes already hold EVALUATED values (make_tail_marker pre-evaluated them
+     in the caller's frame), so they must be rebound as-is, never re-evaluated.
+     Re-evaluating a value that happens to be a pair/symbol (e.g. a computed
+     list) would (mis)interpret it as a call. */
+  int marker_args = 0;
 
 tailrec: {
   exp_t *body = fn->next->content;
@@ -9630,7 +9636,10 @@ tailrec: {
   {
     exp_t *src;
     for (src = e->next; src; src = src->next) {
-      exp_t *v = EVAL(src->content, env);
+      /* marker_args: the node already holds an evaluated value — take a ref,
+         don't re-evaluate it (see the marker rebind in the cross-function tail
+         path below). */
+      exp_t *v = marker_args ? refexp(src->content) : EVAL(src->content, env);
       if (v && iserror(v)) {
         /* clean up partial evald list */
         if (evald_args)
@@ -9650,6 +9659,7 @@ tailrec: {
       }
     }
   }
+  marker_args = 0; /* consumed; a further tail hop re-sets it if needed */
   newenv = make_env(captured ? captured : env);
   newenv->callingfnc = refexp(e);
   exp_t *params = lambda_params(fn);
@@ -9751,6 +9761,7 @@ tailrec: {
       unrefexp(e);
       fn = new_fn;
       e = marker;
+      marker_args = 1; /* marker's arg nodes are pre-evaluated — don't re-eval */
       goto tailrec;
     }
 

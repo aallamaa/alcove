@@ -4594,7 +4594,35 @@ each x:
   nil
   setf each-empty 99
 
-assert "each nil runs once" each-empty 99
+assert "each nil zero iters" each-empty 0
+
+setf each-empty2 0
+
+each x:
+  list()
+  setf each-empty2 99
+
+assert "each (list) zero iters" each-empty2 0
+
+setf each-nilelt 0
+
+each x:
+  list nil 5
+  setf each-nilelt (+ each-nilelt 1)
+
+assert "each over nil element" each-nilelt 2
+
+def tc-takes (x):
+  x
+
+def tc-caller ():
+  do:
+    fn (q):
+      q
+    tc-takes (list (list 1 2) (list 3 4))
+
+assert "tail-call computed list arg" (iso (tc-caller) (list (list 1 2) (list 3 4))):
+  t
 
 assert "case match first" (case 1 1 "one" 2 "two") "one"
 

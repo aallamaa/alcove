@@ -2858,8 +2858,26 @@
 (each x (list 1 2 3) (= each-acc (cons x each-acc)))
 (assert "each list collect"           (length each-acc)               3)
 (= each-empty 0)
-(each x nil (= each-empty 99))      ;; empty list
-(assert "each nil runs once"         each-empty                       99)
+(each x nil (= each-empty 99))      ;; empty list / nil → ZERO iterations
+(assert "each nil zero iters"        each-empty                       0)
+(= each-empty2 0)
+(each x (list) (= each-empty2 99))  ;; (list) is nil too → zero iterations
+(assert "each (list) zero iters"     each-empty2                      0)
+;; a list that CONTAINS nil still iterates over the nil element
+(= each-nilelt 0)
+(each x (list nil 5) (= each-nilelt (+ each-nilelt 1)))
+(assert "each over nil element"      each-nilelt                      2)
+
+;; cross-function tail call with a COMPUTED list-of-heap-objects arg: the AST
+;; tail trampoline pre-evaluates marker args, and the cross-function rebind must
+;; NOT re-evaluate them (re-evaluating a list value would apply it as a call).
+;; Regression for the tail-marker double-eval bug.
+(def tc-takes (x) x)
+(def tc-caller ()
+  (do (fn (q) q)                         ;; force the AST path (fn literal)
+      (tc-takes (list (list 1 2) (list 3 4)))))  ;; tail call, list-of-lists
+(assert "tail-call computed list arg"
+        (iso (tc-caller) (list (list 1 2) (list 3 4)))                 t)
 
 ;; ---------- case ----------
 (assert "case match first"            (case 1 1 "one" 2 "two")        "one")

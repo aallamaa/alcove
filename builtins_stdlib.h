@@ -2366,7 +2366,12 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
         if (ispair(retval)) {
           curin = curval->next;
           tmpexp = retval;
-          while (retval) {
+          /* `retval->content` guard: the empty list is NIL_EXP, a pair whose
+             content is NULL (and proper lists terminate at it). Without it an
+             empty collection would run the body once with the loop var unbound.
+             A list that CONTAINS nil stores NIL_EXP as the content (non-NULL),
+             so genuine nil elements still iterate. */
+          while (retval && retval->content) {
             set_get_keyval_dict(newenv->d, exp_text(curvar->content),
                                 car(retval));
             curval = curin;
