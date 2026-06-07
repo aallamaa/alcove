@@ -246,62 +246,81 @@ static int x64_add_reg_rsp(uint8_t *buf, int dst) {
    We restrict ourselves to XMM0/XMM1 (no REX.B/REX.R extension needed) and
    GP regs in the low 8. Byte patterns verified against the GNU assembler. */
 
+/* REX.R for an xmm/gp in the ModRM.reg field, REX.B for the ModRM.r/m field —
+   the low 3 bits go in the ModRM byte, the 4th bit here. Only xmm8-15 (or r8-15)
+   set a bit, so callers using xmm0-7 stay byte-identical (these return 0). */
+#define X64_REXR(reg) (((reg) >= 8) ? 0x04 : 0)
+#define X64_REXB(rm) (((rm) >= 8) ? 0x01 : 0)
 /* cvtsi2sd xmm, r64  →  F2 REX.W 0F 2A /r.  Signed int64 → double. */
 static int x64_cvtsi2sd_xmm_reg(uint8_t *buf, int xmm, int gp) {
   buf[0] = 0xF2;
-  buf[1] = 0x48;
+  buf[1] = (uint8_t)(0x48 | X64_REXR(xmm) | X64_REXB(gp));
   buf[2] = 0x0F;
   buf[3] = 0x2A;
   buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
   return 5;
 }
-/* movsd xmm, [base + disp32]  →  F2 0F 10 /r disp32 (mod=10). */
+/* movsd xmm, [base + disp32]  →  F2 [REX] 0F 10 /r disp32 (mod=10). */
 static int x64_movsd_xmm_mem(uint8_t *buf, int xmm, int base, int32_t disp) {
-  buf[0] = 0xF2;
-  buf[1] = 0x0F;
-  buf[2] = 0x10;
-  buf[3] = (uint8_t)(0x80 | ((xmm & 7) << 3) | (base & 7));
-  memcpy(buf + 4, &disp, 4);
-  return 8;
+  int n = 0;
+  buf[n++] = 0xF2;
+  if (xmm >= 8 || base >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXR(xmm) | X64_REXB(base));
+  buf[n++] = 0x0F;
+  buf[n++] = 0x10;
+  buf[n++] = (uint8_t)(0x80 | ((xmm & 7) << 3) | (base & 7));
+  memcpy(buf + n, &disp, 4);
+  return n + 4;
 }
 /* movq xmm, r64  →  66 REX.W 0F 6E /r.  Copy raw bits GP → xmm. */
 static int x64_movq_xmm_reg(uint8_t *buf, int xmm, int gp) {
   buf[0] = 0x66;
-  buf[1] = 0x48;
+  buf[1] = (uint8_t)(0x48 | X64_REXR(xmm) | X64_REXB(gp));
   buf[2] = 0x0F;
   buf[3] = 0x6E;
   buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
   return 5;
 }
-/* ucomisd xmm_a, xmm_b  →  66 0F 2E /r (mod=11).  Unordered FP compare: sets
-   ZF/PF/CF (PF=1 on NaN/unordered). After it, `ja` = ordered strictly-greater
-   (NaN → not taken, matching the VM's `>`/`<` which are false for NaN). Used by
-   the numeric-loop compiler for float comparisons. */
+/* ucomisd xmm_a, xmm_b  →  66 [REX] 0F 2E /r (mod=11).  Unordered FP compare:
+   sets ZF/PF/CF (PF=1 on NaN/unordered). After it, `ja` = ordered strictly-
+   greater (NaN → not taken, matching the VM's `>`/`<` which are false for NaN).
+   Used by the numeric-loop compiler for float comparisons. */
 __attribute__((unused)) static int x64_ucomisd_xmm_xmm(uint8_t *buf, int a,
                                                        int b) {
-  buf[0] = 0x66;
-  buf[1] = 0x0F;
-  buf[2] = 0x2E;
-  buf[3] = (uint8_t)(0xC0 | ((a & 7) << 3) | (b & 7));
-  return 4;
+  int n = 0;
+  buf[n++] = 0x66;
+  if (a >= 8 || b >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXR(a) | X64_REXB(b));
+  buf[n++] = 0x0F;
+  buf[n++] = 0x2E;
+  buf[n++] = (uint8_t)(0xC0 | ((a & 7) << 3) | (b & 7));
+  return n;
 }
-/* movsd xmm_dst, xmm_src  →  F2 0F 10 /r (mod=11).  Register copy (divsd is
-   destructive, so a term's numerator is copied to a scratch before dividing). */
+/* movsd xmm_dst, xmm_src  →  F2 [REX] 0F 10 /r (mod=11).  Register copy (divsd
+   is destructive, so a term's numerator is copied to a scratch before div). */
 static int x64_movsd_xmm_xmm(uint8_t *buf, int dst, int src) {
-  buf[0] = 0xF2;
-  buf[1] = 0x0F;
-  buf[2] = 0x10;
-  buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
-  return 4;
+  int n = 0;
+  buf[n++] = 0xF2;
+  if (dst >= 8 || src >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXR(dst) | X64_REXB(src));
+  buf[n++] = 0x0F;
+  buf[n++] = 0x10;
+  buf[n++] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  return n;
 }
-/* addsd/subsd/mulsd/divsd xmm_dst, xmm_src  →  F2 0F {58,5C,59,5E} /r (mod=11).
-   `op2` is the third opcode byte: 0x58 add, 0x5C sub, 0x59 mul, 0x5E div. */
+/* addsd/subsd/mulsd/divsd xmm_dst, xmm_src  →  F2 [REX] 0F {58,5C,59,5E} /r
+   (mod=11).  `op2` is the third opcode byte: 0x58 add, 0x5C sub, 0x59 mul,
+   0x5E div. */
 static int x64_sse_arith_xmm(uint8_t *buf, uint8_t op2, int dst, int src) {
-  buf[0] = 0xF2;
-  buf[1] = 0x0F;
-  buf[2] = op2;
-  buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
-  return 4;
+  int rex = (dst >= 8 || src >= 8);
+  int b0 = 0;
+  buf[b0++] = 0xF2;
+  if (rex)
+    buf[b0++] = (uint8_t)(0x40 | X64_REXR(dst) | X64_REXB(src));
+  buf[b0++] = 0x0F;
+  buf[b0++] = op2;
+  buf[b0++] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
+  return b0;
 }
 /* cmp dst, src  →  REX.W 39 /r (mod=11).  Sets flags for a signed compare;
    used by the numeric-loop compiler for integer slot/temp comparisons. */
@@ -899,10 +918,10 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   numloop_t nl;
   if (!numloop_analyze(bc, &nl))
     return 0;
-  /* amd64 register budget: float homes+temps must fit xmm0-7; int homes+temps
-     the small GPR pool rcx/rax/rdx. (arm64 has far more, so it may JIT kernels
-     this declines.) */
-  if (nl.nfslots + nl.max_ftmp > 8 || nl.nislots + nl.max_itmp > 3)
+  /* amd64 register budget: float homes+temps must fit xmm0-15 (all caller-saved
+     on SysV — the encoders emit REX for xmm8-15); int homes+temps the small GPR
+     pool rcx/rax/rdx. */
+  if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > 3)
     return 0;
   if (nl.nislots > 1)
     return 0; /* >1 int slot: the float-box guard scratch (rax/rdx) would clash
@@ -922,7 +941,7 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     pc += l ? l : 1;
   }
   int zero_xmm = nl.nfslots + nl.max_ftmp; /* next free xmm */
-  if (has_div && zero_xmm > 7)
+  if (has_div && zero_xmm > 15)
     return 0;
 
   /* Emit into a generous local buffer (ncode ≤ NL_MAXPC ops × max bytes/op can
@@ -1218,7 +1237,7 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     x64_patch_rel32(buf, patch[i].at, patch[i].size, tgt);
   }
 
-  if (n > 480) /* must fit the caller's buf[512] */
+  if (n > 1000) /* must fit the caller's buf[1024] */
     return 0;
   memcpy(out_buf, local, (size_t)n);
   *outn = n;
@@ -3096,7 +3115,8 @@ int jit_compile(bytecode_t *bc) {
     return 1;
   }
 
-  uint8_t buf[512];
+  uint8_t buf[1024]; /* numloop kernels (up to 16 xmm slots/temps) can exceed
+                        512; the curated shapes stay far smaller. */
   int n = 0;
 
   if (try_jit_simple_tail_loop(bc, buf, &n)) {

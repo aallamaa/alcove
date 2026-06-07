@@ -182,7 +182,8 @@ def gen_numloop(rng, idx):
     differential safety net for the numloop codegen — the ONLY thing that catches
     a wrong-but-finite miscompile."""
     name = f"nl{idx}"
-    nf = rng.randint(1, 2)            # 1-2 float locals (+ counter): fits amd64 xmm budget
+    nf = rng.randint(1, 4)            # 1-4 float locals (+ counter); 4 slots + temps
+                                      # cross into xmm8-15 (amd64 budget is now 16)
     fs = [f"a{j}" for j in range(nf)]
     limit = rng.choice([40000, 50000, 100000])
     iters = rng.randint(0, 5)
@@ -235,8 +236,29 @@ def gen_numloop_mixed(rng, idx):
     return name, defn, args, "numloop-mixed"
 
 
+def gen_mandelbrot(rng, idx):
+    """Mandelbrot escape loop: an int counter + FOUR :f64 float locals
+    (cr ci zr zi) with a |z|^2 > 4 escape guard. This is the canonical kernel the
+    xmm8-15 extension unlocked on amd64 — 4 float slots plus the tail-self's 4
+    float args and their temps exceed xmm0-7, so the wide register budget + the
+    :f64 hints are both exercised. Returns the integer escape count (exact)."""
+    name = f"mb{idx}"
+    cap = rng.choice([24, 32, 48])
+    defn = (f"(def {name} (cr :f64 ci :f64 zr :f64 zi :f64 i) "
+            f"(if (>= i {cap}) i "
+            f"(if (> (+ (* zr zr) (* zi zi)) 4.0) i "
+            f"({name} cr ci (+ (- (* zr zr) (* zi zi)) cr) "
+            f"(+ (* 2.0 (* zr zi)) ci) (+ i 1)))))")
+    def pt():
+        cr = round(rng.uniform(-2.0, 1.0), 4)
+        ci = round(rng.uniform(-1.2, 1.2), 4)
+        return f"{cr} {ci} 0.0 0.0 0"
+    args = [(pt(), True) for _ in range(3)]
+    return name, defn, args, "mandelbrot"
+
+
 GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown,
-              gen_float_series, gen_numloop, gen_numloop_mixed]
+              gen_float_series, gen_numloop, gen_numloop_mixed, gen_mandelbrot]
 
 
 def generate(rng, count):
