@@ -71,30 +71,34 @@ Two honest takeaways:
 
 1. **alcove is *not* faster than C when both do the same work — C is the
    fastest.** On the benchmarks where alcove and C run the identical
-   algorithm, alcove is about **1.3–3.4× slower than C**. For a dynamic
-   Lisp that's an excellent result.
+   algorithm, alcove is about **1.2–3.5× slower than C**. For a dynamic
+   Lisp that's an excellent result — and on the float-heavy `pi` / `logistic`
+   loops, where alcove's numeric tail-loop JIT compiles the loop to native,
+   it lands within **~1.1–1.3× of C** (the ◆ rows).
 2. **alcove is roughly 10–300× faster than Python.**
 
 Full results (one machine, x86-64; each cell is best-of-15 wall-clock
 including the time to launch the program):
 
-| benchmark       |   alcove |  C (gcc -O2) |   python3 | alcove vs C       | alcove vs python |
-|-----------------|---------:|-------------:|----------:|-------------------|-----------------:|
-| `ackermann 3 9` | 15.3 ms  |     5.34 ms  | 1328.8 ms | 2.9× slower       |       87× faster |
-| `tak 24 16 8`   |  5.91 ms |     3.90 ms  |   87.5 ms | 1.5× slower       |       15× faster |
-| `forsum 1e7`    |  7.19 ms |     4.00 ms  |  236.0 ms | 1.8× slower       |       33× faster |
-| `sieve`         |  5.15 ms |     4.03 ms  |   72.9 ms | 1.3× slower       |       14× faster |
-| `sieve-fast`    |  2.20 ms |     0.84 ms  |   21.8 ms | 2.6× slower **    |       10× faster |
-| `fact 19`       |  3.43 ms |     1.34 ms  |   88.1 ms | 2.6× slower **    |       26× faster |
-| `countdown`     |  4.81 ms |     0.69 ms  |  950.2 ms | 7.0× slower **    |      198× faster |
-| `listsum`       |  3.49 ms |     3.63 ms  |   35.5 ms | 1.04× faster *    |       10× faster |
-| `nqueens-vec`   |  2.24 ms |     4.07 ms  |  144.7 ms | 1.8× faster *     |       65× faster |
-| `nqueens 10`    |  1.66 ms |     3.94 ms  |   90.8 ms | 2.4× faster *     |       55× faster |
-| `fib 33`        |  1.16 ms |     6.16 ms  |  343.7 ms | 5.3× faster *     |      298× faster |
-| `mlp` (5 ep.)   |  588 ms  |     n/a   *** | 3360.4 ms | —                |      5.7× faster |
+| benchmark      |   alcove |  C (gcc -O2) |   python3 | alcove vs C     | alcove vs python |
+|----------------|---------:|-------------:|----------:|-----------------|-----------------:|
+| `fib`          |  0.92 ms |     4.48 ms  |  252.2 ms | 4.9× faster *   |      274× faster |
+| `nqueens`      |  1.05 ms |     2.39 ms  |   70.0 ms | 2.3× faster *   |       67× faster |
+| `nqueens-vec`  |  1.05 ms |     2.77 ms  |  110.4 ms | 2.6× faster *   |      105× faster |
+| `sieve-fast`   |  1.78 ms |     0.70 ms  |   17.3 ms | 2.6× slower **  |       10× faster |
+| `listsum`      |  2.63 ms |     2.68 ms  |   27.7 ms | 1.4× faster *   |       11× faster |
+| `fact`         |  2.60 ms |     1.12 ms  |   66.0 ms | 2.3× slower **  |       25× faster |
+| `countdown`    |  3.46 ms |     0.51 ms  |  750.0 ms | 6.8× slower **  |      217× faster |
+| `sieve`        |  3.73 ms |     2.89 ms  |   55.9 ms | 1.2× slower     |       15× faster |
+| `tak`          |  3.93 ms |     2.94 ms  |   68.0 ms | 1.2× slower     |       17× faster |
+| `forsum`       |  5.26 ms |     2.64 ms  |  178.1 ms | 2.1× slower     |       34× faster |
+| `ackermann`    | 11.7 ms  |     3.67 ms  | 1056.0 ms | 3.5× slower     |       90× faster |
+| `pi`           | 20.0 ms  |    20.7 ms   |  947.9 ms | 1.07× faster ◆  |       47× faster |
+| `logistic`     |  116 ms  |     92.1 ms  | 2000.8 ms | 1.26× slower ◆  |       17× faster |
+| `mlp` (5 ep.)  |  134 ms  |     n/a  *** | 2574.3 ms | —               |     19.2× faster |
 
-(Ratios are just the two time columns divided — e.g. `fib` 6.16 / 1.16 ≈
-5.3. They're end-to-end, so they include the launch time noted below.)
+(Ratios are just the two time columns divided — e.g. `fib` 4.48 / 0.92 ≈
+4.9. They're end-to-end, so they include the launch time noted below.)
 
 **\* The "× faster" rows are real numbers but not a fair race — alcove
 isn't running faster than C, it's doing *less work*.** When alcove's
@@ -125,12 +129,19 @@ compiling*, so the run-time C program does almost nothing. On
 time reliably at this scale. In all three the C column is so small that
 the ratio mostly measures alcove's own launch cost, not a fair race.
 
+**◆ The fair fight.** `pi` and `logistic` are float-heavy scalar loops with no
+"trick" — alcove and C run the same arithmetic. alcove's numeric tail-loop JIT
+compiles the loop body to native code (unboxed doubles in registers), so it lands
+at **1.07× faster to 1.26× slower than `gcc -O2`** — genuine near-parity with C on
+exactly the numeric kernels alcove is built for.
+
 **\*\*\*** `mlp` (the §2 demo) has no C version (it trains a neural net with
-randomness, so the result differs run to run); it's ~5.7× faster than
-plain Python.
+randomness, so the result differs run to run); it's **~19× faster than plain
+Python** now that each layer's forward and backward pass is a single fused
+SIMD call (`mat-vec!` / `mat-vec-t!` / `vec-ger!`).
 
 Note on launch time: every number above includes starting the program —
-about **2 ms for alcove** and **13 ms for Python** — which is a large
+about **1 ms for alcove** and **9 ms for Python** — which is a large
 share of the very fast rows. Reproduce with `make benchmark`.
 
 ### 2. ML in Lisp — digit classifier in 130 lines
@@ -138,21 +149,27 @@ share of the very fast rows. Reproduce with `make benchmark`.
 `examples/mlp/` ships a 64→32→10 MLP that trains from scratch on the
 UCI optdigits dataset (3823 train / 1797 test, the same data behind
 `sklearn.datasets.load_digits`). Pure alcove — no BLAS, no numpy
-dependency. **95% test accuracy, 880 ms for 5 epochs** on a laptop.
+dependency. **95% test accuracy, ~135 ms for 5 epochs** on a laptop
+(~19× faster than the same algorithm in plain Python).
 
 ```
 $ cd examples/mlp
 $ make           # downloads dataset, packs, trains
 …
-final test  acc: 1713/1797   (95.3%)
-real    0m0.881s
+final test  acc: 1709/1797   (95.1%)
+real    0m0.14s
 ```
 
-The speedup comes from nine tensor-bulk-ops baked into the language —
-`vec-dot`, `vec-axpy!`, `vec-relu!`, … — that operate on `vec`
-storage in raw `double`s. See [`examples/mlp/README.md`](examples/mlp/README.md)
-for the full story (and a side-by-side `make benchmark` against the
-per-element interpreter baseline: 35× speedup).
+The speed comes from fusing each dense layer into a single SIMD C call over
+the underlying `double` storage: forward is `mat-vec!` (W·x + bias), the input
+gradient is `mat-vec-t!` (Wᵀ·g), and the weight update is `vec-ger!` (rank-1) —
+no per-element interpreter loop. See [`examples/mlp/README.md`](examples/mlp/README.md)
+for the full story (~280× over the per-element baseline).
+
+**Automatic differentiation.** [`examples/autograd/`](examples/autograd/) is a
+small reverse-mode autograd built on those same kernels: you write only the
+forward pass and `(backward loss)` fills every gradient. `mlp-autograd.alc`
+trains the identical net with backprop derived automatically.
 
 ### 3. Embedded Redis-compatible server
 
@@ -274,6 +291,20 @@ test instead of matching a key):
 (try (risky-call)
      (fn (e) (str "caught: " (error-message e)))
      (cleanup))          ; always runs, even on success
+```
+
+An **uncaught** error prints a call backtrace (the chain of functions that led
+to it), and `(backtrace)` returns the live call stack as a list for custom
+handlers:
+
+```
+err.alc:3: Illegal division by 0
+  (run)
+  ^
+  backtrace (most recent call first):
+    divide
+    compute
+    run
 ```
 
 **`call/cc`** — escape continuations for early return / non-local exit
@@ -461,7 +492,9 @@ and [`adder-spec.md`](adder-spec.md).
 | [`examples/mario/`](examples/mario/) | Side-scrolling platformer with SDL2 (native) and Canvas/WASM (web). See the [live demo](https://aallamaa.github.io/alcove/mario.html). |
 | [`web/learn.html`](web/learn.html) | Editable Rosetta-style examples for Alcove and Adder. See the [live page](https://aallamaa.github.io/alcove/learn.html). |
 | [`docs/lisp-hyperpolyglot-alcove.html`](docs/lisp-hyperpolyglot-alcove.html) | Lisp comparison table extended with Alcove and Adder. See the [live table](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html). |
+| [`web/playground.html`](web/playground.html) | In-browser playground — editable code, shareable links, and an 8-step guided tour. See the [live page](https://aallamaa.github.io/alcove/playground.html). |
 | [`examples/mlp/`](examples/mlp/) | MLP digit classifier on UCI optdigits — full pipeline with `make data && make train`. |
+| [`examples/autograd/`](examples/autograd/) | Reverse-mode autograd in pure alcove (gradient check + an MLP trained with automatic backprop). |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
 | [`ffi-examples/`](ffi-examples/) | libm, libc strings, sleeping via usleep, a custom .so for everything FFI can call. |
 | [`examples/adder/`](examples/adder/) | Adder (`.adr`) — Python-like indentation syntax over the same Lisp forms; `make als` → `adder`. |
@@ -481,7 +514,8 @@ make jit-mono     # JIT + single-threaded refcounts (fastest)
 make als          # → adder (Adder front end)
 make install      # install alcove and adder into ~/.local/bin by default
 make parser       # debug build with -g3
-make test         # run test.alc (currently 400+ asserts) + ffi-examples
+make test         # run test.alc (1600+ asserts) + ffi-examples
+make test-all     # every build variant + equiv-sweep + jit-fuzz + web smoke
 make benchmark    # alcove vs python3 microbenchmarks (incl. mlp)
 make web          # → web/alcove-core.{js,wasm} via Emscripten
 ```

@@ -34,7 +34,9 @@
   @media (max-width: 760px) { .pane + .pane { border-left: none;
     border-top: 1px solid var(--border); } }
   .label { padding: 0.3rem 1rem; color: var(--dim); font-size: 11px;
-    border-bottom: 1px solid var(--border); background: var(--panel); }
+    border-bottom: 1px solid var(--border); background: var(--panel);
+    display: flex; justify-content: space-between; gap: 1rem; }
+  .label b { color: var(--accent); font-weight: 600; }
   #editor { flex: 1 1 auto; resize: none; border: 0; outline: none;
     background: var(--bg); color: var(--fg); padding: 1rem; font: inherit;
     tab-size: 2; white-space: pre; overflow: auto; }
@@ -49,7 +51,9 @@
   <span><strong>alcove</strong> playground · WebAssembly</span>
   <span class="sp"></span>
   <div class="toolbar">
-    <select id="examples" title="load an example"></select>
+    <button id="prev" title="previous lesson">‹ Prev</button>
+    <select id="tour" title="guided tour — pick a lesson"></select>
+    <button id="next" title="next lesson">Next ›</button>
     <button id="run" title="Ctrl/Cmd+Enter">▶ Run</button>
     <button id="share" title="copy a shareable link">↗ Share</button>
     <button id="clear" title="clear output">Clear</button>
@@ -63,7 +67,8 @@
 
 <main>
   <section class="pane">
-    <div class="label">code — edit and press <kbd>Run</kbd> (Ctrl/Cmd+Enter)</div>
+    <div class="label"><b id="lesson-title">Guided tour</b>
+      <span>edit & <kbd>Run</kbd> (Ctrl/Cmd+Enter)</span></div>
     <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
   </section>
   <section class="pane">
@@ -74,42 +79,103 @@
 <footer id="status">loading the alcove runtime…</footer>
 
 <script>
-// ---- example snippets -------------------------------------------------------
-const EXAMPLES = {
-  "Basics": `; alcove basics — numbers, strings, lists, formatting
-(prn (+ 1 2 3) " " (* 6 7))
-(prn (fmt "{} squared is {}" 9 (* 9 9)))
-(prn (map (fn (x) (* x x)) (list 1 2 3 4 5)))
+// ---- guided tour: ordered lessons; the comments are the teaching ------------
+const TOUR = [
+{ title: "1 · Values & printing", code:
+`; numbers, strings, lists, and string formatting. (prn ...) prints a line.
+(prn (+ 1 2 3) " and " (* 6 7))
+(prn (fmt "{} squared is {}" 9 (* 9 9)))          ; {} placeholders
 (prn (string-upcase (string-concat "hello, " "alcove")))
-(prn (sort (list 3 1 4 1 5 9 2 6)))`,
+(prn (sort (list 3 1 4 1 5 9 2 6)))               ; lists are first-class` },
 
-  "Recursion + backtrace": `; deep recursion is fast (TCO + JIT); and uncaught
-; errors print a call backtrace so you can see where they came from.
+{ title: "2 · Functions & recursion", code:
+`; (def name (args) body). Recursion is fast — tail calls don't grow the stack,
+; and the JIT compiles hot numeric recursion to native code.
+(def fact (n) (if (< n 2) 1 (* n (fact (- n 1)))))
+(prn "10! = " (fact 10))
+
 (def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
-(prn "fib 25 = " (fib 25))
+(prn "fib 30 = " (fib 30))                          ; ~1.3M calls, instant` },
 
-; an uncaught error prints the call chain that led to it:
-(def deep (x) (+ 0 (boom x)))   ; (boom unbound) — these calls are non-tail
-(def mid  (x) (+ 0 (deep x)))   ; so the whole chain shows in the backtrace
+{ title: "3 · Closures & higher-order fns", code:
+`; (fn (args) body) is an anonymous function; it closes over its environment.
+(def adder (n) (fn (x) (+ x n)))                    ; returns a closure
+(= add10 (adder 10))
+(prn "add10(5) = " (add10 5))
+
+; map / filter / reduce take functions as arguments
+(prn (map (fn (x) (* x x)) (list 1 2 3 4 5)))
+(prn (filter (fn (x) (is 0 (mod x 2))) (range 1 10)))
+(prn "sum 1..10 = " (reduce + 0 (range 1 11)))` },
+
+{ title: "4 · Lists, vectors & dicts", code:
+`; lists (linked), vectors (O(1) random access), and dicts (hash maps).
+(= v (vector 10 20 30))
+(vec-set! v 1 99)
+(prn "vec: " v "  v[1] = " (vec-ref v 1))
+
+(= d (hash-map))
+(assoc! d "one" 1)
+(assoc! d "two" 2)
+(prn "dict two = " (get d "two") "  keys = " (keys d))
+
+(prn "first/rest: " (first (list 'a 'b 'c)) " / " (rest (list 'a 'b 'c)))` },
+
+{ title: "5 · Errors & backtraces", code:
+`; errors carry a message; (try body handler) catches them.
+(prn (try (/ 1 0) (fn (e) (string-concat "caught: " (error-message e)))))
+
+; an UNCAUGHT error prints the call chain that led to it. (backtrace) also
+; returns the live stack on demand. These calls are non-tail, so the whole
+; chain shows:
+(def deep (x) (+ 0 (boom x)))    ; 'boom' is undefined
+(def mid  (x) (+ 0 (deep x)))
 (def top  ()  (+ 0 (mid 0)))
-(top)        ; → error + "backtrace: deep <- mid <- top"`,
+(top)                            ; → error + backtrace: deep <- mid <- top` },
 
-  "Tensors (SIMD)": `; F64 tensor ops run as one C call over the whole vector.
+{ title: "6 · Tensors & dense layers", code:
+`; F64 tensor ops run as ONE SIMD C call over the whole vector — no per-element
+; interpreter loop. This is what makes numeric / ML code fast.
 (= a (vector 1.0 2.0 3.0 4.0))
 (= b (vector 10.0 20.0 30.0 40.0))
-(prn "dot      = " (vec-dot a b))           ; 300
-(vec-axpy! a 2.0 b)                          ; a += 2*b, in place
+(prn "dot      = " (vec-dot a b))            ; 300
+(vec-axpy! a 2.0 b)                           ; a += 2*b, in place
 (prn "a += 2b  = " a)
 
-; a fused dense layer: out = W*x + bias, one call (no per-row loop)
-(= W (vector 1.0 2.0 3.0  4.0 5.0 6.0))      ; flat 2x3 matrix
-(= x (vector 1.0 1.0 1.0))
+; a whole dense layer in one fused call: out = W*x + bias
+(= W (vector 1.0 2.0 3.0  4.0 5.0 6.0))       ; flat 2x3 matrix
 (= out (vector 0.0 0.0))
-(mat-vec! out W x (vector 100.0 200.0))      ; W*x + bias
-(prn "dense    = " out)`,
+(mat-vec! out W (vector 1.0 1.0 1.0) (vector 100.0 200.0))
+(prn "dense    = " out)` },
 
-  "Mandelbrot (ASCII)": `; the escape loop is a scalar-float self-tail loop the
-; JIT compiles to native; the grid walk is interpreted.
+{ title: "7 · Autograd (auto gradients)", code:
+`; a tiny WORKING reverse-mode autograd: build a graph, walk it backward to get
+; gradients automatically. (grad lives in a 1-cell vec since struct fields are
+; immutable.) The full engine — which trains an MLP — is in examples/autograd.
+(defstruct nd val grad bw kids)
+(def leaf (x) (nd x (vec 1 0.0) nil (list)))
+(def gof (a)   (vec-ref (nd-grad a) 0))
+(def g+  (a d) (vec-set! (nd-grad a) 0 (+ (gof a) d)))
+(def mul (a b)
+  (nd (* (nd-val a) (nd-val b)) (vec 1 0.0)
+      (fn (y) (do (g+ a (* (nd-val b) (gof y)))
+                  (g+ b (* (nd-val a) (gof y))))) (list a b)))
+(def add (a b)
+  (nd (+ (nd-val a) (nd-val b)) (vec 1 0.0)
+      (fn (y) (do (g+ a (gof y)) (g+ b (gof y)))) (list a b)))
+(def backward (n)
+  (do (if (nd-bw n) ((nd-bw n) n)) (each k (nd-kids n) (backward k))))
+
+(= x (leaf 3.0)) (= y (leaf 4.0))
+(= z (add (mul x x) (mul y y)))               ; z = x^2 + y^2
+(vec-set! (nd-grad z) 0 1.0) (backward z)
+(prn "z(3,4)     = " (nd-val z))              ; 25
+(prn "dz/dx = 2x = " (gof x))                 ; 6
+(prn "dz/dy = 2y = " (gof y))` },
+
+{ title: "8 · Mandelbrot (JIT'd)", code:
+`; the escape loop is a scalar-float self-tail loop the JIT compiles to native
+; (the :f64 hints type the four float locals); the grid walk is interpreted.
 (def mb (cr :f64 ci :f64 zr :f64 zi :f64 i)
   (if (>= i 32) i
     (if (> (+ (* zr zr) (* zi zi)) 4.0) i
@@ -124,43 +190,12 @@ const EXAMPLES = {
 (def draw (w h)
   (let dx (/ 3.2 w) (let dy (/ 2.2 h)
     (for py 0 (- h 1) (prn (row 0 w -2.4 dx (+ -1.1 (* dy py)) ""))))))
-(draw 64 24)`,
-
-  "Autograd (mini)": `; a tiny WORKING reverse-mode autograd over scalars: build
-; a graph, then walk it backward to get gradients automatically. grad lives in a
-; 1-cell vec (mutable) since defstruct fields are immutable.
-(defstruct nd val grad bw kids)
-(def leaf (x) (nd x (vec 1 0.0) nil (list)))
-(def gof (a)   (vec-ref (nd-grad a) 0))
-(def g+  (a d) (vec-set! (nd-grad a) 0 (+ (gof a) d)))   ; accumulate gradient
-(def mul (a b)
-  (nd (* (nd-val a) (nd-val b)) (vec 1 0.0)
-      (fn (y) (do (g+ a (* (nd-val b) (gof y)))
-                  (g+ b (* (nd-val a) (gof y))))) (list a b)))
-(def add (a b)
-  (nd (+ (nd-val a) (nd-val b)) (vec 1 0.0)
-      (fn (y) (do (g+ a (gof y)) (g+ b (gof y)))) (list a b)))
-(def backward (n)                       ; pre-order: a node before its inputs
-  (do (if (nd-bw n) ((nd-bw n) n))
-      (each k (nd-kids n) (backward k))))
-
-(= x (leaf 3.0)) (= y (leaf 4.0))
-(= z (add (mul x x) (mul y y)))         ; z = x^2 + y^2
-(vec-set! (nd-grad z) 0 1.0)            ; seed dz/dz = 1
-(backward z)
-(prn "z(3,4)     = " (nd-val z))        ; 25
-(prn "dz/dx = 2x = " (gof x))           ; 6
-(prn "dz/dy = 2y = " (gof y))           ; 8
-(prn "the full engine (trains an MLP) is in examples/autograd in the repo.")`,
-};
+(draw 64 24)` },
+];
 
 // ---- URL share (code in the hash, base64 of UTF-8) --------------------------
-function encodeCode(s) {
-  return btoa(unescape(encodeURIComponent(s))).replace(/=+$/, "");
-}
-function decodeCode(b64) {
-  try { return decodeURIComponent(escape(atob(b64))); } catch (e) { return null; }
-}
+function encodeCode(s) { return btoa(unescape(encodeURIComponent(s))).replace(/=+$/, ""); }
+function decodeCode(b64) { try { return decodeURIComponent(escape(atob(b64))); } catch (e) { return null; } }
 function loadFromHash() {
   const m = location.hash.match(/(?:^#|&)code=([^&]+)/);
   if (m) { const d = decodeCode(m[1]); if (d) return d; }
@@ -168,33 +203,39 @@ function loadFromHash() {
 }
 
 // ---- wiring -----------------------------------------------------------------
-const editor   = document.getElementById("editor");
-const output   = document.getElementById("alcove-output");
-const statusEl = document.getElementById("status");
-const exSelect = document.getElementById("examples");
+const editor    = document.getElementById("editor");
+const output    = document.getElementById("alcove-output");
+const statusEl  = document.getElementById("status");
+const tourSel   = document.getElementById("tour");
+const lessonTtl = document.getElementById("lesson-title");
 const shareNote = document.getElementById("share-note");
 
-for (const name of Object.keys(EXAMPLES)) {
+TOUR.forEach((l, i) => {
   const o = document.createElement("option");
-  o.value = name; o.textContent = name; exSelect.appendChild(o);
+  o.value = String(i); o.textContent = l.title; tourSel.appendChild(o);
+});
+
+function loadLesson(i) {
+  i = Math.max(0, Math.min(TOUR.length - 1, i));
+  tourSel.value = String(i);
+  lessonTtl.textContent = TOUR[i].title;
+  editor.value = TOUR[i].code;
+  output.textContent = "";
 }
 
-const shared = loadFromHash();
-editor.value = shared !== null ? shared : EXAMPLES["Basics"];
-
-exSelect.addEventListener("change", () => {
-  editor.value = EXAMPLES[exSelect.value] || "";
-  output.textContent = "";
-});
+tourSel.addEventListener("change", () => loadLesson(parseInt(tourSel.value, 10)));
+document.getElementById("prev").addEventListener("click",
+  () => loadLesson(parseInt(tourSel.value, 10) - 1));
+document.getElementById("next").addEventListener("click",
+  () => loadLesson(parseInt(tourSel.value, 10) + 1));
 
 let running = false;
 async function run() {
   if (running || !window.Alcove) return;
   running = true;
   output.textContent = "";
-  try {
-    await Alcove.eval(editor.value);
-  } catch (e) {
+  try { await Alcove.eval(editor.value); }
+  catch (e) {
     output.insertAdjacentHTML("beforeend",
       '<span style="color:#f55">' + (e && e.message ? e.message : e) + "</span>\n");
   }
@@ -202,11 +243,9 @@ async function run() {
 }
 
 document.getElementById("run").addEventListener("click", run);
-document.getElementById("clear").addEventListener("click",
-  () => { output.textContent = ""; });
+document.getElementById("clear").addEventListener("click", () => { output.textContent = ""; });
 editor.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
-  // insert two spaces on Tab instead of leaving the textarea
   if (e.key === "Tab") {
     e.preventDefault();
     const s = editor.selectionStart, en = editor.selectionEnd;
@@ -223,7 +262,11 @@ document.getElementById("share").addEventListener("click", () => {
   setTimeout(() => { shareNote.textContent = ""; }, 2500);
 });
 
-// Use our own output sink so each run replaces (not appends to) the pane.
+// initial content: a shared snippet (if present) else lesson 1
+const shared = loadFromHash();
+if (shared !== null) { editor.value = shared; lessonTtl.textContent = "shared snippet"; }
+else loadLesson(0);
+
 window.addEventListener("DOMContentLoaded", () => {
   if (!window.Alcove) return;
   Alcove.setOutput((str) => {
@@ -232,7 +275,7 @@ window.addEventListener("DOMContentLoaded", () => {
   Alcove.ready.then(() => {
     statusEl.textContent =
       "ready — alcove runs entirely in your browser (WebAssembly). " +
-      "Edit and press Run.";
+      "Step through the tour with Prev/Next, or edit and Run.";
     if (shared !== null) run(); // auto-run a shared snippet
   }).catch((e) => { statusEl.textContent = "failed to load runtime: " + e.message; });
 });
