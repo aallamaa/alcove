@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>alcove playground</title>
+<style>
+  :root {
+    --bg: #1a1a1a; --panel: #202020; --fg: #e6e6e6; --dim: #888;
+    --accent: #7cc; --ok: #5a5; --err: #f55; --border: #333;
+  }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  body { display: flex; flex-direction: column; min-height: 100vh; }
+  header { padding: 0.5rem 1rem; border-bottom: 1px solid var(--border);
+    color: var(--dim); font-size: 12px; flex: 0 0 auto; display: flex;
+    flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
+  header strong { color: var(--accent); }
+  header a { color: var(--accent); text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+  header .sp { flex: 1 1 auto; }
+  .toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  button, select {
+    background: #2a2a2a; color: var(--fg); border: 1px solid #444;
+    border-radius: 3px; padding: 0.25rem 0.7rem; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button#run { background: #1f3a3a; border-color: var(--accent); color: var(--accent); }
+  #share-note { color: var(--ok); font-size: 12px; }
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+  @media (max-width: 760px) { main { flex-direction: column; } }
+  .pane { flex: 1 1 50%; display: flex; flex-direction: column; min-width: 0;
+    min-height: 0; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  @media (max-width: 760px) { .pane + .pane { border-left: none;
+    border-top: 1px solid var(--border); } }
+  .label { padding: 0.3rem 1rem; color: var(--dim); font-size: 11px;
+    border-bottom: 1px solid var(--border); background: var(--panel); }
+  #editor { flex: 1 1 auto; resize: none; border: 0; outline: none;
+    background: var(--bg); color: var(--fg); padding: 1rem; font: inherit;
+    tab-size: 2; white-space: pre; overflow: auto; }
+  #alcove-output { flex: 1 1 auto; margin: 0; padding: 1rem; overflow: auto;
+    white-space: pre-wrap; word-break: break-word; }
+  footer { padding: 0.3rem 1rem; border-top: 1px solid var(--border);
+    color: var(--dim); font-size: 11px; flex: 0 0 auto; }
+</style>
+</head>
+<body>
+<header>
+  <span><strong>alcove</strong> playground · WebAssembly</span>
+  <span class="sp"></span>
+  <div class="toolbar">
+    <select id="examples" title="load an example"></select>
+    <button id="run" title="Ctrl/Cmd+Enter">▶ Run</button>
+    <button id="share" title="copy a shareable link">↗ Share</button>
+    <button id="clear" title="clear output">Clear</button>
+    <span id="share-note"></span>
+  </div>
+  <span class="sp"></span>
+  <span><a href="index.html">REPL</a> · <a href="learn.html">learn</a> ·
+    <a href="mandelbrot.html">mandelbrot</a> ·
+    <a href="https://github.com/aallamaa/alcove">source</a></span>
+</header>
+
+<main>
+  <section class="pane">
+    <div class="label">code — edit and press <kbd>Run</kbd> (Ctrl/Cmd+Enter)</div>
+    <textarea id="editor" spellcheck="false" autocomplete="off"></textarea>
+  </section>
+  <section class="pane">
+    <div class="label">output</div>
+    <pre id="alcove-output"></pre>
+  </section>
+</main>
+<footer id="status">loading the alcove runtime…</footer>
+
+<script>
+// ---- example snippets -------------------------------------------------------
+const EXAMPLES = {
+  "Basics": `; alcove basics — numbers, strings, lists, formatting
+(prn (+ 1 2 3) " " (* 6 7))
+(prn (fmt "{} squared is {}" 9 (* 9 9)))
+(prn (map (fn (x) (* x x)) (list 1 2 3 4 5)))
+(prn (string-upcase (string-concat "hello, " "alcove")))
+(prn (sort (list 3 1 4 1 5 9 2 6)))`,
+
+  "Recursion + backtrace": `; deep recursion is fast (TCO + JIT); and uncaught
+; errors print a call backtrace so you can see where they came from.
+(def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+(prn "fib 25 = " (fib 25))
+
+; an uncaught error prints the call chain that led to it:
+(def deep (x) (+ 0 (boom x)))   ; (boom unbound) — these calls are non-tail
+(def mid  (x) (+ 0 (deep x)))   ; so the whole chain shows in the backtrace
+(def top  ()  (+ 0 (mid 0)))
+(top)        ; → error + "backtrace: deep <- mid <- top"`,
+
+  "Tensors (SIMD)": `; F64 tensor ops run as one C call over the whole vector.
+(= a (vector 1.0 2.0 3.0 4.0))
+(= b (vector 10.0 20.0 30.0 40.0))
+(prn "dot      = " (vec-dot a b))           ; 300
+(vec-axpy! a 2.0 b)                          ; a += 2*b, in place
+(prn "a += 2b  = " a)
+
+; a fused dense layer: out = W*x + bias, one call (no per-row loop)
+(= W (vector 1.0 2.0 3.0  4.0 5.0 6.0))      ; flat 2x3 matrix
+(= x (vector 1.0 1.0 1.0))
+(= out (vector 0.0 0.0))
+(mat-vec! out W x (vector 100.0 200.0))      ; W*x + bias
+(prn "dense    = " out)`,
+
+  "Mandelbrot (ASCII)": `; the escape loop is a scalar-float self-tail loop the
+; JIT compiles to native; the grid walk is interpreted.
+(def mb (cr :f64 ci :f64 zr :f64 zi :f64 i)
+  (if (>= i 32) i
+    (if (> (+ (* zr zr) (* zi zi)) 4.0) i
+      (mb cr ci (+ (- (* zr zr) (* zi zi)) cr)
+                (+ (* 2.0 (* zr zi)) ci) (+ i 1)))))
+(= ramp (list " " "." ":" "-" "=" "+" "*" "#" "%" "@"))
+(def shade (c) (if (>= c 32) "@" (nth (int (/ c 4)) ramp)))
+(def row (px w cx0 dx cy acc)
+  (if (>= px w) acc
+    (row (+ px 1) w cx0 dx cy
+      (string-concat acc (shade (mb (+ cx0 (* dx px)) cy 0.0 0.0 0))))))
+(def draw (w h)
+  (let dx (/ 3.2 w) (let dy (/ 2.2 h)
+    (for py 0 (- h 1) (prn (row 0 w -2.4 dx (+ -1.1 (* dy py)) ""))))))
+(draw 64 24)`,
+
+  "Autograd (mini)": `; a tiny WORKING reverse-mode autograd over scalars: build
+; a graph, then walk it backward to get gradients automatically. grad lives in a
+; 1-cell vec (mutable) since defstruct fields are immutable.
+(defstruct nd val grad bw kids)
+(def leaf (x) (nd x (vec 1 0.0) nil (list)))
+(def gof (a)   (vec-ref (nd-grad a) 0))
+(def g+  (a d) (vec-set! (nd-grad a) 0 (+ (gof a) d)))   ; accumulate gradient
+(def mul (a b)
+  (nd (* (nd-val a) (nd-val b)) (vec 1 0.0)
+      (fn (y) (do (g+ a (* (nd-val b) (gof y)))
+                  (g+ b (* (nd-val a) (gof y))))) (list a b)))
+(def add (a b)
+  (nd (+ (nd-val a) (nd-val b)) (vec 1 0.0)
+      (fn (y) (do (g+ a (gof y)) (g+ b (gof y)))) (list a b)))
+(def backward (n)                       ; pre-order: a node before its inputs
+  (do (if (nd-bw n) ((nd-bw n) n))
+      (each k (nd-kids n) (backward k))))
+
+(= x (leaf 3.0)) (= y (leaf 4.0))
+(= z (add (mul x x) (mul y y)))         ; z = x^2 + y^2
+(vec-set! (nd-grad z) 0 1.0)            ; seed dz/dz = 1
+(backward z)
+(prn "z(3,4)     = " (nd-val z))        ; 25
+(prn "dz/dx = 2x = " (gof x))           ; 6
+(prn "dz/dy = 2y = " (gof y))           ; 8
+(prn "the full engine (trains an MLP) is in examples/autograd in the repo.")`,
+};
+
+// ---- URL share (code in the hash, base64 of UTF-8) --------------------------
+function encodeCode(s) {
+  return btoa(unescape(encodeURIComponent(s))).replace(/=+$/, "");
+}
+function decodeCode(b64) {
+  try { return decodeURIComponent(escape(atob(b64))); } catch (e) { return null; }
+}
+function loadFromHash() {
+  const m = location.hash.match(/(?:^#|&)code=([^&]+)/);
+  if (m) { const d = decodeCode(m[1]); if (d) return d; }
+  return null;
+}
+
+// ---- wiring -----------------------------------------------------------------
+const editor   = document.getElementById("editor");
+const output   = document.getElementById("alcove-output");
+const statusEl = document.getElementById("status");
+const exSelect = document.getElementById("examples");
+const shareNote = document.getElementById("share-note");
+
+for (const name of Object.keys(EXAMPLES)) {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name; exSelect.appendChild(o);
+}
+
+const shared = loadFromHash();
+editor.value = shared !== null ? shared : EXAMPLES["Basics"];
+
+exSelect.addEventListener("change", () => {
+  editor.value = EXAMPLES[exSelect.value] || "";
+  output.textContent = "";
+});
+
+let running = false;
+async function run() {
+  if (running || !window.Alcove) return;
+  running = true;
+  output.textContent = "";
+  try {
+    await Alcove.eval(editor.value);
+  } catch (e) {
+    output.insertAdjacentHTML("beforeend",
+      '<span style="color:#f55">' + (e && e.message ? e.message : e) + "</span>\n");
+  }
+  running = false;
+}
+
+document.getElementById("run").addEventListener("click", run);
+document.getElementById("clear").addEventListener("click",
+  () => { output.textContent = ""; });
+editor.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  // insert two spaces on Tab instead of leaving the textarea
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const s = editor.selectionStart, en = editor.selectionEnd;
+    editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(en);
+    editor.selectionStart = editor.selectionEnd = s + 2;
+  }
+});
+document.getElementById("share").addEventListener("click", () => {
+  const url = location.origin + location.pathname + "#code=" + encodeCode(editor.value);
+  history.replaceState(null, "", url);
+  (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
+    .then(() => { shareNote.textContent = "link copied!"; })
+    .catch(() => { shareNote.textContent = "link in address bar"; });
+  setTimeout(() => { shareNote.textContent = ""; }, 2500);
+});
+
+// Use our own output sink so each run replaces (not appends to) the pane.
+window.addEventListener("DOMContentLoaded", () => {
+  if (!window.Alcove) return;
+  Alcove.setOutput((str) => {
+    output.insertAdjacentHTML("beforeend", Alcove.ansiToHtml(str) + "\n");
+  });
+  Alcove.ready.then(() => {
+    statusEl.textContent =
+      "ready — alcove runs entirely in your browser (WebAssembly). " +
+      "Edit and press Run.";
+    if (shared !== null) run(); // auto-run a shared snippet
+  }).catch((e) => { statusEl.textContent = "failed to load runtime: " + e.message; });
+});
+</script>
+<script src="alcove.js"></script>
+</body>
+</html>

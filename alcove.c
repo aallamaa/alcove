@@ -11978,6 +11978,10 @@ __attribute__((used)) int alcove_web_eval(const char *src) {
       if (strf != NIL_EXP) {
         print_node(strf);
         printf("\n");
+        /* an uncaught error: show the captured call backtrace (the web path has
+           no source-file caret, but the call chain is the useful part). */
+        if (iserror(strf))
+          render_backtrace(stdout);
       }
       unrefexp(strf);
     }
