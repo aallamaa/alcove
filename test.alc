@@ -2879,6 +2879,18 @@
 (assert "tail-call computed list arg"
         (iso (tc-caller) (list (list 1 2) (list 3 4)))                 t)
 
+;; ---------- backtrace ----------
+;; non-tail chain bt-a → bt-b → bt-c: the three innermost frames are bt-c, bt-b,
+;; bt-a in that order (outer harness frames, if any, follow — so test the prefix,
+;; not the exact depth).
+(def bt-c () (backtrace))
+(def bt-b () (car (cons (bt-c) 0)))   ;; (bt-c) is NOT a tail call
+(def bt-a () (car (cons (bt-b) 0)))
+(= _bt (bt-a))
+(assert "backtrace innermost first"  (nth _bt 0)                      "bt-c")
+(assert "backtrace 2nd frame"        (nth _bt 1)                      "bt-b")
+(assert "backtrace 3rd frame"        (nth _bt 2)                      "bt-a")
+
 ;; ---------- case ----------
 (assert "case match first"            (case 1 1 "one" 2 "two")        "one")
 (assert "case match second"           (case 2 1 "one" 2 "two")        "two")

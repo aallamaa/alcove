@@ -146,6 +146,50 @@ struct env_t *g_global_env = NULL;
    strictly call-site reentrant state. */
 static ALCOVE_TLS int in_tail_position = 0;
 
+/* ---- Call backtrace (for error stack traces) ------------------------------
+   A lightweight dynamic call stack of function NAMES, pushed/popped at the two
+   call dispatchers (invoke for the AST path, vm_invoke_values for the VM path).
+   The env chain can't serve this — it's the LEXICAL parent (a top-level fn
+   parents straight to global), not the dynamic caller. When an error is first
+   created, error() snapshots the live stack into g_error_bt; it is rendered at
+   top level if the error goes uncaught, and cleared when a handler catches it.
+   Tail calls reuse a frame (no push), so the trace collapses tail recursion —
+   standard for a TCO language. */
+#define ALC_BT_MAX 128
+static ALCOVE_TLS const char *g_callstack[ALC_BT_MAX];
+static ALCOVE_TLS int g_calldepth = 0;       /* may exceed ALC_BT_MAX; only the
+                                                first ALC_BT_MAX names are kept */
+static ALCOVE_TLS const char *g_error_bt[ALC_BT_MAX];
+static ALCOVE_TLS int g_error_bt_n = 0;      /* >0 once an error snapshot is live */
+static ALCOVE_TLS int g_error_bt_more = 0;   /* frames beyond ALC_BT_MAX, elided */
+static inline void bt_push(const char *name) {
+  if (g_calldepth >= 0 && g_calldepth < ALC_BT_MAX)
+    g_callstack[g_calldepth] = name ? name : "<anonymous>";
+  g_calldepth++;
+}
+static inline void bt_pop(void) {
+  if (g_calldepth > 0)
+    g_calldepth--;
+}
+/* Snapshot the live call stack into g_error_bt (called by error() at the error
+   site, where the depth is deepest). Only captures once per error episode — the
+   first error() wins; cleared at top level / on catch so the next is fresh. */
+static inline void bt_capture(void) {
+  if (g_error_bt_n != 0)
+    return;
+  int n = g_calldepth < ALC_BT_MAX ? g_calldepth : ALC_BT_MAX;
+  for (int i = 0; i < n; i++)
+    g_error_bt[i] = g_callstack[i];
+  g_error_bt_n = n;
+  g_error_bt_more = g_calldepth - n;
+  if (n == 0)
+    g_error_bt_n = -1; /* sentinel: captured-but-empty (don't re-capture) */
+}
+static inline void bt_clear(void) {
+  g_error_bt_n = 0;
+  g_error_bt_more = 0;
+}
+
 /* ---- RESP user-callback read-only guard -----------------------------------
    `alcove -r --threads N` (N>1) runs N reactor pthreads that serve RESP
    concurrently. User commands (redis-defcmd) run their lambda on a reactor
@@ -492,6 +536,7 @@ lispProc lispProcList[] = {
     LISPCMD_APP("jit?", jitpcmd, doc_jitp),
     LISPCMD_APP("inline?", inlinepcmd, doc_inlinep),
     LISPCMD_APP("exp-flags", expflagscmd, doc_expflags),
+    LISPCMD("backtrace", backtracecmd, doc_backtrace),
     /* I/O */
     LISPCMD("pr", prcmd, doc_pr),
     LISPCMD("print", prcmd, doc_pr),
@@ -742,6 +787,7 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
   }
   va_end(ap);
   ret->next = refexp(id);
+  bt_capture(); /* snapshot the call stack at the error site for a backtrace */
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
@@ -1843,6 +1889,24 @@ static void render_form_caret(FILE *out, int gen_line, int gen_col) {
   else
     render_error_caret(out, g_reader_srctext, g_reader_srctext_len, gen_line,
                        gen_col);
+}
+
+/* Print the call backtrace captured at the error site (most recent call first),
+   then clear it. Frame 0 is the outermost call, frame n-1 the innermost. Does
+   nothing if no frames were on the stack (a top-level error). */
+static void render_backtrace(FILE *out) {
+  int n = g_error_bt_n;
+  if (n <= 0) { /* 0 = none captured, -1 = captured-but-empty */
+    bt_clear();
+    return;
+  }
+  fprintf(out, "  backtrace (most recent call first):\n");
+  for (int i = n - 1; i >= 0; i--)
+    fprintf(out, "    %s\n", g_error_bt[i] ? g_error_bt[i] : "<anonymous>");
+  if (g_error_bt_more > 0)
+    fprintf(out, "    … (%d more frame%s)\n", g_error_bt_more,
+            g_error_bt_more == 1 ? "" : "s");
+  bt_clear();
 }
 
 // Syntactic sugar causes cancer of the semicolon. — Alan Perlis
@@ -8141,6 +8205,7 @@ static exp_t *vm_unwind_handlers(exp_t *v, int handler_base) {
         unrefexp(v);
         v = handler;
       } else {
+        bt_clear(); /* error handled here — drop its captured backtrace */
         exp_t *res = alc_apply1(handler, v, he);
         unrefexp(handler);
         unrefexp(v);
@@ -9035,11 +9100,16 @@ l_tail_call: {
   while (i < n)
     unrefexp(args_buf[i++]);
 
-  /* Swap in new_fn and re-enter. */
+  /* Swap in new_fn and re-enter. The TCO reuses this frame, so update its
+     backtrace name to the function we're tail-calling into (a tail chain shows
+     the function actually running, not the one that started the chain). */
   if (fn_owned)
     unrefexp(fn);
   fn = new_fn;
   fn_owned = 1;
+  if (g_calldepth >= 1 && g_calldepth <= ALC_BT_MAX)
+    g_callstack[g_calldepth - 1] =
+        new_fn->meta ? (const char *)new_fn->meta : "<anonymous>";
   goto tail_reentry;
 }
 
@@ -9535,6 +9605,7 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
   }
 
   exp_t *ret;
+  bt_push(fn->meta ? (const char *)fn->meta : NULL); /* backtrace frame */
   if (fn->flags & FLAG_COMPILED) {
 #ifdef ALCOVE_JIT
     if (fn->bc->jit) {
@@ -9556,6 +9627,7 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
       body = body->next;
     }
   }
+  bt_pop();
   destroy_env(newenv);
   return ret;
 }
@@ -9581,7 +9653,19 @@ static exp_t *multi_pick(exp_t *clauses, int n) {
   return NULL;
 }
 
+static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env);
+
+/* Thin wrapper: push one backtrace frame around the whole AST invocation, so the
+   many internal return paths need no per-exit bookkeeping. (Cross-function tail
+   calls inside invoke_body reuse the frame and keep this name — a TCO collapse.) */
 exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
+  bt_push(fn->meta ? (const char *)fn->meta : NULL);
+  exp_t *r = invoke_body(e, fn, env);
+  bt_pop();
+  return r;
+}
+
+static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env) {
   /* e->content = fn name, e->next = args list,
      fn->content = params list, fn->next->content = body list.
 
@@ -9604,7 +9688,7 @@ exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
       unrefexp(e);
       return er;
     }
-    return invoke(e, chosen, env); /* consumes e; refexps chosen internally */
+    return invoke_body(e, chosen, env); /* consumes e; same backtrace frame */
   }
 
   /* Nested invokes inherit but don't export tail-position: the CALLEE
@@ -10995,8 +11079,10 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     if (res) {
       printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
       print_node(res);
-      if (iserror(res)) /* show the offending line + caret under the message */
+      if (iserror(res)) { /* show the offending line + caret under the message */
         render_form_caret(stdout, g_form_line, g_form_col);
+        render_backtrace(stdout);
+      }
     } else
       printf("nil");
     printf("\n\n");
@@ -11012,6 +11098,7 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
       annotate_error_loc(res, g_reader_src, display_line(g_form_line));
     fprintf(stderr, "%s\n", (const char *)res->ptr);
     render_form_caret(stderr, g_form_line, g_form_col);
+    render_backtrace(stderr);
     g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
   }
   if (res)

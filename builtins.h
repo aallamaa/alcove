@@ -95,6 +95,8 @@ exp_t *jitpcmd(exp_t *e, env_t *env);
 exp_t *inlinepcmd(exp_t *e, env_t *env);
 exp_t *expflagscmd(exp_t *e, env_t *env);
 extern const char doc_compiledp[], doc_jitp[], doc_inlinep[], doc_expflags[];
+extern const char doc_backtrace[];
+exp_t *backtracecmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

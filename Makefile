@@ -365,6 +365,11 @@ test-all:
 	   && echo "$$ce" | grep -qF '(+ 2 undefined_caret_zz)' && echo "$$ce" | grep -qE '^[[:space:]]*\^'; then \
 	  echo "  OK — file error shows src:line + caret, -e shows source line + caret"; \
 	else echo "  CARET MISSING:"; echo "$$cf" | sed 's/^/    /'; echo "    --"; echo "$$ce" | sed 's/^/    /'; ok=0; fi; \
+	printf '\n=== error backtrace (call chain on uncaught error) ===\n'; \
+	bt=$$(printf '(def c (x) (/ x 0))\n(def b (x) (+ 1 (c x)))\n(def a () (+ 1 (b 5)))\n(a)\n' | ./alcove --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	if echo "$$bt" | grep -qi 'backtrace' && echo "$$bt" | grep -qE '^[[:space:]]+c$$' && echo "$$bt" | grep -qE '^[[:space:]]+b$$' && echo "$$bt" | grep -qE '^[[:space:]]+a$$'; then \
+	  echo "  OK — uncaught error prints the c<-b<-a call chain"; \
+	else echo "  BACKTRACE WRONG:"; echo "$$bt" | sed 's/^/    /'; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n=== adder error caret (maps generated line back to Adder source) ===\n'; \
 	ac=$$(printf '= x 1\n\n+ x undefined_adr_zz\n' | ./adder --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \

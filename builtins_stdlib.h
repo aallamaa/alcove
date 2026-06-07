@@ -815,6 +815,27 @@ exp_t *expflagscmd(exp_t *e, env_t *env) {
   return MAKE_FIX(f);
 }
 
+/* (backtrace) — the live call stack as a list of function-name strings, the
+   innermost (most recent) call first. The same stack error reporting uses, made
+   programmatic so a user error handler can log where it was called from. Empty
+   at top level; tail calls collapse (TCO). */
+const char doc_backtrace[] =
+    "(backtrace) — current call stack as a list of function-name strings, "
+    "innermost call first (empty at top level; tail calls collapse).";
+exp_t *backtracecmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  exp_t *head = NULL;
+  int n = g_calldepth < ALC_BT_MAX ? g_calldepth : ALC_BT_MAX;
+  for (int i = 0; i < n; i++) { /* outermost..innermost; prepend → innermost-first */
+    const char *nm = g_callstack[i] ? g_callstack[i] : "<anonymous>";
+    exp_t *node = make_node(make_string((char *)nm, (int)strlen(nm)));
+    node->next = head;
+    head = node;
+  }
+  return head ? head : NIL_EXP;
+}
+
 /* (exit) / (exit code) — terminate the process. */
 const char doc_exit[] = "(exit) or (exit code) — terminate the process. "
                         "Default exit code is 0. Alias: quit.";
@@ -1683,6 +1704,7 @@ exp_t *trycmd(exp_t *e, env_t *env) {
       unrefexp(result); /* handler eval itself failed — surface that error */
       ret = handler;
     } else {
+      bt_clear(); /* error is being handled — drop its captured backtrace */
       ret = alc_apply1(handler, result, env);
       unrefexp(handler);
       unrefexp(result);
