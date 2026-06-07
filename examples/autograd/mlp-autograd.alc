@@ -1,0 +1,83 @@
+;;; mlp-autograd.alc — the SAME 64-32-10 digit classifier as examples/mlp, but
+;;; the backward pass is fully AUTOMATIC: you write only the forward expression
+;;; and (backward loss) computes every gradient. Compare examples/mlp/mlp.alc,
+;;; which hand-codes the backprop with mat-vec-t! / vec-ger!. Autograd trades
+;;; some speed (it rebuilds the graph each step) for not writing gradients at all.
+;;;
+;;; Run from the repo root:  ./alcove --noload examples/autograd/mlp-autograd.alc
+
+(load "examples/autograd/autograd.alc")
+
+(= raw (read-bytes "examples/mlp/digits.bin"))
+(if (no raw)
+    (do (prn "error: examples/mlp/digits.bin not found "
+             "(run `make -C examples/mlp data` first)")
+        (exit 1)))
+
+(def u32-at (b off)
+  (+ (blob-ref b off) (* 256 (blob-ref b (+ off 1)))
+     (* 65536 (blob-ref b (+ off 2))) (* 16777216 (blob-ref b (+ off 3)))))
+(= N-TRAIN (u32-at raw 4)) (= N-TEST (u32-at raw 8))
+(= N-FEAT (u32-at raw 12)) (= N-CLS (u32-at raw 16))
+
+(def slice->fvec (b off len)
+  (let v (vec len 0.0)
+    (do (for i 0 (- len 1) (vec-set! v i (/ (blob-ref b (+ off i)) 16.0))) v)))
+(def unpack-X (b off n d)
+  (let xs (vec n 0)
+    (do (for k 0 (- n 1) (vec-set! xs k (slice->fvec b (+ off (* k d)) d))) xs)))
+(def unpack-y (b off n)
+  (let ys (vec n 0) (do (for k 0 (- n 1) (vec-set! ys k (blob-ref b (+ off k)))) ys)))
+
+(= tX-off 20)
+(= ty-off (+ tX-off (* N-TRAIN N-FEAT)))
+(= eX-off (+ ty-off N-TRAIN))
+(= ey-off (+ eX-off (* N-TEST N-FEAT)))
+(= train-X (unpack-X raw tX-off N-TRAIN N-FEAT))
+(= train-y (unpack-y raw ty-off N-TRAIN))
+(= test-X  (unpack-X raw eX-off N-TEST  N-FEAT))
+(= test-y  (unpack-y raw ey-off N-TEST))
+
+(= HIDDEN 32) (= LR 0.05) (= EPOCHS 3)
+
+(def rnd () (- (/ (random 1000000) 1000000.0) 0.5))
+(def randmat (rows cols scale)
+  (let m (vec (* rows cols) 0.0)
+    (do (for i 0 (- (* rows cols) 1) (vec-set! m i (* (rnd) (* 2.0 scale)))) m)))
+
+;; parameters as autograd leaves (flat row-major weight matrices)
+(= W1 (leaf (randmat HIDDEN N-FEAT 0.125)))
+(= b1 (leaf (vec HIDDEN 0.0)))
+(= W2 (leaf (randmat N-CLS HIDDEN 0.177)))
+(= b2 (leaf (vec N-CLS 0.0)))
+
+;; forward graph: logits = W2·relu(W1·x + b1) + b2   — that's the WHOLE model.
+(def logits-of (xvec)
+  (t+ (t-matvec W2 (t-relu (t+ (t-matvec W1 (leaf xvec)) b1))) b2))
+
+(def predict (xvec) (vec-argmax (tensor-data (logits-of xvec))))
+
+(def train-step (xvec target)
+  (do
+    (zero-grad! W1) (zero-grad! b1) (zero-grad! W2) (zero-grad! b2)
+    (backward (t-softmax-ce (logits-of xvec) target))   ; ← automatic gradients
+    (sgd! W1 LR) (sgd! b1 LR) (sgd! W2 LR) (sgd! b2 LR)))
+
+(def accuracy (X y)
+  (let correct 0
+    (do (for k 0 (- (vec-len X) 1)
+          (if (is (predict (vec-ref X k)) (vec-ref y k))
+              (= correct (+ correct 1))))
+        correct)))
+
+(prn "MLP " N-FEAT "-" HIDDEN "-" N-CLS " on UCI optdigits (AUTOGRAD)")
+(prn "train=" N-TRAIN " test=" N-TEST " lr=" LR " epochs=" EPOCHS)
+(prn "")
+(= t0 (time))
+(for epoch 0 (- EPOCHS 1)
+  (do
+    (for k 0 (- N-TRAIN 1) (train-step (vec-ref train-X k) (vec-ref train-y k)))
+    (prn "epoch " epoch ":  test acc " (accuracy test-X test-y) "/" N-TEST
+         "  (" (/ (- (time) t0) 1000) " ms cumulative)")))
+(prn "")
+(prn "final test acc: " (accuracy test-X test-y) "/" N-TEST)

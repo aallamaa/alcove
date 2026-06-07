@@ -1,0 +1,131 @@
+;;; autograd.alc — reverse-mode automatic differentiation for alcove, built on
+;;; the F64 tensor ops + the fused dense-layer kernels (mat-vec! / mat-vec-t! /
+;;; vec-ger!). You write the forward pass; (backward loss) fills every leaf's
+;;; gradient by walking the computation graph in reverse.
+;;;
+;;; A `tensor` wraps:
+;;;   data : an F64 vec (the values — a vector, or a flat row-major matrix)
+;;;   grad : an F64 vec of the same length (accumulated during backward)
+;;;   bw   : a thunk (fn (self) ...) that pushes self's grad into its inputs'
+;;;          grads, or nil for a leaf
+;;;   prev : the list of input tensors this one was computed from
+;;;   id   : a unique int (identity key for the visited set; structs `iso` by
+;;;          value, so we can't key the set on the tensor itself)
+;;;
+;;; grad is mutated IN PLACE (vec-add!/vec-fill!) — struct fields stay immutable,
+;;; only the vec contents change, so no struct mutation is needed.
+
+(defstruct tensor data grad bw prev id)
+
+(= *tn-counter* 0)
+(def mktensor (data bw prev)
+  (do (= *tn-counter* (+ *tn-counter* 1))
+      (tensor data (vec (vec-len data) 0.0) bw prev *tn-counter*)))
+
+;; A leaf: a parameter or an input. No backward, no parents.
+(def leaf (data) (mktensor data nil (list)))
+
+;; ---- helpers -------------------------------------------------------------
+(def zeros (n) (vec n 0.0))
+(def tn-len (nd) (vec-len (tensor-data nd)))
+
+;; ---- ops (each returns a new tensor and records how to back-propagate) ----
+
+;; elementwise add of two equal-length tensors:  y = a + b
+(def t+ (a b)
+  (let yd (zeros (tn-len a))
+    (do
+      (vec-copy! yd (tensor-data a))
+      (vec-add! yd (tensor-data b))
+      (mktensor yd
+                (fn (y) (do (vec-add! (tensor-grad a) (tensor-grad y))
+                            (vec-add! (tensor-grad b) (tensor-grad y))))
+                (list a b)))))
+
+;; dense layer:  y = W·x   (W.data is a flat row-major m×n matrix, x length n,
+;; y length m).  dW += outer(dy, x);  dx += Wᵀ·dy.
+(def t-matvec (W x)
+  (let n (tn-len x)
+    (let m (/ (tn-len W) n)
+      (let yd (zeros m)
+        (do
+          (mat-vec! yd (tensor-data W) (tensor-data x))
+          (mktensor yd
+                    (fn (y)
+                      (do
+                        ;; dW += dy ⊗ x
+                        (vec-ger! (tensor-grad W) 1.0 (tensor-grad y) (tensor-data x))
+                        ;; dx += Wᵀ·dy   (into a temp, then accumulate)
+                        (let tmp (zeros n)
+                          (do (mat-vec-t! tmp (tensor-data W) (tensor-grad y))
+                              (vec-add! (tensor-grad x) tmp)))))
+                    (list W x)))))))
+
+;; ReLU, elementwise:  y = max(0, x);  dx += dy where x>0.
+(def t-relu (x)
+  (let yd (zeros (tn-len x))
+    (do
+      (vec-copy! yd (tensor-data x))
+      (vec-relu! yd)
+      (mktensor yd
+                (fn (y)
+                  (let xd (tensor-data x)
+                    (let xg (tensor-grad x)
+                      (let yg (tensor-grad y)
+                        (for i 0 (- (vec-len xd) 1)
+                          (if (> (vec-ref xd i) 0.0)
+                              (vec-set! xg i (+ (vec-ref xg i) (vec-ref yg i)))))))))
+                (list x)))))
+
+;; softmax + cross-entropy in one numerically-stable op. `logits` is a tensor of
+;; length C; `target` is the correct class index. Returns a scalar-loss tensor.
+;; d(logits) += (softmax(logits) - onehot(target)) * d(loss).
+(def t-softmax-ce (logits target)
+  (let z (tensor-data logits)
+    (let c (vec-len z)
+      (let probs (zeros c)
+        (do
+          (vec-copy! probs z)
+          (vec-softmax! probs)               ; stable softmax in place
+          (let l (- 0.0 (log (vec-ref probs target)))
+            (mktensor (vec 1 l)
+                      (fn (y)
+                        (let g (vec-ref (tensor-grad y) 0)
+                          (let lg (tensor-grad logits)
+                            (for k 0 (- c 1)
+                              (let d (* g (- (vec-ref probs k)
+                                             (if (is k target) 1.0 0.0)))
+                                (vec-set! lg k (+ (vec-ref lg k) d)))))))
+                      (list logits))))))))
+
+;; ---- the backward pass ---------------------------------------------------
+;; Post-order DFS collects the graph into `acc` (inputs before the node that
+;; uses them); iterating acc in REVERSE gives a valid reverse-topological order
+;; (every node before its inputs), so each node's grad is complete before it
+;; propagates. `seen` dedups shared subgraphs by tensor id.
+(def topo-build (nd seen acc)
+  (if (set-has? seen (tensor-id nd))
+      nil
+      (do (set-add! seen (tensor-id nd))
+          (each p (tensor-prev nd) (topo-build p seen acc))
+          (vec-push! acc nd))))
+
+(def backward (loss)
+  (do
+    (vec-fill! (tensor-grad loss) 1.0)        ; seed dL/dL = 1
+    (let seen (hash-set)
+      (let acc (vec 0 nil)
+        (do
+          (topo-build loss seen acc)
+          (let i (- (vec-len acc) 1)
+            (while (>= i 0)
+              (do
+                (let nd (vec-ref acc i)
+                  (if (tensor-bw nd) ((tensor-bw nd) nd)))
+                (= i (- i 1))))))))) )
+
+;; ---- parameter helpers ---------------------------------------------------
+;; reset a parameter's accumulated gradient before the next step
+(def zero-grad! (p) (vec-fill! (tensor-grad p) 0.0))
+;; SGD: data -= lr * grad
+(def sgd! (p lr) (vec-axpy! (tensor-data p) (- 0.0 lr) (tensor-grad p)))

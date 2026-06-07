@@ -1,0 +1,78 @@
+;;; test-autograd.alc — correctness gate for the autograd engine.
+;;; Compares every op's analytic gradient (from `backward`) against a finite-
+;;; difference numeric gradient. If reverse-mode and central-difference agree to
+;;; ~1e-3 on random inputs, the backward rules are right. Self-gating: prints
+;;; "AUTOGRAD: OK" only if all checks pass (non-zero exit otherwise).
+;;;
+;;; Run from the repo root:  ./alcove --noload examples/autograd/test-autograd.alc
+
+(load "examples/autograd/autograd.alc")
+
+(= _pass 0) (= _fail 0)
+
+;; central-difference numeric gradient of (fwd)→scalar wrt element i of p.data
+(def numgrad (p i fwd eps)
+  (let orig (vec-ref (tensor-data p) i)
+    (do
+      (vec-set! (tensor-data p) i (+ orig eps))
+      (let lp (vec-ref (tensor-data (fwd)) 0)
+        (do
+          (vec-set! (tensor-data p) i (- orig eps))
+          (let lm (vec-ref (tensor-data (fwd)) 0)
+            (do
+              (vec-set! (tensor-data p) i orig)
+              (/ (- lp lm) (* 2.0 eps)))))))))
+
+;; check analytic grad of param p (already filled by backward) vs numeric
+(def gradcheck (label p fwd)
+  (for i 0 (- (vec-len (tensor-data p)) 1)
+    (let a  (vec-ref (tensor-grad p) i)
+      (let nu (numgrad p i fwd 0.00001)
+        (if (> (abs (- a nu)) 0.001)
+            (do (= _fail (+ _fail 1))
+                (prn "  FAIL " label "[" i "] analytic=" a " numeric=" nu))
+            (= _pass (+ _pass 1)))))))
+
+(def rnd () (- (/ (random 1000000) 1000000.0) 0.5))
+(def randvec (n) (let v (vec n 0.0) (do (for i 0 (- n 1) (vec-set! v i (rnd))) v)))
+
+;; ── a 2-layer net: x(4) → W1(3x4)+b1 → relu → W2(2x3)+b2 → softmax-ce ──
+(= W1 (leaf (randvec 12))) (= b1 (leaf (randvec 3)))
+(= W2 (leaf (randvec 6)))  (= b2 (leaf (randvec 2)))
+(= xin (leaf (randvec 4)))
+(= tgt 1)
+
+(def net ()
+  (t-softmax-ce
+    (t+ (t-matvec W2 (t-relu (t+ (t-matvec W1 xin) b1))) b2)
+    tgt))
+
+;; analytic grads
+(zero-grad! W1) (zero-grad! b1) (zero-grad! W2) (zero-grad! b2) (zero-grad! xin)
+(= loss (net))
+(backward loss)
+
+(gradcheck "W1" W1 net)
+(gradcheck "b1" b1 net)
+(gradcheck "W2" W2 net)
+(gradcheck "b2" b2 net)
+(gradcheck "xin" xin net)
+
+;; ── training sanity: SGD on a fixed example must drive the loss down ──
+(= l0 (vec-ref (tensor-data (net)) 0))
+(for step 0 199
+  (do
+    (zero-grad! W1) (zero-grad! b1) (zero-grad! W2) (zero-grad! b2)
+    (let ls (net)
+      (do (backward ls)
+          (sgd! W1 0.5) (sgd! b1 0.5) (sgd! W2 0.5) (sgd! b2 0.5)))))
+(= l1 (vec-ref (tensor-data (net)) 0))
+(if (< l1 (* 0.5 l0))
+    (= _pass (+ _pass 1))
+    (do (= _fail (+ _fail 1)) (prn "  FAIL training: loss " l0 " -> " l1)))
+
+(prn "")
+(prn "autograd checks: " _pass " passed, " _fail " failed   (loss " l0 " -> " l1 ")")
+(if (is _fail 0)
+    (prn "AUTOGRAD: OK")
+    (do (prn "AUTOGRAD: FAILED") (exit 1)))
