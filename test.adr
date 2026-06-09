@@ -4058,6 +4058,30 @@ assert "vec-ger!: A[0,0]" (vec-ref gerA 0) 10.0
 
 assert "vec-ger!: A[1,2]" (vec-ref gerA 5) 60.0
 
+setf vfbB (string->blob "ABC")
+
+setf vfbV (vec 3 0.0)
+
+assert "vec-from-blob!: returns v" (is (vec-from-blob! vfbV vfbB 0) vfbV) t
+
+assert "vec-from-blob!: v[0]" (vec-ref vfbV 0) 65.0
+
+assert "vec-from-blob!: v[2]" (vec-ref vfbV 2) 67.0
+
+setf vfbS (vec 2 0.0)
+
+vec-from-blob! vfbS vfbB 1 0.5
+
+assert "vec-from-blob!: offset+scale" (vec-ref vfbS 0) 33.0
+
+assert "vec-from-blob!: offset+scale [1]" (vec-ref vfbS 1) 33.5
+
+assert "vec-from-blob!: range check errors" (error? (try (vec-from-blob! (vec 4 0.0) vfbB 0) (fn (e) e))):
+  t
+
+assert "vec-from-blob!: negative offset errors" (error? (try (vec-from-blob! vfbS vfbB -1) (fn (e) e))):
+  t
+
 setf mmA (vec 4 0)
 
 vec-set! mmA 0 1.0

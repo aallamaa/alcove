@@ -61,6 +61,20 @@
                               (vec-add! (tensor-grad x) tmp)))))
                     (list W x)))))))
 
+;; dense layer over a CONSTANT input:  y = W·x  where x is a raw F64 vec
+;; (not a tensor). Backward only fills dW += dy ⊗ x — no dx is computed, so
+;; use this for the FIRST layer of a net, where the input needs no gradient.
+;; (With t-matvec a 784-input layer would waste a full Wᵀ·dy per step on a
+;; gradient nobody reads.)
+(def t-matvec-const (W xd)
+  (let m (/ (tn-len W) (vec-len xd))
+    (let yd (zeros m)
+      (do
+        (mat-vec! yd (tensor-data W) xd)
+        (mktensor yd
+                  (fn (y) (vec-ger! (tensor-grad W) 1.0 (tensor-grad y) xd))
+                  (list W))))))
+
 ;; ReLU, elementwise:  y = max(0, x);  dx += dy where x>0.
 (def t-relu (x)
   (let yd (zeros (tn-len x))

@@ -7,9 +7,12 @@ every gradient by walking the computation graph in reverse.
 
 ```
 examples/autograd/
-  autograd.alc        the engine (~130 lines): a `tensor` type + ops + backward
+  autograd.alc        the engine (~150 lines): a `tensor` type + ops + backward
   test-autograd.alc   gradient check (analytic vs finite-difference) + train test
   mlp-autograd.alc    the 64-32-10 digit MLP with FULLY AUTOMATIC backprop
+  mnist.alc           REAL MNIST (60k/10k): 784-128-10 MLP → ~97.5% in ~28 s
+  mnist_baseline.py   the identical training in Python+NumPy (for honesty)
+  get-mnist.sh        one-time ~11 MB dataset download
 ```
 
 ## The idea
@@ -22,6 +25,7 @@ op builds a new tensor and records how to push its gradient back into its inputs
 |----------------------------|--------------------|-----------------------------------|
 | `(t+ a b)`                 | a + b              | da += dy, db += dy                |
 | `(t-matvec W x)`           | W·x                | dW += dy⊗x (`vec-ger!`), dx += Wᵀ·dy (`mat-vec-t!`) |
+| `(t-matvec-const W xd)`    | W·xd (xd raw vec)  | dW += dy⊗xd only — first-layer input needs no dx |
 | `(t-relu x)`               | max(0, x)          | dx += dy where x>0                |
 | `(t-softmax-ce logits t)`  | −log softmax(t)    | d(logits) += softmax − onehot     |
 
@@ -41,6 +45,26 @@ make -C ../mlp data                                  # one-time: fetch digits.bi
 The gradient check compares every op's analytic gradient against a central
 finite difference — if reverse-mode and numeric agree to ~1e-3 on random inputs,
 the backward rules are right.
+
+## Real MNIST
+
+`mnist.alc` trains the standard benchmark: all 60,000 training images
+(28×28 handwritten digits), evaluated on the 10,000-image test set, with a
+784-128-10 MLP and per-sample SGD (lr halved each epoch):
+
+```sh
+sh examples/autograd/get-mnist.sh           # one-time ~11 MB download
+./alcove --noload examples/autograd/mnist.alc
+# epoch 1:  test acc 9489/10000   (~9.5 s)
+# epoch 3:  test acc 9747/10000   (~28 s total)  → 97.5%
+```
+
+The 47 MB of pixels stay packed in a blob; each sample is bulk-decoded into a
+scratch F64 vec by `vec-from-blob!` (one C call). `mnist_baseline.py` is the
+**identical** computation in Python+NumPy — same architecture, same updates,
+same decay. On the same machine it reaches the same accuracy in ~92 s vs
+alcove's ~28 s (≈3× faster): at per-sample granularity NumPy's per-call
+overhead dominates, while alcove's fused kernels stay cheap to invoke.
 
 ## Two ways to train the same net
 

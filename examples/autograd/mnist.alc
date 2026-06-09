@@ -1,0 +1,102 @@
+;;; mnist.alc — train a real MNIST digit classifier with the pure-alcove
+;;; autograd engine. The full 60k/10k handwritten-digit dataset, a 784-128-10
+;;; MLP, per-sample SGD: you write the forward pass, (backward loss) does the
+;;; calculus. The heavy lifting per step is four fused SIMD kernel calls
+;;; (mat-vec! / vec-ger! / mat-vec-t!) over F64 vecs.
+;;;
+;;;   sh examples/autograd/get-mnist.sh        # once: ~11 MB download
+;;;   ./alcove --noload examples/autograd/mnist.alc
+;;;
+;;; Expect ~95% test accuracy after the 1st epoch, ~97% after 3 — a few
+;;; seconds per epoch.
+
+(load "examples/autograd/autograd.alc")
+
+;; ---- IDX loading -----------------------------------------------------------
+;; MNIST ships as IDX: big-endian u32 header words, then raw u8 payload.
+(def be32 (b off)
+  (+ (* 16777216 (blob-ref b off)) (* 65536 (blob-ref b (+ off 1)))
+     (* 256 (blob-ref b (+ off 2))) (blob-ref b (+ off 3))))
+
+(def load-idx (path magic)
+  (let b (read-bytes path)
+    (do (if (no b)
+            (do (prn "error: " path " not found — run "
+                     "`sh examples/autograd/get-mnist.sh` first")
+                (exit 1)))
+        (if (no (is (be32 b 0) magic))
+            (do (prn "error: " path " is not the expected IDX file") (exit 1)))
+        b)))
+
+(= DIR "examples/autograd/mnist/")
+(= train-img (load-idx (string-concat DIR "train-images-idx3-ubyte") 2051))
+(= train-lab (load-idx (string-concat DIR "train-labels-idx1-ubyte") 2049))
+(= test-img  (load-idx (string-concat DIR "t10k-images-idx3-ubyte") 2051))
+(= test-lab  (load-idx (string-concat DIR "t10k-labels-idx1-ubyte") 2049))
+
+(= N-TRAIN (be32 train-img 4))
+(= N-TEST  (be32 test-img 4))
+(= N-FEAT  (* (be32 train-img 8) (be32 train-img 12)))   ; 28*28 = 784
+(= N-CLS   10)
+
+;; pixels stay packed in the blobs (47 MB); each sample is bulk-decoded into
+;; this scratch vec on demand — one C call, normalised to 0..1.
+(= x-scratch (vec N-FEAT 0.0))
+(def load-x! (blob k)
+  (vec-from-blob! x-scratch blob (+ 16 (* k N-FEAT)) 0.00392156862745098))
+(def label-of (blob k) (blob-ref blob (+ 8 k)))
+
+;; ---- the model: logits = W2·relu(W1·x + b1) + b2 ---------------------------
+(= HIDDEN 128) (= LR 0.03) (= EPOCHS 3)
+
+(def rnd () (- (/ (random 1000000) 1000000.0) 0.5))
+(def randmat (rows cols scale)
+  (let m (vec (* rows cols) 0.0)
+    (do (for i 0 (- (* rows cols) 1) (vec-set! m i (* (rnd) (* 2.0 scale)))) m)))
+
+(= W1 (leaf (randmat HIDDEN N-FEAT 0.0357)))   ; ~ sqrt(1/784)
+(= b1 (leaf (vec HIDDEN 0.0)))
+(= W2 (leaf (randmat N-CLS HIDDEN 0.0884)))    ; ~ sqrt(1/128)
+(= b2 (leaf (vec N-CLS 0.0)))
+
+(def train-step (xd target)
+  (do
+    (zero-grad! W1) (zero-grad! b1) (zero-grad! W2) (zero-grad! b2)
+    (backward (t-softmax-ce
+               (t+ (t-matvec W2 (t-relu (t+ (t-matvec-const W1 xd) b1))) b2)
+               target))                                  ; ← automatic gradients
+    (sgd! W1 LR) (sgd! b1 LR) (sgd! W2 LR) (sgd! b2 LR)))
+
+;; inference skips the graph: raw fused kernels into scratch buffers.
+(= h-scratch (vec HIDDEN 0.0))
+(= o-scratch (vec N-CLS 0.0))
+(def predict (xd)
+  (do (mat-vec! h-scratch (tensor-data W1) xd (tensor-data b1))
+      (vec-relu! h-scratch)
+      (mat-vec! o-scratch (tensor-data W2) h-scratch (tensor-data b2))
+      (vec-argmax o-scratch)))
+
+(def test-accuracy ()
+  (let correct 0
+    (do (for k 0 (- N-TEST 1)
+          (if (is (predict (load-x! test-img k)) (label-of test-lab k))
+              (= correct (+ correct 1))))
+        correct)))
+
+;; ---- train ------------------------------------------------------------------
+(prn "MNIST " N-FEAT "-" HIDDEN "-" N-CLS " MLP, pure-alcove autograd")
+(prn "train=" N-TRAIN " test=" N-TEST " lr=" LR " epochs=" EPOCHS)
+(prn "")
+(= t0 (time))
+(for epoch 1 EPOCHS
+  (do
+    (for k 0 (- N-TRAIN 1)
+      (train-step (load-x! train-img k) (label-of train-lab k)))
+    (prn "epoch " epoch ":  test acc " (test-accuracy) "/" N-TEST
+         "  (" (/ (- (time) t0) 1000) " ms cumulative)")
+    (= LR (* LR 0.5))))                        ; halve the step size each epoch
+(= final (test-accuracy))
+(prn "")
+(prn "final test accuracy: " final "/" N-TEST
+     " (" (fmt "{:.1f}" (/ (* 100.0 final) N-TEST)) "%)")
+(if (>= final 9000) (prn "MNIST: OK") (do (prn "MNIST: BELOW THRESHOLD") (exit 1)))

@@ -97,3 +97,4 @@ lockfree-bench/
 benchmark/resp-bench-c
 alcove_asan
 dist/
+examples/autograd/mnist/

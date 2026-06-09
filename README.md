@@ -166,10 +166,12 @@ gradient is `mat-vec-t!` (Wᵀ·g), and the weight update is `vec-ger!` (rank-1)
 no per-element interpreter loop. See [`examples/mlp/README.md`](examples/mlp/README.md)
 for the full story (~280× over the per-element baseline).
 
-**Automatic differentiation.** [`examples/autograd/`](examples/autograd/) is a
-small reverse-mode autograd built on those same kernels: you write only the
-forward pass and `(backward loss)` fills every gradient. `mlp-autograd.alc`
-trains the identical net with backprop derived automatically.
+**Automatic differentiation — real MNIST.** [`examples/autograd/`](examples/autograd/)
+is a small reverse-mode autograd built on those same kernels: you write only the
+forward pass and `(backward loss)` fills every gradient. Its flagship,
+`mnist.alc`, trains a 784-128-10 MLP on the full 60k-image MNIST dataset to
+**97.5% test accuracy in ~28 s** — ~3× faster than the identical per-sample
+training loop in Python+NumPy (`mnist_baseline.py`, ~92 s on the same machine).
 
 ### 3. Embedded Redis-compatible server
 
@@ -494,7 +496,7 @@ and [`adder-spec.md`](adder-spec.md).
 | [`docs/lisp-hyperpolyglot-alcove.html`](docs/lisp-hyperpolyglot-alcove.html) | Lisp comparison table extended with Alcove and Adder. See the [live table](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html). |
 | [`web/playground.html`](web/playground.html) | In-browser playground — editable code, shareable links, and an 8-step guided tour in BOTH syntaxes (an Alcove/Adder picker). See the [live page](https://aallamaa.github.io/alcove/playground.html). |
 | [`examples/mlp/`](examples/mlp/) | MLP digit classifier on UCI optdigits — full pipeline with `make data && make train`. |
-| [`examples/autograd/`](examples/autograd/) | Reverse-mode autograd in pure alcove (gradient check + an MLP trained with automatic backprop). |
+| [`examples/autograd/`](examples/autograd/) | Reverse-mode autograd in pure alcove: gradient check, automatic-backprop MLP, and real MNIST to 97.5% in ~28 s (3× NumPy). |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
 | [`ffi-examples/`](ffi-examples/) | libm, libc strings, sleeping via usleep, a custom .so for everything FFI can call. |
 | [`examples/adder/`](examples/adder/) | Adder (`.adr`) — Python-like indentation syntax over the same Lisp forms; `make als` → `adder`. |

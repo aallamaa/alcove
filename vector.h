@@ -1398,6 +1398,56 @@ exp_t *vecgercmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp, ret);
 }
 
+const char doc_vecfromblob[] =
+    "(vec-from-blob! v b off [scale]) — bulk-load bytes into an F64 vector: "
+    "v[i] = b[off+i] * scale (scale defaults to 1.0; bytes read as unsigned "
+    "0..255). One C loop instead of a per-element blob-ref/vec-set! pair — "
+    "the fast path for decoding packed u8 datasets (images, audio) into "
+    "tensors. Returns v.";
+exp_t *vecfromblobcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_3(vexp, bexp, offexp);
+  exp_t *sexp = NIL_EXP;
+  if (e->next && e->next->next && e->next->next->next &&
+      e->next->next->next->next)
+    sexp = EVAL(e->next->next->next->next->content, env);
+  if (iserror(sexp))
+    CLEAN_RETURN_3(vexp, bexp, offexp, sexp);
+  int has_scale = (sexp != NIL_EXP);
+  if (!isvector(vexp) || !isblob(bexp) || !isnumber(offexp) ||
+      (has_scale && !(isnumber(sexp) || isfloat(sexp))))
+    CLEAN_RETURN_4(vexp, bexp, offexp, sexp,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "(vec-from-blob! v b off [scale]): vec, blob, "
+                         "integer offset [, numeric scale]"));
+  int64_t off = FIX_VAL(offexp);
+  int64_t n = vec_len(vexp);
+  alc_blob_t *bb = (alc_blob_t *)bexp->ptr;
+  if (off < 0 || off + n > (int64_t)bb->len)
+    CLEAN_RETURN_4(vexp, bexp, offexp, sexp,
+                   error(ERROR_INDEX_OUT_OF_RANGE, e, env,
+                         "vec-from-blob!: bytes [%lld..%lld) outside blob of "
+                         "%lld bytes",
+                         (long long)off, (long long)(off + n),
+                         (long long)bb->len));
+  double scale = !has_scale  ? 1.0
+                 : isfloat(sexp) ? sexp->f
+                                 : (double)FIX_VAL(sexp);
+  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-from-blob!",
+                             CLEAN_RETURN_4(vexp, bexp, offexp, sexp, _alc_e));
+  const unsigned char *src = (const unsigned char *)bb->bytes + off;
+  if (vec_kind(vexp) == VEC_KIND_F64) {
+    double *cells = VEC_F64_CELLS(vexp);
+    VEC_SIMD
+    for (int64_t i = 0; i < n; i++)
+      cells[i] = scale * (double)src[i];
+  } else {
+    for (int64_t i = 0; i < n; i++)
+      vec_write_double(vexp, i, scale * (double)src[i]);
+  }
+  exp_t *ret = refexp(vexp);
+  CLEAN_RETURN_4(vexp, bexp, offexp, sexp, ret);
+}
+
 const char doc_matmul[] =
     "(mat-mul A B k) — matrix·matrix. A is a flat row-major m×k matrix, B a "
     "flat k×n matrix (k is the shared inner dimension); m = (len A)/k, n = "

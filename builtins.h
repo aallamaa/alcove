@@ -166,11 +166,12 @@ exp_t *vecsigmoidcmd(exp_t *e, env_t *env);
 exp_t *vectanhcmd(exp_t *e, env_t *env);
 exp_t *vecsoftmaxcmd(exp_t *e, env_t *env);
 extern const char doc_matvec[], doc_matmul[], doc_matvecbang[],
-    doc_matvectbang[], doc_vecger[];
+    doc_matvectbang[], doc_vecger[], doc_vecfromblob[];
 exp_t *matveccmd(exp_t *e, env_t *env);
 exp_t *matvecbangcmd(exp_t *e, env_t *env);
 exp_t *matvectbangcmd(exp_t *e, env_t *env);
 exp_t *vecgercmd(exp_t *e, env_t *env);
+exp_t *vecfromblobcmd(exp_t *e, env_t *env);
 exp_t *matmulcmd(exp_t *e, env_t *env);
 extern const char doc_vector[];
 extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
