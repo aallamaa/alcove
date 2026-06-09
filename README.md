@@ -492,7 +492,7 @@ and [`adder-spec.md`](adder-spec.md).
 | [`examples/mario/`](examples/mario/) | Side-scrolling platformer with SDL2 (native) and Canvas/WASM (web). See the [live demo](https://aallamaa.github.io/alcove/mario.html). |
 | [`web/learn.html`](web/learn.html) | Editable Rosetta-style examples for Alcove and Adder. See the [live page](https://aallamaa.github.io/alcove/learn.html). |
 | [`docs/lisp-hyperpolyglot-alcove.html`](docs/lisp-hyperpolyglot-alcove.html) | Lisp comparison table extended with Alcove and Adder. See the [live table](https://aallamaa.github.io/alcove/docs/lisp-hyperpolyglot-alcove.html). |
-| [`web/playground.html`](web/playground.html) | In-browser playground — editable code, shareable links, and an 8-step guided tour. See the [live page](https://aallamaa.github.io/alcove/playground.html). |
+| [`web/playground.html`](web/playground.html) | In-browser playground — editable code, shareable links, and an 8-step guided tour in BOTH syntaxes (an Alcove/Adder picker). See the [live page](https://aallamaa.github.io/alcove/playground.html). |
 | [`examples/mlp/`](examples/mlp/) | MLP digit classifier on UCI optdigits — full pipeline with `make data && make train`. |
 | [`examples/autograd/`](examples/autograd/) | Reverse-mode autograd in pure alcove (gradient check + an MLP trained with automatic backprop). |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
