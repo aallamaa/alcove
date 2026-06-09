@@ -370,6 +370,13 @@ test-all:
 	if echo "$$bt" | grep -qi 'backtrace' && echo "$$bt" | grep -qE '^[[:space:]]+c$$' && echo "$$bt" | grep -qE '^[[:space:]]+b$$' && echo "$$bt" | grep -qE '^[[:space:]]+a$$'; then \
 	  echo "  OK — uncaught error prints the c<-b<-a call chain"; \
 	else echo "  BACKTRACE WRONG:"; echo "$$bt" | sed 's/^/    /'; ok=0; fi; \
+	btd=/tmp/alcove-bt.$$$$; mkdir -p "$$btd"; \
+	printf '(prn "init ran")\n' > "$$btd/.init.alc"; \
+	bt2=$$(printf '(def c (x) (/ x 0))\n(def b (x) (+ 1 (c x)))\n(def a () (+ 1 (b 5)))\n(a)\n' | (cd "$$btd" && exec "$(CURDIR)/alcove" --noload /dev/stdin) 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	rm -rf "$$btd"; \
+	if echo "$$bt2" | grep -qi 'backtrace' && echo "$$bt2" | grep -qE '^[[:space:]]+c$$'; then \
+	  echo "  OK — backtrace survives a loaded .init.alc (reader EOF must not poison the capture)"; \
+	else echo "  BACKTRACE-WITH-INIT WRONG:"; echo "$$bt2" | sed 's/^/    /'; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n=== adder error caret (maps generated line back to Adder source) ===\n'; \
 	ac=$$(printf '= x 1\n\n+ x undefined_adr_zz\n' | ./adder --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \

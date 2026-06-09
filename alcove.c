@@ -11071,6 +11071,14 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     return 0;
   }
   exp_t *res = NULL;
+  /* Each top-level form starts with clean backtrace-capture state. Without
+     this, an error CREATED but swallowed earlier (the reader's EOF sentinel
+     while loading .init.alc, an (error? ...) probe in a previous form) leaves
+     a stale snapshot that blocks capture for this form's real error — the
+     uncaught-error backtrace then renders empty (or worse, someone else's
+     frames). The capture's meaningful scope is exactly one top-level form:
+     anything live is rendered right below, before the next form runs. */
+  bt_clear();
   if (toeval)
     res = evaluate(form, env);
   else
@@ -11529,6 +11537,7 @@ exp_t *alcove_eval_string(const char *src) {
       fclose(stream);
       return form; /* parse error — caller checks iserror */
     }
+    bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form) */
     exp_t *r = evaluate(form, g_global_env);
     if (r && iserror(r)) {
       unrefexp(last);
@@ -11977,6 +11986,7 @@ __attribute__((used)) int alcove_web_eval(const char *src) {
       unrefexp(stre);
       break;
     }
+    bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form) */
     exp_t *strf = evaluate(stre, g_global_env);
     if (strf) {
       /* Match the script-execution convention: don't echo nil results.
