@@ -501,6 +501,27 @@ and [`adder-spec.md`](adder-spec.md).
 
 ---
 
+## Install
+
+Prebuilt binaries (`alcove` + `adder` in one tarball) are on the
+[releases page](https://github.com/aallamaa/alcove/releases):
+**linux-x86_64** (full: JIT, readline, FFI), **linux-aarch64**
+(static — runs anywhere incl. Raspberry Pi; JIT, no readline/FFI), and a
+**wasm** bundle (both cores + the playground pages, self-hostable).
+
+```sh
+tar xzf alcove-0.1.0-linux-x86_64.tar.gz
+./alcove-0.1.0-linux-x86_64/alcove          # REPL
+```
+
+On macOS (or for the full feature set anywhere), build from source — it's
+one C file and takes a few seconds:
+
+```sh
+git clone https://github.com/aallamaa/alcove && cd alcove
+make && make als && make install            # → ~/.local/bin/{alcove,adder}
+```
+
 ## Build
 
 Requires `cc`, `make`. Optional: `libreadline` (REPL line-editing,
@@ -518,6 +539,7 @@ make test         # run test.alc (1600+ asserts) + ffi-examples
 make test-all     # every build variant + equiv-sweep + jit-fuzz + web smoke
 make benchmark    # alcove vs python3 microbenchmarks (incl. mlp)
 make web          # → web/alcove-core.{js,wasm} via Emscripten
+sh tools/release.sh  # release tarballs into dist/ (x86_64 + aarch64 + wasm)
 ```
 
 After `make install`, use it like this. Make sure `~/.local/bin` is in `PATH`.

@@ -2,16 +2,20 @@
 ;
 ; (ffi-fn LIB FN-NAME RETURN-TYPE ARG-TYPE-1 ARG-TYPE-2 ...)
 ;   returns a callable. Call it like any alcove fn.
+;
+; alcove has native sqrt/sin/cos/log/exp these days (and they're reserved
+; names), so bind the C versions under a c- prefix — the point here is the
+; FFI mechanism, not the math.
 
-(= sqrt (ffi-fn "libm.so.6" "sqrt" "double" "double"))
-(= sin  (ffi-fn "libm.so.6" "sin"  "double" "double"))
-(= cos  (ffi-fn "libm.so.6" "cos"  "double" "double"))
-(= pow  (ffi-fn "libm.so.6" "pow"  "double" "double" "double"))
-(= log  (ffi-fn "libm.so.6" "log"  "double" "double"))
-(= exp  (ffi-fn "libm.so.6" "exp"  "double" "double"))
+(= c-sqrt (ffi-fn "libm.so.6" "sqrt" "double" "double"))
+(= c-sin  (ffi-fn "libm.so.6" "sin"  "double" "double"))
+(= c-cos  (ffi-fn "libm.so.6" "cos"  "double" "double"))
+(= c-pow  (ffi-fn "libm.so.6" "pow"  "double" "double" "double"))
+(= c-log  (ffi-fn "libm.so.6" "log"  "double" "double"))
+(= c-exp  (ffi-fn "libm.so.6" "exp"  "double" "double"))
 
-(prn "sqrt(2) =" (sqrt 2.0))
-(prn "sin(0) =" (sin 0.0))
-(prn "cos(0) =" (cos 0.0))
-(prn "2^10 =" (pow 2.0 10.0))
-(prn "log(e) =" (log (exp 1.0)))
+(prn "sqrt(2) =" (c-sqrt 2.0))
+(prn "sin(0) =" (c-sin 0.0))
+(prn "cos(0) =" (c-cos 0.0))
+(prn "2^10 =" (c-pow 2.0 10.0))
+(prn "log(e) =" (c-log (c-exp 1.0)))

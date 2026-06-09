@@ -14,7 +14,7 @@
 (= cfib    (ffi-fn "./libmylib.so" "mylib_fib"     "long"   "long"))
 (= cstrlen (ffi-fn "./libmylib.so" "mylib_strlen"  "long"   "string"))
 (= inc     (ffi-fn "./libmylib.so" "mylib_inc"     "long"))
-(= get     (ffi-fn "./libmylib.so" "mylib_get"     "long"))
+(= get-ctr (ffi-fn "./libmylib.so" "mylib_get"     "long"))  ; `get` is reserved (dict lookup)
 (= reset   (ffi-fn "./libmylib.so" "mylib_reset"   "void"))
 (= greet   (ffi-fn "./libmylib.so" "mylib_greet"   "string"))
 
@@ -25,4 +25,4 @@
 
 (reset)
 (inc) (inc) (inc) (inc) (inc)
-(prn "counter after 5 incs:" (get))
+(prn "counter after 5 incs:" (get-ctr))

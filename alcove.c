@@ -11594,6 +11594,13 @@ int main(int argc, char *argv[]) {
     for (src = 1; src < argc; src++) {
       if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
         auto_load = 0;
+      } else if (strcmp(argv[src], "--version") == 0) {
+#ifdef ALCOVE_ALS
+        printf("adder %s\n", ALCOVE_VERSION);
+#else
+        printf("alcove %s\n", ALCOVE_VERSION);
+#endif
+        return 0;
       } else if (strcmp(argv[src], "--safe") == 0) {
         /* Don't let a db.dump auto-(require) native modules to resolve its
            custom types — loading a dump then can't execute module code. */
