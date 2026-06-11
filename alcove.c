@@ -633,6 +633,7 @@ lispProc lispProcList[] = {
     LISPCMD_APP("globals", globalscmd, doc_globals),
     LISPCMD_APP("check-syntax", checksyntaxcmd, doc_checksyntax),
     LISPCMD("read-stdin", readstdincmd, doc_readstdin),
+    LISPCMD("flush", flushcmd, doc_flush),
     /* FFI */
     LISPCMD("ffi?", ffipcmd, doc_ffip),
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),

@@ -309,3 +309,13 @@ exp_t *readstdincmd(exp_t *e, env_t *env) {
   free(buf);
   CLEAN_RETURN_1(nexp, ret);
 }
+
+const char doc_flush[] =
+    "(flush) — flush stdout. Needed when stdout is a pipe (block-buffered): "
+    "protocol servers (LSP) must flush after each message.";
+exp_t *flushcmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  fflush(stdout);
+  return NIL_EXP;
+}
