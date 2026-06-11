@@ -10522,10 +10522,22 @@ static void alcove_colored_redisplay(void) {
 }
 
 /* Every prompt starts a fresh render, so the cursor-row tracker must
-   reset before each readline(). */
+   reset before each readline(). Bracketed paste: readline skips its own
+   ESC[?2004h handshake whenever an application installs a custom
+   rl_redisplay_function (verified empirically against readline 8.2), even
+   though its ESC[200~ keybinding still works — so emit/retract the mode
+   ourselves around each call. With it, a multi-line paste arrives as ONE
+   buffer (newlines as literal chars, rendered by the custom redisplay with
+   continuation prompts) instead of every pasted newline acting as Enter
+   and stacking the pasted indentation onto the auto-indent. */
 static char *alc_readline(const char *prompt) {
   g_rd_crow = 0;
-  return readline(prompt);
+  fputs("\x1B[?2004h", rl_outstream ? rl_outstream : stdout);
+  fflush(rl_outstream ? rl_outstream : stdout);
+  char *line = readline(prompt);
+  fputs("\x1B[?2004l", rl_outstream ? rl_outstream : stdout);
+  fflush(rl_outstream ? rl_outstream : stdout);
+  return line;
 }
 
 /* Read one complete top-level form from the terminal. Continues
@@ -11116,6 +11128,13 @@ static void repl_readline_setup(env_t *global) {
   rl_bind_keyseq("\033[Z", alcove_back_tab);
   rl_basic_word_break_characters = " \t\n()'`,;\"";
   rl_variable_bind("blink-matching-paren", "on");
+  /* Ask the terminal to WRAP pastes in ESC[200~ / 201~ so a multi-line
+     paste arrives as ONE buffer (newlines as literal chars — the custom
+     redisplay already renders them with continuation prompts) instead of
+     each '\n' acting as Enter and stacking the pasted indentation on top
+     of the auto-indent. readline 8.x supports this but was not emitting
+     the enable sequence here without an explicit bind. */
+  rl_variable_bind("enable-bracketed-paste", "on");
   rl_redisplay_function = alcove_colored_redisplay; /* real-time highlighting */
   using_history();
   stifle_history(1000);
