@@ -96,20 +96,30 @@
   clearPad();
   document.getElementById("clear").onclick = clearPad;
 
-  // ---- drawing (mouse + touch via pointer events) ---------------------------
+  // ---- drawing ---------------------------------------------------------------
+  // Pointer events where available, with mouse+touch fallbacks (older Safari
+  // has no pointer events; some Safari versions are quirky about
+  // setPointerCapture). All three funnel into the same start/move/end.
   let drawing = false, last = null;
   ctx.lineCap = ctx.lineJoin = "round";
-  function pos(ev) {
+  function posXY(clientX, clientY) {
     const r = pad.getBoundingClientRect();
-    return [ (ev.clientX - r.left) * (pad.width / r.width),
-             (ev.clientY - r.top) * (pad.height / r.height) ];
+    return [ (clientX - r.left) * (pad.width / r.width),
+             (clientY - r.top) * (pad.height / r.height) ];
   }
-  pad.addEventListener("pointerdown", (ev) => {
-    drawing = true; last = pos(ev); pad.setPointerCapture(ev.pointerId);
-  });
-  pad.addEventListener("pointermove", (ev) => {
+  function strokeStart(x, y) {
+    drawing = true;
+    last = posXY(x, y);
+    // a click/tap with no drag still leaves a dot
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(last[0], last[1], 10, 0, 6.2832);
+    ctx.fill();
+    throttledClassify();
+  }
+  function strokeMove(x, y) {
     if (!drawing) return;
-    const p = pos(ev);
+    const p = posXY(x, y);
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 20;
     ctx.beginPath();
@@ -118,10 +128,38 @@
     ctx.stroke();
     last = p;
     throttledClassify();
-  });
-  function endStroke() { if (drawing) { drawing = false; classify(); } }
-  pad.addEventListener("pointerup", endStroke);
-  pad.addEventListener("pointerleave", endStroke);
+  }
+  function strokeEnd() { if (drawing) { drawing = false; classify(); } }
+
+  if (window.PointerEvent) {
+    pad.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      strokeStart(ev.clientX, ev.clientY);
+      try { pad.setPointerCapture(ev.pointerId); } catch (e) { /* Safari */ }
+    });
+    pad.addEventListener("pointermove", (ev) => {
+      ev.preventDefault();
+      strokeMove(ev.clientX, ev.clientY);
+    });
+    pad.addEventListener("pointerup", strokeEnd);
+    pad.addEventListener("pointercancel", strokeEnd);
+    pad.addEventListener("pointerleave", strokeEnd);
+  } else {
+    pad.addEventListener("mousedown", (ev) => strokeStart(ev.clientX, ev.clientY));
+    pad.addEventListener("mousemove", (ev) => strokeMove(ev.clientX, ev.clientY));
+    window.addEventListener("mouseup", strokeEnd);
+    pad.addEventListener("touchstart", (ev) => {
+      ev.preventDefault();
+      const t = ev.touches[0];
+      strokeStart(t.clientX, t.clientY);
+    }, { passive: false });
+    pad.addEventListener("touchmove", (ev) => {
+      ev.preventDefault();
+      const t = ev.touches[0];
+      strokeMove(t.clientX, t.clientY);
+    }, { passive: false });
+    pad.addEventListener("touchend", strokeEnd);
+  }
 
   // ---- MNIST-style preprocessing --------------------------------------------
   // MNIST digits are 20x20, centered by center-of-mass in a 28x28 field.
