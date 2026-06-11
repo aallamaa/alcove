@@ -484,6 +484,24 @@ into a list; a dotted tail collects the **remaining** ones:
 ((fn xs xs) 7 8)                ; (7 8) — works for anonymous fns too
 ```
 
+### Default parameter values
+
+A `(name default)` pair in the parameter list makes the parameter
+optional; the default expression is evaluated when the caller omits it
+(and may reference earlier work — it's an ordinary expression):
+
+```
+(def greet (name (greeting "hello"))
+  (string-concat greeting ", " name))
+(greet "ada")            ; → "hello, ada"
+(greet "ada" "salut")    ; → "salut, ada"
+
+(def pad (s (width (+ 8 2))) (string-pad-left s width))   ; computed default
+```
+
+There are **no keyword arguments**; for many optional knobs, the idiom
+is passing a dict: `(def run (cmd (opts (hash-map))) ...)`.
+
 ### Error handling
 
 Errors are first-class values that propagate up the call chain. Instead
@@ -569,6 +587,13 @@ Sequence utilities:
 (flatten (list 1 (list 2 (list 3)))) ; (1 2 3)
 (sort (list 3 1 2))       ; (1 2 3) — numbers by value, strings lexicographically
 (sort-by (fn (x) (- 0 x)) (list 1 2 3)) ; (3 2 1) — sort by (key-fn element)
+(partition 2 (list 1 2 3 4 5))   ; ((1 2) (3 4)) — trailing partial dropped
+(partition 2 1 (list 1 2 3))     ; ((1 2) (2 3)) — sliding window via step
+(interleave (list 1 2) (list "a" "b")) ; (1 "a" 2 "b") — stops at shortest
+(max-by length (list "aa" "b" "ccc"))  ; "ccc"   (min-by for the smallest)
+(group-by odd (range 0 5))       ; {"t" (1 3), "nil" (0 2 4)} — keys are
+                                 ; STRINGIFIED (dicts are string-keyed)
+(frequencies (list "a" "b" "a")) ; {"a" 2, "b" 1} — same stringified keys
 ```
 
 ### Higher-order
@@ -607,6 +632,10 @@ Common whole-string helpers:
 (string-contains? "hello world" "world")  ; t
 (string-index "hello" "ll")     ; 2 — 0-based, or nil if absent
 (string-replace "a-b-c" "-" "+") ; "a+b+c" — replaces all occurrences
+(starts-with? "foobar" "foo")    ; t       (ends-with? for suffixes)
+(string-repeat "ab" 3)           ; "ababab"
+(string-pad-left "7" 3 "0")      ; "007" — width counts CODEPOINTS;
+(string-pad-right "ab" 4)        ; "ab  " — pad: char or 1-codepoint string
 ```
 
 `fmt` is the formatting function: `{}` interpolates the next argument

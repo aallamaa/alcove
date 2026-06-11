@@ -126,6 +126,23 @@ exp_t *base64encodecmd(exp_t *e, env_t *env);
 exp_t *base64decodecmd(exp_t *e, env_t *env);
 exp_t *hexencodecmd(exp_t *e, env_t *env);
 exp_t *hexdecodecmd(exp_t *e, env_t *env);
+
+/* builtins_stdlib.h — v0.2 stdlib batch */
+extern const char doc_groupby[], doc_frequencies[], doc_partition[],
+                  doc_interleave[], doc_maxby[], doc_minby[],
+                  doc_startswith[], doc_endswith[], doc_stringrepeat[],
+                  doc_stringpadleft[], doc_stringpadright[];
+exp_t *groupbycmd(exp_t *e, env_t *env);
+exp_t *frequenciescmd(exp_t *e, env_t *env);
+exp_t *partitioncmd(exp_t *e, env_t *env);
+exp_t *interleavecmd(exp_t *e, env_t *env);
+exp_t *maxbycmd(exp_t *e, env_t *env);
+exp_t *minbycmd(exp_t *e, env_t *env);
+exp_t *startswithcmd(exp_t *e, env_t *env);
+exp_t *endswithcmd(exp_t *e, env_t *env);
+exp_t *stringrepeatcmd(exp_t *e, env_t *env);
+exp_t *stringpadleftcmd(exp_t *e, env_t *env);
+exp_t *stringpadrightcmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

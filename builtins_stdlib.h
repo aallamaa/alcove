@@ -2841,3 +2841,401 @@ exp_t *disasmcmd(exp_t *e, env_t *env) {
   }
   CLEAN_RETURN_1(arg, NULL);
 }
+
+/* ---------- stdlib batch (v0.2): grouping, chunking, string predicates ----- */
+
+/* Reverse a freshly-built, exclusively-owned node chain in place (no
+   refcount traffic — the nodes just get relinked). */
+static exp_t *alc_nodes_reverse(exp_t *head) {
+  exp_t *prev = NULL;
+  while (head) {
+    exp_t *nx = head->next;
+    head->next = prev;
+    prev = head;
+    head = nx;
+  }
+  return prev;
+}
+
+const char doc_groupby[] =
+    "(group-by f xs) — dict mapping (str (f x)) → list of the x's, in input "
+    "order. Keys are STRINGIFIED (alcove dicts are string-keyed): "
+    "(group-by odd (range 0 4)) → {\"t\" (1 3), \"nil\" (0 2)}.";
+exp_t *groupbycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !e->next->next)
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(group-by f xs)"));
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "group-by: second arg is not a sequence"));
+  exp_t *dexp = make_dict_exp();
+  dict_t *d = (dict_t *)dexp->ptr;
+  for (exp_t *cur = xseq; ispair(cur) && cur->content; cur = cur->next) {
+    exp_t *k = alc_apply1(fn, cur->content, env);
+    if (k && iserror(k)) {
+      unrefexp(xseq);
+      unrefexp(dexp);
+      CLEAN_RETURN_2(fn, xs, k);
+    }
+    size_t cap = 64, len = 0;
+    char *kbuf = memalloc(cap, 1);
+    exp_to_string_buf(k ? k : NIL_EXP, &kbuf, &len, &cap);
+    unrefexp(k);
+    keyval_t *kv = set_get_keyval_dict(d, kbuf, NULL);
+    exp_t *node = make_node(refexp(cur->content));
+    if (kv) { /* prepend; whole bucket is reversed below */
+      node->next = kv->val;
+      kv->val = node;
+    } else {
+      set_get_keyval_dict(d, kbuf, node);
+      unrefexp(node); /* dict took its own ref */
+    }
+    free(kbuf);
+  }
+  /* buckets were built newest-first — restore input order */
+  for (unsigned int i = 0; i < d->ht[0].size; i++)
+    for (keyval_t *k = d->ht[0].table[i]; k; k = k->next)
+      k->val = alc_nodes_reverse(k->val);
+  unrefexp(xseq);
+  CLEAN_RETURN_2(fn, xs, dexp);
+}
+
+const char doc_frequencies[] =
+    "(frequencies xs) — dict mapping (str x) → occurrence count. Keys are "
+    "stringified (alcove dicts are string-keyed).";
+exp_t *frequenciescmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(xs);
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq)
+    CLEAN_RETURN_1(xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                             "frequencies: arg is not a sequence"));
+  exp_t *dexp = make_dict_exp();
+  dict_t *d = (dict_t *)dexp->ptr;
+  for (exp_t *cur = xseq; ispair(cur) && cur->content; cur = cur->next) {
+    size_t cap = 64, len = 0;
+    char *kbuf = memalloc(cap, 1);
+    exp_to_string_buf(cur->content, &kbuf, &len, &cap);
+    keyval_t *kv = set_get_keyval_dict(d, kbuf, NULL);
+    if (kv)
+      kv->val = MAKE_FIX(FIX_VAL(kv->val) + 1); /* immediates: no refcount */
+    else
+      set_get_keyval_dict(d, kbuf, MAKE_FIX(1));
+    free(kbuf);
+  }
+  unrefexp(xseq);
+  CLEAN_RETURN_1(xs, dexp);
+}
+
+const char doc_partition[] =
+    "(partition n xs) — list of n-element lists; (partition n step xs) "
+    "advances by step between chunks. A trailing partial chunk is DROPPED "
+    "(Clojure semantics).";
+exp_t *partitioncmd(exp_t *e, env_t *env) {
+  exp_t *stepexp = NULL, *xs;
+  EVAL_ARG_1(nexp);
+  int has_step = (e->next->next && e->next->next->next);
+  exp_t *second = e->next->next ? EVAL(e->next->next->content, env) : NULL;
+  if (second && iserror(second))
+    CLEAN_RETURN_1(nexp, second);
+  if (has_step) {
+    stepexp = second;
+    xs = EVAL(e->next->next->next->content, env);
+    if (xs && iserror(xs))
+      CLEAN_RETURN_2(nexp, stepexp, xs);
+  } else
+    xs = second;
+  int64_t n = isnumber(nexp) ? FIX_VAL(nexp) : -1;
+  int64_t step = stepexp ? (isnumber(stepexp) ? FIX_VAL(stepexp) : -1) : n;
+  if (n <= 0 || step <= 0) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
+                       "(partition n [step] xs): n and step must be positive "
+                       "integers");
+    if (stepexp)
+      CLEAN_RETURN_3(nexp, stepexp, xs, err);
+    CLEAN_RETURN_2(nexp, xs, err);
+  }
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
+                       "partition: last arg is not a sequence");
+    if (stepexp)
+      CLEAN_RETURN_3(nexp, stepexp, xs, err);
+    CLEAN_RETURN_2(nexp, xs, err);
+  }
+  exp_t *head = NULL, *tail = NULL;
+  exp_t *win = xseq;
+  while (1) {
+    /* try to take n elements starting at win */
+    exp_t *chead = NULL, *ctail = NULL, *cur = win;
+    int64_t got = 0;
+    for (; got < n && ispair(cur) && cur->content; cur = cur->next, got++) {
+      exp_t *node = make_node(refexp(cur->content));
+      if (ctail) {
+        ctail->next = node;
+        ctail = node;
+      } else
+        chead = ctail = node;
+    }
+    if (got < n) { /* trailing partial — dropped */
+      if (chead)
+        unrefexp(chead);
+      break;
+    }
+    exp_t *cnode = make_node(chead);
+    if (tail) {
+      tail->next = cnode;
+      tail = cnode;
+    } else
+      head = tail = cnode;
+    for (int64_t i = 0; i < step && ispair(win) && win->content; i++)
+      win = win->next;
+    if (!(ispair(win) && win->content))
+      break;
+  }
+  unrefexp(xseq);
+  exp_t *ret = head ? head : refexp(NIL_EXP);
+  if (stepexp)
+    CLEAN_RETURN_3(nexp, stepexp, xs, ret);
+  CLEAN_RETURN_2(nexp, xs, ret);
+}
+
+const char doc_interleave[] =
+    "(interleave xs ys ...) — first of each, second of each, …; stops at the "
+    "shortest sequence: (interleave '(1 2 3) '(a b)) → (1 a 2 b).";
+exp_t *interleavecmd(exp_t *e, env_t *env) {
+  int argc = 0;
+  for (exp_t *a = cdr(e); a; a = a->next)
+    argc++;
+  if (argc == 0) {
+    unrefexp(e);
+    return refexp(NIL_EXP);
+  }
+  exp_t **vals = memalloc((size_t)argc, sizeof(exp_t *));
+  exp_t **seqs = memalloc((size_t)argc, sizeof(exp_t *));
+  exp_t **curs = memalloc((size_t)argc, sizeof(exp_t *));
+  int i = 0;
+  for (exp_t *a = cdr(e); a; a = a->next, i++) {
+    vals[i] = EVAL(a->content, env);
+    if (vals[i] && iserror(vals[i])) {
+      exp_t *err = vals[i];
+      for (int j = 0; j < i; j++) {
+        unrefexp(vals[j]);
+        unrefexp(seqs[j]);
+      }
+      free(vals); free(seqs); free(curs);
+      unrefexp(e);
+      return err;
+    }
+    seqs[i] = coll_to_list(vals[i]);
+    if (!seqs[i]) {
+      for (int j = 0; j < i; j++) {
+        unrefexp(vals[j]);
+        unrefexp(seqs[j]);
+      }
+      exp_t *bad = vals[i];
+      unrefexp(bad);
+      free(vals); free(seqs); free(curs);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "interleave: every arg must be a sequence");
+    }
+    curs[i] = seqs[i];
+  }
+  exp_t *head = NULL, *tail = NULL;
+  int alive = 1;
+  while (alive) {
+    for (i = 0; i < argc; i++)
+      if (!(ispair(curs[i]) && curs[i]->content)) {
+        alive = 0;
+        break;
+      }
+    if (!alive)
+      break;
+    for (i = 0; i < argc; i++) {
+      exp_t *node = make_node(refexp(curs[i]->content));
+      if (tail) {
+        tail->next = node;
+        tail = node;
+      } else
+        head = tail = node;
+      curs[i] = curs[i]->next;
+    }
+  }
+  for (i = 0; i < argc; i++) {
+    unrefexp(vals[i]);
+    unrefexp(seqs[i]);
+  }
+  free(vals); free(seqs); free(curs);
+  unrefexp(e);
+  return head ? head : refexp(NIL_EXP);
+}
+
+/* shared engine for max-by / min-by */
+static exp_t *alc_extremum_by(exp_t *e, env_t *env, int want_max,
+                              const char *name) {
+  EVAL_ARG_2(fn, xs);
+  if (!fn || !e->next->next)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env,
+                                 "(%s f xs)", name));
+  exp_t *xseq = coll_to_list(xs);
+  if (!xseq)
+    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "%s: second arg is not a sequence", name));
+  exp_t *best = NULL;
+  double bestk = 0;
+  for (exp_t *cur = xseq; ispair(cur) && cur->content; cur = cur->next) {
+    exp_t *k = alc_apply1(fn, cur->content, env);
+    if (k && iserror(k)) {
+      unrefexp(xseq);
+      CLEAN_RETURN_2(fn, xs, k);
+    }
+    if (!k || !(isnumber(k) || isfloat(k))) {
+      if (k)
+        unrefexp(k);
+      unrefexp(xseq);
+      CLEAN_RETURN_2(fn, xs,
+                     error(ERROR_NUMBER_EXPECTED, NULL, env,
+                           "%s: key fn must return a number", name));
+    }
+    double kd = isfloat(k) ? k->f : (double)FIX_VAL(k);
+    unrefexp(k);
+    if (!best || (want_max ? kd > bestk : kd < bestk)) {
+      best = cur->content;
+      bestk = kd;
+    }
+  }
+  exp_t *ret = best ? refexp(best) : refexp(NIL_EXP);
+  unrefexp(xseq);
+  CLEAN_RETURN_2(fn, xs, ret);
+}
+
+const char doc_maxby[] = "(max-by f xs) — the element with the largest "
+                         "numeric (f x); nil for an empty sequence.";
+exp_t *maxbycmd(exp_t *e, env_t *env) {
+  return alc_extremum_by(e, env, 1, "max-by");
+}
+const char doc_minby[] = "(min-by f xs) — the element with the smallest "
+                         "numeric (f x); nil for an empty sequence.";
+exp_t *minbycmd(exp_t *e, env_t *env) {
+  return alc_extremum_by(e, env, 0, "min-by");
+}
+
+const char doc_startswith[] =
+    "(starts-with? s prefix) — t if string s begins with prefix.";
+exp_t *startswithcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, p);
+  if (!isstring(s) || !isstring(p))
+    CLEAN_RETURN_2(s, p, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "(starts-with? s prefix): both strings"));
+  const char *ss = (const char *)exp_text(s), *pp = (const char *)exp_text(p);
+  exp_t *ret = strncmp(ss, pp, strlen(pp)) == 0 ? TRUE_EXP : NIL_EXP;
+  CLEAN_RETURN_2(s, p, refexp(ret));
+}
+
+const char doc_endswith[] =
+    "(ends-with? s suffix) — t if string s ends with suffix.";
+exp_t *endswithcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, p);
+  if (!isstring(s) || !isstring(p))
+    CLEAN_RETURN_2(s, p, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "(ends-with? s suffix): both strings"));
+  const char *ss = (const char *)exp_text(s), *pp = (const char *)exp_text(p);
+  size_t sl = strlen(ss), pl = strlen(pp);
+  exp_t *ret = (pl <= sl && memcmp(ss + sl - pl, pp, pl) == 0) ? TRUE_EXP
+                                                               : NIL_EXP;
+  CLEAN_RETURN_2(s, p, refexp(ret));
+}
+
+const char doc_stringrepeat[] =
+    "(string-repeat s n) — s concatenated n times (\"ab\" 3 → \"ababab\").";
+exp_t *stringrepeatcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(s, nexp);
+  if (!isstring(s) || !isnumber(nexp) || FIX_VAL(nexp) < 0)
+    CLEAN_RETURN_2(s, nexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "(string-repeat s n): string + non-negative count"));
+  const char *ss = (const char *)exp_text(s);
+  size_t sl = strlen(ss);
+  int64_t n = FIX_VAL(nexp);
+  if (n > 0 && sl > (size_t)(64 * 1024 * 1024) / (size_t)n)
+    CLEAN_RETURN_2(s, nexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                  "string-repeat: result too large"));
+  char *out = memalloc(sl * (size_t)n + 1, 1);
+  for (int64_t i = 0; i < n; i++)
+    memcpy(out + (size_t)i * sl, ss, sl);
+  exp_t *ret = make_string(out, (int)(sl * (size_t)n));
+  free(out);
+  CLEAN_RETURN_2(s, nexp, ret);
+}
+
+/* shared engine for string-pad-left / string-pad-right. Width counts
+   CODEPOINTS (what (length s) returns), so padded columns line up. */
+static exp_t *alc_string_pad(exp_t *e, env_t *env, int left,
+                             const char *name) {
+  EVAL_ARG_2(s, nexp);
+  exp_t *padexp = NIL_EXP;
+  if (e->next && e->next->next && e->next->next->next)
+    padexp = EVAL(e->next->next->next->content, env);
+  if (iserror(padexp))
+    CLEAN_RETURN_2(s, nexp, padexp);
+  if (!isstring(s) || !isnumber(nexp) || FIX_VAL(nexp) < 0)
+    CLEAN_RETURN_3(s, nexp, padexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "(%s s width [pad]): string + non-negative width",
+                         name));
+  char padb[5] = " ";
+  int padlen = 1;
+  if (padexp != NIL_EXP) {
+    if (ischar(padexp)) {
+      padlen = utf8_encode(CHAR_VAL(padexp), padb);
+      padb[padlen] = 0;
+    } else if (isstring(padexp) && utf8_strlen((char *)exp_text(padexp)) == 1) {
+      /* one codepoint = at most 4 UTF-8 bytes */
+      padlen = (int)strlen((const char *)exp_text(padexp));
+      memcpy(padb, exp_text(padexp), (size_t)padlen);
+      padb[padlen] = 0;
+    } else
+      CLEAN_RETURN_3(s, nexp, padexp,
+                     error(ERROR_ILLEGAL_VALUE, NULL, env,
+                           "%s: pad must be a char or 1-codepoint string",
+                           name));
+  }
+  const char *ss = (const char *)exp_text(s);
+  int64_t have = utf8_strlen((char *)ss);
+  int64_t want = FIX_VAL(nexp);
+  if (have >= want) {
+    exp_t *ret = refexp(s);
+    CLEAN_RETURN_3(s, nexp, padexp, ret);
+  }
+  int64_t add = want - have;
+  size_t sl = strlen(ss);
+  char *out = memalloc(sl + (size_t)add * (size_t)padlen + 1, 1);
+  size_t o = 0;
+  if (left)
+    for (int64_t i = 0; i < add; i++, o += (size_t)padlen)
+      memcpy(out + o, padb, (size_t)padlen);
+  memcpy(out + o, ss, sl);
+  o += sl;
+  if (!left)
+    for (int64_t i = 0; i < add; i++, o += (size_t)padlen)
+      memcpy(out + o, padb, (size_t)padlen);
+  exp_t *ret = make_string(out, (int)o);
+  free(out);
+  CLEAN_RETURN_3(s, nexp, padexp, ret);
+}
+
+const char doc_stringpadleft[] =
+    "(string-pad-left s width [pad]) — pad s on the left to `width` "
+    "codepoints (pad: char or 1-codepoint string, default space). Longer "
+    "strings come back unchanged.";
+exp_t *stringpadleftcmd(exp_t *e, env_t *env) {
+  return alc_string_pad(e, env, 1, "string-pad-left");
+}
+const char doc_stringpadright[] =
+    "(string-pad-right s width [pad]) — pad s on the right to `width` "
+    "codepoints (pad: char or 1-codepoint string, default space).";
+exp_t *stringpadrightcmd(exp_t *e, env_t *env) {
+  return alc_string_pad(e, env, 0, "string-pad-right");
+}
