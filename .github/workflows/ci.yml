@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: ["master", "main"]
@@ -18,7 +21,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
       - name: Cross-variant suite (make test-all)
@@ -35,7 +38,7 @@ jobs:
   wasm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mymindstorm/setup-emsdk@v14
       - name: wasm smoke (make test-web)
         # setup-emsdk shadows `node` on PATH with its own bundled node; bare
@@ -48,7 +51,7 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install deps (clang for libFuzzer)
         run: sudo apt-get update && sudo apt-get install -y clang libffi-dev
       - name: libFuzzer — reader

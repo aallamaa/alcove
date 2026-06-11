@@ -1,5 +1,8 @@
 name: Deploy Web Demos to GitHub Pages
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: ["master", "main"]
@@ -19,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
