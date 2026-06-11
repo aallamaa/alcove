@@ -1,0 +1,190 @@
+;;; lsp.alc — a Language Server Protocol server written in Alcove itself,
+;;; on the v0.2 scripting floor: read-line/read-stdin for the JSON-RPC
+;;; framing, json-encode/json-decode for the payloads, (builtins)/(globals)/
+;;; (docstring)/(check-syntax) for the language smarts, (flush) for the pipe.
+;;;
+;;; Serves BOTH dialects from one process: .alc documents are checked
+;;; in-process; .adr documents are checked through the adder binary (set
+;;; ALCOVE_LSP_ADDER if `adder` isn't on PATH), whose check-syntax maps
+;;; error lines back to the Adder source.
+;;;
+;;; Run (editors do this for you — see editor/README.md):
+;;;   alcove --noload --noinit tools/lsp.alc
+;;;
+;;; v1 capabilities: full-text sync, diagnostics on open/change,
+;;; completion (builtins + live globals, with docs), hover (docstrings).
+
+;; ---- framing ---------------------------------------------------------------
+(def byte-len (s) (blob-len (string->blob s)))
+
+(def send! (msg)
+  (let body (json-encode msg)
+    ;; everything through pr must already BE a string — pr renders other
+    ;; types via the (ANSI-coloured) value printer, which would corrupt
+    ;; the wire format
+    (do (pr "Content-Length: " (str (byte-len body)) "\r\n\r\n" body)
+        (flush))))
+
+(def respond! (id result)
+  (send! (hash-map "jsonrpc" "2.0" "id" id "result" result)))
+
+(def notify! (method params)
+  (send! (hash-map "jsonrpc" "2.0" "method" method "params" params)))
+
+;; read one framed message; nil at EOF. Headers end at a blank line.
+(def read-msg ()
+  (let len 0
+    (do
+      (while (let line (read-line)
+               (if (no line) nil                       ; EOF
+                   (if (iso line "") nil               ; end of headers
+                       (do (let m (re-match "^[Cc]ontent-[Ll]ength: *([0-9]+)" line)
+                             (if m (= len (json-decode (nth 1 m)))))
+                           t)))))
+      (if (is len 0) nil
+          (let body (read-stdin len)
+            (if (no body) nil (json-decode body)))))))
+
+;; ---- document store ---------------------------------------------------------
+(= *docs* (hash-map))                 ; uri -> text
+
+;; ---- diagnostics ------------------------------------------------------------
+(= *adder-bin* (getenv "ALCOVE_LSP_ADDER" "adder"))
+(= *tmp-adr* (string-concat "/tmp/alcove-lsp-" (str (random 1000000)) ".adr"))
+
+(def adr-uri? (uri) (ends-with? uri ".adr"))
+
+;; -> nil | (line message), dialect-aware
+(def syntax-issue (uri text)
+  (if (adr-uri? uri)
+      (do (write-string *tmp-adr* text)
+          (let r (shell (string-concat
+                         *adder-bin* " --noload --noinit -e "
+                         "'(prn (json-encode (check-syntax (read-string \""
+                         *tmp-adr* "\"))))' 2>/dev/null"))
+            (if (is (get r "exit") 0)
+                (json-decode (string-trim (get r "out")))
+                nil)))                       ; adder unavailable — stay silent
+      (check-syntax text)))
+
+(def publish-diagnostics! (uri)
+  (let issue (syntax-issue uri (get *docs* uri))
+    (notify! "textDocument/publishDiagnostics"
+      (hash-map "uri" uri
+                "diagnostics"
+                ;; an empty VECTOR: (list) is nil → JSON null, but the
+                ;; protocol requires [] to clear diagnostics
+                (if (no issue) (vector)
+                    (let ln (max 0 (- (first issue) 1))   ; LSP lines are 0-based
+                      (list (hash-map
+                             "range" (hash-map
+                                      "start" (hash-map "line" ln "character" 0)
+                                      "end"   (hash-map "line" ln "character" 200))
+                             "severity" 1
+                             "source" "alcove"
+                             "message" (nth 1 issue)))))))))
+
+;; ---- completion -------------------------------------------------------------
+(def doc-of (name)
+  (let d (apply docstring (list name))
+    (if d d "")))
+
+;; builtins never change: compute their items once at startup.
+(= *builtin-items*
+   (map (fn (name)
+          (hash-map "label" name "kind" 3            ; 3 = Function
+                    "documentation" (doc-of name)))
+        (builtins)))
+
+(def completion-items ()
+  (append *builtin-items*
+          (map (fn (name) (hash-map "label" name "kind" 6))  ; 6 = Variable
+               (globals))))
+
+;; ---- hover ------------------------------------------------------------------
+;; NB char literals are single-char (#\space would read as #\s + `pace`!) —
+;; derive the break set from a string instead: (seq str) yields its chars.
+;; (`in` is VARIADIC — (in v a b c) — not list membership, hence any?.)
+(= *sym-break* (seq "()[]{}\"'`,; \t"))
+(def sym-char? (c) (no (any? (fn (b) (is b c)) *sym-break*)))
+
+;; the symbol spanning character index `ch` on `line` (a string), or nil
+(def word-at (line ch)
+  (let n (length line)
+    (if (or (< ch 0) (>= ch n)) nil
+        (let a ch
+          (let b ch
+            (do (while (and (> a 0) (sym-char? (nth (- a 1) line)))
+                  (= a (- a 1)))
+                (while (and (< b n) (sym-char? (nth b line)))
+                  (= b (+ b 1)))
+                (if (is a b) nil (substr line a b))))))))
+
+(def hover-result (uri pos)
+  (let text (get *docs* uri)
+    (if (no text) nil
+        (let lines (string-split text "\n")
+          (let ln (get pos "line")
+            (if (>= ln (length lines)) nil
+                (let w (word-at (nth ln lines) (get pos "character"))
+                  (if (no w) nil
+                      (let d (apply docstring (list w))
+                        (if (no d) nil
+                            (hash-map "contents"
+                                      (hash-map "kind" "plaintext"
+                                                "value" d))))))))))))
+
+;; ---- dispatch ----------------------------------------------------------------
+(def handle (msg)
+  (let method (get msg "method")
+    (let id (get msg "id")
+      (let params (get msg "params")
+        (cond
+          (iso method "initialize")
+          (respond! id
+            (hash-map
+             "capabilities" (hash-map "textDocumentSync" 1
+                                      "hoverProvider" t
+                                      "completionProvider" (hash-map))
+             "serverInfo" (hash-map "name" "alcove-lsp" "version" "0.1")))
+
+          (iso method "textDocument/didOpen")
+          (let td (get params "textDocument")      ; NB `doc` is a reserved builtin
+            (do (assoc! *docs* (get td "uri") (get td "text"))
+                (publish-diagnostics! (get td "uri"))))
+
+          (iso method "textDocument/didChange")
+          (let uri (get (get params "textDocument") "uri")
+            (do (assoc! *docs* uri
+                        (get (first (get params "contentChanges")) "text"))
+                (publish-diagnostics! uri)))
+
+          (iso method "textDocument/didClose")
+          (dissoc! *docs* (get (get params "textDocument") "uri"))
+
+          (iso method "textDocument/completion")
+          (respond! id (completion-items))
+
+          (iso method "textDocument/hover")
+          (respond! id (hover-result (get (get params "textDocument") "uri")
+                                     (get params "position")))
+
+          (iso method "shutdown") (respond! id nil)
+          (iso method "exit") (do (if (file-exists? *tmp-adr*)
+                                      (delete-file *tmp-adr*))
+                                  (exit 0))
+          ;; unknown REQUEST (has an id): MethodNotFound; notifications: ignore
+          (no (is id nil))
+          (send! (hash-map "jsonrpc" "2.0" "id" id
+                           "error" (hash-map "code" -32601
+                                             "message" (string-concat
+                                                        "unhandled: " (str method)))))
+          nil)))))
+
+;; ---- main loop ----------------------------------------------------------------
+;; a broken handler must never kill the session: report on stderr, keep serving
+(while (let msg (read-msg)
+         (if (no msg) nil
+             (try (do (handle msg) t)
+                  (fn (e) (do (eprn "lsp: " (error-message e)) t))))))
+(if (file-exists? *tmp-adr*) (delete-file *tmp-adr*))
