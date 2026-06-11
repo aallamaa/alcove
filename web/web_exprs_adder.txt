@@ -32,3 +32,5 @@ apply + (list 10 20 30)
 json-encode (list 1 2 t)
 get (json-decode "{\"a\": 7}") "a"
 base64-encode "hi"
+re-match "[0-9]+" "n=42"
+re-replace "o" "foo" "0"

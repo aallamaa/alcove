@@ -169,6 +169,10 @@ const LISP = [
   ["(base64-encode \"foo\")", "\"Zm9v\""],
   ["(blob->string (base64-decode \"Zm9v\"))", "\"foo\""],
   ["(hex-encode \"AB\")", "\"4142\""],
+  ["(re-match \"([a-z]+)-([0-9]+)\" \"abc-42\")", "(\"abc-42\" \"abc\" \"42\")"],
+  ["(re-find-all \"[0-9]+\" \"1 22 333\")", "(\"1\" \"22\" \"333\")"],
+  ["(re-replace \"[aeiou]\" \"alcove\" \"_\")", "\"_lc_v_\""],
+  ["(re-split \",\" \"a,b,c\")", "(\"a\" \"b\" \"c\")"],
 ];
 const ADDER = [
   ["+ 1 2", "3"],
@@ -202,5 +206,7 @@ const ADDER = [
   ["json-encode (list 1 2 t)", "\"[1,2,true]\""],
   ["get (json-decode \"{\\\"a\\\": 7}\") \"a\"", "7"],
   ["base64-encode \"hi\"", "\"aGk=\""],
+  ["re-match \"[0-9]+\" \"n=42\"", "(\"42\")"],
+  ["re-replace \"o\" \"foo\" \"0\"", "\"f00\""],
 ];
 module.exports = { LISP, ADDER };

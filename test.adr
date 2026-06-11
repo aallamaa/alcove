@@ -6153,6 +6153,57 @@ assert "string-pad counts codepoints" (length (string-pad-left "é" 3)) 3
 
 assert "string-pad longer unchanged" (string-pad-left "abcdef" 3) "abcdef"
 
+assert "re-match full + groups" (re-match "([a-z]+)-([0-9]+)" "see abc-42"):
+  list "abc-42" "abc" "42"
+
+assert "re-match no match -> nil" (re-match "[0-9]+" "abc") nil
+
+assert "re-match unmatched optional group -> nil" (re-match "x(y)?z" "xz"):
+  list "xz" nil
+
+assert "re-match ERE class" (re-match "[[:digit:]]+" "a99") (list "99")
+
+assert "re-match anchors" (re-match "^ab$" "ab") (list "ab")
+
+assert "re-find offsets" (re-find "[0-9]+" "ab 123 cd") (list 3 6)
+
+assert "re-find with start" (re-find "a" "banana" 2) (list 3 4)
+
+assert "re-find start past end -> nil" (re-find "a" "ab" 9) nil
+
+assert "re-find anchored ^ not mid-string" (re-find "^b" "ab" 1) nil
+
+assert "re-find-all" (re-find-all "[0-9]+" "1 22 333") (list "1" "22" "333")
+
+assert "re-find-all none -> nil" (re-find-all "z" "abc") nil
+
+assert "re-find-all empty matches advance" (length (re-find-all "x*" "ab")) 3
+
+assert "re-replace" (re-replace "[0-9]+" "a1b22c" "#") "a#b#c"
+
+assert "re-replace literal (no backrefs)" (re-replace "a" "aa" "$0") "$0$0"
+
+assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-"):
+  "-a-b-c-"
+
+assert "re-split" (re-split "[ ,]+" "a, b  c") (list "a" "b" "c")
+
+assert "re-split keeps empty edges" (re-split "," ",a,") (list "" "a" "")
+
+assert "re-split no match -> whole" (re-split "z" "abc") (list "abc")
+
+assert "re-split empty-match pattern errors" (error? (try (re-split "x*" "abc") (fn (e) e))):
+  t
+
+assert "re bad pattern errors" (error? (try (re-match "(" "x") (fn (e) e))) t
+
+assert "re non-string errors" (error? (try (re-match 5 "x") (fn (e) e))) t
+
+assert "re utf8 bytes pass through" (re-match "é(.)" "éx") (list "éx" "x")
+
+assert "re cache survives many patterns" (do (each p (list "a" "b" "c" "d" "e" "f" "g" "h" "i" "j") (re-match p "abcdefghij")) (re-match "a" "xa")):
+  list "a"
+
 def _dflt (a (b 10) (c (+ 1 2))):
   list a b c
 

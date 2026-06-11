@@ -772,6 +772,27 @@ char, float, string, symbol, blob.
 (hamt? m)                        ; t
 ```
 
+### Regular expressions (POSIX ERE)
+
+```lisp
+(re-match "([a-z]+)-([0-9]+)" "see abc-42")  ; ("abc-42" "abc" "42") | nil
+(re-find "[0-9]+" "ab 123")        ; (3 6) — BYTE offsets, for substr
+(re-find "a" "banana" 2)           ; (3 4) — optional start offset
+(re-find-all "[0-9]+" "1 22 333")  ; ("1" "22" "333")
+(re-replace "[0-9]+" "a1b22c" "#") ; "a#b#c" — replacement is LITERAL
+(re-split "[ ,]+" "a, b  c")       ; ("a" "b" "c")
+```
+
+The engine is libc's POSIX **Extended** regex (`regcomp`/`regexec`), so it
+works identically in the native build and the browser/wasm build with zero
+dependencies. Mind the dialect: character classes are `[[:digit:]]` /
+`[[:alpha:]]` (there is **no `\d` / `\w`**), quantifiers are greedy only
+(no `*?`), and there is no lookaround and no `$1` backrefs in
+`re-replace`. Offsets are bytes, not codepoints. Compiled patterns are
+cached (8 entries), so a regex in a loop doesn't recompile. An unmatched
+optional group comes back as `nil`; a pattern that matches the empty
+string makes `re-split` error (it would split between every byte).
+
 ### JSON
 
 ```lisp

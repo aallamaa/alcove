@@ -143,6 +143,15 @@ exp_t *endswithcmd(exp_t *e, env_t *env);
 exp_t *stringrepeatcmd(exp_t *e, env_t *env);
 exp_t *stringpadleftcmd(exp_t *e, env_t *env);
 exp_t *stringpadrightcmd(exp_t *e, env_t *env);
+
+/* builtins_regex.h — POSIX ERE */
+extern const char doc_rematch[], doc_refind[], doc_refindall[],
+                  doc_rereplace[], doc_resplit[];
+exp_t *rematchcmd(exp_t *e, env_t *env);
+exp_t *refindcmd(exp_t *e, env_t *env);
+exp_t *refindallcmd(exp_t *e, env_t *env);
+exp_t *rereplacecmd(exp_t *e, env_t *env);
+exp_t *resplitcmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

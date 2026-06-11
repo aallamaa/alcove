@@ -173,3 +173,7 @@
 (base64-encode "foo")
 (blob->string (base64-decode "Zm9v"))
 (hex-encode "AB")
+(re-match "([a-z]+)-([0-9]+)" "abc-42")
+(re-find-all "[0-9]+" "1 22 333")
+(re-replace "[aeiou]" "alcove" "_")
+(re-split "," "a,b,c")

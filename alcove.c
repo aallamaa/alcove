@@ -571,6 +571,11 @@ lispProc lispProcList[] = {
     LISPCMD_APP("string-repeat", stringrepeatcmd, doc_stringrepeat),
     LISPCMD_APP("string-pad-left", stringpadleftcmd, doc_stringpadleft),
     LISPCMD_APP("string-pad-right", stringpadrightcmd, doc_stringpadright),
+    LISPCMD_APP("re-match", rematchcmd, doc_rematch),
+    LISPCMD_APP("re-find", refindcmd, doc_refind),
+    LISPCMD_APP("re-find-all", refindallcmd, doc_refindall),
+    LISPCMD_APP("re-replace", rereplacecmd, doc_rereplace),
+    LISPCMD_APP("re-split", resplitcmd, doc_resplit),
     /* Strings and whole-file I/O */
     LISPCMD_APP("str", strcmd, doc_str),
     LISPCMD_APP("format", strcmd, doc_str),
@@ -5573,6 +5578,7 @@ static exp_t *load_native_module(const char *path, const char *spec,
 /* The standard-library builtins live in a dedicated #included fragment. */
 #include "builtins_stdlib.h"
 #include "builtins_os.h"
+#include "builtins_regex.h"
 
 /* ---------------- Source pretty-printer ----------------
    Used by (source fn) to render a lambda body the way a Lisper would
