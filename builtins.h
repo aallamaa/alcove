@@ -152,6 +152,14 @@ exp_t *refindcmd(exp_t *e, env_t *env);
 exp_t *refindallcmd(exp_t *e, env_t *env);
 exp_t *rereplacecmd(exp_t *e, env_t *env);
 exp_t *resplitcmd(exp_t *e, env_t *env);
+
+/* introspection + LSP primitives */
+extern const char doc_builtins[], doc_globals[], doc_checksyntax[],
+                  doc_readstdin[];
+exp_t *builtinscmd(exp_t *e, env_t *env);
+exp_t *globalscmd(exp_t *e, env_t *env);
+exp_t *checksyntaxcmd(exp_t *e, env_t *env);
+exp_t *readstdincmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

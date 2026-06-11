@@ -6204,6 +6204,32 @@ assert "re utf8 bytes pass through" (re-match "é(.)" "éx") (list "éx" "x")
 assert "re cache survives many patterns" (do (each p (list "a" "b" "c" "d" "e" "f" "g" "h" "i" "j") (re-match p "abcdefghij")) (re-match "a" "xa")):
   list "a"
 
+assert "builtins is a big list" (> (length (builtins)) 300) t
+
+assert "builtins contains map" (any? (fn (s) (iso s "map")) (builtins)) t
+
+assert "globals sees a fresh def" (do (setf _introspect-zz 1) (any? (fn (s) (iso s "_introspect-zz")) (globals))):
+  t
+
+assert "globals sees *args*" (any? (fn (s) (iso s "*args*")) (globals)) t
+
+assert "docstring of a builtin" (string? (docstring map)) t
+
+assert "docstring of user fn still works" (do (def _docfn (x) "my doc" x) (docstring _docfn)):
+  "my doc"
+
+assert "check-syntax clean -> nil" (check-syntax "(+ 1 2) (def f (x) x)") nil
+
+assert "check-syntax reports line" (first (check-syntax "(+ 1 2)\n(]")) 2
+
+assert "check-syntax message is a string" (string? (nth 1 (check-syntax "(]"))):
+  t
+
+assert "check-syntax non-string errors" (error? (try (check-syntax 5) (fn (e) e))):
+  t
+
+assert "read-stdin registered" (type-of read-stdin) 'fn
+
 def _dflt (a (b 10) (c (+ 1 2))):
   list a b c
 

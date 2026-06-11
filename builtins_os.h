@@ -278,3 +278,34 @@ exp_t *shellcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(c, ret);
 #endif
 }
+
+/* ---------- exact-byte stdin read (LSP/JSON-RPC framing) ---------- */
+
+const char doc_readstdin[] =
+    "(read-stdin n) — read EXACTLY n bytes from stdin (blocking until they "
+    "arrive), as a string. Returns fewer bytes at end of input, nil when "
+    "input is already exhausted. The framing primitive for protocols like "
+    "LSP whose bodies are byte-counted rather than line-delimited "
+    "(read-line covers the header lines).";
+exp_t *readstdincmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(nexp);
+  if (!isnumber(nexp) || FIX_VAL(nexp) < 0 || FIX_VAL(nexp) > 64 * 1024 * 1024)
+    CLEAN_RETURN_1(nexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                               "(read-stdin n): n must be 0..64MiB"));
+  size_t want = (size_t)FIX_VAL(nexp);
+  char *buf = memalloc(want + 1, 1);
+  size_t got = 0;
+  while (got < want) {
+    size_t r = fread(buf + got, 1, want - got, stdin);
+    if (r == 0)
+      break; /* EOF mid-body — return the short read */
+    got += r;
+  }
+  if (got == 0 && want > 0) {
+    free(buf);
+    CLEAN_RETURN_1(nexp, refexp(NIL_EXP));
+  }
+  exp_t *ret = make_string(buf, (int)got);
+  free(buf);
+  CLEAN_RETURN_1(nexp, ret);
+}

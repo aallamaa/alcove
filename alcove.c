@@ -629,6 +629,10 @@ lispProc lispProcList[] = {
     LISPCMD("doc", doccmd, doc_doc),
     LISPCMD("docstring", docstringcmd, doc_docstring),
     LISPCMD("help", helpcmd, doc_help),
+    LISPCMD_APP("builtins", builtinscmd, doc_builtins),
+    LISPCMD_APP("globals", globalscmd, doc_globals),
+    LISPCMD_APP("check-syntax", checksyntaxcmd, doc_checksyntax),
+    LISPCMD("read-stdin", readstdincmd, doc_readstdin),
     /* FFI */
     LISPCMD("ffi?", ffipcmd, doc_ffip),
     LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
@@ -10830,6 +10834,18 @@ exp_t *docstringcmd(exp_t *e, env_t *env) {
       if (kv && kv->val && isstring(kv->val))
         ret = refexp(kv->val);
     }
+    if (name && ret == NIL_EXP) {
+      /* builtins too — the same text (doc) prints; tooling (LSP hover) needs
+         it as a VALUE, not a side effect on stdout. */
+      int N = (int)(sizeof(lispProcList) / sizeof(lispProc));
+      for (int i = 0; i < N; i++)
+        if (strcmp(lispProcList[i].name, name) == 0) {
+          if (lispProcList[i].doc)
+            ret = make_string((char *)lispProcList[i].doc,
+                              (int)strlen(lispProcList[i].doc));
+          break;
+        }
+    }
     if (owned)
       unrefexp(owned);
     if (err)
@@ -10893,6 +10909,50 @@ exp_t *helpcmd(exp_t *e, env_t *env) {
   }
   unrefexp(e);
   return NIL_EXP;
+}
+
+const char doc_builtins[] =
+    "(builtins) — every builtin's name as a list of strings, in registration "
+    "order. The machine-readable sibling of (help); completion sources "
+    "(the LSP) are built on it.";
+exp_t *builtinscmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  int N = (int)(sizeof(lispProcList) / sizeof(lispProc));
+  exp_t *head = NULL, *tail = NULL;
+  for (int i = 0; i < N; i++) {
+    exp_t *node = make_node(make_string((char *)lispProcList[i].name,
+                                        (int)strlen(lispProcList[i].name)));
+    if (tail) {
+      tail->next = node;
+      tail = node;
+    } else
+      head = tail = node;
+  }
+  return head ? head : refexp(NIL_EXP);
+}
+
+const char doc_globals[] =
+    "(globals) — the names bound in the global environment (user defs, "
+    "*args*, …) as a list of strings. Builtins live in their own table — "
+    "see (builtins).";
+exp_t *globalscmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  exp_t *head = NULL, *tail = NULL;
+  dict_t *d = g_global_env ? g_global_env->d : NULL;
+  if (d)
+    for (unsigned int i = 0; i < d->ht[0].size; i++)
+      for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
+        exp_t *node =
+            make_node(make_string((char *)k->key, (int)strlen(k->key)));
+        if (tail) {
+          tail->next = node;
+          tail = node;
+        } else
+          head = tail = node;
+      }
+  return head ? head : refexp(NIL_EXP);
 }
 
 /* ============================================================
@@ -11592,6 +11652,86 @@ exp_t *alcove_eval_string(const char *src) {
   }
   fclose(stream);
   return last;
+}
+
+const char doc_checksyntax[] =
+    "(check-syntax src) — parse (NOT evaluate) every form in the string. "
+    "Returns nil when the whole text parses, else (line message) for the "
+    "first syntax error (1-based line; in the adder binary the line refers "
+    "to the Adder source). The LSP's diagnostics primitive.";
+exp_t *checksyntaxcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(srcexp);
+  REQUIRE_TYPE(srcexp, isstring, CLEAN_RETURN_1(srcexp, _alc_e),
+               ERROR_ILLEGAL_VALUE, NULL, env,
+               "check-syntax: src must be a string");
+  const char *src = (const char *)exp_text(srcexp);
+#ifdef ALCOVE_ALS
+  /* the adder binary checks Adder text: transpile with a line map so the
+     reported line points into the user's source, not the generated sexprs */
+  als_map lmap;
+  memset(&lmap, 0, sizeof lmap);
+  char *gen = als_to_sexpr_mapped(src, &lmap);
+  FILE *stream = gen ? fmemopen(gen, strlen(gen), "r") : NULL;
+#else
+  FILE *stream = fmemopen((void *)src, strlen(src), "r");
+#endif
+  if (!stream) {
+#ifdef ALCOVE_ALS
+    free(gen);
+    als_map_free(&lmap);
+#endif
+    CLEAN_RETURN_1(srcexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "check-syntax: empty or unreadable input"));
+  }
+  /* the reader's position state belongs to the OUTER stream being evaluated
+     (a script, the REPL) — save, run on fresh state, restore. */
+  int prev_line = g_reader_line, prev_col = g_reader_col,
+      prev_off = g_reader_off, prev_arm = g_form_line_arm;
+  const char *prev_src = g_reader_src;
+  g_reader_line = 1;
+  g_reader_col = 1;
+  g_reader_off = 0;
+  g_reader_src = NULL;
+  exp_t *ret = refexp(NIL_EXP);
+  while (1) {
+    exp_t *form = reader(stream, 0, 0);
+    if (!form)
+      break;
+    if (iserror(form)) {
+      if (form->flags == EXP_ERROR_PARSING_EOF) {
+        unrefexp(form);
+        break;
+      }
+      int line = g_reader_line;
+#ifdef ALCOVE_ALS
+      {
+        int a = als_map_lookup(&lmap, line);
+        if (a > 0)
+          line = a;
+      }
+#endif
+      const char *msg = form->ptr ? (const char *)form->ptr : "syntax error";
+      exp_t *n1 = make_node(MAKE_FIX(line));
+      exp_t *n2 = make_node(make_string((char *)msg, (int)strlen(msg)));
+      n1->next = n2;
+      unrefexp(form);
+      unrefexp(ret);
+      ret = n1;
+      break;
+    }
+    unrefexp(form);
+  }
+  fclose(stream);
+#ifdef ALCOVE_ALS
+  free(gen);
+  als_map_free(&lmap);
+#endif
+  g_reader_line = prev_line;
+  g_reader_col = prev_col;
+  g_reader_off = prev_off;
+  g_form_line_arm = prev_arm;
+  g_reader_src = prev_src;
+  CLEAN_RETURN_1(srcexp, ret);
 }
 
 #ifndef ALCOVE_NO_MAIN
