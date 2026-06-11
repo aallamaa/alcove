@@ -89,11 +89,76 @@ vim.lsp.enable("alcove")
                                 "~/Code/alcove/tools/lsp.alc"))))
 ```
 
+### Vim (classic, via vim-lsp)
+
+With [prabirshrestha/vim-lsp](https://github.com/prabirshrestha/vim-lsp)
+(and the syntax files above installed):
+
+```vim
+au BufRead,BufNewFile *.adr set filetype=alcove
+if executable('alcove')
+  au User lsp_setup call lsp#register_server({
+        \ 'name': 'alcove-lsp',
+        \ 'cmd': {server_info->['alcove', '--noload', '--noinit',
+        \         expand('~/Code/alcove/tools/lsp.alc')]},
+        \ 'allowlist': ['alcove'],
+        \ })
+endif
+```
+
+`:LspHover` on a builtin, `:LspDocumentDiagnostics` for the error list;
+completion arrives through omnifunc (`<C-x><C-o>`). (coc.nvim users:
+declare the same command under `languageserver` in `coc-settings.json`.)
+
+### Helix
+
+In `~/.config/helix/languages.toml`:
+
+```toml
+[language-server.alcove-lsp]
+command = "alcove"
+args = ["--noload", "--noinit", "/home/you/Code/alcove/tools/lsp.alc"]
+
+[[language]]
+name = "alcove"
+scope = "source.alcove"
+file-types = ["alc", "adr"]
+comment-token = ";"
+language-servers = ["alcove-lsp"]
+```
+
+### Sublime Text
+
+Install the **LSP** package, then in its settings:
+
+```json
+{ "clients": { "alcove-lsp": {
+    "enabled": true,
+    "command": ["alcove", "--noload", "--noinit",
+                "/home/you/Code/alcove/tools/lsp.alc"],
+    "selector": "source.alcove",
+    "file_patterns": ["*.alc", "*.adr"] } } }
+```
+
 ### VS Code
 
 Any generic LSP client extension works (e.g. "LSP Client" / custom
 `languageServerExample`); set the command above for file patterns
 `*.alc` and `*.adr`.
 
-Smoke-test the server end-to-end with `python3 tools/test_lsp.py`
-(also wired into `make test-all`).
+### Verify it's working (any editor)
+
+1. `python3 tools/test_lsp.py` from the repo root — the server itself
+   must print `LSP: OK` (19 protocol checks; also a `make test-all` gate).
+2. Open an `.alc` buffer, type `(]` — a diagnostic should appear on that
+   line within a keystroke, and clear when you delete it.
+3. Hover (or `K` / eldoc) on `vec-dot` — its docstring appears.
+4. Trigger completion after `(vec-` — the builtin list, with docs.
+5. Open an `.adr` buffer, type `bad ]` — the diagnostic points at YOUR
+   Adder line (the server maps through the transpiler). If .adr
+   diagnostics stay silent, the server can't find the `adder` binary —
+   set `ALCOVE_LSP_ADDER=/path/to/adder` in the editor's environment.
+
+In Emacs, `M-x eglot-events-buffer` shows the raw JSON-RPC traffic and
+the `*EGLOT … stderr*` buffer shows the server's own log (handler errors
+are reported there rather than killing the session).
