@@ -1,0 +1,116 @@
+;;; export-mnist-web.alc — train the MNIST MLP (as mnist.alc does), quantize
+;;; the weights to u8, validate the quantized net's accuracy, and write
+;;; web/mnist-weights.json for the draw-a-digit browser demo.
+;;;
+;;;   sh examples/autograd/get-mnist.sh        # once
+;;;   ./alcove --noload examples/autograd/export-mnist-web.alc
+;;;
+;;; Quantization: symmetric u8 — byte = clamp(round(w/s), -127, 127) + 128
+;;; with s = absmax/127, reconstructed as w ≈ (byte - 128) * s. The page
+;;; rebuilds each tensor with (hex-decode ...) + (vec-from-blob! v b 0 s)
+;;; + (vec-axpy! v (-128*s) ones). An MLP loses ~0.1-0.3% accuracy to this;
+;;; the validation below measures it with the actual reconstructed weights.
+
+(load "examples/autograd/autograd.alc")
+
+(def be32 (b off)
+  (+ (* 16777216 (blob-ref b off)) (* 65536 (blob-ref b (+ off 1)))
+     (* 256 (blob-ref b (+ off 2))) (blob-ref b (+ off 3))))
+(def load-idx (path magic)
+  (let b (read-bytes path)
+    (do (if (no b) (do (prn "missing " path " — run get-mnist.sh") (exit 1)))
+        (if (no (is (be32 b 0) magic)) (do (prn "bad idx " path) (exit 1)))
+        b)))
+(= DIR "examples/autograd/mnist/")
+(= train-img (load-idx (string-concat DIR "train-images-idx3-ubyte") 2051))
+(= train-lab (load-idx (string-concat DIR "train-labels-idx1-ubyte") 2049))
+(= test-img  (load-idx (string-concat DIR "t10k-images-idx3-ubyte") 2051))
+(= test-lab  (load-idx (string-concat DIR "t10k-labels-idx1-ubyte") 2049))
+(= N-TRAIN (be32 train-img 4)) (= N-TEST (be32 test-img 4))
+(= N-FEAT (* (be32 train-img 8) (be32 train-img 12)))
+(= N-CLS 10) (= HIDDEN 128) (= LR 0.03) (= EPOCHS 3)
+
+(= x-scratch (vec N-FEAT 0.0))
+(def load-x! (blob k)
+  (vec-from-blob! x-scratch blob (+ 16 (* k N-FEAT)) 0.00392156862745098))
+(def label-of (blob k) (blob-ref blob (+ 8 k)))
+
+(def rnd () (- (/ (random 1000000) 1000000.0) 0.5))
+(def randmat (rows cols scale)
+  (let m (vec (* rows cols) 0.0)
+    (do (for i 0 (- (* rows cols) 1) (vec-set! m i (* (rnd) (* 2.0 scale)))) m)))
+(= W1 (leaf (randmat HIDDEN N-FEAT 0.0357)))
+(= b1 (leaf (vec HIDDEN 0.0)))
+(= W2 (leaf (randmat N-CLS HIDDEN 0.0884)))
+(= b2 (leaf (vec N-CLS 0.0)))
+
+(def train-step (xd target)
+  (do (zero-grad! W1) (zero-grad! b1) (zero-grad! W2) (zero-grad! b2)
+      (backward (t-softmax-ce
+                 (t+ (t-matvec W2 (t-relu (t+ (t-matvec-const W1 xd) b1))) b2)
+                 target))
+      (sgd! W1 LR) (sgd! b1 LR) (sgd! W2 LR) (sgd! b2 LR)))
+
+(prn "training " N-FEAT "-" HIDDEN "-" N-CLS " for the web export ...")
+(for epoch 1 EPOCHS
+  (do (for k 0 (- N-TRAIN 1)
+        (train-step (load-x! train-img k) (label-of train-lab k)))
+      (prn "  epoch " epoch " done")
+      (= LR (* LR 0.5))))
+
+;; accuracy with an arbitrary weight set (float or reconstructed)
+(= h-scratch (vec HIDDEN 0.0))
+(= o-scratch (vec N-CLS 0.0))
+(def acc-with (w1 bb1 w2 bb2)
+  (let correct 0
+    (do (for k 0 (- N-TEST 1)
+          (do (mat-vec! h-scratch w1 (load-x! test-img k) bb1)
+              (vec-relu! h-scratch)
+              (mat-vec! o-scratch w2 h-scratch bb2)
+              (if (is (vec-argmax o-scratch) (label-of test-lab k))
+                  (= correct (+ correct 1)))))
+        correct)))
+(prn "float test acc: " (acc-with (tensor-data W1) (tensor-data b1)
+                                  (tensor-data W2) (tensor-data b2))
+     "/" N-TEST)
+
+;; ---- quantize + reconstruct + hex-pack -------------------------------------
+(def absmax (v)
+  (let m 0.0
+    (do (for i 0 (- (vec-len v) 1)
+          (let a (abs (vec-ref v i)) (if (> a m) (= m a))))
+        m)))
+(def q-byte (w s)                        ; clamp(round(w/s),-127,127)+128
+  (let q (round (/ w s))
+    (+ 128 (int (max -127.0 (min 127.0 q))))))
+(def quantize (v)                        ; → (scale hexstring reconstructed)
+  (let s (/ (absmax v) 127.0)
+    (let n (vec-len v)
+      (let recon (vec n 0.0)
+        (let hexes (vec 0 nil)
+          (do (for i 0 (- n 1)
+                (let b (q-byte (vec-ref v i) s)
+                  (do (vec-push! hexes (string-pad-left (fmt "{:x}" b) 2 "0"))
+                      (vec-set! recon i (* (- b 128) s)))))
+              (list s (string-join (seq hexes) "") recon)))))))
+
+(= q1 (quantize (tensor-data W1)))
+(= qb1 (quantize (tensor-data b1)))
+(= q2 (quantize (tensor-data W2)))
+(= qb2 (quantize (tensor-data b2)))
+
+(= qacc (acc-with (nth 2 q1) (nth 2 qb1) (nth 2 q2) (nth 2 qb2)))
+(prn "u8-quantized test acc: " qacc "/" N-TEST)
+(if (< qacc 9600) (do (prn "QUANTIZED ACCURACY TOO LOW — not exporting") (exit 1)))
+
+(def entry (q rows cols)
+  (hash-map "scale" (nth 0 q) "hex" (nth 1 q) "rows" rows "cols" cols))
+(write-string "web/mnist-weights.json"
+  (json-encode (hash-map
+    "arch" (list N-FEAT HIDDEN N-CLS)
+    "acc"  qacc
+    "w1" (entry q1 HIDDEN N-FEAT) "b1" (entry qb1 HIDDEN 1)
+    "w2" (entry q2 N-CLS HIDDEN)  "b2" (entry qb2 N-CLS 1))))
+(prn "wrote web/mnist-weights.json ("
+     (get (file-info "web/mnist-weights.json") "size") " bytes)")
+(prn "EXPORT: OK")

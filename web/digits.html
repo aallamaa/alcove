@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>draw a digit — classified by alcove in your browser</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0d12; color: #cdd3de;
+         font: 15px/1.5 system-ui, sans-serif; display: flex;
+         flex-direction: column; align-items: center; padding: 24px 16px 40px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  p  { max-width: 660px; text-align: center; margin: 6px 0; color: #9aa3b2; }
+  a  { color: #6af; }
+  .stage { display: flex; gap: 28px; margin: 18px 0 6px; flex-wrap: wrap;
+           justify-content: center; align-items: flex-start; }
+  canvas#pad { border-radius: 10px; background: #000; cursor: crosshair;
+               box-shadow: 0 8px 40px #0008; touch-action: none; }
+  .result { display: flex; flex-direction: column; align-items: center;
+            min-width: 220px; }
+  #digit { font: 700 96px/1 ui-monospace, monospace; color: #7cc;
+           min-height: 100px; }
+  #conf { width: 220px; }
+  .bar { display: flex; align-items: center; gap: 6px; margin: 2px 0;
+         font: 12px ui-monospace, monospace; }
+  .bar span.lbl { width: 12px; color: #9aa3b2; }
+  .bar .track { flex: 1; background: #161a24; border-radius: 3px; height: 12px; }
+  .bar .fill { height: 12px; border-radius: 3px; background: #2e6f6f;
+               width: 0%; transition: width 0.08s; }
+  .bar.best .fill { background: #7cc; }
+  .bar span.pct { width: 42px; text-align: right; color: #6b7384; }
+  #status { font: 12px ui-monospace, monospace; color: #6b7384;
+            min-height: 1.2em; margin-top: 8px; }
+  button { background:#1b2030; color:#cdd3de; border:1px solid #2c3346;
+           border-radius:6px; padding:6px 14px; font:14px system-ui;
+           cursor:pointer; margin-top: 10px; }
+  button:hover { background:#232a3d; }
+</style>
+</head>
+<body>
+  <h1>Draw a digit — classified by <a href="https://github.com/aallamaa/alcove">alcove</a></h1>
+  <p>The network below was <strong>trained by alcove itself</strong> — the
+     pure-Lisp autograd engine in
+     <a href="https://github.com/aallamaa/alcove/tree/master/examples/autograd">examples/autograd</a>
+     trained a 784-128-10 MLP on all 60,000 MNIST digits (97%+ test accuracy,
+     ~28&nbsp;s natively). Its weights run here in the alcove WebAssembly
+     runtime: every classification is a Lisp call into fused tensor kernels.</p>
+
+  <div class="stage">
+    <div>
+      <canvas id="pad" width="280" height="280"></canvas><br>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="result">
+      <div id="digit">·</div>
+      <div id="conf"></div>
+    </div>
+  </div>
+  <div id="status">loading the alcove runtime…</div>
+  <p style="font-size:13px"><a href="index.html">› alcove REPL</a> &nbsp;·&nbsp;
+     <a href="playground.html">› playground</a> &nbsp;·&nbsp;
+     <a href="mandelbrot.html">› mandelbrot</a> &nbsp;·&nbsp;
+     <a href="learn.html">› learn alcove</a></p>
+
+<script src="alcove.js"></script>
+<script>
+(function () {
+  "use strict";
+  const pad = document.getElementById("pad");
+  const ctx = pad.getContext("2d", { willReadFrequently: true });
+  const statusEl = document.getElementById("status");
+  const digitEl = document.getElementById("digit");
+  const confEl = document.getElementById("conf");
+
+  // confidence bars 0-9
+  const bars = [];
+  for (let d = 0; d < 10; d++) {
+    const row = document.createElement("div");
+    row.className = "bar";
+    row.innerHTML = `<span class="lbl">${d}</span>` +
+      `<div class="track"><div class="fill"></div></div><span class="pct"></span>`;
+    confEl.appendChild(row);
+    bars.push(row);
+  }
+
+  function clearPad() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, 280, 280);
+    digitEl.textContent = "·";
+    bars.forEach((b) => {
+      b.classList.remove("best");
+      b.querySelector(".fill").style.width = "0%";
+      b.querySelector(".pct").textContent = "";
+    });
+  }
+  clearPad();
+  document.getElementById("clear").onclick = clearPad;
+
+  // ---- drawing (mouse + touch via pointer events) ---------------------------
+  let drawing = false, last = null;
+  ctx.lineCap = ctx.lineJoin = "round";
+  function pos(ev) {
+    const r = pad.getBoundingClientRect();
+    return [ (ev.clientX - r.left) * (pad.width / r.width),
+             (ev.clientY - r.top) * (pad.height / r.height) ];
+  }
+  pad.addEventListener("pointerdown", (ev) => {
+    drawing = true; last = pos(ev); pad.setPointerCapture(ev.pointerId);
+  });
+  pad.addEventListener("pointermove", (ev) => {
+    if (!drawing) return;
+    const p = pos(ev);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 20;
+    ctx.beginPath();
+    ctx.moveTo(last[0], last[1]);
+    ctx.lineTo(p[0], p[1]);
+    ctx.stroke();
+    last = p;
+    throttledClassify();
+  });
+  function endStroke() { if (drawing) { drawing = false; classify(); } }
+  pad.addEventListener("pointerup", endStroke);
+  pad.addEventListener("pointerleave", endStroke);
+
+  // ---- MNIST-style preprocessing --------------------------------------------
+  // MNIST digits are 20x20, centered by center-of-mass in a 28x28 field.
+  // Reproducing that on the drawn image matters far more than the model does.
+  function toMnist() {
+    const img = ctx.getImageData(0, 0, 280, 280).data;
+    // grayscale + bounding box of ink
+    let minx = 280, miny = 280, maxx = -1, maxy = -1;
+    const g = new Float32Array(280 * 280);
+    for (let y = 0; y < 280; y++)
+      for (let x = 0; x < 280; x++) {
+        const v = img[(y * 280 + x) * 4]; // white ink on black: R channel
+        g[y * 280 + x] = v;
+        if (v > 16) {
+          if (x < minx) minx = x;
+          if (x > maxx) maxx = x;
+          if (y < miny) miny = y;
+          if (y > maxy) maxy = y;
+        }
+      }
+    if (maxx < 0) return null; // empty canvas
+    const bw = maxx - minx + 1, bh = maxy - miny + 1;
+    const scale = 20 / Math.max(bw, bh);
+    const sw = Math.max(1, Math.round(bw * scale)),
+          sh = Math.max(1, Math.round(bh * scale));
+    // box-resample the crop into sw x sh
+    const small = new Float32Array(sw * sh);
+    for (let y = 0; y < sh; y++)
+      for (let x = 0; x < sw; x++) {
+        const x0 = minx + (x / scale), x1 = minx + ((x + 1) / scale);
+        const y0 = miny + (y / scale), y1 = miny + ((y + 1) / scale);
+        let sum = 0, n = 0;
+        for (let yy = Math.floor(y0); yy < Math.min(280, Math.ceil(y1)); yy++)
+          for (let xx = Math.floor(x0); xx < Math.min(280, Math.ceil(x1)); xx++) {
+            sum += g[yy * 280 + xx]; n++;
+          }
+        small[y * sw + x] = n ? sum / n : 0;
+      }
+    // center of mass of the small image
+    let mx = 0, my = 0, mass = 0;
+    for (let y = 0; y < sh; y++)
+      for (let x = 0; x < sw; x++) {
+        const v = small[y * sw + x];
+        mx += x * v; my += y * v; mass += v;
+      }
+    mx /= mass; my /= mass;
+    // paste into 28x28 with the mass center at (14, 14)
+    const out = new Uint8Array(784);
+    const ox = Math.round(14 - mx), oy = Math.round(14 - my);
+    for (let y = 0; y < sh; y++)
+      for (let x = 0; x < sw; x++) {
+        const tx = x + ox, ty = y + oy;
+        if (tx >= 0 && tx < 28 && ty >= 0 && ty < 28)
+          out[ty * 28 + tx] = Math.min(255, Math.round(small[y * sw + x]));
+      }
+    return out;
+  }
+
+  function toHex(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i++)
+      s += bytes[i].toString(16).padStart(2, "0");
+    return s;
+  }
+
+  // ---- alcove glue -----------------------------------------------------------
+  let buf = "";
+  Alcove.setOutput((s) => { buf += s; });
+  let ready = false, busy = false, queued = false;
+
+  async function classify() {
+    if (!ready) return;
+    if (busy) { queued = true; return; }
+    busy = true;
+    const px = toMnist();
+    if (px) {
+      buf = "";
+      await Alcove.eval(`(prn (classify "${toHex(px)}"))`);
+      const clean = buf.replace(/\x1B\[[0-9;]*m/g, "");
+      const probs = (clean.match(/-?[0-9.]+(?:e-?[0-9]+)?/g) || []).map(Number);
+      if (probs.length === 10) {
+        let best = 0;
+        for (let d = 1; d < 10; d++) if (probs[d] > probs[best]) best = d;
+        digitEl.textContent = String(best);
+        for (let d = 0; d < 10; d++) {
+          bars[d].classList.toggle("best", d === best);
+          bars[d].querySelector(".fill").style.width = (probs[d] * 100) + "%";
+          bars[d].querySelector(".pct").textContent =
+            (probs[d] * 100).toFixed(1) + "%";
+        }
+      }
+    }
+    busy = false;
+    if (queued) { queued = false; classify(); }
+  }
+  let lastT = 0;
+  function throttledClassify() {
+    const t = performance.now();
+    if (t - lastT > 120) { lastT = t; classify(); }
+  }
+
+  Alcove.ready.then(async () => {
+    statusEl.textContent = "fetching the alcove-trained weights…";
+    const r = await fetch("mnist-weights.json");
+    const W = await r.json();
+    statusEl.textContent = "unpacking weights into tensors…";
+    // unpack: v[i] = (byte-128)*scale via vec-from-blob! + a vec-axpy! shift
+    await Alcove.eval(`
+      (def unpack (hex n s)
+        (let v (vec n 0.0)
+          (do (vec-from-blob! v (hex-decode hex) 0 s)
+              (let ones (vec n 1.0)
+                (vec-axpy! v (- 0.0 (* 128.0 s)) ones))
+              v)))
+      (def classify (hex)
+        (do (vec-from-blob! x-in (hex-decode hex) 0 0.00392156862745098)
+            (mat-vec! h w1 x-in b1)
+            (vec-relu! h)
+            (mat-vec! o w2 h b2)
+            (vec-softmax! o)
+            o))
+      (= x-in (vec 784 0.0)) (= h (vec 128 0.0)) (= o (vec 10 0.0))`);
+    for (const k of ["w1", "b1", "w2", "b2"]) {
+      const t = W[k];
+      await Alcove.eval(
+        `(= ${k} (unpack "${t.hex}" ${t.rows * t.cols} ${t.scale}))`);
+    }
+    buf = "";
+    ready = true;
+    statusEl.textContent =
+      `ready — ${W.arch.join("-")} MLP, ${(W.acc / 100).toFixed(1)}% on the ` +
+      "MNIST test set, trained by alcove's autograd. Draw a digit!";
+  }).catch((e) => { statusEl.textContent = "failed to start: " + e; });
+})();
+</script>
+</body>
+</html>
