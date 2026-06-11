@@ -1,19 +1,51 @@
-# Alcove
+# Alcove & Adder
 
 [![CI](https://github.com/aallamaa/alcove/actions/workflows/ci.yml/badge.svg)](https://github.com/aallamaa/alcove/actions/workflows/ci.yml)
 
-A Lisp-1 dialect in one C file. Arc + Clojure flavour, bytecode VM,
-native JIT (arm64 + amd64), persistent key-value store, RESP2 server
-mode, libffi-based C interop, and a small tensor toolkit fast enough
-to train an MLP digit classifier in pure Lisp.
+**One tiny runtime, two languages.** **Alcove** is a Lisp-1 dialect
+(Arc + Clojure flavour); **Adder** is the *same language* wearing
+Python's indentation syntax — the most readable compromise between
+Lisp's homoiconic core and Python's surface. Both share everything:
+one C file, a bytecode VM, a native JIT (arm64 + amd64), tensors fast
+enough to train an MNIST classifier, JSON/regex/shell scripting,
+persistence, FFI, and a WebAssembly build.
+
+```python
+#!/usr/bin/env adder                 # ← Adder: Python-shaped
+def fib (n):
+  if (< n 2):
+    n
+    + (fib (- n 1)) (fib (- n 2))
+
+prn "fib 30 = " (fib 30)
+```
+
+```lisp
+;; ← Alcove: the same program, as Lisp
+(def fib (n)
+  (if (< n 2) n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+(prn "fib 30 = " (fib 30))
+```
+
+Adder is not a transpile-to target or a skin: the indentation reader
+produces ordinary Lisp forms *before* macro-expansion, so it is fully
+homoiconic — macros, `(source f)` round-tripping, the REPL, scripts,
+and the browser runtime all speak both. `make` builds `alcove`,
+`make als` builds `adder`; every release ships both binaries.
 
 🎮 **Play the in-browser Mario demo** — the game is one alcove file
 running under WebAssembly:
 **[aallamaa.github.io/alcove/mario.html](https://aallamaa.github.io/alcove/mario.html)**
 
-📚 **Learn alcove in the browser** — editable Alcove and Adder
-examples with immediate output:
-**[aallamaa.github.io/alcove/learn.html](https://aallamaa.github.io/alcove/learn.html)**
+✎ **Draw a digit** — a neural net trained *by* the language classifies
+your handwriting live:
+**[aallamaa.github.io/alcove/digits.html](https://aallamaa.github.io/alcove/digits.html)**
+
+📚 **Learn both syntaxes in the browser** — the playground's guided
+tour has an Alcove/Adder switch on every lesson:
+**[aallamaa.github.io/alcove/playground.html](https://aallamaa.github.io/alcove/playground.html)**
 
 🧭 **Lisp comparison table** — Common Lisp, Racket, Clojure, Emacs Lisp,
 Alcove, and Adder side by side:
@@ -28,10 +60,10 @@ Alcove, and Adder side by side:
 
 ## Taste
 
-```lisp
-;; Hello world
-(prn "hello" "world")                ; → hello world
+The same features, both surfaces — pick whichever reads better to you:
 
+```lisp
+;; Alcove ----------------------------------------------------------
 ;; Closures
 (def make-counter ()
   (let n 0 (fn () (do (= n (+ n 1)) n))))
@@ -54,6 +86,25 @@ Alcove, and Adder side by side:
 ;; FFI: any C library at runtime
 (= sqrt (ffi-fn "libm.so.6" "sqrt" "double" "double"))
 (sqrt 2.0)                           ; → 1.41421...
+```
+
+```python
+# Adder ------------------------------------------------------------
+# Closures
+def make-counter ():
+  with (n 0):
+    fn ():
+      = n (+ n 1)
+      n
+
+= c (make-counter)
+prn (c) (c) (c)                      # → 1 2 3
+
+# Scripting floor: JSON, regex, shell — same builtins, no parens tax
+= cfg (json-decode (read-string "config.json"))
+prn (get cfg "port")
+each m (re-find-all "[0-9]+" (get (shell "uname -r") "out")):
+  prn "version part: " m
 ```
 
 ---
