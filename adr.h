@@ -342,11 +342,14 @@ static char *als_strip_comment(const char *line) {
       continue;
     }
     /* A line comment is `#` followed by a space, tab, or end of line:
-       `# like this`. A `#` glued to the next character is a dispatch token
-       (#[ vector, #{ set, #b"..." blob) and passes through to the reader
-       untouched. This one rule replaces a per-token exception list — see the
-       matching rule in adr.py / als_read_one. */
-    if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' || line[i + 1] == '\t'))
+       `# like this`. `#!` is also a comment (so `#!/usr/bin/env adder`
+       shebang scripts run; the alcove reader has the matching `#!` rule).
+       A `#` glued to any other character is a dispatch token (#[ vector,
+       #{ set, #b"..." blob) and passes through to the reader untouched.
+       This one rule replaces a per-token exception list — see the matching
+       rule in adr.py / als_read_one. */
+    if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' ||
+                     line[i + 1] == '\t' || line[i + 1] == '!'))
       break;
     out[o++] = c;
     if (c == '"')

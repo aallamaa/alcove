@@ -97,6 +97,15 @@ exp_t *expflagscmd(exp_t *e, env_t *env);
 extern const char doc_compiledp[], doc_jitp[], doc_inlinep[], doc_expflags[];
 extern const char doc_backtrace[];
 exp_t *backtracecmd(exp_t *e, env_t *env);
+
+/* builtins_os.h — OS/scripting floor */
+extern const char doc_getenv[], doc_setenv[], doc_epr[], doc_eprn[],
+                  doc_readline[];
+exp_t *getenvcmd(exp_t *e, env_t *env);
+exp_t *setenvcmd(exp_t *e, env_t *env);
+exp_t *eprcmd(exp_t *e, env_t *env);
+exp_t *eprncmd(exp_t *e, env_t *env);
+exp_t *readlinecmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

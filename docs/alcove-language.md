@@ -52,8 +52,44 @@ alcove -r 6379      # RESP2 server on port 6379
 ```
 
 Script execution prints the value of each top-level form unless it is
-`nil`. Errors do **not** abort a script — alcove logs the error and
-keeps going. There is no `try` / `catch`.
+`nil`. Errors do **not** abort a script — alcove logs the error (with a
+caret and a call backtrace) and keeps going, then exits non-zero. Use
+`(try body handler)` to catch errors in-language.
+
+### Scripts: arguments, environment, shebang
+
+Everything after the script path lands in `*args*` as a list of strings
+(`nil` when there are none — REPL, plain `-e`, embedded):
+
+```sh
+alcove deploy.alc prod --fast     # *args* = ("prod" "--fast")
+alcove -e '(prn *args*)' a b      # ("a" "b")
+```
+
+`#!` starts a comment in both readers, so scripts run directly:
+
+```sh
+#!/usr/bin/env alcove             # or: #!/usr/bin/env adder
+```
+
+The process environment and standard streams:
+
+```lisp
+(getenv "HOME")             ; → "/home/you" | nil
+(getenv "PORT" "6379")      ; default when unset
+(setenv "MODE" "fast")      ; visible to (shell ...) children
+(eprn "to stderr, no colour")
+(read-line)                 ; one stdin line | nil at EOF
+```
+
+In Adder the same script reads:
+
+```python
+#!/usr/bin/env adder
+if (no *args*):
+  eprn "usage: greet.adr NAME"
+  prn "hello, " (first *args*)
+```
 
 ---
 
@@ -764,7 +800,9 @@ use FFI.
 
 `pr x y z` — write each arg to stdout, no separator, no newline.
 `prn x y z` — same but trailing newline. `print` and `println` exist as
-aliases.
+aliases. `epr` / `eprn` are the stderr twins (uncoloured — diagnostics
+stay grep-able when redirected). `(read-line)` reads one line from stdin
+(`nil` at EOF).
 
 Whole-file helpers:
 
@@ -779,9 +817,18 @@ Whole-file helpers:
 (load "lib.alc")                 ; evaluate Alcove forms from a file
 ```
 
-There is **no `read-line`, `read-char`, or stream/port object** yet.
-Keyboard input and custom stream handling require the FFI route
-described below.
+There is **no `read-char` or stream/port object**. Character-level
+keyboard input (raw tty) still uses the FFI route described below.
+
+### Modules
+
+`(require "mod")` loads `mod.alc` exactly once per session — searched
+relative to the requiring file, then `$ALCOVE_PATH`, then cwd. A module
+can open with `(ns mymod)` so its `def`s become `mymod/name`;
+`(require "mod" :refer parse emit)` imports chosen names unqualified
+(`:refer` alone imports them all). `(require "mod.so")` dlopens a native
+module (see the embedding guide). `load` remains the no-bookkeeping
+textual include.
 
 ### Time, randomness, persistence
 
@@ -1104,11 +1151,8 @@ So you do not waste time looking:
 - No threads visible from user Lisp. The RESP server runs sharded
   reactors internally but those shards do not expose user-facing
   primitives. There is no `future`, `agent`, `go`, `spawn`.
-- No regex, no JSON, no HTTP. Use FFI.
-- No module system. Top-level `def`s land in the current top-level
-  session environment.
-  `(load "file.alc")` exists, but there is no namespace/import/export
-  layer yet.
+- No regex, no JSON, no HTTP. Use FFI. (Regex and JSON are planned for
+  v0.2.)
 
 When in doubt, search `alcove.c` for the symbol; if it is not in the
 reserved-symbol table it is not a builtin.

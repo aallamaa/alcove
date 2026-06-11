@@ -543,6 +543,11 @@ lispProc lispProcList[] = {
     LISPCMD("print", prcmd, doc_pr),
     LISPCMD("prn", prncmd, doc_prn),
     LISPCMD("println", prncmd, doc_prn),
+    LISPCMD("epr", eprcmd, doc_epr),
+    LISPCMD("eprn", eprncmd, doc_eprn),
+    LISPCMD("read-line", readlinecmd, doc_readline),
+    LISPCMD_APP("getenv", getenvcmd, doc_getenv),
+    LISPCMD_APP("setenv", setenvcmd, doc_setenv),
     /* Strings and whole-file I/O */
     LISPCMD_APP("str", strcmd, doc_str),
     LISPCMD_APP("format", strcmd, doc_str),
@@ -5544,6 +5549,7 @@ static exp_t *load_native_module(const char *path, const char *spec,
 
 /* The standard-library builtins live in a dedicated #included fragment. */
 #include "builtins_stdlib.h"
+#include "builtins_os.h"
 
 /* ---------------- Source pretty-printer ----------------
    Used by (source fn) to render a lambda body the way a Lisper would
@@ -11506,6 +11512,12 @@ env_t *alcove_init(void) {
   }
   (void)t;
   (void)nil;
+  /* *args*: the script's command-line arguments (a list of strings). Bound
+     nil here so it is ALWAYS defined — REPL, -e without args, embedded, web;
+     main() rebinds it after argv parsing when a script receives arguments. */
+  if (!global->d)
+    global->d = create_dict();
+  set_get_keyval_dict(global->d, "*args*", NIL_EXP);
   return global;
 }
 
@@ -11592,6 +11604,7 @@ int main(int argc, char *argv[]) {
   int auto_load = 1;
   int run_init = 1;
   int save_history = 1;
+  int interactive_after = 0; /* -i: drop into the REPL after the script */
   char *eval_string = NULL;
 #ifndef ALCOVE_WEB
   int resp_mode = 0;     /* -r: RESP server only, no REPL */
@@ -11611,6 +11624,8 @@ int main(int argc, char *argv[]) {
         printf("alcove %s\n", ALCOVE_VERSION);
 #endif
         return 0;
+      } else if (strcmp(argv[src], "-i") == 0) {
+        interactive_after = 1;
       } else if (strcmp(argv[src], "--safe") == 0) {
         /* Don't let a db.dump auto-(require) native modules to resolve its
            custom types — loading a dump then can't execute module code. */
@@ -11737,20 +11752,41 @@ int main(int argc, char *argv[]) {
     }
     evaluatingfile = 1;
   } else if (argc >= 2) {
-    if ((stream = fopen(argv[argc - 1], "r"))) {
+    if ((stream = fopen(argv[1], "r"))) {
       evaluatingfile = 1;
-      if (strcmp(argv[argc - 2], "-i") == 0)
+      if (interactive_after)
         evaluatingfile |= 2;
-      script_src = src_basename(argv[argc - 1]);
+      script_src = src_basename(argv[1]);
       /* Let (require ...) at the top level of a script resolve modules
          relative to the script's own directory first. */
-      g_reader_dir = path_dirname(argv[argc - 1]);
+      g_reader_dir = path_dirname(argv[1]);
     } else {
-      printf("Error opening %s\n", argv[argc - 1]);
+      printf("Error opening %s\n", argv[1]);
       exit(1);
     }
   } else
     stream = stdin;
+
+  /* Rebind *args* to the remaining positionals: for a script, everything
+     after the script path; for -e, every positional. (Previously extra
+     positionals were silently mis-read — the LAST one won as the script —
+     so no working invocation changes meaning.) */
+  {
+    int first = (evaluatingfile && !eval_string) ? 2 : 1;
+    exp_t *head = NULL, *tail = NULL;
+    for (int ai = first; ai < argc; ai++) {
+      exp_t *node = make_node(make_string(argv[ai], (int)strlen(argv[ai])));
+      if (tail) {
+        tail->next = node;
+        tail = node;
+      } else
+        head = tail = node;
+    }
+    if (head) {
+      set_get_keyval_dict(global->d, "*args*", head);
+      unrefexp(head);
+    }
+  }
 
 #ifdef ALCOVE_ALS
   /* Non-interactive input (file arg, piped stdin, -e) is Adder:
@@ -11804,7 +11840,7 @@ int main(int argc, char *argv[]) {
     fclose(stream);
     stream = txt ? fmemopen(txt, slen, "r") : NULL;
     if (!stream) {
-      printf("Error reading %s\n", argv[argc - 1]);
+      printf("Error reading %s\n", argv[1]);
       exit(1);
     }
     g_reader_srctext = txt; /* outlives the run; reclaimed at exit */

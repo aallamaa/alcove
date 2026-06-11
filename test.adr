@@ -6022,6 +6022,26 @@ assert "string-set! utf8 width change" (do (setf _s (string-buf 3)) (string-set!
 assert "string-set! utf8 keeps codepoint length" (do (setf _s (string-buf 3)) (string-set! _s 1 #\é) (length _s)):
   3
 
+assert "*args* defined, nil under test" *args* nil
+
+assert "setenv->getenv round-trip" (do (setenv "ALCOVE_TEST_ENV_ZZ" "v1") (getenv "ALCOVE_TEST_ENV_ZZ")):
+  "v1"
+
+assert "getenv unset -> nil" (getenv "ALCOVE_NO_SUCH_VAR_ZZ") nil
+
+assert "getenv unset -> default" (getenv "ALCOVE_NO_SUCH_VAR_ZZ" "dflt"):
+  "dflt"
+
+assert "getenv non-string name errors" (error? (try (getenv 42) (fn (e) e))) t
+
+assert "epr returns nil" (epr) nil
+
+assert "eprn returns nil, prints to stderr only" (eprn) nil
+
+assert "read-line is registered" (type-of read-line) 'fn
+
+assert "#! comments to end of line" (do #!/usr/bin/env alcove 42) 42
+
 ns nstest
 
 def nsfn (x):

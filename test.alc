@@ -3821,6 +3821,26 @@
         3)
 
 ;; ====================================================================
+;; OS / scripting floor: *args*, getenv/setenv, epr/eprn, read-line.
+;; (*args* is nil under the test runner — scripts get a list of strings.
+;; read-line would consume the suite's stdin, so only its registration is
+;; pinned here; behavior is covered by the shebang/script Makefile gate.)
+;; ====================================================================
+(assert "*args* defined, nil under test" *args* nil)
+(assert "setenv->getenv round-trip"
+        (do (setenv "ALCOVE_TEST_ENV_ZZ" "v1") (getenv "ALCOVE_TEST_ENV_ZZ"))
+        "v1")
+(assert "getenv unset -> nil" (getenv "ALCOVE_NO_SUCH_VAR_ZZ") nil)
+(assert "getenv unset -> default" (getenv "ALCOVE_NO_SUCH_VAR_ZZ" "dflt") "dflt")
+(assert "getenv non-string name errors"
+        (error? (try (getenv 42) (fn (e) e))) t)
+(assert "epr returns nil" (epr) nil)
+(assert "eprn returns nil, prints to stderr only" (eprn) nil)
+(assert "read-line is registered" (type-of read-line) 'fn)
+(assert "#! comments to end of line" (do #!/usr/bin/env alcove
+        42) 42)
+
+;; ====================================================================
 ;; module system: (ns name) auto-qualifies top-level def/defn/defmacro to
 ;; name/<sym>; qualified references resolve; (ns) clears. (require itself is
 ;; filesystem-driven and exercised outside the suite.)

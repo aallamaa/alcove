@@ -217,9 +217,10 @@ def strip_comment(line):
                 i += 3
                 continue
             # A line comment is `#` followed by a space, tab, or end of line.
-            # A `#` glued to the next char is a dispatch token (#[ #{ #b"…)
-            # and survives to the reader. One rule, no per-token exceptions.
-            if c == "#" and line[i + 1:i + 2] in (" ", "\t", ""):
+            # `#!` comments too (shebang scripts). A `#` glued to any other
+            # char is a dispatch token (#[ #{ #b"…) and survives to the
+            # reader. One rule, no per-token exceptions.
+            if c == "#" and line[i + 1:i + 2] in (" ", "\t", "", "!"):
                 break
             out.append(c)
             if c == '"':

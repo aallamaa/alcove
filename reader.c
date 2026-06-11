@@ -438,6 +438,16 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
                same value. (Plain `{...}` is the hash-map literal.) */
             return reader_collect(stream, '}',
                                   make_node(make_symbol("hash-set", 8)));
+          } else if (y == '!') {
+            /* `#!` — comment to end of line (Scheme convention). Exists so
+               `#!/usr/bin/env alcove` shebang scripts parse; harmless
+               anywhere else. Line counting stays exact: RGETC sees the
+               newline like any comment. */
+            while ((z = RGETC(stream)) != EOF && z != '\n')
+              ;
+            if (clmacro == 0)
+              g_form_line_arm = 1; /* re-arm form-position for the next form */
+            continue;
           } else
             return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
                          "call to dispatch macro char %c unkown!", y);
