@@ -21,6 +21,11 @@ a list.
 highlighting, completion, history, FFI, RESP) with the Adder
 front end wired in. `./alcove` is untouched (built without `ALCOVE_ALS`).
 
+Adder scripts are directly executable — `#!` is a comment, so
+`#!/usr/bin/env adder` works; arguments arrive in `*args*`.
+See `dirstat.adr` (a file-type summary utility) for the v0.2
+scripting floor in action: `./dirstat.adr ~/Code`.
+
 ```sh
 make als                       # -> ./adder
 ./adder                    # ALS REPL, syntax highlighted

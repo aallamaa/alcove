@@ -1,6 +1,6 @@
 # Build artifacts (the default `make` target produces ./alcove).
-alcove
-adder
+/alcove
+/adder
 alcoveil
 
 # Cross-compile / benchmark A-B comparison binaries (alcove.jemalloc,

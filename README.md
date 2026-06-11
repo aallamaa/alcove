@@ -485,6 +485,34 @@ and `alc2adr.py` (`.alc` → `.adr`, with builder laddering) are
 offline tools. See [`examples/adder/`](examples/adder/)
 and [`adder-spec.md`](adder-spec.md).
 
+### 10. Shell scripts — the scripting floor (v0.2)
+
+Scripts are real programs: `#!` is a comment in both readers, `*args*`
+carries the command line, and the stdlib covers env, filesystem,
+subprocesses, JSON, base64/hex, and POSIX-ERE regex — no FFI needed:
+
+```python
+#!/usr/bin/env adder
+# greet.adr — chmod +x and run: ./greet.adr world
+if (no *args*):
+  do:
+    eprn "usage: greet.adr NAME"        # stderr
+    exit 1
+prn "hello, " (first *args*) " from " (getenv "USER" "?")
+prn (get (shell "uname -s") "out")      # → {"out" ..., "exit" 0}
+prn (json-encode (frequencies (re-find-all "[a-z]" "banana")))
+```
+
+The same calls work identically in Alcove syntax. The full kit:
+`*args*` · `getenv`/`setenv` · `epr`/`eprn` · `read-line` ·
+`list-dir`/`file-info`/`make-dir`/`rename-file`/`delete-file` ·
+`(shell cmd)` · `json-encode`/`json-decode` · `base64-*`/`hex-*` ·
+`re-match`/`re-find`/`re-find-all`/`re-replace`/`re-split` ·
+`group-by`/`frequencies`/`partition`/`interleave`/`max-by`/`min-by` ·
+`string-pad-*`/`string-repeat`/`starts-with?`/`ends-with?` — see
+[`examples/adder/dirstat.adr`](examples/adder/dirstat.adr) for a complete
+utility script in ~50 lines.
+
 ---
 
 ## Examples
@@ -499,7 +527,7 @@ and [`adder-spec.md`](adder-spec.md).
 | [`examples/autograd/`](examples/autograd/) | Reverse-mode autograd in pure alcove: gradient check, automatic-backprop MLP, and real MNIST to 97.5% in ~28 s (3× NumPy). |
 | [`examples/arkanoid.alc`](examples/arkanoid.alc) | Auto-playing arkanoid on the terminal — mutable-string framebuffer, ANSI rendering. |
 | [`ffi-examples/`](ffi-examples/) | libm, libc strings, sleeping via usleep, a custom .so for everything FFI can call. |
-| [`examples/adder/`](examples/adder/) | Adder (`.adr`) — Python-like indentation syntax over the same Lisp forms; `make als` → `adder`. |
+| [`examples/adder/`](examples/adder/) | Adder (`.adr`) — Python-like indentation syntax over the same Lisp forms; `make als` → `adder`. `dirstat.adr` is the scripting-floor showcase. |
 
 ---
 
@@ -512,8 +540,8 @@ Prebuilt binaries (`alcove` + `adder` in one tarball) are on the
 **wasm** bundle (both cores + the playground pages, self-hostable).
 
 ```sh
-tar xzf alcove-0.1.0-linux-x86_64.tar.gz
-./alcove-0.1.0-linux-x86_64/alcove          # REPL
+tar xzf alcove-0.2.0-linux-x86_64.tar.gz
+./alcove-0.2.0-linux-x86_64/alcove          # REPL
 ```
 
 On macOS (or for the full feature set anywhere), build from source — it's

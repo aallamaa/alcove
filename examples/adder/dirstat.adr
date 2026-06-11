@@ -1,0 +1,56 @@
+#!/usr/bin/env adder
+# dirstat — file-type summary of a directory tree.
+#
+#   ./examples/adder/dirstat.adr [DIR]        (default: current directory)
+#
+# An Adder scripting-floor demo in ~40 lines: *args* / file-info / list-dir
+# (recursive walk), group-by + sort-by (aggregation), string-pad-* + fmt
+# (the table), eprn + exit (CLI manners). The same program in Alcove is the
+# same calls with parentheses — Adder is the indentation surface over one
+# runtime.
+
+= root (if *args* (first *args*) ".")
+= root-info (file-info root)
+if (or (no root-info) (no (get root-info "dir?"))):
+  do:
+    eprn "dirstat: not a directory: " root
+    exit 1
+
+# recursive walk: collect (ext . size) pairs for every regular file
+def ext-of (name):
+  with (i (string-index name ".")):
+    if (no i):
+      "(none)"
+      if (is i 0):
+        "(dotfile)"
+        substr name (+ i 1) (length name)
+
+def walk (d acc):                      # NB `dir` is a reserved builtin
+  each name (list-dir d):
+    with (path (string-concat d "/" name)):
+      with (info (file-info path)):
+        if (get info "dir?"):
+          walk path acc
+          vec-push! acc (list (ext-of name) (get info "size"))
+  acc
+
+= files (walk root (vec 0 nil))
+
+if (is (vec-len files) 0):
+  do:
+    prn "no files under " root
+    exit 0
+
+# aggregate: extension -> (ext count total-bytes)
+= by-ext (group-by first (seq files))
+def row-for (ext):
+  with (sizes (map (fn (p) (nth 1 p)) (get by-ext ext))):
+    list ext (length sizes) (reduce + 0 sizes)
+= rows (map row-for (keys by-ext))
+
+prn (string-pad-right "ext" 12) (string-pad-left "files" 8) (string-pad-left "bytes" 12)
+prn (string-repeat "-" 32)
+each row (sort-by (fn (r) (- 0 (nth 2 r))) rows):
+  prn (string-pad-right (nth 0 row) 12) (string-pad-left (str (nth 1 row)) 8) (string-pad-left (str (nth 2 row)) 12)
+prn (string-repeat "-" 32)
+prn (fmt "{} files, {} bytes total" (vec-len files) (reduce + 0 (map (fn (r) (nth 2 r)) rows)))

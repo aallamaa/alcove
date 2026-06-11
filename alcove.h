@@ -3,7 +3,7 @@
 
 /* Release version — printed by `alcove --version` and exported here so a C
    embedder can compile-time-check what it's building against. */
-#define ALCOVE_VERSION "0.1.0"
+#define ALCOVE_VERSION "0.2.0"
 
 #include "char.h"
 #include <stdint.h>

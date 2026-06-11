@@ -91,6 +91,18 @@ if (no *args*):
   prn "hello, " (first *args*)
 ```
 
+See [`examples/adder/dirstat.adr`](../examples/adder/dirstat.adr) for a
+complete utility script exercising the whole scripting floor.
+
+### The web build (wasm)
+
+The browser/wasm build runs the same language with three differences:
+`(shell ...)` returns an error (no subprocesses in a browser), FFI and the
+RESP server are compiled out, and the filesystem is emscripten's in-memory
+MEMFS (file ops work, but against a sandbox). Everything else — JSON,
+regex, tensors, the JIT-less VM — behaves identically; the wasm smoke
+battery (`make test-web`) pins that.
+
 ---
 
 ## 2. Lexical syntax
@@ -1250,8 +1262,15 @@ So you do not waste time looking:
 - No threads visible from user Lisp. The RESP server runs sharded
   reactors internally but those shards do not expose user-facing
   primitives. There is no `future`, `agent`, `go`, `spawn`.
-- No regex, no JSON, no HTTP. Use FFI. (Regex and JSON are planned for
-  v0.2.)
+- No HTTP client. `(shell "curl -s ...")`, FFI, or a native module.
+- No keyword arguments — default parameter values + dict-passing cover it
+  (see §3). A keyword-arg design that desugars purely in the reader may
+  happen someday; nothing that touches the calling convention will.
+- No stream/port objects. Whole-file helpers + `read-line` + `shell`
+  cover the scripting floor; `read-char`-level input is FFI territory.
+- No PCRE syntax: regex is POSIX **ERE** (see §4) — `[[:digit:]]`, not
+  `\d`; no lazy quantifiers, lookaround, or `$1` backrefs. A PCRE binding
+  belongs in a native module, not the core.
 
 When in doubt, search `alcove.c` for the symbol; if it is not in the
 reserved-symbol table it is not a builtin.
