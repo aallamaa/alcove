@@ -100,12 +100,19 @@ exp_t *backtracecmd(exp_t *e, env_t *env);
 
 /* builtins_os.h — OS/scripting floor */
 extern const char doc_getenv[], doc_setenv[], doc_epr[], doc_eprn[],
-                  doc_readline[];
+                  doc_readline[], doc_deletefile[], doc_renamefile[],
+                  doc_makedir[], doc_listdir[], doc_fileinfo[], doc_shell[];
 exp_t *getenvcmd(exp_t *e, env_t *env);
 exp_t *setenvcmd(exp_t *e, env_t *env);
 exp_t *eprcmd(exp_t *e, env_t *env);
 exp_t *eprncmd(exp_t *e, env_t *env);
 exp_t *readlinecmd(exp_t *e, env_t *env);
+exp_t *deletefilecmd(exp_t *e, env_t *env);
+exp_t *renamefilecmd(exp_t *e, env_t *env);
+exp_t *makedircmd(exp_t *e, env_t *env);
+exp_t *listdircmd(exp_t *e, env_t *env);
+exp_t *fileinfocmd(exp_t *e, env_t *env);
+exp_t *shellcmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

@@ -548,6 +548,12 @@ lispProc lispProcList[] = {
     LISPCMD("read-line", readlinecmd, doc_readline),
     LISPCMD_APP("getenv", getenvcmd, doc_getenv),
     LISPCMD_APP("setenv", setenvcmd, doc_setenv),
+    LISPCMD_APP("delete-file", deletefilecmd, doc_deletefile),
+    LISPCMD_APP("rename-file", renamefilecmd, doc_renamefile),
+    LISPCMD_APP("make-dir", makedircmd, doc_makedir),
+    LISPCMD_APP("list-dir", listdircmd, doc_listdir),
+    LISPCMD_APP("file-info", fileinfocmd, doc_fileinfo),
+    LISPCMD("shell", shellcmd, doc_shell),
     /* Strings and whole-file I/O */
     LISPCMD_APP("str", strcmd, doc_str),
     LISPCMD_APP("format", strcmd, doc_str),

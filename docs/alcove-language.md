@@ -817,6 +817,28 @@ Whole-file helpers:
 (load "lib.alc")                 ; evaluate Alcove forms from a file
 ```
 
+Filesystem management:
+
+```
+(list-dir "src")                 ; sorted entry names ("." ".." excluded)
+(file-info "a.txt")              ; {"size" n, "mtime" unix-secs, "dir?" t|nil}
+                                 ; ... or nil if the path doesn't exist
+(make-dir "build/out")           ; mkdir -p; idempotent
+(rename-file "a" "b")
+(delete-file "a")                ; files and empty directories
+```
+
+Subprocesses:
+
+```
+(shell "git status --short")     ; → {"out" "...captured stdout...", "exit" 0}
+(shell "ls nope 2>&1")           ; append 2>&1 to capture stderr too
+```
+
+`shell` runs the command through `/bin/sh`; a signal-terminated child
+reports `128+signal` as its exit code (the shell convention). It is not
+available in the web build (the call returns an error).
+
 There is **no `read-char` or stream/port object**. Character-level
 keyboard input (raw tty) still uses the FFI route described below.
 

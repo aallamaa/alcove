@@ -3840,6 +3840,48 @@
 (assert "#! comments to end of line" (do #!/usr/bin/env alcove
         42) 42)
 
+;; filesystem ops — full life-cycle round-trip under /tmp, cleaned up below.
+(= _osd "/tmp/alcove-test-osdir")
+(assert "make-dir creates parents" (make-dir (string-concat _osd "/sub")) t)
+(assert "make-dir idempotent" (make-dir _osd) t)
+(write-string (string-concat _osd "/sub/x.txt") "12345")
+(assert "file-info size" (get (file-info (string-concat _osd "/sub/x.txt")) "size") 5)
+(assert "file-info dir flag" (get (file-info _osd) "dir?") t)
+(assert "file-info mtime is a number"
+        (number? (get (file-info _osd) "mtime")) t)
+(assert "file-info missing -> nil" (file-info (string-concat _osd "/nope")) nil)
+(assert "rename-file"
+        (rename-file (string-concat _osd "/sub/x.txt")
+                     (string-concat _osd "/sub/y.txt")) t)
+(assert "list-dir sorted names"
+        (do (write-string (string-concat _osd "/sub/a.txt") "")
+            (list-dir (string-concat _osd "/sub")))
+        (list "a.txt" "y.txt"))
+(assert "list-dir missing errors"
+        (error? (try (list-dir (string-concat _osd "/nope")) (fn (e) e))) t)
+(assert "delete-file" (delete-file (string-concat _osd "/sub/y.txt")) t)
+(delete-file (string-concat _osd "/sub/a.txt"))
+(assert "delete-file empty dir" (delete-file (string-concat _osd "/sub")) t)
+(delete-file _osd)
+(assert "cleanup complete" (file-exists? _osd) nil)
+(assert "delete-file missing errors"
+        (error? (try (delete-file (string-concat _osd "/zz")) (fn (e) e))) t)
+
+;; (shell ...) — gated on a probe (web build / exotic hosts report an error
+;; uniformly, skipping the block) the way the FFI block gates on (ffi?).
+(= _sh-ok (no (error? (try (shell "true") (fn (e) e)))))
+(if _sh-ok
+    (do
+      (assert "shell captures stdout" (get (shell "echo -n hi") "out") "hi")
+      (assert "shell exit 0" (get (shell "true") "exit") 0)
+      (assert "shell exit code" (get (shell "exit 7") "exit") 7)
+      (assert "shell sees setenv"
+              (do (setenv "ALCOVE_SH_ZZ" "boo")
+                  (get (shell "printf %s \"$ALCOVE_SH_ZZ\"") "out"))
+              "boo")
+      (assert "shell non-string errors"
+              (error? (try (shell 5) (fn (e) e))) t)))
+
 ;; ====================================================================
 ;; module system: (ns name) auto-qualifies top-level def/defn/defmacro to
 ;; name/<sym>; qualified references resolve; (ns) clears. (require itself is
