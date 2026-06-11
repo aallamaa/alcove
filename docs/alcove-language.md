@@ -56,6 +56,13 @@ Script execution prints the value of each top-level form unless it is
 caret and a call backtrace) and keeps going, then exits non-zero. Use
 `(try body handler)` to catch errors in-language.
 
+### Editor intelligence
+
+`tools/lsp.alc` is an LSP server written in Alcove (see
+[`editor/README.md`](../editor/README.md) for Neovim/Emacs/VS Code setup):
+live syntax diagnostics, completion for every builtin with its docstring,
+and hover docs — serving `.alc` and `.adr` from one process.
+
 ### Scripts: arguments, environment, shebang
 
 Everything after the script path lands in `*args*` as a list of strings

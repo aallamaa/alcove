@@ -655,7 +655,9 @@ alcove -r 6379                  # RESP2 server mode
   [`examples/adder/README.md`](examples/adder/README.md)
   for the `adder` REPL, `.adr` files, and the offline tools.
 - **Editor support**: [`editor/`](editor/README.md) — syntax
-  highlighting for vim and emacs (drop-in files + install steps).
+  highlighting for vim and emacs (drop-in files + install steps), and a
+  **language server** (`tools/lsp.alc`, written in Alcove itself):
+  live diagnostics, completion with docs, and hover for BOTH dialects.
 
 ---
 
