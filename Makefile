@@ -377,6 +377,7 @@ test-all:
 	if echo "$$bt2" | grep -qi 'backtrace' && echo "$$bt2" | grep -qE '^[[:space:]]+c$$'; then \
 	  echo "  OK — backtrace survives a loaded .init.alc (reader EOF must not poison the capture)"; \
 	else echo "  BACKTRACE-WITH-INIT WRONG:"; echo "$$bt2" | sed 's/^/    /'; ok=0; fi; \
+	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n=== script identity (*args* + shebang, both dialects) ===\n'; \
 	sa=/tmp/alcove-args.$$$$.alc; printf '#!/usr/bin/env alcove\n(pr (length *args*) ":" (first *args*))\n' > "$$sa"; \
 	out=$$(./alcove --noload "$$sa" one two 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); rm -f "$$sa"; \
@@ -386,7 +387,6 @@ test-all:
 	out=$$(./adder --noload "$$sb" uno dos 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); rm -f "$$sb"; \
 	if [ "$$out" = "2:uno" ]; then echo "  OK — adder script receives *args*, shebang line ignored"; \
 	else echo "  SCRIPT ARGS WRONG (adder): '$$out'"; ok=0; fi; \
-	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n=== adder error caret (maps generated line back to Adder source) ===\n'; \
 	ac=$$(printf '= x 1\n\n+ x undefined_adr_zz\n' | ./adder --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	if echo "$$ac" | grep -q ':3:' && echo "$$ac" | grep -qF '+ x undefined_adr_zz' && echo "$$ac" | grep -qE '^[[:space:]]*\^'; then \
