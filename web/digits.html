@@ -62,6 +62,20 @@
      <a href="mandelbrot.html">› mandelbrot</a> &nbsp;·&nbsp;
      <a href="learn.html">› learn alcove</a></p>
 
+<script>
+  // Surface ANY failure on the status line — a blank-looking page must say
+  // why (script 404, wasm blocked e.g. by Lockdown Mode, JS error, …).
+  window.addEventListener("error", function (ev) {
+    var el = document.getElementById("status");
+    if (el) el.textContent = "error: " + (ev.message || ("failed to load " +
+      ((ev.target && (ev.target.src || ev.target.href)) || "resource")));
+  }, true);
+  window.addEventListener("unhandledrejection", function (ev) {
+    var el = document.getElementById("status");
+    if (el) el.textContent = "error (async): " +
+      (ev.reason && ev.reason.message ? ev.reason.message : ev.reason);
+  });
+</script>
 <script src="alcove.js"></script>
 <script>
 (function () {
@@ -291,7 +305,8 @@
     ready = true;
     statusEl.textContent =
       `ready — ${W.arch.join("-")} MLP, ${(W.acc / 100).toFixed(1)}% on the ` +
-      "MNIST test set, trained by alcove's autograd. Draw a digit!";
+      "MNIST test set, trained by alcove's autograd. Draw a digit! " +
+      `[input: ${window.PointerEvent ? "pointer" : "mouse/touch"}]`;
   }).catch((e) => { statusEl.textContent = "failed to start: " + e; });
 })();
 </script>
