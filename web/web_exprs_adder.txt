@@ -29,3 +29,6 @@ msgpack-decode (msgpack-encode 3.5)
 let x 10 (* x x)
 do (+ 1 1) (* 3 3)
 apply + (list 10 20 30)
+json-encode (list 1 2 t)
+get (json-decode "{\"a\": 7}") "a"
+base64-encode "hi"

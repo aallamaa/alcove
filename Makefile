@@ -617,6 +617,19 @@ msgpack-fuzz:
 	  $(JIT_FLAGS) -o msgpack_fuzz msgpack_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
 	./msgpack_fuzz $(FUZZ_ARGS)
 
+# JSON codec: unit round-trips + random-buffer decoder fuzz under ASan/UBSan,
+# plus a coverage-guided libFuzzer target (json.h parses untrusted text).
+json-test:
+	$(CC) -Wall -W $(SAFE_FLAGS) -g -O1 -fsanitize=address,undefined \
+	  $(JIT_FLAGS) -o json_test json_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./json_test
+
+json-fuzz:
+	@[ -n "$(CLANG)" ] || { echo "no clang found"; exit 1; }
+	$(CLANG) -DJSON_LIBFUZZER -g -O1 -fsanitize=fuzzer,address,undefined \
+	  $(JIT_FLAGS) -o json_fuzz json_test.c $(FFI_FLAGS) -lm $(FFI_LIBS)
+	./json_fuzz $(FUZZ_ARGS)
+
 fmt:
 	$(FMT) -i $(FMT_FILES)
 

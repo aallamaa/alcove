@@ -554,6 +554,12 @@ lispProc lispProcList[] = {
     LISPCMD_APP("list-dir", listdircmd, doc_listdir),
     LISPCMD_APP("file-info", fileinfocmd, doc_fileinfo),
     LISPCMD("shell", shellcmd, doc_shell),
+    LISPCMD_APP("json-encode", jsonencodecmd, doc_jsonencode),
+    LISPCMD_APP("json-decode", jsondecodecmd, doc_jsondecode),
+    LISPCMD_APP("base64-encode", base64encodecmd, doc_base64encode),
+    LISPCMD_APP("base64-decode", base64decodecmd, doc_base64decode),
+    LISPCMD_APP("hex-encode", hexencodecmd, doc_hexencode),
+    LISPCMD_APP("hex-decode", hexdecodecmd, doc_hexdecode),
     /* Strings and whole-file I/O */
     LISPCMD_APP("str", strcmd, doc_str),
     LISPCMD_APP("format", strcmd, doc_str),
@@ -10988,6 +10994,7 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
 
 /* MessagePack codec lives in a dedicated #included fragment. */
 #include "msgpack.h"
+#include "json.h"
 
 /* deque (EXP_LIST) ops live in a dedicated #included fragment. */
 #include "deque.h"

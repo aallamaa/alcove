@@ -3867,6 +3867,48 @@
 (assert "delete-file missing errors"
         (error? (try (delete-file (string-concat _osd "/zz")) (fn (e) e))) t)
 
+;; JSON — encode/decode round-trips + the documented lossiness (false/null
+;; → nil, symbols/vectors → strings/arrays) + error paths. The C-level
+;; json_test.c covers decoder robustness (fuzz); these pin Lisp semantics.
+(assert "json scalars" (json-encode (list 1 2.5 t nil "x")) "[1,2.5,true,null,\"x\"]")
+(assert "json dict" (json-encode (hash-map "a" 1)) "{\"a\":1}")
+(assert "json vector -> array" (json-encode (vector 1 2)) "[1,2]")
+(assert "json string escapes" (json-encode "a\"b\\c\nd") "\"a\\\"b\\\\c\\nd\"")
+(assert "json decode object" (get (json-decode "{\"k\": 42}") "k") 42)
+(assert "json decode nested" (json-decode "[1, [2, [3]]]") (list 1 (list 2 (list 3))))
+(assert "json decode true" (json-decode "true") t)
+(assert "json decode false -> nil" (json-decode "false") nil)
+(assert "json decode null -> nil" (json-decode "null") nil)
+(assert "json decode float" (json-decode "2.5") 2.5)
+(assert "json decode exponent" (json-decode "1e3") 1000.0)
+(assert "json decode int stays fixnum" (is (json-decode "7") 7) t)
+(assert "json decode unicode escape" (json-decode "\"\\u00e9\"") "é")
+(assert "json round-trip" (json-decode (json-encode (hash-map "xs" (list 1 2.5 nil) "ok" t)))
+        (hash-map "xs" (list 1 2.5 nil) "ok" t))
+(assert "json pretty parses back"
+        (json-decode (json-encode (hash-map "k" (list 1 2)) 2))
+        (hash-map "k" (list 1 2)))
+(assert "json malformed errors" (error? (try (json-decode "{") (fn (e) e))) t)
+(assert "json trailing errors" (error? (try (json-decode "1 2") (fn (e) e))) t)
+(assert "json leading zero errors" (error? (try (json-decode "01") (fn (e) e))) t)
+(assert "json encode blob errors" (error? (try (json-encode (make-blob 3)) (fn (e) e))) t)
+(assert "json encode inf errors" (error? (try (json-encode (/ 1.0 0.0)) (fn (e) e))) t)
+
+;; base64 / hex codecs (RFC 4648 vectors)
+(assert "base64 encode" (base64-encode "Many hands make light work.")
+        "TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu")
+(assert "base64 pad1" (base64-encode "fo") "Zm8=")
+(assert "base64 pad2" (base64-encode "f") "Zg==")
+(assert "base64 empty" (base64-encode "") "")
+(assert "base64 round-trip" (blob->string (base64-decode (base64-encode "héllo"))) "héllo")
+(assert "base64 blob arg" (base64-encode (string->blob "foo")) "Zm9v")
+(assert "base64 bad char errors" (error? (try (base64-decode "a!c=") (fn (e) e))) t)
+(assert "hex encode" (hex-encode "AB~") "41427e")
+(assert "hex round-trip" (blob->string (hex-decode "68690a")) "hi\n")
+(assert "hex upper accepted" (blob->string (hex-decode "4142")) "AB")
+(assert "hex odd errors" (error? (try (hex-decode "abc") (fn (e) e))) t)
+(assert "hex bad digit errors" (error? (try (hex-decode "zz") (fn (e) e))) t)
+
 ;; (shell ...) — gated on a probe (web build / exotic hosts report an error
 ;; uniformly, skipping the block) the way the FFI block gates on (ffi?).
 (= _sh-ok (no (error? (try (shell "true") (fn (e) e)))))

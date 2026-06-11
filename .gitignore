@@ -98,3 +98,6 @@ benchmark/resp-bench-c
 alcove_asan
 dist/
 examples/autograd/mnist/
+json_test
+json_fuzz
+msgpack_fuzz

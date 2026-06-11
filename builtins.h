@@ -113,6 +113,19 @@ exp_t *makedircmd(exp_t *e, env_t *env);
 exp_t *listdircmd(exp_t *e, env_t *env);
 exp_t *fileinfocmd(exp_t *e, env_t *env);
 exp_t *shellcmd(exp_t *e, env_t *env);
+
+/* json.h */
+extern const char doc_jsonencode[], doc_jsondecode[];
+exp_t *jsonencodecmd(exp_t *e, env_t *env);
+exp_t *jsondecodecmd(exp_t *e, env_t *env);
+
+/* blob.h byte codecs */
+extern const char doc_base64encode[], doc_base64decode[], doc_hexencode[],
+                  doc_hexdecode[];
+exp_t *base64encodecmd(exp_t *e, env_t *env);
+exp_t *base64decodecmd(exp_t *e, env_t *env);
+exp_t *hexencodecmd(exp_t *e, env_t *env);
+exp_t *hexdecodecmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
 extern const char doc_docstring[];
 exp_t *withdbcmd(exp_t *e, env_t *env);

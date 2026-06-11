@@ -113,3 +113,154 @@ const char doc_string2blob[] =
     "(string->blob s) — wrap string bytes in a fresh blob.";
 UNARY_TYPE_CMD(string2blobcmd, "string->blob: arg must be a string", isstring,
                char, make_blob(val_ptr, strlen(val_ptr)))
+
+/* ---------- byte codecs: base64 / hex ---------- */
+
+static const char b64_tab[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* Accept a blob or a string arg; yields bytes+len. Returns 0 on wrong type. */
+static int blob_or_string_bytes(exp_t *v, const char **bytes, size_t *len) {
+  if (isblob(v)) {
+    *bytes = blob_bytes(v);
+    *len = blob_len(v);
+    return 1;
+  }
+  if (isstring(v)) {
+    *bytes = (const char *)exp_text(v);
+    *len = strlen(*bytes);
+    return 1;
+  }
+  return 0;
+}
+
+const char doc_base64encode[] =
+    "(base64-encode x) — RFC 4648 base64 of a blob or string, as a string "
+    "(padded, no line wrapping).";
+exp_t *base64encodecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  const char *src;
+  size_t n;
+  if (!blob_or_string_bytes(v, &src, &n))
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "base64-encode: arg must be a blob or string"));
+  size_t outn = ((n + 2) / 3) * 4;
+  char *out = memalloc(outn + 1, 1);
+  size_t o = 0;
+  for (size_t i = 0; i < n; i += 3) {
+    uint32_t w = (uint32_t)(unsigned char)src[i] << 16;
+    if (i + 1 < n)
+      w |= (uint32_t)(unsigned char)src[i + 1] << 8;
+    if (i + 2 < n)
+      w |= (uint32_t)(unsigned char)src[i + 2];
+    out[o++] = b64_tab[(w >> 18) & 63];
+    out[o++] = b64_tab[(w >> 12) & 63];
+    out[o++] = i + 1 < n ? b64_tab[(w >> 6) & 63] : '=';
+    out[o++] = i + 2 < n ? b64_tab[w & 63] : '=';
+  }
+  exp_t *ret = make_string(out, (int)o);
+  free(out);
+  CLEAN_RETURN_1(v, ret);
+}
+
+const char doc_base64decode[] =
+    "(base64-decode s) — decode a base64 string to a blob ((blob->string b) "
+    "for text). Errors on bad characters or length.";
+exp_t *base64decodecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(s);
+  REQUIRE_TYPE(s, isstring, CLEAN_RETURN_1(s, _alc_e), ERROR_ILLEGAL_VALUE,
+               NULL, env, "base64-decode: arg must be a string");
+  const char *src = (const char *)exp_text(s);
+  size_t n = strlen(src);
+  while (n > 0 && src[n - 1] == '=')
+    n--;
+  if ((strlen(src) % 4 != 0 && strlen(src) != 0) || strlen(src) - n > 2)
+    CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "base64-decode: bad input length"));
+  size_t outn = (n / 4) * 3 + (n % 4 == 3 ? 2 : n % 4 == 2 ? 1 : 0);
+  if (n % 4 == 1)
+    CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "base64-decode: bad input length"));
+  char *out = memalloc(outn ? outn : 1, 1);
+  uint32_t w = 0;
+  int nb = 0;
+  size_t o = 0;
+  for (size_t i = 0; i < n; i++) {
+    const char *p = strchr(b64_tab, src[i]);
+    if (!p || !src[i]) {
+      free(out);
+      CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                              "base64-decode: bad character '%c'", src[i]));
+    }
+    w = (w << 6) | (uint32_t)(p - b64_tab);
+    if (++nb == 4) {
+      out[o++] = (char)(w >> 16);
+      out[o++] = (char)(w >> 8);
+      out[o++] = (char)w;
+      nb = 0;
+      w = 0;
+    }
+  }
+  if (nb == 3) {
+    out[o++] = (char)(w >> 10);
+    out[o++] = (char)(w >> 2);
+  } else if (nb == 2)
+    out[o++] = (char)(w >> 4);
+  exp_t *ret = make_blob(out, o);
+  free(out);
+  CLEAN_RETURN_1(s, ret);
+}
+
+const char doc_hexencode[] =
+    "(hex-encode x) — lowercase hex of a blob or string, as a string.";
+exp_t *hexencodecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  const char *src;
+  size_t n;
+  if (!blob_or_string_bytes(v, &src, &n))
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "hex-encode: arg must be a blob or string"));
+  char *out = memalloc(n * 2 + 1, 1);
+  static const char hx[] = "0123456789abcdef";
+  for (size_t i = 0; i < n; i++) {
+    out[i * 2] = hx[((unsigned char)src[i]) >> 4];
+    out[i * 2 + 1] = hx[((unsigned char)src[i]) & 15];
+  }
+  exp_t *ret = make_string(out, (int)(n * 2));
+  free(out);
+  CLEAN_RETURN_1(v, ret);
+}
+
+const char doc_hexdecode[] =
+    "(hex-decode s) — decode a hex string (either case) to a blob. Errors on "
+    "odd length or a non-hex digit.";
+exp_t *hexdecodecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(s);
+  REQUIRE_TYPE(s, isstring, CLEAN_RETURN_1(s, _alc_e), ERROR_ILLEGAL_VALUE,
+               NULL, env, "hex-decode: arg must be a string");
+  const char *src = (const char *)exp_text(s);
+  size_t n = strlen(src);
+  if (n % 2)
+    CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "hex-decode: odd-length input"));
+  char *out = memalloc(n / 2 + 1, 1);
+  for (size_t i = 0; i < n; i++) {
+    char c = src[i];
+    int d = (c >= '0' && c <= '9')   ? c - '0'
+            : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+            : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                                     : -1;
+    if (d < 0) {
+      free(out);
+      CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                              "hex-decode: bad hex digit '%c'", c));
+    }
+    if (i % 2)
+      out[i / 2] |= (char)d;
+    else
+      out[i / 2] = (char)(d << 4);
+  }
+  exp_t *ret = make_blob(out, n / 2);
+  free(out);
+  CLEAN_RETURN_1(s, ret);
+}

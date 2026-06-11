@@ -743,6 +743,33 @@ char, float, string, symbol, blob.
 (hamt? m)                        ; t
 ```
 
+### JSON
+
+```lisp
+(json-encode (hash-map "name" "alcove" "tags" (list 1 2.5 t)))
+;; → "{\"name\":\"alcove\",\"tags\":[1,2.5,true]}"
+(json-encode v 2)                ; pretty-print, 2-space indent
+(json-decode "{\"k\": [1, null]}")  ; → {"k" (1 nil)}
+```
+
+Mapping: dicts ↔ objects, lists **and vectors** → arrays (arrays decode to
+lists), `t` ↔ `true`, `nil` → `null`. Decode is lossy the same way
+msgpack-decode is: `false` and `null` both come back as `nil` — and since
+the empty list IS `nil`, `()` encodes as `null`. Symbols encode as strings.
+Integral numbers decode to fixnums, the rest to floats. NaN/Infinity and
+non-JSON types (blob, fn) make encode error; malformed or trailing input
+makes decode error. The decoder is depth-capped and fuzz-hardened
+(`make json-fuzz`).
+
+### base64 / hex
+
+```lisp
+(base64-encode "binary or string")   ; → padded RFC 4648 string
+(base64-decode "Zm9v")               ; → blob (blob->string for text)
+(hex-encode #b"\xab")                ; → "ab" (lowercase)
+(hex-decode "41427e")                ; → blob; either case accepted
+```
+
 ### MessagePack
 
 `(msgpack-encode v)` serializes a value to a MessagePack blob;

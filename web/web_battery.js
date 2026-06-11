@@ -163,6 +163,12 @@ const LISP = [
   ["(blob? #b\"a\")", "t"],
   ["(dict? {:a 1})", "t"],
   ["(set? #{1})", "t"],
+  ["(json-encode (list 1 2.5 t nil \"x\"))", "\"[1,2.5,true,null,\"x\"]\""],
+  ["(json-decode \"{\\\"k\\\": [1, 2.5, true]}\")", "{\"k\" (1 2.5 t)}"],
+  ["(json-encode (json-decode \"[1,[2,[3]]]\"))", "\"[1,[2,[3]]]\""],
+  ["(base64-encode \"foo\")", "\"Zm9v\""],
+  ["(blob->string (base64-decode \"Zm9v\"))", "\"foo\""],
+  ["(hex-encode \"AB\")", "\"4142\""],
 ];
 const ADDER = [
   ["+ 1 2", "3"],
@@ -193,5 +199,8 @@ const ADDER = [
   ["let x 10 (* x x)", "100"],
   ["do (+ 1 1) (* 3 3)", "9"],
   ["apply + (list 10 20 30)", "60"],
+  ["json-encode (list 1 2 t)", "\"[1,2,true]\""],
+  ["get (json-decode \"{\\\"a\\\": 7}\") \"a\"", "7"],
+  ["base64-encode \"hi\"", "\"aGk=\""],
 ];
 module.exports = { LISP, ADDER };
