@@ -213,7 +213,13 @@ static ALCOVE_TLS int g_dbg_evaluating = 0; /* set only while a top-level user f
                                                during parsing/loading */
 static ALCOVE_TLS int g_dbg_color = 0;   /* colorize debug output (a tty stderr) */
 static ALCOVE_TLS env_t *g_dbg_complete_env = NULL; /* frame env for tab-completion */
-static void dbg_error_break(exp_t *err, env_t *env); /* defined with the debugger */
+static ALCOVE_TLS int g_dbg_in_error_break = 0; /* in the break-on-raise prompt: the
+                                                   `return <expr>` recovery is allowed */
+static ALCOVE_TLS exp_t *g_dbg_replace = NULL; /* `return <expr>` value (owned) — error()
+                                                  hands it back in place of the error */
+static ALCOVE_TLS int g_dbg_did_replace = 0;
+static exp_t *dbg_error_break(exp_t *err, env_t *env); /* returns err, or a replacement
+                                                          value if the user `return`ed */
 static char *dbg_read_command(env_t *frame_env);     /* readline (tty) or getline */
 /* ANSI colors for the debug REPL, suppressed when stderr isn't a tty (so piped
    output — and the test harness — stays plain). dc() returns the code or "". */
@@ -889,8 +895,13 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
      so it never fires while parsing/loading, inside a try, or re-entrantly from
      a `p` evaluation. Like gdb's `catch throw`: wrap in (try ...) to suppress. */
   if (g_debug && g_dbg_evaluating && !g_dbg_active && g_try_depth == 0 &&
-      g_handler_sp == 0 && errnum != EXP_ERROR_PARSING_EOF)
-    dbg_error_break(ret, env);
+      g_handler_sp == 0 && errnum != EXP_ERROR_PARSING_EOF) {
+    exp_t *rep = dbg_error_break(ret, env);
+    if (rep != ret) {     /* user typed `return <expr>` — recover with that value */
+      unrefexp(ret);      /* discard the error; the failing form yields `rep` */
+      return rep;         /* ownership transfers to error()'s caller */
+    }
+  }
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
@@ -9999,11 +10010,21 @@ static void debug_repl(exp_t *form, env_t *env) {
                   dc(DBGC_RST));
         }
       }
+    } else if (DBG_IS("return")) {
+      if (!g_dbg_in_error_break) {
+        fprintf(stderr, "  return works only at a break-on-error (recovers the "
+                        "failing expression with a value)\n");
+      } else {
+        env_t *fe = g_dbg_frames[g_dbg_sel].env;
+        g_dbg_replace = dbg_eval_in_env(*arg ? arg : "nil", fe ? fe : env);
+        g_dbg_did_replace = 1;
+        resume = 1; /* error() returns this value in place of the error */
+      }
     } else if (DBG_IS("h") || DBG_IS("help") || DBG_IS("?")) {
       fprintf(stderr,
               "  commands: bt | frame N | up | down | locals | p <expr>\n"
-              "            step(s) | next(n) | continue(c) | break <fn|line>"
-              " | quit(q)\n");
+              "            step(s) | next(n) | continue(c) | break <fn|line>\n"
+              "            return <expr> (recover at a break-on-error) | quit(q)\n");
     } else {
       fprintf(stderr, "  unknown command '%s' (try 'help')\n", c);
     }
@@ -10041,7 +10062,7 @@ static void dbg_hook(exp_t *e, env_t *env) {
 }
 /* Break-on-raise: an uncaught error just dropped us here at the raise site
    (frames live). Show it, then open the debugger at the failing frame. */
-static void dbg_error_break(exp_t *err, env_t *env) {
+static exp_t *dbg_error_break(exp_t *err, env_t *env) {
   exp_t *eform =
       (err->next && is_ptr(err->next) && ispair(err->next)) ? err->next
       : (g_dbg_depth > 0 ? g_dbg_frames[g_dbg_depth - 1].form : NIL_EXP);
@@ -10051,9 +10072,19 @@ static void dbg_error_break(exp_t *err, env_t *env) {
   g_dbg_color = isatty(fileno(stderr));
   fprintf(stderr,
           "\n%s** error raised: %s%s\n   (debugger — bt / locals / p <expr>; "
-          "'c' continues, 'q' detaches)\n",
-          dc(DBGC_ERR), (const char *)err->ptr, dc(DBGC_RST));
+          "'c' propagates, '%sreturn <expr>%s' recovers with a value, 'q' "
+          "detaches)\n",
+          dc(DBGC_ERR), (const char *)err->ptr, dc(DBGC_RST), dc(DBGC_FN),
+          dc(DBGC_ERR));
+  fprintf(stderr, "%s", dc(DBGC_RST));
+  g_dbg_did_replace = 0;
+  g_dbg_replace = NULL;
+  g_dbg_in_error_break = 1; /* enable the `return` recovery command */
   debug_repl(eform, fe);
+  g_dbg_in_error_break = 0;
+  if (g_dbg_did_replace)
+    return g_dbg_replace ? g_dbg_replace : refexp(NIL_EXP); /* owned replacement */
+  return err;
 }
 
 const char doc_break[] =
@@ -11137,9 +11168,9 @@ static int alcove_back_tab(int count, int key) {
 
 /* ---- Debugger tab-completion (readline) ----------------------------------- */
 static const char *g_dbg_commands[] = {
-    "bt",   "backtrace", "where", "frame",    "up",   "down", "locals",
-    "p",    "print",     "step",  "next",     "continue", "break",
-    "quit", "help",      NULL};
+    "bt",     "backtrace", "where", "frame", "up",       "down",  "locals",
+    "p",      "print",     "step",  "next",  "continue", "break", "return",
+    "quit",   "help",      NULL};
 /* First word: complete a debug command name (empty input lists them all). */
 static char *dbg_cmd_generator(const char *text, int state) {
   static int idx;
@@ -11195,7 +11226,8 @@ static char **dbg_rl_completer(const char *text, int start, int end) {
   while (*b == ' ' || *b == '\t')
     b++;
   if (strncmp(b, "p ", 2) == 0 || strncmp(b, "print ", 6) == 0 ||
-      strncmp(b, "break ", 6) == 0 || strncmp(b, "b ", 2) == 0)
+      strncmp(b, "break ", 6) == 0 || strncmp(b, "b ", 2) == 0 ||
+      strncmp(b, "return ", 7) == 0)
     return rl_completion_matches(text, dbg_sym_generator);
   return NULL;
 }

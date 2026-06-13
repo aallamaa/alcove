@@ -123,6 +123,18 @@ gdb's `catch throw`: wrapping an expression in `(try ...)` suppresses the break
 (it's being handled), and because errors are first-class values, an `(error? …)`
 probe will also break at the raise — `c` past it, or use `try`.
 
+**Recover with a value.** At a break-on-error, `return <expr>` evaluates `<expr>`
+in the failing frame's scope and makes the failing expression yield *that* value
+instead of the error — the computation then continues as if it had succeeded
+(Common-Lisp `use-value` semantics):
+
+```
+** error raised: Illegal division by 0
+-- break in toto, line 1:
+   (/ 1 x)
+(dbg) return 999      ; (/ 1 x) now yields 999; the program runs on, no error
+```
+
 ### Scripts: arguments, environment, shebang
 
 Everything after the script path lands in `*args*` as a list of strings

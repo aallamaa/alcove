@@ -74,6 +74,13 @@ TRY = "(def boom (x) (/ 1 x))\n(try (boom 0.) (fn (e) 42))\n"
 out = run(TRY, ["c", "c"], extra_args=["--debug"])
 check("try suppresses break-on-raise", "error raised" not in out)
 
+# 1d. `return <expr>` recovers — the failing expression yields the value (the
+#     expr is evaluated in the failing frame, where x is in scope), no error.
+REC = ('(def toto (x) (/ 1 x))\n(def test (x) (toto (* x 2)))\n'
+       '(prn (str "R=" (test 0.)))\n')
+out = run(REC, ["c", "return (+ x 700)"], extra_args=["--debug"])
+check("return recovers with an in-frame value", "R=700" in out)
+
 # 2. stepping: step descends into a callee, next steps over it.
 STEP = ("(def add (a b)\n  (+ a b))\n(def main ()\n  (let (x 5)\n"
         "    (add x 10)\n    (prn x)))\n(main)\n")
