@@ -3636,6 +3636,19 @@
 (assert "default param fn not compiled" (compiled? (fn (x (y 1)) (+ x y))) nil)
 (assert "reserved default-name errors" (error? (fn (a (list 5)) a))   t)
 
+;; --- malformed parameters are rejected at definition (not silently) ---
+;; The flat `(x 10)` is two params — `x` and the literal `10` — NOT a default;
+;; the default form needs the double parens `((x 10))`. A bare non-symbol param
+;; (number, string, ...) is illegal and must error at def time rather than
+;; silently swallowing an argument and skipping the too-many-args check.
+;; Regression for the `(def f (x 10) ...)` footgun.
+(assert "flat (x 10) param errors"     (error? (fn (x 10) x))         t)
+(assert "numeric params error"         (error? (fn (1 2) 1))          t)
+(assert "string literal param errors"  (error? (fn (x "oops") x))     t)
+;; the correct double-paren default still binds, with and without the arg
+(assert "double-paren default binds"   ((fn ((x 10)) x))              10)
+(assert "double-paren default override" ((fn ((x 10)) x) 7)           7)
+
 ;; --- docstrings: (def f (args) "doc" body...) ---
 ;; A leading string FOLLOWED by more forms is documentation; a lone string
 ;; body stays the return value. (docstring name) returns it (or nil).

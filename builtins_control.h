@@ -782,8 +782,16 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
         }
         unrefexp(retvar);
       } else {
+        /* Not a symbol, a (name default) pair, or a destructuring pattern:
+           a malformed parameter (e.g. a bare `10`). def/fn/defn reject this
+           at definition via build_clean_params; this guards any other path
+           (and stops a bad param from silently swallowing an argument and
+           short-circuiting the too-many-args check below). */
         unrefexp(retvar);
-        return NULL;
+        return error(ERROR_ILLEGAL_VALUE, e, env,
+                     "illegal parameter in %s (must be a symbol, a "
+                     "(name default) pair, or a destructuring pattern)",
+                     fname);
       }
       curval = curval->next;
     } else if (is_default) {

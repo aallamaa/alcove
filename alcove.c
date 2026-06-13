@@ -2386,6 +2386,26 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
   *errp = NULL;
   if (hints_out)
     memset(hints_out, 0, ENV_INLINE_SLOTS);
+  /* Shape check (def/fn/defn all reach here for list-form params): every
+     top-level parameter must be a symbol — a name, '.', or a :type-hint
+     keyword — or a pair: (name default) / a destructuring pattern. A bare
+     non-symbol atom is malformed, e.g. the flat `(x 10)` someone writes
+     meaning the default `((x 10))`. Caught here at definition rather than
+     silently swallowing an argument at the first call. A bare-symbol param
+     list (rest-only, `fn xs`) is handled by params_have_hint's !ispair path
+     below and never walked here. */
+  if (ispair(params)) {
+    for (exp_t *p = params; p && ispair(p) && istrue(p); p = p->next) {
+      exp_t *el = p->content;
+      if (is_ptr(el) && (issymbol(el) || (ispair(el) && istrue(el))))
+        continue;
+      *errp = error(ERROR_ILLEGAL_VALUE, form, env,
+                    "illegal parameter: a parameter must be a symbol, a "
+                    "(name default) pair, or a destructuring pattern (did "
+                    "you mean ((x 10)) to give a default value?)");
+      return NULL;
+    }
+  }
   if (!params_have_hint(params))
     return refexp(params);
   exp_t *head = NULL, *tail = NULL;
