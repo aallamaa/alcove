@@ -190,6 +190,61 @@ static inline void bt_clear(void) {
   g_error_bt_more = 0;
 }
 
+/* ---- Debugger (gdb-style, runs on the AST tree-walker) --------------------
+   Opt-in via --debug (which also forces the AST walker, like --interpret, so
+   every call frame is a live, inspectable env_t) or the (break) builtin. All
+   state is thread-local and every hook is gated on g_debug, so a non-debug run
+   is byte-identical and pays at most one never-taken branch in evaluate().
+   Source lines come from g_track_lines: when set, the reader stamps each list
+   form's start line into the pair's otherwise-unused `meta` slot (lambda/macro
+   heads, symbols and vectors use `meta`; a plain list-form pair never does) —
+   read it back via form_line(). */
+static ALCOVE_TLS int g_track_lines = 0; /* reader stamps form lines when set */
+static ALCOVE_TLS int g_debug = 0;       /* debugger active (hooks live) */
+static ALCOVE_TLS int g_dbg_mode = 0;    /* 0 run, 1 step-into, 2 next/step-over */
+static ALCOVE_TLS int g_dbg_next_depth = 0; /* for `next`: stop when depth <= this */
+static ALCOVE_TLS int g_dbg_sel = 0;     /* frame selected for locals / p */
+static ALCOVE_TLS int g_dbg_active = 0;  /* inside the debug REPL: suppress the hook
+                                            so `p <expr>` / locals don't re-stop */
+static ALCOVE_TLS int g_try_depth = 0;   /* AST (try ...) body nesting: an error here
+                                            is about to be caught — don't break on it */
+static ALCOVE_TLS int g_dbg_evaluating = 0; /* set only while a top-level user form is
+                                               evaluating, so break-on-error never fires
+                                               during parsing/loading */
+static ALCOVE_TLS int g_dbg_color = 0;   /* colorize debug output (a tty stderr) */
+static ALCOVE_TLS env_t *g_dbg_complete_env = NULL; /* frame env for tab-completion */
+static void dbg_error_break(exp_t *err, env_t *env); /* defined with the debugger */
+static char *dbg_read_command(env_t *frame_env);     /* readline (tty) or getline */
+/* ANSI colors for the debug REPL, suppressed when stderr isn't a tty (so piped
+   output — and the test harness — stays plain). dc() returns the code or "". */
+#define DBGC_HDR "\x1B[1;96m" /* header (break / ready) */
+#define DBGC_FN "\x1B[93m"    /* function name */
+#define DBGC_NUM "\x1B[92m"   /* line numbers */
+#define DBGC_FORM "\x1B[36m"  /* source form */
+#define DBGC_VAR "\x1B[94m"   /* local variable name */
+#define DBGC_SEL "\x1B[95m"   /* selected-frame marker */
+#define DBGC_ERR "\x1B[91m"   /* error text */
+#define DBGC_RST "\x1B[0m"
+static inline const char *dc(const char *code) { return g_dbg_color ? code : ""; }
+typedef struct {
+  const char *name; /* function name (borrowed from fn->meta) */
+  env_t *env;       /* most-local env seen executing in this frame */
+  exp_t *form;      /* form last about to evaluate in this frame */
+  int line;         /* its source line, or 0 */
+} dbg_frame_t;
+static ALCOVE_TLS dbg_frame_t g_dbg_frames[ALC_BT_MAX];
+static ALCOVE_TLS int g_dbg_depth = 0;   /* may exceed ALC_BT_MAX; array capped */
+#define DBG_BP_MAX 32
+static ALCOVE_TLS char *g_dbg_bp_fn[DBG_BP_MAX]; /* break-on-function names */
+static ALCOVE_TLS int g_dbg_nbp_fn = 0;
+static ALCOVE_TLS int g_dbg_bp_line[DBG_BP_MAX]; /* break-on-line numbers */
+static ALCOVE_TLS int g_dbg_nbp_line = 0;
+/* The source line stamped on a list form (1-based), or 0 if unknown. Lives in
+   the pair's `meta` union, unused on plain list-form pairs. */
+static inline int form_line(exp_t *e) {
+  return (is_ptr(e) && e->type == EXP_PAIR) ? (int)(intptr_t)e->meta : 0;
+}
+
 /* ---- RESP user-callback read-only guard -----------------------------------
    `alcove -r --threads N` (N>1) runs N reactor pthreads that serve RESP
    concurrently. User commands (redis-defcmd) run their lambda on a reactor
@@ -538,6 +593,7 @@ lispProc lispProcList[] = {
     LISPCMD_APP("inline?", inlinepcmd, doc_inlinep),
     LISPCMD_APP("exp-flags", expflagscmd, doc_expflags),
     LISPCMD("backtrace", backtracecmd, doc_backtrace),
+    LISPCMD("break", breakcmd, doc_break),
     /* I/O */
     LISPCMD("pr", prcmd, doc_pr),
     LISPCMD("print", prcmd, doc_pr),
@@ -827,6 +883,14 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
   va_end(ap);
   ret->next = refexp(id);
   bt_capture(); /* snapshot the call stack at the error site for a backtrace */
+  /* Debugger break-on-raise: an error raised outside any (try ...) during a
+     top-level form's evaluation drops into the debugger HERE — at the raise
+     site, where every frame and its env are still live (locals/p work). Gated
+     so it never fires while parsing/loading, inside a try, or re-entrantly from
+     a `p` evaluation. Like gdb's `catch throw`: wrap in (try ...) to suppress. */
+  if (g_debug && g_dbg_evaluating && !g_dbg_active && g_try_depth == 0 &&
+      g_handler_sp == 0 && errnum != EXP_ERROR_PARSING_EOF)
+    dbg_error_break(ret, env);
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
@@ -9716,12 +9780,304 @@ static exp_t *multi_pick(exp_t *clauses, int n) {
 
 static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env);
 
+/* ---- Debugger implementation (see the globals block near bt_clear) --------
+   Everything here is reached only when g_debug is set. The debug REPL reads
+   commands from stdin and writes to stderr (so it never tangles with the
+   program's own stdout); --debug runs a FILE, leaving stdin free for commands. */
+/* A form's line for DISPLAY/breakpoints: form_line() routed through the Adder
+   source map (display_line is identity for Alcove, generated→.adr for Adder), so
+   `bt`/`break <line>` use the line the user actually wrote in both dialects. */
+static int dbg_disp_line(exp_t *e) {
+  int ln = form_line(e);
+  return ln ? display_line(ln) : 0;
+}
+static void dbg_push(const char *name, exp_t *form) {
+  if (g_dbg_depth >= 0 && g_dbg_depth < ALC_BT_MAX) {
+    g_dbg_frames[g_dbg_depth].name = name ? name : "<anonymous>";
+    g_dbg_frames[g_dbg_depth].env = NULL;
+    g_dbg_frames[g_dbg_depth].form = form;
+    g_dbg_frames[g_dbg_depth].line = dbg_disp_line(form);
+  }
+  g_dbg_depth++;
+}
+static void dbg_pop(void) {
+  if (g_dbg_depth > 0)
+    g_dbg_depth--;
+}
+/* True if NAME has a break-on-function set. Checked by invoke_body AFTER args are
+   bound, so the stop lands on the first BODY form (with the callee's params in
+   scope), not on an argument expression evaluated in the caller. */
+static int dbg_fn_breakpointed(const char *name) {
+  if (!name)
+    return 0;
+  for (int i = 0; i < g_dbg_nbp_fn; i++)
+    if (strcmp(g_dbg_bp_fn[i], name) == 0)
+      return 1;
+  return 0;
+}
+/* Render one value to a freshly-malloc'd C string (caller frees). */
+static char *dbg_value_str(exp_t *v) {
+  /* cap must start non-zero: str_buf_put grows by doubling (0*2 == 0 loops). */
+  size_t len = 0, cap = 64;
+  char *buf = malloc(cap);
+  if (!buf)
+    return strdup("");
+  buf[0] = 0;
+  exp_to_string_buf(v, &buf, &len, &cap);
+  return buf;
+}
+/* Read+evaluate one expression string in `env` (the `p` command). */
+static exp_t *dbg_eval_in_env(const char *src, env_t *env) {
+  FILE *s = fmemopen((void *)src, strlen(src), "r");
+  if (!s)
+    return NIL_EXP;
+  exp_t *form = reader(s, 0, 0);
+  exp_t *r;
+  if (!form || iserror(form))
+    r = form ? form : refexp(NIL_EXP);
+  else
+    r = evaluate(form, env); /* takes ownership of form (reader gave an owned ref) */
+  fclose(s);
+  return r ? r : refexp(NIL_EXP); /* always an owned ref — caller unrefs */
+}
+static void dbg_show_backtrace(FILE *out) {
+  int top = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
+  for (int i = top - 1; i >= 0; i--) {
+    char *fs = g_dbg_frames[i].form ? dbg_value_str(g_dbg_frames[i].form) : NULL;
+    int sel = (i == g_dbg_sel);
+    fprintf(out, "  %s%c#%d%s %s%-16s%s line %s%d%s   %s%s%s\n",
+            dc(sel ? DBGC_SEL : ""), sel ? '*' : ' ', top - 1 - i, dc(DBGC_RST),
+            dc(DBGC_FN), g_dbg_frames[i].name ? g_dbg_frames[i].name : "?",
+            dc(DBGC_RST), dc(DBGC_NUM), g_dbg_frames[i].line, dc(DBGC_RST),
+            dc(DBGC_FORM), fs ? fs : "", dc(DBGC_RST));
+    free(fs);
+  }
+  if (g_dbg_depth > ALC_BT_MAX)
+    fprintf(out, "   … (%d deeper frames)\n", g_dbg_depth - ALC_BT_MAX);
+}
+static void dbg_show_locals(FILE *out, env_t *env) {
+  if (!env) {
+    fprintf(out, "  (no frame env)\n");
+    return;
+  }
+  int n = 0;
+  for (int i = 0; i < env->n_inline; i++) {
+    if (!env->inline_keys[i])
+      continue;
+    char *vs = dbg_value_str(env->inline_vals[i]);
+    fprintf(out, "  %s%s%s = %s\n", dc(DBGC_VAR), env->inline_keys[i],
+            dc(DBGC_RST), vs);
+    free(vs);
+    n++;
+  }
+  if (env->d)
+    fprintf(out, "  (+ more bindings in this frame's overflow dict)\n");
+  if (n == 0 && !env->d)
+    fprintf(out, "  (no locals)\n");
+}
+/* The interactive debug prompt. Returns when a resume command is given; sets
+   g_dbg_mode for the kind of resume (run / step-into / next). */
+static void debug_repl(exp_t *form, env_t *env) {
+  g_dbg_active = 1; /* suppress the per-form hook while we run commands */
+  g_dbg_color = isatty(fileno(stderr));
+  int have_form = form && form != NIL_EXP;
+  if (have_form && g_dbg_depth > 0) {
+    g_dbg_frames[g_dbg_depth - 1].env = env;
+    g_dbg_frames[g_dbg_depth - 1].form = form;
+    int ln = dbg_disp_line(form);
+    if (ln)
+      g_dbg_frames[g_dbg_depth - 1].line = ln;
+  }
+  g_dbg_sel = g_dbg_depth > 0 ? g_dbg_depth - 1 : 0;
+  const char *fn = g_dbg_depth > 0 ? g_dbg_frames[g_dbg_depth - 1].name : "(top)";
+  if (!have_form) {
+    fprintf(stderr,
+            "\n%s-- debugger ready.%s set breakpoints (%sbreak <fn|line>%s), then "
+            "'%sc%s' to run; '%shelp%s' for commands.\n",
+            dc(DBGC_HDR), dc(DBGC_RST), dc(DBGC_FN), dc(DBGC_RST), dc(DBGC_FN),
+            dc(DBGC_RST), dc(DBGC_FN), dc(DBGC_RST));
+  } else {
+    char *fs = dbg_value_str(form);
+    fprintf(stderr, "\n%s-- break in %s%s%s, line %s%d%s:\n   %s%s%s\n",
+            dc(DBGC_HDR), dc(DBGC_FN), fn ? fn : "?", dc(DBGC_RST), dc(DBGC_NUM),
+            dbg_disp_line(form), dc(DBGC_RST), dc(DBGC_FORM), fs, dc(DBGC_RST));
+    free(fs);
+  }
+  for (;;) {
+    env_t *fe = (g_dbg_depth > 0 && g_dbg_frames[g_dbg_sel].env)
+                    ? g_dbg_frames[g_dbg_sel].env
+                    : env;
+    char *line = dbg_read_command(fe);
+    if (!line) { /* EOF on the command stream → detach and continue */
+      g_debug = 0;
+      g_dbg_mode = 0;
+      break;
+    }
+    char *c = line;
+    while (*c == ' ' || *c == '\t')
+      c++;
+    if (!*c) {
+      free(line);
+      continue;
+    }
+    /* command word + rest */
+    char *rest = c;
+    while (*rest && *rest != ' ' && *rest != '\t')
+      rest++;
+    char *arg = rest;
+    while (*arg == ' ' || *arg == '\t')
+      arg++;
+    size_t wlen = (size_t)(rest - c);
+    int resume = 0; /* a step/next/continue/quit command ends the REPL */
+#define DBG_IS(w) (wlen == strlen(w) && strncmp(c, w, wlen) == 0)
+    if (DBG_IS("c") || DBG_IS("continue")) {
+      g_dbg_mode = 0;
+      resume = 1;
+    } else if (DBG_IS("s") || DBG_IS("step")) {
+      g_dbg_mode = 1;
+      resume = 1;
+    } else if (DBG_IS("n") || DBG_IS("next")) {
+      g_dbg_mode = 2;
+      g_dbg_next_depth = g_dbg_depth;
+      resume = 1;
+    } else if (DBG_IS("q") || DBG_IS("quit")) {
+      g_debug = 0; /* detach: run to completion without stopping */
+      g_dbg_mode = 0;
+      resume = 1;
+    } else if (DBG_IS("bt") || DBG_IS("backtrace") || DBG_IS("where")) {
+      dbg_show_backtrace(stderr);
+    } else if (DBG_IS("frame") || DBG_IS("f")) {
+      int idx = atoi(arg); /* 0 = innermost, as printed by bt */
+      int top = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
+      if (idx >= 0 && idx < top)
+        g_dbg_sel = top - 1 - idx;
+      fprintf(stderr, "  frame #%d: %s%s%s (line %s%d%s)\n", top - 1 - g_dbg_sel,
+              dc(DBGC_FN), g_dbg_frames[g_dbg_sel].name, dc(DBGC_RST),
+              dc(DBGC_NUM), g_dbg_frames[g_dbg_sel].line, dc(DBGC_RST));
+    } else if (DBG_IS("up")) {
+      if (g_dbg_sel > 0)
+        g_dbg_sel--;
+      fprintf(stderr, "  frame: %s%s%s\n", dc(DBGC_FN),
+              g_dbg_frames[g_dbg_sel].name, dc(DBGC_RST));
+    } else if (DBG_IS("down")) {
+      int top = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
+      if (g_dbg_sel < top - 1)
+        g_dbg_sel++;
+      fprintf(stderr, "  frame: %s%s%s\n", dc(DBGC_FN),
+              g_dbg_frames[g_dbg_sel].name, dc(DBGC_RST));
+    } else if (DBG_IS("locals")) {
+      env_t *fe = g_dbg_frames[g_dbg_sel].env;
+      dbg_show_locals(stderr, fe ? fe : env);
+    } else if (DBG_IS("p") || DBG_IS("print")) {
+      if (!*arg) {
+        fprintf(stderr, "  usage: p <expr>\n");
+      } else {
+        env_t *fe = g_dbg_frames[g_dbg_sel].env;
+        exp_t *r = dbg_eval_in_env(arg, fe ? fe : env);
+        char *vs = dbg_value_str(r);
+        fprintf(stderr, "  %s%s%s\n", dc(DBGC_FORM), vs, dc(DBGC_RST));
+        free(vs);
+        unrefexp(r);
+      }
+    } else if (DBG_IS("break") || DBG_IS("b")) {
+      if (!*arg) {
+        fprintf(stderr, "  usage: break <function|line>\n");
+      } else {
+        int isnum = 1;
+        for (char *p = arg; *p; p++)
+          if (*p < '0' || *p > '9') {
+            isnum = 0;
+            break;
+          }
+        if (isnum && g_dbg_nbp_line < DBG_BP_MAX) {
+          g_dbg_bp_line[g_dbg_nbp_line++] = atoi(arg);
+          fprintf(stderr, "  breakpoint at line %s%s%s\n", dc(DBGC_NUM), arg,
+                  dc(DBGC_RST));
+        } else if (!isnum && g_dbg_nbp_fn < DBG_BP_MAX) {
+          g_dbg_bp_fn[g_dbg_nbp_fn++] = strdup(arg);
+          fprintf(stderr, "  breakpoint at function %s%s%s\n", dc(DBGC_FN), arg,
+                  dc(DBGC_RST));
+        }
+      }
+    } else if (DBG_IS("h") || DBG_IS("help") || DBG_IS("?")) {
+      fprintf(stderr,
+              "  commands: bt | frame N | up | down | locals | p <expr>\n"
+              "            step(s) | next(n) | continue(c) | break <fn|line>"
+              " | quit(q)\n");
+    } else {
+      fprintf(stderr, "  unknown command '%s' (try 'help')\n", c);
+    }
+#undef DBG_IS
+    free(line);
+    if (resume)
+      break;
+  }
+  g_dbg_active = 0;
+}
+/* Per-form hook installed in evaluate(); decides whether to stop. */
+static void dbg_hook(exp_t *e, env_t *env) {
+  if (g_dbg_active)
+    return; /* re-entrant call from a `p`/locals evaluation — don't stop */
+  int ln = dbg_disp_line(e); /* Adder-mapped, so `break <line>` matches source */
+  if (g_dbg_depth > 0) {
+    g_dbg_frames[g_dbg_depth - 1].env = env;
+    g_dbg_frames[g_dbg_depth - 1].form = e;
+    if (ln)
+      g_dbg_frames[g_dbg_depth - 1].line = ln;
+  }
+  int stop = 0;
+  if (g_dbg_mode == 1)
+    stop = 1; /* step into */
+  else if (g_dbg_mode == 2 && g_dbg_depth <= g_dbg_next_depth)
+    stop = 1; /* next: back at or above the launching depth */
+  else if (ln)
+    for (int i = 0; i < g_dbg_nbp_line; i++)
+      if (g_dbg_bp_line[i] == ln) {
+        stop = 1;
+        break;
+      }
+  if (stop)
+    debug_repl(e, env);
+}
+/* Break-on-raise: an uncaught error just dropped us here at the raise site
+   (frames live). Show it, then open the debugger at the failing frame. */
+static void dbg_error_break(exp_t *err, env_t *env) {
+  exp_t *eform =
+      (err->next && is_ptr(err->next) && ispair(err->next)) ? err->next
+      : (g_dbg_depth > 0 ? g_dbg_frames[g_dbg_depth - 1].form : NIL_EXP);
+  env_t *fe = (g_dbg_depth > 0 && g_dbg_frames[g_dbg_depth - 1].env)
+                  ? g_dbg_frames[g_dbg_depth - 1].env
+                  : env;
+  g_dbg_color = isatty(fileno(stderr));
+  fprintf(stderr,
+          "\n%s** error raised: %s%s\n   (debugger — bt / locals / p <expr>; "
+          "'c' continues, 'q' detaches)\n",
+          dc(DBGC_ERR), (const char *)err->ptr, dc(DBGC_RST));
+  debug_repl(eform, fe);
+}
+
+const char doc_break[] =
+    "(break) — drop into the interactive debugger here (gdb-style: bt, frame N, "
+    "locals, p <expr>, step/next/continue, break <fn|line>). Full backtrace and "
+    "source lines require running under `alcove --debug`.";
+exp_t *breakcmd(exp_t *e, env_t *env) {
+  g_track_lines = 1;
+  g_debug = 1;
+  debug_repl(e, env); /* e == the (break) call form; alive until we unref below */
+  unrefexp(e);
+  return NIL_EXP;
+}
+
 /* Thin wrapper: push one backtrace frame around the whole AST invocation, so the
    many internal return paths need no per-exit bookkeeping. (Cross-function tail
    calls inside invoke_body reuse the frame and keep this name — a TCO collapse.) */
 exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
   bt_push(fn->meta ? (const char *)fn->meta : NULL);
+  if (g_debug)
+    dbg_push(fn->meta ? (const char *)fn->meta : NULL, e);
   exp_t *r = invoke_body(e, fn, env);
+  if (g_debug)
+    dbg_pop();
   bt_pop();
   return r;
 }
@@ -9838,6 +10194,11 @@ tailrec: {
     return ret;
   }
 
+  /* Break-on-function: now that args are bound, arm a stop so the per-form hook
+     lands on the first BODY form with the callee's params in scope (not on an
+     argument expression evaluated back in the caller). */
+  if (g_debug && fn->meta && dbg_fn_breakpointed((const char *)fn->meta))
+    g_dbg_mode = 1;
   exp_t *cur = body;
   while (cur) {
     if (ret) {
@@ -9998,6 +10359,8 @@ exp_t *evaluate(exp_t *e, env_t *env) {
     } else
       return e; // Number? String? Char? Boolean? Vector?
   } else if ispair (e) {
+    if (g_debug)
+      dbg_hook(e, env); /* gated; one never-taken branch when not debugging */
     tmpexp = car(e);
     if (tmpexp && ispair(tmpexp)) {
       tmpevexp = EVAL(tmpexp, env);
@@ -10071,7 +10434,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             in_tail_position = was_tail;
             goto finisht;
           } else if islambda (tmpexp2) {
-            if (in_tail_position) {
+            if (in_tail_position && !g_debug) { /* debug: real frames, no TCO */
               ret = make_tail_marker(tmpexp2, e, env);
               unrefexp(tmpexp2);
               goto finisht;
@@ -10149,7 +10512,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         ret = container_apply(tmpexp, tmpexp2, env); /* consumes tmpexp2 */
         goto finish;
       } else if (islambda(tmpexp)) {
-        if (in_tail_position) {
+        if (in_tail_position && !g_debug) { /* debug: real frames, no TCO */
           ret = make_tail_marker(tmpexp, e, env);
           goto finisht;
         }
@@ -10771,7 +11134,113 @@ static int alcove_back_tab(int count, int key) {
   }
   return 0;
 }
+
+/* ---- Debugger tab-completion (readline) ----------------------------------- */
+static const char *g_dbg_commands[] = {
+    "bt",   "backtrace", "where", "frame",    "up",   "down", "locals",
+    "p",    "print",     "step",  "next",     "continue", "break",
+    "quit", "help",      NULL};
+/* First word: complete a debug command name (empty input lists them all). */
+static char *dbg_cmd_generator(const char *text, int state) {
+  static int idx;
+  static size_t tl;
+  if (state == 0) {
+    idx = 0;
+    tl = strlen(text);
+  }
+  while (g_dbg_commands[idx]) {
+    const char *cmd = g_dbg_commands[idx++];
+    if (!tl || strncmp(cmd, text, tl) == 0)
+      return strdup(cmd);
+  }
+  return NULL;
+}
+/* After p / print / break: complete a symbol from the selected frame's scope
+   (locals via its env chain → globals) plus the builtins. */
+static char *dbg_sym_generator(const char *text, int state) {
+  static char **m = NULL;
+  static int n = 0, cap = 0, idx = 0;
+  if (state == 0) {
+    free(m);
+    m = NULL;
+    n = 0;
+    cap = 0;
+    idx = 0;
+    size_t tl = strlen(text);
+    rl_collect_dict(reserved_symbol, text, tl, &m, &n, &cap); /* builtins */
+    for (env_t *cur = g_dbg_complete_env; cur; cur = cur->root) {
+      for (int i = 0; i < cur->n_inline; i++) {
+        const char *kk = cur->inline_keys[i];
+        if (!kk || (tl && strncmp(kk, text, tl) != 0))
+          continue;
+        if (n >= cap) {
+          cap = cap ? cap * 2 : 16;
+          m = realloc(m, sizeof(char *) * cap);
+        }
+        m[n++] = strdup(kk);
+      }
+      rl_collect_dict(cur->d, text, tl, &m, &n, &cap);
+    }
+  }
+  if (idx < n)
+    return m[idx++];
+  return NULL;
+}
+static char **dbg_rl_completer(const char *text, int start, int end) {
+  (void)end;
+  rl_attempted_completion_over = 1; /* never fall back to filename completion */
+  if (start == 0)
+    return rl_completion_matches(text, dbg_cmd_generator); /* the command word */
+  const char *b = rl_line_buffer;
+  while (*b == ' ' || *b == '\t')
+    b++;
+  if (strncmp(b, "p ", 2) == 0 || strncmp(b, "print ", 6) == 0 ||
+      strncmp(b, "break ", 6) == 0 || strncmp(b, "b ", 2) == 0)
+    return rl_completion_matches(text, dbg_sym_generator);
+  return NULL;
+}
+/* Read one debug command on a tty with completion (TAB → commands / symbols).
+   g_dbg_complete_env is the frame whose locals feed symbol completion. Returns a
+   malloc'd, newline-free line (caller frees), or NULL at EOF. */
+static char *dbg_readline_tty(env_t *frame_env) {
+  g_dbg_complete_env = frame_env;
+  rl_completion_func_t *prev = rl_attempted_completion_function;
+  rl_attempted_completion_function = dbg_rl_completer;
+  rl_bind_key('\t', rl_complete); /* plain complete, not the REPL's smart-tab */
+  /* One TAB lists the matches when there's no common prefix — so TAB on an empty
+     line shows every command (acts as help). */
+  rl_variable_bind("show-all-if-ambiguous", "on");
+  char *l = readline(g_dbg_color ? DBGC_HDR "(dbg)" DBGC_RST " " : "(dbg) ");
+  rl_attempted_completion_function = prev;
+  rl_bind_key('\t', alcove_smart_tab);
+  rl_variable_bind("show-all-if-ambiguous", "off");
+  g_dbg_complete_env = NULL;
+  return l;
+}
 #endif /* ALCOVE_READLINE */
+
+/* Read one debug command: readline+completion on a tty, plain getline otherwise
+   (pipes, the test harness, or a no-readline build). Malloc'd line / NULL@EOF. */
+static char *dbg_read_command(env_t *frame_env) {
+#ifdef ALCOVE_READLINE
+  if (isatty(fileno(stdin)))
+    return dbg_readline_tty(frame_env);
+#else
+  (void)frame_env;
+#endif
+  fprintf(stderr, "%s(dbg)%s ", dc(DBGC_HDR), dc(DBGC_RST));
+  fflush(stderr);
+  char *buf = NULL;
+  size_t cap = 0;
+  ssize_t n = getline(&buf, &cap, stdin);
+  if (n < 0) {
+    free(buf);
+    return NULL;
+  }
+  while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+    buf[--n] = 0;
+  return buf;
+}
 
 /* Help / discovery — both implemented at file scope so they can scan
    lispProcList[] (defined at the top of this file). doccmd looks up a
@@ -11216,9 +11685,11 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
      frames). The capture's meaningful scope is exactly one top-level form:
      anything live is rendered right below, before the next form runs. */
   bt_clear();
-  if (toeval)
+  if (toeval) {
+    g_dbg_evaluating = 1; /* arm break-on-raise only for this top-level form */
     res = evaluate(form, env);
-  else
+    g_dbg_evaluating = 0;
+  } else
     unrefexp(form);
   if (!quiet) {
     if (res) {
@@ -11844,6 +12315,15 @@ int main(int argc, char *argv[]) {
         /* Force the AST tree-walker (no bytecode compile) — differential
            testing vs the default compiled path. No TCO; keep recursion bounded. */
         g_no_compile = 1;
+      } else if (strcmp(argv[src], "--debug") == 0 ||
+                 strcmp(argv[src], "-d") == 0) {
+        /* gdb-style debugger: force the AST walker (every frame a live env_t),
+           track source lines, and arm the per-form hook. Starts in continue
+           mode — a startup prompt lets you set breakpoints, then run. */
+        g_no_compile = 1;
+        g_track_lines = 1;
+        g_debug = 1;
+        g_dbg_mode = 0;
       } else if (strcmp(argv[src], "--no-init") == 0 ||
                  strcmp(argv[src], "--noinit") == 0) {
         run_init = 0;
@@ -12068,6 +12548,12 @@ int main(int argc, char *argv[]) {
     repl_history_load(save_history);
   }
 #endif
+
+  /* Debugger startup prompt (gdb's `(gdb)` before `run`): set breakpoints, then
+     `c` to run (or `s` to step from the start). Applies to both a file and the
+     interactive REPL; breakpoints / (break) then stop with fully live frames. */
+  if (g_debug)
+    debug_repl(NIL_EXP, global);
 
   exp_t *stre = NULL;
 

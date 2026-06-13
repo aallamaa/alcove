@@ -658,6 +658,11 @@ alcove -r 6379                  # RESP2 server mode
   highlighting for vim and emacs (drop-in files + install steps), and a
   **language server** (`tools/lsp.alc`, written in Alcove itself):
   live diagnostics, completion with docs, and hover for BOTH dialects.
+- **Debugger**: `alcove --debug script.alc` is an interactive, gdb-style
+  debugger — `break`/`step`/`next`/`continue`, `bt`, `frame`, `locals`, and
+  `p <expr>` (evaluate in any frame's scope), with break-on-raise, TAB
+  completion (commands + in-scope variables) and color. `(break)` is the
+  in-code breakpoint. See the language guide's "Debugging" section.
 
 ---
 

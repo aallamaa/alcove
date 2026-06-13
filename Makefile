@@ -394,6 +394,13 @@ test-all:
 	    echo "  OK — initialize/diagnostics/completion/hover, both dialects"; \
 	  else echo "  LSP FAILED: $$lout"; ok=0; fi; \
 	else echo "  (skipped — no python3)"; fi; \
+	printf '\n=== debugger (--debug / (break): breakpoints, bt, locals, p, step/next) ===\n'; \
+	if command -v python3 >/dev/null 2>&1; then \
+	  dout=$$(python3 tools/test_debug.py 2>&1 | tail -1); \
+	  if [ "$$dout" = "DEBUG: OK" ]; then \
+	    echo "  OK — fn/line breakpoints, full backtrace, frame/locals/p, step+next, (break)"; \
+	  else echo "  DEBUG FAILED: $$dout"; ok=0; fi; \
+	else echo "  (skipped — no python3)"; fi; \
 	printf '\n=== adder error caret (maps generated line back to Adder source) ===\n'; \
 	ac=$$(printf '= x 1\n\n+ x undefined_adr_zz\n' | ./adder --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	if echo "$$ac" | grep -q ':3:' && echo "$$ac" | grep -qF '+ x undefined_adr_zz' && echo "$$ac" | grep -qE '^[[:space:]]*\^'; then \

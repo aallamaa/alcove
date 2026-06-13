@@ -63,6 +63,66 @@ caret and a call backtrace) and keeps going, then exits non-zero. Use
 live syntax diagnostics, completion for every builtin with its docstring,
 and hover docs — serving `.alc` and `.adr` from one process.
 
+### Debugging (`--debug`)
+
+`alcove --debug script.alc` (works for `.adr` too: `adder --debug`) runs the
+program under an interactive, gdb-style debugger. Debug mode runs on the AST
+tree-walker (like `--interpret`), so every call frame is a live environment you
+can inspect, and **tail-call optimisation is disabled** so every call is a real,
+named frame (deep tail loops can overflow the C stack while debugging — that's
+the trade for honest backtraces).
+
+Like gdb, it opens at a **setup prompt** before running anything: set
+breakpoints, then `c` to run (or `s` to step from the start). A breakpoint
+stops with the callee's parameters already in scope. From the `(dbg)` prompt:
+
+| command | does |
+|---|---|
+| `step` / `s` | run the next form, descending into calls |
+| `next` / `n` | run the next form, stepping *over* calls |
+| `continue` / `c` | resume until a breakpoint |
+| `break <fn>` / `break <line>` | stop on entry to a function, or at a source line |
+| `bt` / `where` | full backtrace (innermost first), with each frame's line |
+| `frame N` / `up` / `down` | select a frame for `locals` / `p` |
+| `locals` | the selected frame's bindings |
+| `p <expr>` | evaluate any expression **in the selected frame's scope** |
+| `quit` / `q` | detach and run to completion |
+
+```
+$ alcove --debug div.alc
+-- debugger ready. set breakpoints (break <fn|line>), then 'c' to run.
+(dbg) break toto
+(dbg) c
+-- break in toto, line 2:
+   (/ 1 x)
+(dbg) p x
+  0
+(dbg) bt
+ *#0 toto   line 2   (/ 1 x)
+  #1 test   line 4   (toto (* x 2))
+```
+
+`p` evaluating in a frame's environment is nearly free here — a frame *is* a
+first-class env, so `p` is just `eval` against it. For an `.adr` file the lines
+and caret map back to the Adder source (run it with `adder --debug`).
+
+On a terminal the `(dbg)` prompt has **TAB completion** and color: TAB on an
+empty line lists every command; on a partial word it completes the command; and
+after `p`/`break` it completes symbols from the selected frame's scope (its
+locals, then globals and builtins). Output is plain when stderr isn't a tty.
+
+`(break)` is the in-code breakpoint: drop it anywhere and execution stops at
+that point with the debugger attached (full backtraces and source lines need
+`--debug`; `locals`/`p` work from the live scope regardless).
+
+**Break-on-raise.** Under `--debug`, an error raised *outside* any `(try ...)`
+drops straight into the debugger at the raise site — with every frame and its
+locals still live, so you land exactly where it broke and can `bt` / `locals` /
+`p <expr>`. `c` lets the error propagate as usual; `q` detaches. This is like
+gdb's `catch throw`: wrapping an expression in `(try ...)` suppresses the break
+(it's being handled), and because errors are first-class values, an `(error? …)`
+probe will also break at the raise — `c` past it, or use `try`.
+
 ### Scripts: arguments, environment, shebang
 
 Everything after the script path lands in `*args*` as a list of strings

@@ -1683,7 +1683,9 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   }
   exp_t *finally_form =
       e->next->next->next ? e->next->next->next->content : NULL;
+  g_try_depth++; /* an error in the body is about to be caught — no debugger break */
   exp_t *result = EVAL(e->next->content, env);
+  g_try_depth--;
   exp_t *ret;
   if (!result || !iserror(result)) {
     ret = result ? result : NIL_EXP;

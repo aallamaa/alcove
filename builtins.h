@@ -97,6 +97,8 @@ exp_t *expflagscmd(exp_t *e, env_t *env);
 extern const char doc_compiledp[], doc_jitp[], doc_inlinep[], doc_expflags[];
 extern const char doc_backtrace[];
 exp_t *backtracecmd(exp_t *e, env_t *env);
+extern const char doc_break[];
+exp_t *breakcmd(exp_t *e, env_t *env);
 
 /* builtins_os.h — OS/scripting floor */
 extern const char doc_getenv[], doc_setenv[], doc_epr[], doc_eprn[],
