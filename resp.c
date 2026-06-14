@@ -3200,7 +3200,14 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
      closure var living outside the callback frame — see doc_redis_defcmd. */
   int _save = g_resp_cb_guard;
   g_resp_cb_guard = g_resp_multi;
+  /* Sandbox the callback: a client-triggered command can't reach host-escape
+     builtins (shell/FS/FFI/code-loading) — see invoke_internal. Armed on ANY
+     reactor count (unlike g_resp_cb_guard, which is the multi-reactor global-
+     write guard). save/restore so nested invocations behave. */
+  int _save_cc = g_in_client_cmd;
+  g_in_client_cmd = 1;
   exp_t *ret = vm_invoke_values(fn_ref, 1, vargv, resp_user_env);
+  g_in_client_cmd = _save_cc;
   g_resp_cb_guard = _save;
   unrefexp(fn_ref);
   resp_user_encode(c, ret);

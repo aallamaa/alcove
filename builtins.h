@@ -99,6 +99,8 @@ extern const char doc_backtrace[];
 exp_t *backtracecmd(exp_t *e, env_t *env);
 extern const char doc_break[];
 exp_t *breakcmd(exp_t *e, env_t *env);
+extern const char doc_allow_unsafe[];
+exp_t *allowunsafecmd(exp_t *e, env_t *env);
 
 /* builtins_os.h — OS/scripting floor */
 extern const char doc_getenv[], doc_setenv[], doc_epr[], doc_eprn[],

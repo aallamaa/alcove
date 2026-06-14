@@ -192,19 +192,32 @@ if (no *args*):
 See [`examples/adder/dirstat.adr`](../examples/adder/dirstat.adr) for a
 complete utility script exercising the whole scripting floor.
 
-### Sandboxing (`--safe`)
+### Sandboxing (RESP client callbacks, `--safe`)
 
-`alcove --safe` refuses the privileged builtins — anything that touches the host
-OS, filesystem, FFI, persistence, or loads code: `shell`, `delete-file` /
-`rename-file` / `make-dir` / `list-dir` / `file-info`, `setenv`, `savedb` /
-`loaddb`, `load` / `require`, the `ffi-*` calls, and `redis-defcmd` /
-`redis-undefcmd`. Calling one returns an error rather than running it. Benign
-reads (`getenv`, stdin reads) and all pure computation stay available.
+When alcove serves the Redis-compatible protocol (`alcove -r`), a connected
+client can only invoke the operator's `redis-defcmd` callbacks (there is no
+client `EVAL`). Those callbacks are **sandboxed**: while one runs on behalf of a
+client, the *privileged* builtins — anything that escapes into the host (`shell`,
+the file ops, `setenv`, `ffi-*`, `load`/`require`/`eval`, `savedb`/`loaddb`,
+`redis-defcmd`, the debugger, `exit`…) — are refused. So code a network client
+triggers cannot reach the OS, filesystem, FFI, or load code. Pure computation,
+local `let`/`fn`, string/JSON/regex, and the keyspace ops (`redis-get`/`set`/…)
+stay available — and global mutation (`def`/`=`/`persist`) is separately refused
+in callbacks by the existing concurrency guard.
 
-The gate is a single chokepoint (`invoke_internal`) every builtin invocation
-flows through, so there is no bypass via `apply`, `map`, or a compiled function;
-the builtins are marked with the `FLAG_UNSAFE` bit in their registration. It
-costs nothing when `--safe` is off (one never-taken branch).
+The operator's own setup runs **unsandboxed**, so `def`/`defn`/`defmacro` and the
+rest work normally when you build the server. To let a specific callback use a
+privileged builtin, grant it from trusted init code:
+
+```lisp
+(allow-unsafe "shell")   ; now callbacks may (shell …); allow-unsafe is itself sandboxed
+```
+
+`--safe` applies the same restriction **process-wide** (for running an untrusted
+script via the CLI). Enforcement is one chokepoint, `invoke_internal`, that every
+builtin invocation flows through (no bypass via `apply`/`map`/a compiled fn);
+privileged builtins carry the `FLAG_UNSAFE` bit. It costs nothing when neither a
+callback nor `--safe` is active (one never-taken branch).
 
 ### The web build (wasm)
 

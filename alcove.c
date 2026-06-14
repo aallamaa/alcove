@@ -303,6 +303,12 @@ static inline int form_col(exp_t *e) {
    documented in doc_redis_defcmd. */
 static ALCOVE_TLS int g_resp_cb_guard = 0;
 static int g_resp_multi = 0;
+/* Set (TLS) while executing a RESP client's command callback, on ANY reactor
+   count — the security-sandbox signal: invoke_internal refuses FLAG_UNSAFE
+   (host-escape) builtins while it is set, so code a network client triggers
+   can't reach the OS/FS/FFI/code-loading. Distinct from g_resp_cb_guard (which
+   stays multi-reactor-only for the global-write thread-safety refusal). */
+static ALCOVE_TLS int g_in_client_cmd = 0;
 
 /* ---- VM handler stack (try in tail position) ------------------------------
    `try` is value-based and not tail-aware, so the AST evaluator (trycmd) must
@@ -589,7 +595,7 @@ lispProc lispProcList[] = {
     LISPCMD("defc", defccmd, doc_defc),
     LISPCMD("defmacro", defmacrocmd, doc_defmacro),
     LISPCMD("macroexpand-1", expandmacrocmd, doc_macroexpand),
-    LISPCMD("eval", evalcmd, doc_eval),
+    LISPCMD_UNSAFE("eval", evalcmd, doc_eval),
     LISPCMD("apply", applycmd, doc_apply),
     LISPCMD("setq", setqcmd, doc_setq),
     /* Higher-order */
@@ -632,7 +638,8 @@ lispProc lispProcList[] = {
     LISPCMD_APP("inline?", inlinepcmd, doc_inlinep),
     LISPCMD_APP("exp-flags", expflagscmd, doc_expflags),
     LISPCMD("backtrace", backtracecmd, doc_backtrace),
-    LISPCMD("break", breakcmd, doc_break),
+    LISPCMD_UNSAFE("break", breakcmd, doc_break),
+    LISPCMD_UNSAFE("allow-unsafe", allowunsafecmd, doc_allow_unsafe),
     /* I/O */
     LISPCMD("pr", prcmd, doc_pr),
     LISPCMD("print", prcmd, doc_pr),
@@ -640,8 +647,8 @@ lispProc lispProcList[] = {
     LISPCMD("println", prncmd, doc_prn),
     LISPCMD("epr", eprcmd, doc_epr),
     LISPCMD("eprn", eprncmd, doc_eprn),
-    LISPCMD("read-line", readlinecmd, doc_readline),
-    LISPCMD_APP("getenv", getenvcmd, doc_getenv),
+    LISPCMD_UNSAFE("read-line", readlinecmd, doc_readline),
+    LISPCMD_APP_UNSAFE("getenv", getenvcmd, doc_getenv),
     LISPCMD_APP_UNSAFE("setenv", setenvcmd, doc_setenv),
     LISPCMD_APP_UNSAFE("delete-file", deletefilecmd, doc_deletefile),
     LISPCMD_APP_UNSAFE("rename-file", renamefilecmd, doc_renamefile),
@@ -690,12 +697,12 @@ lispProc lispProcList[] = {
     LISPCMD_APP("string-contains?", stringcontainspcmd, doc_stringcontainsp),
     LISPCMD_APP("string-index", stringindexcmd, doc_stringindex),
     LISPCMD_APP("string-replace", stringreplacecmd, doc_stringreplace),
-    LISPCMD_APP("read-string", readstringcmd, doc_readstring),
-    LISPCMD_APP("write-string", writestringcmd, doc_writestring),
-    LISPCMD_APP("append-string", appendstringcmd, doc_appendstring),
-    LISPCMD_APP("read-lines", readlinescmd, doc_readlines),
-    LISPCMD_APP("file-exists?", fileexistspcmd, doc_fileexistsp),
-    LISPCMD_APP("write-bytes", writebytescmd, doc_writebytes),
+    LISPCMD_APP_UNSAFE("read-string", readstringcmd, doc_readstring),
+    LISPCMD_APP_UNSAFE("write-string", writestringcmd, doc_writestring),
+    LISPCMD_APP_UNSAFE("append-string", appendstringcmd, doc_appendstring),
+    LISPCMD_APP_UNSAFE("read-lines", readlinescmd, doc_readlines),
+    LISPCMD_APP_UNSAFE("file-exists?", fileexistspcmd, doc_fileexistsp),
+    LISPCMD_APP_UNSAFE("write-bytes", writebytescmd, doc_writebytes),
     LISPCMD_UNSAFE("load", loadcmd, doc_load),
     LISPCMD_UNSAFE("require", requirecmd, doc_require),
     LISPCMD("ns", nscmd, doc_ns),
@@ -709,25 +716,25 @@ lispProc lispProcList[] = {
     /* Introspection / utilities */
     LISPCMD("inspect", inspectcmd, doc_inspect),
     LISPCMD("disasm", disasmcmd, doc_disasm),
-    LISPCMD("source", sourcecmd, doc_source),
+    LISPCMD_UNSAFE("source", sourcecmd, doc_source),
     LISPCMD("dir", dircmd, doc_dir),
     LISPCMD("time", timecmd, doc_time),
     LISPCMD("web?", webpcmd, doc_webp),
     LISPCMD("platform", platformcmd, doc_platform),
     LISPCMD("arch", archcmd, doc_arch),
-    LISPCMD("dylib-suffix", dylibsuffixcmd, doc_dylibsuffix),
+    LISPCMD_UNSAFE("dylib-suffix", dylibsuffixcmd, doc_dylibsuffix),
     LISPCMD("now-ms", nowmscmd, doc_nowms),
-    LISPCMD("sleep-ms", sleepmscmd, doc_sleepms),
-    LISPCMD("exit", exitcmd, doc_exit),
-    LISPCMD("quit", exitcmd, doc_exit),
+    LISPCMD_UNSAFE("sleep-ms", sleepmscmd, doc_sleepms),
+    LISPCMD_UNSAFE("exit", exitcmd, doc_exit),
+    LISPCMD_UNSAFE("quit", exitcmd, doc_exit),
     /* Help / discovery */
     LISPCMD("doc", doccmd, doc_doc),
     LISPCMD("docstring", docstringcmd, doc_docstring),
     LISPCMD("help", helpcmd, doc_help),
     LISPCMD_APP("builtins", builtinscmd, doc_builtins),
-    LISPCMD_APP("globals", globalscmd, doc_globals),
+    LISPCMD_APP_UNSAFE("globals", globalscmd, doc_globals),
     LISPCMD_APP("check-syntax", checksyntaxcmd, doc_checksyntax),
-    LISPCMD("read-stdin", readstdincmd, doc_readstdin),
+    LISPCMD_UNSAFE("read-stdin", readstdincmd, doc_readstdin),
     LISPCMD("flush", flushcmd, doc_flush),
     /* FFI */
     LISPCMD("ffi?", ffipcmd, doc_ffip),
@@ -785,7 +792,7 @@ lispProc lispProcList[] = {
     LISPCMD_APP("blob-ref", blobrefcmd, doc_blobref),
     LISPCMD_APP("blob->string", blob2stringcmd, doc_blob2string),
     LISPCMD_APP("string->blob", string2blobcmd, doc_string2blob),
-    LISPCMD_APP("read-bytes", readbytescmd, doc_readbytes),
+    LISPCMD_APP_UNSAFE("read-bytes", readbytescmd, doc_readbytes),
     /* Clojure-style varargs vector ctor — populates EXP_VECTOR. Same as #[...].
      */
     LISPCMD("vector", vectorcmd, doc_vector),
@@ -803,10 +810,10 @@ lispProc lispProcList[] = {
     LISPCMD("redis-del", redisdelcmd, doc_redis_del),
     LISPCMD("with-db", withdbcmd, doc_withdb),
     LISPCMD("redis-flush", redisflushcmd, doc_redis_flush),
-    LISPCMD("redis-port", redisportcmd, doc_redis_port),
+    LISPCMD_UNSAFE("redis-port", redisportcmd, doc_redis_port),
     LISPCMD_UNSAFE("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
     LISPCMD_UNSAFE("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
-    LISPCMD("redis-cmds", rediscmdscmd, doc_redis_cmds),
+    LISPCMD_UNSAFE("redis-cmds", rediscmdscmd, doc_redis_cmds),
 #endif
 };
 #undef LISPCMD
@@ -952,10 +959,17 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
    no bypass. Consumes `form` exactly as fnc does (the refusal error keeps it via
    its id ref), so callers need no extra cleanup. */
 static inline exp_t *invoke_internal(exp_t *fn, exp_t *form, env_t *env) {
-  if (g_safe_mode && (fn->flags & FLAG_UNSAFE)) {
+  /* Refuse a host-escape builtin (FLAG_UNSAFE) when sandboxed: either process-
+     wide under --safe, or — the main case — while executing a RESP client's
+     command callback (g_in_client_cmd, armed around resp_invoke_user_cmd). So
+     code a network client can trigger can't reach OS/FS/FFI/code-loading, while
+     the operator's own setup/REPL code stays unrestricted. (Global mutation
+     from a callback — def/=/persist — is separately refused by g_resp_cb_guard.)
+     `(allow-unsafe "name")` from trusted init grants a specific exception. */
+  if ((g_safe_mode || g_in_client_cmd) && (fn->flags & FLAG_UNSAFE)) {
     exp_t *err = error(ERROR_ILLEGAL_VALUE, form, env,
-                       "operation disabled in --safe mode "
-                       "(OS / filesystem / FFI / code-loading)");
+                       "operation not permitted in this context "
+                       "(sandboxed: OS / filesystem / FFI / code-loading)");
     unrefexp(form);
     return err;
   }
@@ -10220,6 +10234,27 @@ exp_t *breakcmd(exp_t *e, env_t *env) {
   debug_repl(e, env); /* e == the (break) call form; alive until we unref below */
   unrefexp(e);
   return NIL_EXP;
+}
+
+const char doc_allow_unsafe[] =
+    "(allow-unsafe \"name\") — permanently clear the sandbox restriction on the "
+    "named builtin (shell, file ops, ffi-*, load, ...) so it may run from RESP "
+    "client callbacks and under --safe. For trusted init/setup code; allow-unsafe "
+    "is itself sandboxed, so client code can't grant itself access. Returns t, or "
+    "nil if there is no such builtin.";
+exp_t *allowunsafecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(name);
+  if (!isstring(name) && !issymbol(name))
+    CLEAN_RETURN_1(name, error(ERROR_ILLEGAL_VALUE, e, env,
+                               "allow-unsafe: name must be a string or symbol"));
+  keyval_t *kv =
+      set_get_keyval_dict(reserved_symbol, (char *)exp_text(name), NULL);
+  exp_t *ret = NIL_EXP;
+  if (kv && kv->val && isinternal((exp_t *)kv->val)) {
+    ((exp_t *)kv->val)->flags &= ~FLAG_UNSAFE; /* grant: no longer host-escape-gated */
+    ret = TRUE_EXP;
+  }
+  CLEAN_RETURN_1(name, refexp(ret));
 }
 
 /* Thin wrapper: push one backtrace frame around the whole AST invocation, so the
