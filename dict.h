@@ -37,7 +37,6 @@ dict_t *create_dict() {
   dict_t *d;
   d = memalloc(1, sizeof(dict_t));
   d->meta = NULL;
-  d->pos = -1;
   init_kvht(&d->ht[0]);
   init_kvht(&d->ht[1]);
   return d;

@@ -664,7 +664,6 @@ typedef struct kvht_t {
 
 typedef struct dict_t {
   void *meta;
-  int pos;
   kvht_t ht[2];
 } dict_t;
 

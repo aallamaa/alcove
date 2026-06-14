@@ -10597,10 +10597,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             ret = container_apply(tmpexp2, idx, env); /* consumes idx */
             unrefexp(tmpexp2);
             goto finish;
-          } else if ispair (tmpexp2) {
-            ret = tmpexp2;
-            goto finisht;
           } else {
+            /* Any other value (including a pair) in operator position
+               self-evaluates: return the looked-up value as-is. */
             ret = tmpexp2;
             goto finisht;
           }
@@ -10644,14 +10643,8 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         ret = invokemacro(e, tmpexp, env);
         goto finisht;
       }
-    } else if (tmpexp == NULL)
-      return e;
-
-    /*else if (islambda(tmpexp)) {
-      return invoke(e,tmpexp,env);
-      }*/
-    else
-      return e;
+    } else
+      return e; /* head evaluated to NULL — return the form unchanged */
   } else {
     // is ???
     return e;
