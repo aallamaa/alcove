@@ -49,7 +49,7 @@ static void roundtrip(exp_t *v, const char *label) {
     return;
   }
   size_t pos = 0;
-  exp_t *d = mp_decode(m.b, m.len, &pos);
+  exp_t *d = mp_decode(m.b, m.len, &pos, 0);
   CHECK(d && pos == m.len && isoequal(v, d), "round-trip %s (pos=%zu/%zu)",
         label, pos, m.len);
   if (d)
@@ -116,7 +116,7 @@ static void fuzz_decode(int iters, int maxlen) {
     for (int j = 0; j < len; j++)
       buf[j] = (uint8_t)(xs() & 0xff);
     size_t pos = 0;
-    exp_t *d = mp_decode(buf, (size_t)len, &pos);
+    exp_t *d = mp_decode(buf, (size_t)len, &pos, 0);
     if (d)
       unrefexp(d);
     free(buf);
@@ -135,7 +135,7 @@ static void fuzz_blob_roundtrip(int iters) {
     mp_buf m = {NULL, 0, 0};
     if (mp_encode(b, &m)) {
       size_t pos = 0;
-      exp_t *d = mp_decode(m.b, m.len, &pos);
+      exp_t *d = mp_decode(m.b, m.len, &pos, 0);
       if (!(d && pos == m.len))
         g_fail++; /* should always round-trip */
       if (d)
@@ -158,7 +158,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   if (!nil_singleton)
     init_singletons();
   size_t pos = 0;
-  exp_t *d = mp_decode(data, size, &pos);
+  exp_t *d = mp_decode(data, size, &pos, 0);
   if (d)
     unrefexp(d);
   return 0;

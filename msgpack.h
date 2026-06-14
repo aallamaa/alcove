@@ -151,7 +151,7 @@ static int mp_encode(exp_t *v, mp_buf *m) {
   return 0; /* unsupported type */
 }
 
-static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos);
+static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth);
 static uint64_t mp_get_be(const uint8_t *b, size_t pos, int n) {
   uint64_t v = 0;
   for (int i = 0; i < n; i++)
@@ -166,12 +166,16 @@ static inline int64_t mp_sext(uint64_t v, int nb) {
   int sh = 64 - nb * 8;
   return (int64_t)(v << sh) >> sh;
 }
+/* Recursion-depth cap for untrusted input — a deeply-nested blob (e.g. a long
+   run of 0x91 fixarray bytes) would otherwise blow the C stack. Mirrors
+   json.h's JS_MAX_DEPTH and the persistence loader's depth guard. */
+#define MP_MAX_DEPTH 512
 /* Decode `n` elements into a fresh list. */
 static exp_t *mp_decode_array(const uint8_t *b, size_t len, size_t *pos,
-                              size_t n) {
+                              size_t n, int depth) {
   exp_t *head = NULL, *tail = NULL;
   for (size_t i = 0; i < n; i++) {
-    exp_t *el = mp_decode(b, len, pos);
+    exp_t *el = mp_decode(b, len, pos, depth + 1);
     if (!el) {
       if (head)
         unrefexp(head);
@@ -191,11 +195,11 @@ static exp_t *mp_decode_array(const uint8_t *b, size_t len, size_t *pos,
 /* Decode `n` key/value pairs into a fresh dict (keys must be msgpack strings).
  */
 static exp_t *mp_decode_map(const uint8_t *b, size_t len, size_t *pos,
-                            size_t n) {
+                            size_t n, int depth) {
   exp_t *dexp = make_dict_exp();
   dict_t *d = (dict_t *)dexp->ptr;
   for (size_t i = 0; i < n; i++) {
-    exp_t *key = mp_decode(b, len, pos);
+    exp_t *key = mp_decode(b, len, pos, depth + 1);
     if (!key) {
       unrefexp(dexp);
       return NULL;
@@ -205,7 +209,7 @@ static exp_t *mp_decode_map(const uint8_t *b, size_t len, size_t *pos,
       unrefexp(dexp);
       return NULL;
     }
-    exp_t *val = mp_decode(b, len, pos);
+    exp_t *val = mp_decode(b, len, pos, depth + 1);
     if (!val) {
       unrefexp(key);
       unrefexp(dexp);
@@ -217,7 +221,9 @@ static exp_t *mp_decode_map(const uint8_t *b, size_t len, size_t *pos,
   }
   return dexp;
 }
-static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos) {
+static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
+  if (depth > MP_MAX_DEPTH)
+    return NULL;
   if (*pos >= len)
     return NULL;
   uint8_t c = b[(*pos)++];
@@ -234,9 +240,9 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos) {
     return s;
   }
   if ((c & 0xf0) == 0x90)
-    return mp_decode_array(b, len, pos, c & 0x0f);
+    return mp_decode_array(b, len, pos, c & 0x0f, depth);
   if ((c & 0xf0) == 0x80)
-    return mp_decode_map(b, len, pos, c & 0x0f);
+    return mp_decode_map(b, len, pos, c & 0x0f, depth);
 #define MP_NEED(n)                                                             \
   do {                                                                         \
     if (*pos + (n) > len)                                                      \
@@ -317,7 +323,7 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
-    return mp_decode_array(b, len, pos, n);
+    return mp_decode_array(b, len, pos, n, depth);
   }
   case 0xde:
   case 0xdf: {
@@ -325,7 +331,7 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
-    return mp_decode_map(b, len, pos, n);
+    return mp_decode_map(b, len, pos, n, depth);
   }
   default:
     return NULL;
@@ -358,7 +364,7 @@ exp_t *msgpackdecodecmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_1(b, error(ERROR_ILLEGAL_VALUE, e, env,
                             "msgpack-decode: argument must be a blob"));
   size_t pos = 0, len = blob_len(b);
-  exp_t *ret = mp_decode((const uint8_t *)blob_bytes(b), len, &pos);
+  exp_t *ret = mp_decode((const uint8_t *)blob_bytes(b), len, &pos, 0);
   if (!ret || pos != len) {
     if (ret)
       unrefexp(ret);

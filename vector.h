@@ -49,6 +49,13 @@ static alc_vec_t *vec_alloc_storage(int64_t cap) {
      exclusive: cap == 2^31 would cast to INT32_MIN. */
   if (cap < 0 || cap >= ((int64_t)1 << 31))
     return NULL;
+  /* Reject counts whose byte product would wrap size_t. On 64-bit this is
+     unreachable (cap < 2^31 → bytes < 2^34 << SIZE_MAX), but on wasm32 a
+     persisted u32 element count like 0x20000001 passes the cell-count bound
+     yet (size_t)cap*8 truncates to a tiny block — the GEN init loop would then
+     write hundreds of millions of pointers past it (heap overflow). */
+  if ((uint64_t)cap > (SIZE_MAX - sizeof(alc_vec_t)) / 8u)
+    return NULL;
   size_t bytes = sizeof(alc_vec_t) + (size_t)cap * 8u;
   alc_vec_t *v = (alc_vec_t *)memalloc(1, bytes);
   if (!v)

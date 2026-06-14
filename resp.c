@@ -609,9 +609,13 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
   i += 2;
   if (n <= 0) return -1;
 
-  if (resp_argv_pool_reserve(c, (int)n) < 0) return -1;
-  char **argv = c->argv_pool;
-  long *argl = c->argl_pool;
+  /* Reserve incrementally as bulk args are actually parsed, not the full n up
+     front: a 10-byte `*1048576\r\n` header would otherwise pin a 16 MB sticky
+     per-connection argv pool before a single byte of arg data arrives (and
+     there is no max-clients cap). The pool grows only to the number of
+     elements that genuinely materialize in the buffer. */
+  long prealloc = n < RESP_ARGV_POOL_INIT ? n : RESP_ARGV_POOL_INIT;
+  if (resp_argv_pool_reserve(c, (int)prealloc) < 0) return -1;
 
   for (long a = 0; a < n; a++) {
     if (i >= len) return 0;
@@ -629,13 +633,14 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
     i += 2;
     if (i + (size_t)blen + 2 > len) return 0;
     if (buf[i + blen] != '\r' || buf[i + blen + 1] != '\n') return -1;
-    argv[a] = buf + i;
-    argl[a] = blen;
+    if (resp_argv_pool_reserve(c, (int)a + 1) < 0) return -1;
+    c->argv_pool[a] = buf + i;
+    c->argl_pool[a] = blen;
     i += blen + 2;
   }
 
-  *argv_out = argv;
-  *argl_out = argl;
+  *argv_out = c->argv_pool;
+  *argl_out = c->argl_pool;
   *argc_out = (int)n;
   return (int)i;
 }
@@ -895,7 +900,16 @@ static void cmd_expire(resp_client_t *c, char **argv, long *argl, int argc,
     resp_write_int(c, hit);
     return;
   }
-  int64_t deadline = resp_now_us() + delta * (millis ? 1000LL : 1000000LL);
+  /* Guard the unit scale-up and the now+span add against signed overflow
+     (UB) — delta is client-supplied and only digit-bounded by
+     resp_arg_to_ll. Match Redis: reject as an invalid expire time. */
+  int64_t mul = millis ? 1000LL : 1000000LL;
+  int64_t now = resp_now_us();
+  if (delta > INT64_MAX / mul || delta * mul > INT64_MAX - now) {
+    resp_write_err(c, "ERR invalid expire time in 'expire'");
+    return;
+  }
+  int64_t deadline = now + delta * mul;
   resp_write_int(c, resp_kv_set_expiry(k, klen, deadline));
 }
 
@@ -1097,7 +1111,8 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   for (int i = 3; i < argc; i++) {
     if (resp_cmd_eq(argv[i], argl[i], "EX") && i + 1 < argc) {
       long long s;
-      if (!resp_arg_to_ll(argv[i + 1], argl[i + 1], &s) || s <= 0) {
+      if (!resp_arg_to_ll(argv[i + 1], argl[i + 1], &s) || s <= 0 ||
+          s > LLONG_MAX / 1000000LL) {
         resp_write_err(c, "ERR invalid expire time in 'set'");
         return;
       }
@@ -1105,7 +1120,8 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
       i++;
     } else if (resp_cmd_eq(argv[i], argl[i], "PX") && i + 1 < argc) {
       long long ms;
-      if (!resp_arg_to_ll(argv[i + 1], argl[i + 1], &ms) || ms <= 0) {
+      if (!resp_arg_to_ll(argv[i + 1], argl[i + 1], &ms) || ms <= 0 ||
+          ms > LLONG_MAX / 1000LL) {
         resp_write_err(c, "ERR invalid expire time in 'set'");
         return;
       }
@@ -1148,8 +1164,14 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   } else {
     resp_kv_set(k, klen, fresh); /* always consumes the ref */
   }
-  if (expire_us)
-    resp_kv_set_expiry(k, klen, resp_now_us() + expire_us);
+  if (expire_us) {
+    int64_t now = resp_now_us();
+    /* expire_us is already capped to fit int64 after the unit scale-up; clamp
+       the now+span add so it can't overflow into a bogus (negative) deadline. */
+    int64_t deadline =
+        (expire_us > INT64_MAX - now) ? INT64_MAX : now + expire_us;
+    resp_kv_set_expiry(k, klen, deadline);
+  }
   resp_write_simple(c, "OK");
 }
 
@@ -2620,7 +2642,7 @@ int resp_repl_serve(int port, env_t *global) {
   /* Stdin accumulation buffer for the non-readline (piped / no-tty) path. */
   size_t acc_cap = 4096;
   size_t acc_len = 0;
-  char *acc = malloc(acc_cap);
+  char *acc = memalloc(acc_cap, 1);
   int idx = 0;
   int prompted = 0;
 
@@ -2680,7 +2702,7 @@ int resp_repl_serve(int port, env_t *global) {
       {
         if (acc_len + 4096 > acc_cap) {
           acc_cap *= 2;
-          acc = realloc(acc, acc_cap);
+          acc = xrealloc(acc, acc_cap); /* OOM → graceful_shutdown, no NULL deref */
         }
         ssize_t got = read(0, acc + acc_len, acc_cap - acc_len - 1);
         if (got == 0) {

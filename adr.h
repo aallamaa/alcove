@@ -24,8 +24,46 @@
 #define ALCOVE_ALS_H
 
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ---- checked allocation ----
+   This header is self-contained (no alcove.h), so it can't use the engine's
+   xrealloc/graceful_shutdown. OOM in the transpiler is fatal anyway — abort
+   rather than leak-then-deref-NULL on a self-assigning `p = realloc(p, n)`. */
+static void *als_xmalloc(size_t n) {
+  void *p = malloc(n);
+  if (!p && n) {
+    fputs("adder transpiler: out of memory\n", stderr);
+    abort();
+  }
+  return p;
+}
+static void *als_xrealloc(void *p, size_t n) {
+  void *q = realloc(p, n);
+  if (!q && n) {
+    fputs("adder transpiler: out of memory\n", stderr);
+    abort();
+  }
+  return q;
+}
+static void *als_xcalloc(size_t count, size_t size) {
+  void *p = calloc(count, size);
+  if (!p && count && size) {
+    fputs("adder transpiler: out of memory\n", stderr);
+    abort();
+  }
+  return p;
+}
+static char *als_xstrdup(const char *s) {
+  char *p = strdup(s);
+  if (!p) {
+    fputs("adder transpiler: out of memory\n", stderr);
+    abort();
+  }
+  return p;
+}
 
 /* ---- growable byte buffer ---- */
 typedef struct {
@@ -36,14 +74,14 @@ typedef struct {
 static void als_buf_init(als_buf *b) {
   b->cap = 256;
   b->len = 0;
-  b->p = (char *)malloc(b->cap);
+  b->p = (char *)als_xmalloc(b->cap);
   b->p[0] = 0;
 }
 static void als_buf_putn(als_buf *b, const char *s, size_t n) {
   if (b->len + n + 1 > b->cap) {
     while (b->len + n + 1 > b->cap)
       b->cap *= 2;
-    b->p = (char *)realloc(b->p, b->cap);
+    b->p = (char *)als_xrealloc(b->p, b->cap);
   }
   memcpy(b->p + b->len, s, n);
   b->len += n;
@@ -63,28 +101,28 @@ typedef struct als_node {
 } als_node;
 
 static als_node *als_atom(const char *s, size_t n) {
-  als_node *x = (als_node *)calloc(1, sizeof *x);
+  als_node *x = (als_node *)als_xcalloc(1, sizeof *x);
   /* alcove-target literal mapping */
   if (n == 4 && !strncmp(s, "true", 4)) {
-    x->atom = strdup("t");
+    x->atom = als_xstrdup("t");
   } else if (n == 5 && !strncmp(s, "false", 5)) {
-    x->atom = strdup("nil");
+    x->atom = als_xstrdup("nil");
   } else {
-    x->atom = (char *)malloc(n + 1);
+    x->atom = (char *)als_xmalloc(n + 1);
     memcpy(x->atom, s, n);
     x->atom[n] = 0;
   }
   return x;
 }
 static als_node *als_list(void) {
-  als_node *x = (als_node *)calloc(1, sizeof *x);
+  als_node *x = (als_node *)als_xcalloc(1, sizeof *x);
   x->is_list = 1;
   return x;
 }
 static void als_push(als_node *L, als_node *c) {
   if (L->n == L->cap) {
     L->cap = L->cap ? L->cap * 2 : 4;
-    L->kid = (als_node **)realloc(L->kid, L->cap * sizeof *L->kid);
+    L->kid = (als_node **)als_xrealloc(L->kid, L->cap * sizeof *L->kid);
   }
   L->kid[L->n++] = c;
 }
@@ -427,7 +465,7 @@ static void als_head_remap(als_node *node) {
     return;
   if (!strcmp(h->atom, "macro")) {
     free(h->atom);
-    h->atom = strdup("defmacro");
+    h->atom = als_xstrdup("defmacro");
   }
 }
 
@@ -444,7 +482,7 @@ static void als_map_push(als_map *m, int adder_line) {
     return;
   if (m->n == m->cap) {
     m->cap = m->cap ? m->cap * 2 : 16;
-    m->line = (int *)realloc(m->line, (size_t)m->cap * sizeof *m->line);
+    m->line = (int *)als_xrealloc(m->line, (size_t)m->cap * sizeof *m->line);
   }
   m->line[m->n++] = adder_line;
 }
@@ -528,7 +566,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
        must not write out of bounds. Real source never nears 256 columns. */
     int iidx = indent < MAXD ? indent : MAXD - 1;
     /* trim both ends into `body` */
-    char *body = strdup(nocom + indent);
+    char *body = als_xstrdup(nocom + indent);
     for (size_t k = strlen(body);
          k > 0 &&
          (body[k - 1] == ' ' || body[k - 1] == '\t' || body[k - 1] == '\r');)

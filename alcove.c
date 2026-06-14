@@ -1893,6 +1893,13 @@ static ALCOVE_TLS int g_reader_line = 1;
    never read in the VM hot loop or JIT. Used to place the error caret. */
 static ALCOVE_TLS int g_reader_col = 1;
 static ALCOVE_TLS long g_reader_off = 0;
+/* Reader nesting depth — one C frame is consumed per opening (/[/{ via the
+   callmacrochar→reader recursion, so deeply-nested untrusted source would
+   otherwise overflow the C stack (a hard crash on every reader entry point:
+   scripts, eval/load, the REPL, the alcove_eval_string embedding API). Capped
+   like the persistence loader's ALCOVE_LOAD_MAX_DEPTH. Cold parse path only. */
+static ALCOVE_TLS int g_reader_depth = 0;
+#define ALCOVE_READER_MAX_DEPTH 2000
 static ALCOVE_TLS const char *g_reader_src = NULL;
 /* The in-memory text of the current source, retained by the drivers so the
    error caret can print the offending line. NULL when no buffer is available
@@ -8347,6 +8354,17 @@ int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
   bc->ret_hint = ret_hint;
   bc->self_name = (const char *)fn->meta; /* borrowed; NULL for anon */
   bc->no_gcache = (uint8_t)(is_closure != 0);
+  /* Eager-allocate the global-resolution cache (instead of lazily on first
+     miss) so concurrent reactors sharing this bytecode — a registered RESP
+     command under --threads — never race on `if (!bc->gcache) bc->gcache =
+     calloc(...)`: that lazy init can leak a duplicate allocation and, on a weak
+     memory model (arm64), publish the pointer before its zero-fill is visible,
+     letting a peer read a garbage {val,gen} and refexp() a wild pointer. With
+     it pre-zeroed here, only the per-slot {val,gen} writes remain and a torn
+     read merely misses the cache and re-resolves. One calloc per compiled
+     non-closure that has consts; the runtime fast path is unchanged. */
+  if (!bc->no_gcache && bc->nconsts > 0)
+    bc->gcache = calloc((size_t)bc->nconsts, sizeof(gcache_entry));
   bc->locs = c.locs; /* transfer the pc→source-location table (may be NULL) */
   bc->nlocs = c.nlocs;
   fn->bc = bc;
@@ -9784,6 +9802,18 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
        form synthesized, so nothing to leak. Otherwise alc_apply_n wraps the
        args in the canonical (fn args...) form and calls fn->fnc (which must
        consume that form). Both consume the argv refs. */
+    /* Sandbox gate, hoisted above both arms: alc_apply_n routes through
+       invoke_internal (gated), but the values fast-path calls fv() directly, so
+       refuse a FLAG_UNSAFE builtin here to keep the "single gate" invariant on
+       every compiled path. Consume the owned argv refs first. */
+    if ((g_safe_mode || g_in_client_cmd) && (fn->flags & FLAG_UNSAFE)) {
+      int i;
+      for (i = 0; i < nargs; i++)
+        unrefexp(argv[i]);
+      return error(ERROR_ILLEGAL_VALUE, fn, env,
+                   "operation not permitted in this context "
+                   "(sandboxed: OS / filesystem / FFI / code-loading)");
+    }
     if (fn->meta) {
       lispCmdV *fv = (lispCmdV *)(void *)fn->meta;
       int was_tail = in_tail_position;
@@ -9952,6 +9982,16 @@ static void dbg_pop(void) {
   if (g_dbg_depth > 0)
     g_dbg_depth--;
 }
+/* Index of the current (innermost) live frame in g_dbg_frames, clamped to the
+   array bound. g_dbg_depth may exceed ALC_BT_MAX (dbg_push stores only the
+   first ALC_BT_MAX frames but still counts depth), so deriving an index
+   straight from g_dbg_depth-1 reads/writes out of bounds past 128 frames —
+   reachable by ordinary deep recursion under --debug. Returns -1 when there is
+   no frame. */
+static inline int dbg_cur(void) {
+  int d = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
+  return d > 0 ? d - 1 : -1;
+}
 /* True if NAME has a break-on-function set. Checked by invoke_body AFTER args are
    bound, so the stop lands on the first BODY form (with the callee's params in
    scope), not on an argument expression evaluated in the caller. */
@@ -10029,15 +10069,16 @@ static void debug_repl(exp_t *form, env_t *env) {
   g_dbg_active = 1; /* suppress the per-form hook while we run commands */
   g_dbg_color = isatty(fileno(stderr));
   int have_form = form && form != NIL_EXP;
-  if (have_form && g_dbg_depth > 0) {
-    g_dbg_frames[g_dbg_depth - 1].env = env;
-    g_dbg_frames[g_dbg_depth - 1].form = form;
+  int cur = dbg_cur(); /* clamped innermost-frame index (-1 if none) */
+  if (have_form && cur >= 0) {
+    g_dbg_frames[cur].env = env;
+    g_dbg_frames[cur].form = form;
     int ln = dbg_disp_line(form);
     if (ln)
-      g_dbg_frames[g_dbg_depth - 1].line = ln;
+      g_dbg_frames[cur].line = ln;
   }
-  g_dbg_sel = g_dbg_depth > 0 ? g_dbg_depth - 1 : 0;
-  const char *fn = g_dbg_depth > 0 ? g_dbg_frames[g_dbg_depth - 1].name : "(top)";
+  g_dbg_sel = cur >= 0 ? cur : 0;
+  const char *fn = cur >= 0 ? g_dbg_frames[cur].name : "(top)";
   if (!have_form) {
     fprintf(stderr,
             "\n%s-- debugger ready.%s set breakpoints (%sbreak <fn|line>%s), then "
@@ -10177,11 +10218,12 @@ static void dbg_hook(exp_t *e, env_t *env) {
   if (g_dbg_active)
     return; /* re-entrant call from a `p`/locals evaluation — don't stop */
   int ln = dbg_disp_line(e); /* Adder-mapped, so `break <line>` matches source */
-  if (g_dbg_depth > 0) {
-    g_dbg_frames[g_dbg_depth - 1].env = env;
-    g_dbg_frames[g_dbg_depth - 1].form = e;
+  int cur = dbg_cur();
+  if (cur >= 0) {
+    g_dbg_frames[cur].env = env;
+    g_dbg_frames[cur].form = e;
     if (ln)
-      g_dbg_frames[g_dbg_depth - 1].line = ln;
+      g_dbg_frames[cur].line = ln;
   }
   int stop = 0;
   if (g_dbg_mode == 1)
@@ -10200,12 +10242,12 @@ static void dbg_hook(exp_t *e, env_t *env) {
 /* Break-on-raise: an uncaught error just dropped us here at the raise site
    (frames live). Show it, then open the debugger at the failing frame. */
 static exp_t *dbg_error_break(exp_t *err, env_t *env) {
-  exp_t *eform =
-      (err->next && is_ptr(err->next) && ispair(err->next)) ? err->next
-      : (g_dbg_depth > 0 ? g_dbg_frames[g_dbg_depth - 1].form : NIL_EXP);
-  env_t *fe = (g_dbg_depth > 0 && g_dbg_frames[g_dbg_depth - 1].env)
-                  ? g_dbg_frames[g_dbg_depth - 1].env
-                  : env;
+  int cur = dbg_cur();
+  exp_t *eform = (err->next && is_ptr(err->next) && ispair(err->next))
+                     ? err->next
+                     : (cur >= 0 ? g_dbg_frames[cur].form : NIL_EXP);
+  env_t *fe =
+      (cur >= 0 && g_dbg_frames[cur].env) ? g_dbg_frames[cur].env : env;
   g_dbg_color = isatty(fileno(stderr));
   fprintf(stderr,
           "\n%s** error raised: %s%s\n   (debugger — bt / locals / p <expr>; "
@@ -10554,6 +10596,16 @@ exp_t *evaluate(exp_t *e, env_t *env) {
     if (tmpexp && ispair(tmpexp)) {
       tmpevexp = EVAL(tmpexp, env);
       tmpexp = tmpevexp;
+      /* If evaluating the head form itself raised (e.g. an unbound operator in
+         ((undefined-fn) 1 2)), propagate that error. Without this the form
+         falls through every callable-shape arm to the `return e` below, which
+         silently swallows the error (returning the form as if self-evaluated)
+         and leaks the evaluated head. */
+      if (tmpexp && iserror(tmpexp)) {
+        ret = tmpevexp;
+        tmpevexp = NULL;
+        goto finish;
+      }
     }
     if (tmpexp) {
       if isinternal (tmpexp) {
@@ -10717,6 +10769,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         ret = invokemacro(e, tmpexp, env);
         goto finisht;
       }
+      /* Pair head evaluated to a non-callable, non-error value (number, string,
+         or a list/pair): self-evaluate the form. Route through finisht so the
+         evaluated head (tmpevexp, which we own) is freed rather than leaked.
+         e keeps its incoming ref — that is the self-eval return. */
+      ret = e;
+      goto finisht;
     } else
       return e; /* head evaluated to NULL — return the form unchanged */
   } else {
@@ -10766,6 +10824,27 @@ static void rl_collect_dict(dict_t *d, const char *prefix, size_t plen,
   }
 }
 
+/* Collect every binding visible from `start` (each frame's inline keys + its
+   overflow dict, walking root-ward) whose name has the given prefix. Sibling to
+   rl_collect_dict; shared by the REPL and debugger completion generators so the
+   identical env-walk doesn't live in two places and drift. */
+static void rl_collect_env_chain(env_t *start, const char *prefix, size_t plen,
+                                 char ***out, int *nout, int *cap) {
+  for (env_t *cur = start; cur; cur = cur->root) {
+    for (int i = 0; i < cur->n_inline; i++) {
+      const char *kk = cur->inline_keys[i];
+      if (!kk || (plen && strncmp(kk, prefix, plen) != 0))
+        continue;
+      if (*nout >= *cap) {
+        *cap = *cap ? *cap * 2 : 16;
+        *out = xrealloc(*out, sizeof(char *) * (*cap));
+      }
+      (*out)[(*nout)++] = strdup(kk);
+    }
+    rl_collect_dict(cur->d, prefix, plen, out, nout, cap);
+  }
+}
+
 /* readline completion generator — called repeatedly with state=0 first,
    then state>0 until it returns NULL. Builds the match list lazily on
    the first call.
@@ -10791,23 +10870,7 @@ static char *alcove_completion_generator(const char *text, int state) {
     size_t tlen = strlen(text);
     rl_collect_dict(reserved_symbol, text, tlen, &matches, &n_matches, &cap);
     /* Walk env chain inner→outer (covers global defs). */
-    env_t *cur;
-    for (cur = g_global_env; cur; cur = cur->root) {
-      int i;
-      for (i = 0; i < cur->n_inline; i++) {
-        const char *kk = cur->inline_keys[i];
-        if (!kk)
-          continue;
-        if (tlen && strncmp(kk, text, tlen) != 0)
-          continue;
-        if (n_matches >= cap) {
-          cap = cap ? cap * 2 : 16;
-          matches = xrealloc(matches, sizeof(char *) * cap);
-        }
-        matches[n_matches++] = strdup(kk);
-      }
-      rl_collect_dict(cur->d, text, tlen, &matches, &n_matches, &cap);
-    }
+    rl_collect_env_chain(g_global_env, text, tlen, &matches, &n_matches, &cap);
   }
   if (idx < n_matches)
     return matches[idx++]; /* readline frees the strdup */
@@ -11354,19 +11417,7 @@ static char *dbg_sym_generator(const char *text, int state) {
     idx = 0;
     size_t tl = strlen(text);
     rl_collect_dict(reserved_symbol, text, tl, &m, &n, &cap); /* builtins */
-    for (env_t *cur = g_dbg_complete_env; cur; cur = cur->root) {
-      for (int i = 0; i < cur->n_inline; i++) {
-        const char *kk = cur->inline_keys[i];
-        if (!kk || (tl && strncmp(kk, text, tl) != 0))
-          continue;
-        if (n >= cap) {
-          cap = cap ? cap * 2 : 16;
-          m = xrealloc(m, sizeof(char *) * cap);
-        }
-        m[n++] = strdup(kk);
-      }
-      rl_collect_dict(cur->d, text, tl, &m, &n, &cap);
-    }
+    rl_collect_env_chain(g_dbg_complete_env, text, tl, &m, &n, &cap);
   }
   if (idx < n)
     return m[idx++];

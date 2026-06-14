@@ -933,6 +933,20 @@ static int alc_ffi_infer(exp_t *a, alc_ffi_tag_t *tag, ffi_type **out) {
 }
 
 static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
+  /* Sandbox gate. Invoking an EXP_FFI handle does NOT route through
+     invoke_internal (both dispatchers call alc_ffi_call directly), so the
+     FLAG_UNSAFE refusal that blocks the ffi-fn *constructors* would not cover
+     *calling* a handle a network client can resolve by name. Refuse here too —
+     this is the single chokepoint every present and future dispatch path
+     shares. Consume the owned arg refs first, mirroring the bad_arity cleanup
+     below. */
+  if (g_safe_mode || g_in_client_cmd) {
+    for (int i = 0; i < nargs; i++)
+      unrefexp(args[i]);
+    return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
+                 "operation not permitted in this context "
+                 "(sandboxed: FFI native call)");
+  }
   /* Variadic: f->nargs is the FIXED count — require at least that many and at
      most the slot cap. Non-variadic: exact arity. */
   int bad_arity = f->variadic

@@ -151,7 +151,7 @@ scanned:
   error(EXP_ERROR_PARSING_ILLEGAL_CHAR, NULL, NULL, "Error illegal char %d",   \
         (ch))
 
-exp_t *callmacrochar(FILE *stream, unsigned char x) {
+static exp_t *callmacrochar_inner(FILE *stream, unsigned char x) {
   exp_t *lnode = NULL; // Initial List Node
   exp_t *vnode = NULL; // Val Node
   exp_t *cnode = NULL; // Current Node
@@ -282,6 +282,20 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
     return lnode;
   else
     return NIL_EXP;
+}
+
+/* Depth-guarded entry point. callmacrochar_inner recurses into reader() for
+   each nested (/[/{, so cap the nesting to keep adversarial or accidental
+   deep input (e.g. 100k open parens) from exhausting the C stack — converting
+   a SIGSEGV into a clean parse error. Mirrors ALCOVE_LOAD_MAX_DEPTH. */
+exp_t *callmacrochar(FILE *stream, unsigned char x) {
+  if (g_reader_depth >= ALCOVE_READER_MAX_DEPTH)
+    return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
+                 "nesting too deep (max %d)", ALCOVE_READER_MAX_DEPTH);
+  g_reader_depth++;
+  exp_t *r = callmacrochar_inner(stream, x);
+  g_reader_depth--;
+  return r;
 }
 
 exp_t *escapereader(FILE *stream, token_t **ptoken, int lastchar) {
