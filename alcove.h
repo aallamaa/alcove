@@ -497,6 +497,16 @@ typedef struct gcache_entry {
   uint64_t gen;
 } gcache_entry;
 
+/* One entry of a bytecode's pc→source-location table: "from this code offset on,
+   the source line/col is this." Built at compile time, read ONLY on the error
+   path (cold) to point a runtime error at the precise failing form — never
+   touched by the VM dispatch loop, so it adds zero per-instruction cost. */
+typedef struct bc_loc_t {
+  int pc;   /* code offset where this form's emitted ops begin */
+  int line; /* 1-based source line (raw reader line; mapped at display time) */
+  int col;  /* 1-based column, or 0 */
+} bc_loc_t;
+
 typedef struct bytecode_t {
   struct exp_t *content; /* original arguments list of the compiled lambda */
   uint8_t *code;
@@ -538,6 +548,10 @@ typedef struct bytecode_t {
      mutations) would serve stale values. With this set, OP_LOAD_GLOBAL /
      OP_CALL_GLOBAL always do a fresh lookup and never cache. */
   uint8_t no_gcache;
+  /* pc→source-location table (ascending pc), for precise runtime-error
+     locations. NULL when line tracking was off at compile time. Owned. */
+  bc_loc_t *locs;
+  int nlocs;
 } bytecode_t;
 
 /* Resolve a lambda's params list, accounting for the union overload
@@ -1161,6 +1175,12 @@ typedef struct compiler_t {
                             Set once by a body pre-pass in compile_lambda. */
   const char *self_name; /* for self-tail-call detection; NULL in anon fn */
   int failed;
+  /* Accumulating pc→source-location table (see bc_loc_t). Appended to as forms
+     compile; transferred to bytecode_t at the end of compile_lambda. */
+  bc_loc_t *locs;
+  int nlocs;
+  int locs_cap;
+  int last_loc_line; /* last line recorded, to coalesce runs on the same line */
 } compiler_t;
 
 #endif /* ALCOVE_H */

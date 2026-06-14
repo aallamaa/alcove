@@ -56,6 +56,25 @@ Script execution prints the value of each top-level form unless it is
 caret and a call backtrace) and keeps going, then exits non-zero. Use
 `(try body handler)` to catch errors in-language.
 
+The error location is **precise**: it points at the exact failing expression,
+not just the top-level form. A division-by-zero inside a function reports the
+function's line with a caret under the offending form —
+
+```
+div.alc:2: Illegal division by 0
+  (/ 1 x))
+  ^
+  backtrace (most recent call first):
+    toto
+```
+
+even though the call that triggered it is on a different line. This comes from a
+per-bytecode `pc → source line` table built at compile time and read **only when
+an error is raised** — so it costs nothing at runtime (the VM/JIT loop never
+touches it). `--no-line-info` disables source-position tracking entirely (errors
+fall back to top-level-form granularity); it's a minimalism switch, not a speed
+one — tracking is parse-time only and never on the hot path.
+
 ### Editor intelligence
 
 `tools/lsp.alc` is an LSP server written in Alcove (see

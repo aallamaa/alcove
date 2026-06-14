@@ -365,6 +365,11 @@ test-all:
 	   && echo "$$ce" | grep -qF '(+ 2 undefined_caret_zz)' && echo "$$ce" | grep -qE '^[[:space:]]*\^'; then \
 	  echo "  OK — file error shows src:line + caret, -e shows source line + caret"; \
 	else echo "  CARET MISSING:"; echo "$$cf" | sed 's/^/    /'; echo "    --"; echo "$$ce" | sed 's/^/    /'; ok=0; fi; \
+	printf '\n=== precise error location (compiled fn: inner line, not the call site) ===\n'; \
+	pl=$$(printf '(def toto (x)\n  (/ 1 x))\n(def test (x)\n  (toto (* x 2)))\n(test 0.)\n' | ./alcove --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	if echo "$$pl" | grep -q ':2:' && echo "$$pl" | grep -qF '(/ 1 x)'; then \
+	  echo "  OK — error points at (/ 1 x) on line 2 (the bytecode pc->line table), not the line-5 call"; \
+	else echo "  PRECISE LOC WRONG:"; echo "$$pl" | sed 's/^/    /'; ok=0; fi; \
 	printf '\n=== error backtrace (call chain on uncaught error) ===\n'; \
 	bt=$$(printf '(def c (x) (/ x 0))\n(def b (x) (+ 1 (c x)))\n(def a () (+ 1 (b 5)))\n(a)\n' | ./alcove --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	if echo "$$bt" | grep -qi 'backtrace' && echo "$$bt" | grep -qE '^[[:space:]]+c$$' && echo "$$bt" | grep -qE '^[[:space:]]+b$$' && echo "$$bt" | grep -qE '^[[:space:]]+a$$'; then \

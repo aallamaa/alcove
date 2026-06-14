@@ -199,7 +199,15 @@ static inline void bt_clear(void) {
    form's start line into the pair's otherwise-unused `meta` slot (lambda/macro
    heads, symbols and vectors use `meta`; a plain list-form pair never does) —
    read it back via form_line(). */
-static ALCOVE_TLS int g_track_lines = 0; /* reader stamps form lines when set */
+static ALCOVE_TLS int g_track_lines = 1; /* reader stamps each list form's line+col
+                                            into its pair meta (on by default — feeds
+                                            precise error locations + the debugger) */
+/* Precise source position of a raised error (raw reader line/col), 0 = unknown.
+   The AST path fills it in error() from the offending form; the VM path fills it
+   from the bytecode pc→loc table in RUNTIME_ERR. The top-level renderer prefers
+   it over g_form_line (the enclosing top-level form only). Reset per form. */
+static ALCOVE_TLS int g_err_line = 0;
+static ALCOVE_TLS int g_err_col = 0;
 static ALCOVE_TLS int g_debug = 0;       /* debugger active (hooks live) */
 static ALCOVE_TLS int g_dbg_mode = 0;    /* 0 run, 1 step-into, 2 next/step-over */
 static ALCOVE_TLS int g_dbg_next_depth = 0; /* for `next`: stop when depth <= this */
@@ -245,10 +253,28 @@ static ALCOVE_TLS char *g_dbg_bp_fn[DBG_BP_MAX]; /* break-on-function names */
 static ALCOVE_TLS int g_dbg_nbp_fn = 0;
 static ALCOVE_TLS int g_dbg_bp_line[DBG_BP_MAX]; /* break-on-line numbers */
 static ALCOVE_TLS int g_dbg_nbp_line = 0;
-/* The source line stamped on a list form (1-based), or 0 if unknown. Lives in
-   the pair's `meta` union, unused on plain list-form pairs. */
+/* Source position stamped on a list form, packed into the pair's `meta` union
+   (unused on plain list-form pairs): line in the low 20 bits, column in the next
+   12 — so it fits a 32-bit pointer slot (wasm32). 0 = unknown. The reader packs
+   via FORM_LOC_PACK; form_line/form_col unpack. Lines past ~1M / cols past ~4095
+   clamp (cosmetic only — used for error display, never semantics). */
+#define FORM_LOC_LINE_MAX 0xFFFFF /* 2^20 - 1 */
+#define FORM_LOC_COL_MAX 0xFFF    /* 2^12 - 1 */
+#define FORM_LOC_PACK(line, col)                                               \
+  ((uintptr_t)(((uint32_t)((line) > FORM_LOC_LINE_MAX ? FORM_LOC_LINE_MAX      \
+                                                      : (line))) |             \
+               ((uint32_t)((col) > FORM_LOC_COL_MAX ? FORM_LOC_COL_MAX         \
+                                                    : (col))                   \
+                << 20)))
 static inline int form_line(exp_t *e) {
-  return (is_ptr(e) && e->type == EXP_PAIR) ? (int)(intptr_t)e->meta : 0;
+  return (e && is_ptr(e) && e->type == EXP_PAIR)
+             ? (int)((uintptr_t)e->meta & 0xFFFFF)
+             : 0;
+}
+static inline int form_col(exp_t *e) {
+  return (e && is_ptr(e) && e->type == EXP_PAIR)
+             ? (int)(((uintptr_t)e->meta >> 20) & 0xFFF)
+             : 0;
 }
 
 /* ---- RESP user-callback read-only guard -----------------------------------
@@ -888,6 +914,11 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
   }
   va_end(ap);
   ret->next = refexp(id);
+  /* Precise location for the top-level renderer: the offending form's own line
+     (AST path — `id` is that form). The VM path passes the lambda (no line) and
+     fills g_err_line itself from the bytecode pc→loc table in RUNTIME_ERR. */
+  g_err_line = form_line(id);
+  g_err_col = form_col(id);
   bt_capture(); /* snapshot the call stack at the error site for a backtrace */
   /* Debugger break-on-raise: an error raised outside any (try ...) during a
      top-level form's evaluation drops into the debugger HERE — at the raise
@@ -6710,11 +6741,28 @@ void bytecode_free(bytecode_t *bc) {
   free(bc->consts);
   free(bc->gcache);
   free(bc->code);
+  free(bc->locs);
 #ifdef ALCOVE_JIT
   if (bc->jit_mem)
     munmap(bc->jit_mem, bc->jit_size);
 #endif
   free(bc);
+}
+
+/* Source line/col for the instruction at code offset `pc` — the largest loc
+   entry with pc <= the fault offset. Returns 1 and fills the out-params, else 0.
+   Runs only when raising a runtime error (cold), so a linear scan from the end
+   is fine: the table holds one entry per source line of the function. */
+static int bc_loc_at(bytecode_t *bc, int pc, int *line, int *col) {
+  if (!bc || !bc->locs)
+    return 0;
+  for (int i = bc->nlocs - 1; i >= 0; i--)
+    if (bc->locs[i].pc <= pc) {
+      *line = bc->locs[i].line;
+      *col = bc->locs[i].col;
+      return 1;
+    }
+  return 0;
 }
 
 #ifdef ALCOVE_JIT
@@ -6740,6 +6788,28 @@ static void emit_u8(compiler_t *c, uint8_t b) {
 static void emit_i16(compiler_t *c, int16_t v) {
   emit_u8(c, (uint8_t)(v & 0xff));
   emit_u8(c, (uint8_t)((v >> 8) & 0xff));
+}
+/* Record "from the current code offset, source position is form e's" into the
+   compiler's pc→loc table — coalescing consecutive forms on the same line so the
+   table stays tiny. Cold (compile time only); the VM never reads it except when
+   raising an error. No-op when the form carries no source position. */
+static void emit_loc(compiler_t *c, exp_t *e) {
+  int line = form_line(e);
+  if (c->failed || !line || line == c->last_loc_line)
+    return;
+  if (c->nlocs + 1 > c->locs_cap) {
+    int ncap = c->locs_cap ? c->locs_cap * 2 : 16;
+    bc_loc_t *nl = realloc(c->locs, (size_t)ncap * sizeof(*nl));
+    if (!nl)
+      return; /* OOM: skip this entry — line info is best-effort, never fatal */
+    c->locs = nl;
+    c->locs_cap = ncap;
+  }
+  c->locs[c->nlocs].pc = c->ncode;
+  c->locs[c->nlocs].line = line;
+  c->locs[c->nlocs].col = form_col(e);
+  c->nlocs++;
+  c->last_loc_line = line;
 }
 static int add_const(compiler_t *c, exp_t *v) {
   /* de-dupe by pointer equality — rare wins but costs nothing */
@@ -7654,6 +7724,7 @@ static int compile_try(compiler_t *c, exp_t *form, int tail) {
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (c->failed)
     return;
+  emit_loc(c, e); /* stamp pc→source line for this form (cold; error-path only) */
   /* Tagged fixnum literal: if it fits in int16, inline; else const pool. */
   if (isnumber(e)) {
     int64_t v = FIX_VAL(e);
@@ -8202,6 +8273,7 @@ int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
       unrefexp(c.consts[i]);
     free(c.consts);
     free(c.code);
+    free(c.locs);
     return 0;
   }
   bytecode_t *bc = calloc(1, sizeof(bytecode_t));
@@ -8226,6 +8298,8 @@ int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
   bc->ret_hint = ret_hint;
   bc->self_name = (const char *)fn->meta; /* borrowed; NULL for anon */
   bc->no_gcache = (uint8_t)(is_closure != 0);
+  bc->locs = c.locs; /* transfer the pc→source-location table (may be NULL) */
+  bc->nlocs = c.nlocs;
   fn->bc = bc;
   fn->flags |= FLAG_COMPILED;
 #ifdef ALCOVE_JIT
@@ -8473,9 +8547,21 @@ tail_reentry:
   sp = 0;
   pc = 0;
 
+/* Map the faulting code offset to its source line/col so the error reports the
+   precise failing form (the VM path; cold). error() already cleared g_err_line
+   via the lambda's (absent) line, so a miss leaves the top-level-form fallback. */
+#define RUNTIME_ERR_LOC                                                        \
+  do {                                                                         \
+    int _el, _ec;                                                              \
+    if (bc_loc_at(bc, pc, &_el, &_ec)) {                                       \
+      g_err_line = _el;                                                        \
+      g_err_col = _ec;                                                         \
+    }                                                                          \
+  } while (0)
 #define RUNTIME_ERR(msg)                                                       \
   do {                                                                         \
     exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, msg);                    \
+    RUNTIME_ERR_LOC;                                                           \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
       unrefexp(stack[_i]);                                                     \
@@ -8488,6 +8574,7 @@ tail_reentry:
 #define RUNTIME_ERR_FMT(fmt, a1, a2)                                           \
   do {                                                                         \
     exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, fmt, a1, a2);            \
+    RUNTIME_ERR_LOC;                                                           \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
       unrefexp(stack[_i]);                                                     \
@@ -8506,6 +8593,7 @@ tail_reentry:
                     "Unbound variable %s (did you mean '%s'?)", _nm, _sg)      \
             : error(ERROR_UNBOUND_VARIABLE, fn, env, "Unbound variable %s",    \
                     _nm);                                                      \
+    RUNTIME_ERR_LOC;                                                           \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
       unrefexp(stack[_i]);                                                     \
@@ -11717,18 +11805,25 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
      frames). The capture's meaningful scope is exactly one top-level form:
      anything live is rendered right below, before the next form runs. */
   bt_clear();
+  g_err_line = 0; /* precise error position, filled by error()/RUNTIME_ERR */
+  g_err_col = 0;
   if (toeval) {
     g_dbg_evaluating = 1; /* arm break-on-raise only for this top-level form */
     res = evaluate(form, env);
     g_dbg_evaluating = 0;
   } else
     unrefexp(form);
+  /* Where to point the caret/location: the precise failing form when we have it
+     (g_err_line, from the AST form or the VM pc→loc table), else the enclosing
+     top-level form. */
+  int eln = g_err_line ? g_err_line : g_form_line;
+  int ecol = g_err_line ? g_err_col : g_form_col;
   if (!quiet) {
     if (res) {
       printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
       print_node(res);
       if (iserror(res)) { /* show the offending line + caret under the message */
-        render_form_caret(stdout, g_form_line, g_form_col);
+        render_form_caret(stdout, eln, ecol);
         render_backtrace(stdout);
       }
     } else
@@ -11739,13 +11834,12 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     /* Quiet (running a FILE or -e): a top-level form errored. Surface it on
        stderr — previously this was swallowed entirely unless a file source
        label was set, so `alcove -e '(oops)'` failed SILENTLY with exit 0.
-       With a source label (file mode) prefix "<src>:<line>:" (the form's
-       start line, captured in g_form_line); -e / piped input has no label,
-       so print the bare message. */
+       With a source label (file mode) prefix "<src>:<line>:" — the PRECISE
+       failing form's line when known, else the top-level form's. */
     if (g_reader_src)
-      annotate_error_loc(res, g_reader_src, display_line(g_form_line));
+      annotate_error_loc(res, g_reader_src, display_line(eln));
     fprintf(stderr, "%s\n", (const char *)res->ptr);
-    render_form_caret(stderr, g_form_line, g_form_col);
+    render_form_caret(stderr, eln, ecol);
     render_backtrace(stderr);
     g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
   }
@@ -12347,6 +12441,12 @@ int main(int argc, char *argv[]) {
         /* Force the AST tree-walker (no bytecode compile) — differential
            testing vs the default compiled path. No TCO; keep recursion bounded. */
         g_no_compile = 1;
+      } else if (strcmp(argv[src], "--no-line-info") == 0) {
+        /* Disable the reader's per-form line/col stamping. Tracking is parse-
+           time only (zero runtime cost — the VM/JIT never reads it), so this is
+           a purity/minimalism switch, not a speed one: errors fall back to
+           top-level-form granularity and the debugger loses source lines. */
+        g_track_lines = 0;
       } else if (strcmp(argv[src], "--debug") == 0 ||
                  strcmp(argv[src], "-d") == 0) {
         /* gdb-style debugger: force the AST walker (every frame a live env_t),

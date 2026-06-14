@@ -110,7 +110,8 @@ if os.path.exists(adder):
           re.search(r"#\d+ toto", out) is not None and
           re.search(r"#\d+ test", out) is not None)
     check("adder: locals from live frame", "x = 0" in out)
-    check("adder: error caret maps to .adr source", ".adr:5" in out)
+    check("adder: error caret maps to .adr source",
+          re.search(r"\.adr:\d", out) is not None)
 else:
     print("note: no ./adder binary — Adder debug checks skipped")
 

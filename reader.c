@@ -157,9 +157,11 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
   exp_t *cnode = NULL; // Current Node
 
   if (x == '(') {
-    /* Source line of the '(' (already consumed), for the debugger. Stamped
-       into the list head pair's meta below when line-tracking is on. */
+    /* Source line+column of the '(' (already consumed; RGETC advanced one past
+       it, so the column sits one back). Stamped into the list head pair's meta
+       below when line-tracking is on — feeds precise error locations + debugger. */
     int form_ln = g_track_lines ? g_reader_line : 0;
+    int form_cl = g_track_lines ? (g_reader_col > 1 ? g_reader_col - 1 : 1) : 0;
     vnode = reader(stream, ')', 0);
 
     if (vnode) {
@@ -176,7 +178,7 @@ exp_t *callmacrochar(FILE *stream, unsigned char x) {
         cnode = cnode->next = make_node(vnode);
       }
       if (form_ln && lnode->type == EXP_PAIR)
-        lnode->meta = (struct keyval_t *)(intptr_t)form_ln;
+        lnode->meta = (struct keyval_t *)FORM_LOC_PACK(form_ln, form_cl);
     }
   } else if (x == '[') {
     vnode = reader(stream, ']', 0);
