@@ -192,6 +192,20 @@ if (no *args*):
 See [`examples/adder/dirstat.adr`](../examples/adder/dirstat.adr) for a
 complete utility script exercising the whole scripting floor.
 
+### Sandboxing (`--safe`)
+
+`alcove --safe` refuses the privileged builtins — anything that touches the host
+OS, filesystem, FFI, persistence, or loads code: `shell`, `delete-file` /
+`rename-file` / `make-dir` / `list-dir` / `file-info`, `setenv`, `savedb` /
+`loaddb`, `load` / `require`, the `ffi-*` calls, and `redis-defcmd` /
+`redis-undefcmd`. Calling one returns an error rather than running it. Benign
+reads (`getenv`, stdin reads) and all pure computation stay available.
+
+The gate is a single chokepoint (`invoke_internal`) every builtin invocation
+flows through, so there is no bypass via `apply`, `map`, or a compiled function;
+the builtins are marked with the `FLAG_UNSAFE` bit in their registration. It
+costs nothing when `--safe` is off (one never-taken branch).
+
 ### The web build (wasm)
 
 The browser/wasm build runs the same language with three differences:

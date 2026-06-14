@@ -406,8 +406,15 @@ static env_t *vm_handler_make_env(const vm_handler_t *h) {
    near the corresponding cmd function). Use LISPCMD_TAIL for control-
    flow forms (if, do) that need FLAG_TAIL_AWARE so evaluate() exposes
    in_tail_position to them. */
-#define LISPCMD(name, fn, doc) {name, -1, 0, 0, doc, fn}
-#define LISPCMD_TAIL(name, fn, doc) {name, -1, FLAG_TAIL_AWARE, 0, doc, fn}
+#define LISPCMD(name, fn, doc) {name, -1, 0, doc, fn}
+#define LISPCMD_TAIL(name, fn, doc) {name, -1, FLAG_TAIL_AWARE, doc, fn}
+/* *_UNSAFE: the builtin touches the host OS / filesystem / FFI / persistence /
+   code-loading, so it is refused under --safe (g_safe_mode) at the single
+   invoke_internal() gate. UNSAFE = non-applicative (special-form-shaped, e.g.
+   shell/load/require); APP_UNSAFE = applicative (e.g. delete-file/setenv). */
+#define LISPCMD_UNSAFE(name, fn, doc) {name, -1, FLAG_UNSAFE, doc, fn}
+#define LISPCMD_APP_UNSAFE(name, fn, doc)                                      \
+  {name, -1, FLAG_APPLICATIVE | FLAG_UNSAFE, doc, fn}
 /* LISPCMD_APP: an APPLICATIVE builtin — evaluates ALL of its arguments in
    applicative order, returns a value, and does NOT inspect its unevaluated
    arg forms or depend on in_tail_position. The compiler emits a real
@@ -417,7 +424,7 @@ static env_t *vm_handler_make_env(const vm_handler_t *h) {
    forms (quote/if/for/=/let/…), macros, and anything that reads its raw form
    must stay LISPCMD/LISPCMD_TAIL. alc_apply_n quote-protects symbol/list arg
    VALUES, so storing/forwarding arbitrary values stays correct. */
-#define LISPCMD_APP(name, fn, doc) {name, -1, FLAG_APPLICATIVE, 0, doc, fn}
+#define LISPCMD_APP(name, fn, doc) {name, -1, FLAG_APPLICATIVE, doc, fn}
 
 #include "builtins.h"
 
@@ -635,13 +642,13 @@ lispProc lispProcList[] = {
     LISPCMD("eprn", eprncmd, doc_eprn),
     LISPCMD("read-line", readlinecmd, doc_readline),
     LISPCMD_APP("getenv", getenvcmd, doc_getenv),
-    LISPCMD_APP("setenv", setenvcmd, doc_setenv),
-    LISPCMD_APP("delete-file", deletefilecmd, doc_deletefile),
-    LISPCMD_APP("rename-file", renamefilecmd, doc_renamefile),
-    LISPCMD_APP("make-dir", makedircmd, doc_makedir),
-    LISPCMD_APP("list-dir", listdircmd, doc_listdir),
-    LISPCMD_APP("file-info", fileinfocmd, doc_fileinfo),
-    LISPCMD("shell", shellcmd, doc_shell),
+    LISPCMD_APP_UNSAFE("setenv", setenvcmd, doc_setenv),
+    LISPCMD_APP_UNSAFE("delete-file", deletefilecmd, doc_deletefile),
+    LISPCMD_APP_UNSAFE("rename-file", renamefilecmd, doc_renamefile),
+    LISPCMD_APP_UNSAFE("make-dir", makedircmd, doc_makedir),
+    LISPCMD_APP_UNSAFE("list-dir", listdircmd, doc_listdir),
+    LISPCMD_APP_UNSAFE("file-info", fileinfocmd, doc_fileinfo),
+    LISPCMD_UNSAFE("shell", shellcmd, doc_shell),
     LISPCMD_APP("json-encode", jsonencodecmd, doc_jsonencode),
     LISPCMD_APP("json-decode", jsondecodecmd, doc_jsondecode),
     LISPCMD_APP("base64-encode", base64encodecmd, doc_base64encode),
@@ -689,15 +696,15 @@ lispProc lispProcList[] = {
     LISPCMD_APP("read-lines", readlinescmd, doc_readlines),
     LISPCMD_APP("file-exists?", fileexistspcmd, doc_fileexistsp),
     LISPCMD_APP("write-bytes", writebytescmd, doc_writebytes),
-    LISPCMD("load", loadcmd, doc_load),
-    LISPCMD("require", requirecmd, doc_require),
+    LISPCMD_UNSAFE("load", loadcmd, doc_load),
+    LISPCMD_UNSAFE("require", requirecmd, doc_require),
     LISPCMD("ns", nscmd, doc_ns),
     /* Persistence */
     LISPCMD("persist", persistcmd, doc_persist),
     LISPCMD("forget", forgetcmd, doc_forget),
     LISPCMD("unpersist", unpersistcmd, doc_unpersist),
-    LISPCMD("savedb", savedbcmd, doc_savedb),
-    LISPCMD("loaddb", loaddbcmd, doc_loaddb),
+    LISPCMD_UNSAFE("savedb", savedbcmd, doc_savedb),
+    LISPCMD_UNSAFE("loaddb", loaddbcmd, doc_loaddb),
     LISPCMD("ispersistent", ispersistentcmd, doc_ispersistent),
     /* Introspection / utilities */
     LISPCMD("inspect", inspectcmd, doc_inspect),
@@ -724,12 +731,12 @@ lispProc lispProcList[] = {
     LISPCMD("flush", flushcmd, doc_flush),
     /* FFI */
     LISPCMD("ffi?", ffipcmd, doc_ffip),
-    LISPCMD("ffi-fn", ffifncmd, doc_ffifn),
-    LISPCMD("ffi-vfn", ffivfncmd, doc_ffivfn),
-    LISPCMD("ffi-callback", fficallbackcmd, doc_fficallback),
-    LISPCMD("ffi-struct", ffistructcmd, doc_ffistruct),
-    LISPCMD("ffi-pack", ffipackcmd, doc_ffipack),
-    LISPCMD("ffi-unpack", ffiunpackcmd, doc_ffiunpack),
+    LISPCMD_UNSAFE("ffi-fn", ffifncmd, doc_ffifn),
+    LISPCMD_UNSAFE("ffi-vfn", ffivfncmd, doc_ffivfn),
+    LISPCMD_UNSAFE("ffi-callback", fficallbackcmd, doc_fficallback),
+    LISPCMD_UNSAFE("ffi-struct", ffistructcmd, doc_ffistruct),
+    LISPCMD_UNSAFE("ffi-pack", ffipackcmd, doc_ffipack),
+    LISPCMD_UNSAFE("ffi-unpack", ffiunpackcmd, doc_ffiunpack),
     /* Clojure-style hash-maps (EXP_DICT) */
     LISPCMD("hash-map", hashmapcmd, doc_hashmap),
     LISPCMD("assoc!", assocbangcmd, doc_assocbang),
@@ -797,8 +804,8 @@ lispProc lispProcList[] = {
     LISPCMD("with-db", withdbcmd, doc_withdb),
     LISPCMD("redis-flush", redisflushcmd, doc_redis_flush),
     LISPCMD("redis-port", redisportcmd, doc_redis_port),
-    LISPCMD("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
-    LISPCMD("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
+    LISPCMD_UNSAFE("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
+    LISPCMD_UNSAFE("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
     LISPCMD("redis-cmds", rediscmdscmd, doc_redis_cmds),
 #endif
 };
@@ -936,6 +943,24 @@ exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
   return ret;
 }
 #pragma GCC diagnostic warning "-Wunused-parameter"
+
+/* Execute an internal builtin on its call form. THE single gate for the --safe
+   sandbox: a FLAG_UNSAFE builtin (OS / filesystem / FFI / persistence / code-
+   loading) is refused here. Every internal-cmd execution path routes through
+   this — the AST evaluator's two fnc() sites and alc_apply_n (which backs apply,
+   map/filter/reduce, and the compiled OP_CALL_GLOBAL fall-through) — so there is
+   no bypass. Consumes `form` exactly as fnc does (the refusal error keeps it via
+   its id ref), so callers need no extra cleanup. */
+static inline exp_t *invoke_internal(exp_t *fn, exp_t *form, env_t *env) {
+  if (g_safe_mode && (fn->flags & FLAG_UNSAFE)) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, form, env,
+                       "operation disabled in --safe mode "
+                       "(OS / filesystem / FFI / code-loading)");
+    unrefexp(form);
+    return err;
+  }
+  return fn->fnc(form, env);
+}
 
 /* Raised by global-mutating special forms when invoked from a RESP user
    callback running under multiple reactors (see g_resp_cb_guard above). */
@@ -10500,7 +10525,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         int was_tail = in_tail_position;
         if (!(tmpexp->flags & FLAG_TAIL_AWARE))
           in_tail_position = 0;
-        ret = tmpexp->fnc(e, env);
+        ret = invoke_internal(tmpexp, e, env);
         in_tail_position = was_tail;
         goto finisht;
       }
@@ -10559,7 +10584,7 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             int was_tail = in_tail_position;
             if (!(tmpexp2->flags & FLAG_TAIL_AWARE))
               in_tail_position = 0;
-            ret = tmpexp2->fnc(e, env);
+            ret = invoke_internal(tmpexp2, e, env);
             in_tail_position = was_tail;
             goto finisht;
           } else if islambda (tmpexp2) {
@@ -12241,7 +12266,8 @@ env_t *alcove_init(void) {
         reserved_symbol, lispProcList[i].name,
         val = make_internal(lispProcList[i].cmd,
                             lispProcList[i].flags &
-                                (FLAG_TAIL_AWARE | FLAG_APPLICATIVE)));
+                                (FLAG_TAIL_AWARE | FLAG_APPLICATIVE |
+                                 FLAG_UNSAFE)));
     unrefexp(val);
   }
   (void)t;

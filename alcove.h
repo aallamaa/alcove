@@ -269,6 +269,14 @@ typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv, struct env_t *env
    special forms (while/each/time/…) are installed via make_internal directly,
    never get this bit, and keep the AST path. Bit 8. */
 #define FLAG_APPLICATIVE 256
+/* Privileged/unsafe builtin: touches the host OS, filesystem, network, FFI, or
+   loads/persists code (shell, file ops, setenv, FFI, require of native modules,
+   savedb/loaddb, redis command registration). Set in the lispProcList flags
+   column and propagated to the EXP_INTERNAL (see the registration mask). Under
+   `--safe` (g_safe_mode) the dispatch refuses these with a clear error — the
+   sandbox tier the `level` reservation was a placeholder for. Bit 9 (fits the
+   16-bit exp_t.flags). */
+#define FLAG_UNSAFE 512
 
 /* For EXP_VECTOR only: element kind, encoded in bits 4-5 of exp_t->flags.
    GEN keeps the old behavior — each slot is an owning exp_t* ref. I64/F64
@@ -743,8 +751,9 @@ int shard_main(shard_t *sh, int port);
 typedef struct lispProc {
   char *name;
   int arity;          /* reserved — not yet enforced. -1 = variadic. */
-  int flags;          /* FLAG_TAIL_AWARE, ...; see alcove.h. */
-  int level;          /* reserved — security tier for sandbox modes. */
+  int flags;          /* FLAG_TAIL_AWARE / FLAG_APPLICATIVE / FLAG_UNSAFE; see alcove.h.
+                         FLAG_UNSAFE marks the security tier the old `level` field
+                         reserved — gated under --safe (see invoke_internal). */
   const char *doc;    /* one-line help string; NULL = undocumented. */
   lispCmd *cmd;
 } lispProc;

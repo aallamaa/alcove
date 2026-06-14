@@ -1189,7 +1189,7 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     }
     int was_tail = in_tail_position;
     in_tail_position = 0;
-    exp_t *ret = fn->fnc(head, env);
+    exp_t *ret = invoke_internal(fn, head, env); /* --safe gate (apply/map/...) */
     in_tail_position = was_tail;
     return ret;
   }

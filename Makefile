@@ -370,6 +370,17 @@ test-all:
 	if echo "$$pl" | grep -q ':2:' && echo "$$pl" | grep -qF '(/ 1 x)'; then \
 	  echo "  OK — error points at (/ 1 x) on line 2 (the bytecode pc->line table), not the line-5 call"; \
 	else echo "  PRECISE LOC WRONG:"; echo "$$pl" | sed 's/^/    /'; ok=0; fi; \
+	printf '\n=== --safe sandbox (FLAG_UNSAFE refused on every dispatch path) ===\n'; \
+	sb_ok=1; \
+	for form in '(shell "echo x")' '(apply shell (list "echo x"))' '(map shell (list "echo x"))' '(def _f () (delete-file "/tmp/zz")) (_f)'; do \
+	  o=$$(printf '%s\n' "$$form" | ./alcove --safe --noload --noinit 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	  echo "$$o" | grep -q "disabled in --safe" || { echo "  SANDBOX BYPASS: $$form"; echo "$$o" | sed 's/^/    /'; sb_ok=0; }; \
+	done; \
+	su=$$(printf '(prn (+ 40 2))\n' | ./alcove --safe --noload --noinit 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	echo "$$su" | grep -q "42" || { echo "  SANDBOX over-blocks safe builtins"; sb_ok=0; }; \
+	uw=$$(printf '(prn (get (shell "echo ok") "out"))\n' | ./alcove --noload --noinit 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
+	echo "$$uw" | grep -q "ok" || { echo "  unsafe builtin blocked WITHOUT --safe"; sb_ok=0; }; \
+	if [ "$$sb_ok" = 1 ]; then echo "  OK — unsafe refused via direct/apply/map/compiled; safe builtins run; no --safe = unrestricted"; else ok=0; fi; \
 	printf '\n=== error backtrace (call chain on uncaught error) ===\n'; \
 	bt=$$(printf '(def c (x) (/ x 0))\n(def b (x) (+ 1 (c x)))\n(def a () (+ 1 (b 5)))\n(a)\n' | ./alcove --noload /dev/stdin 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	if echo "$$bt" | grep -qi 'backtrace' && echo "$$bt" | grep -qE '^[[:space:]]+c$$' && echo "$$bt" | grep -qE '^[[:space:]]+b$$' && echo "$$bt" | grep -qE '^[[:space:]]+a$$'; then \
