@@ -588,6 +588,10 @@ int jit_compile(bytecode_t *bc); /* 1 if JIT'd, 0 otherwise */
 
 typedef struct exp_tfunc {
   unsigned short int flags;
+  /* clone / clone_flag: RESERVED. The accessor macros __CLONE__ / __CLONE_FLAG__
+     exist, but the engine does not currently invoke either (no deep-copy path
+     calls them) — they are part of the registration struct for forward
+     compatibility, so a module may set them without effect today. */
   exp_t *(*clone)(exp_t *this);      /* clone exp_t */
   exp_t *(*clone_flag)(exp_t *this); /* clone exp_t and flag as persistent*/
   exp_t *(*load)(exp_t *e,

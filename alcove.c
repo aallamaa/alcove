@@ -987,6 +987,16 @@ void *memalloc(size_t count, size_t size) {
   return ptr;
 }
 
+/* Checked realloc: abort on OOM instead of returning NULL. Lets call sites use
+   the `p = xrealloc(p, n)` idiom safely — a bare `p = realloc(p, n)` both leaks
+   the old block and NULL-derefs on failure. Mirrors memalloc's OOM policy. */
+void *xrealloc(void *ptr, size_t size) {
+  void *p = realloc(ptr, size);
+  if (!p && size)
+    graceful_shutdown("Fatal error: Out of memory");
+  return p;
+}
+
 inline exp_t *refexp(exp_t *e) {
   /* Tagged immediates (fixnum, char) and canonical singletons (nil, t)
      are immortal — skip the refcount traffic. */
@@ -6781,7 +6791,7 @@ static void emit_u8(compiler_t *c, uint8_t b) {
     return;
   if (c->ncode + 1 > c->code_cap) {
     c->code_cap = c->code_cap ? c->code_cap * 2 : 64;
-    c->code = realloc(c->code, c->code_cap);
+    c->code = xrealloc(c->code, c->code_cap);
   }
   c->code[c->ncode++] = b;
 }
@@ -6826,7 +6836,7 @@ static int add_const(compiler_t *c, exp_t *v) {
   }
   if (c->nconsts + 1 > c->consts_cap) {
     c->consts_cap = c->consts_cap ? c->consts_cap * 2 : 8;
-    c->consts = realloc(c->consts, c->consts_cap * sizeof(exp_t *));
+    c->consts = xrealloc(c->consts, c->consts_cap * sizeof(exp_t *));
   }
   c->consts[c->nconsts] = refexp(v);
   return c->nconsts++;
@@ -10613,7 +10623,11 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                             "Unbound variable %s", _nm);
           goto finish;
         }
-        ret = e; // what is happening here?
+        /* Unreachable today: every arm of the bound-symbol dispatch above, and
+           the unbound-symbol else, transfers control via goto. Kept as a
+           defensive fallthrough — if a future dispatch arm omits its goto, this
+           returns the form itself instead of falling off into undefined behavior. */
+        ret = e;
         goto finisht;
       } else if (iscallable_container(tmpexp)) {
         /* (c arg) literal container head — indexable element or keyed lookup.
@@ -10684,7 +10698,7 @@ static void rl_collect_dict(dict_t *d, const char *prefix, size_t plen,
           continue;
         if (*nout >= *cap) {
           *cap = *cap ? *cap * 2 : 16;
-          *out = realloc(*out, sizeof(char *) * (*cap));
+          *out = xrealloc(*out, sizeof(char *) * (*cap));
         }
         (*out)[(*nout)++] = strdup((const char *)k->key);
       }
@@ -10728,7 +10742,7 @@ static char *alcove_completion_generator(const char *text, int state) {
           continue;
         if (n_matches >= cap) {
           cap = cap ? cap * 2 : 16;
-          matches = realloc(matches, sizeof(char *) * cap);
+          matches = xrealloc(matches, sizeof(char *) * cap);
         }
         matches[n_matches++] = strdup(kk);
       }
@@ -11070,7 +11084,7 @@ static char *rl_read_form(int idx) {
     size_t need = strlen(acc) + strlen(more) + 2;
     if (need > cap) {
       cap = need * 2;
-      acc = realloc(acc, cap);
+      acc = xrealloc(acc, cap);
     }
     strcat(acc, "\n");
     strcat(acc, more);
@@ -11202,7 +11216,7 @@ static char *als_rl_read_form(int idx) {
       size_t need = strlen(acc) + strlen(more) + 2;
       if (need > cap) {
         cap = need * 2;
-        acc = realloc(acc, cap);
+        acc = xrealloc(acc, cap);
       }
       strcat(acc, "\n");
       strcat(acc, more);
@@ -11287,7 +11301,7 @@ static char *dbg_sym_generator(const char *text, int state) {
           continue;
         if (n >= cap) {
           cap = cap ? cap * 2 : 16;
-          m = realloc(m, sizeof(char *) * cap);
+          m = xrealloc(m, sizeof(char *) * cap);
         }
         m[n++] = strdup(kk);
       }

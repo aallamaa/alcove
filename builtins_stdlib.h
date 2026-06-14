@@ -2603,7 +2603,7 @@ static void dir_grow(dir_entry_t **arr, int *n, int *cap, const char *name,
     return;
   if (*n >= *cap) {
     *cap = *cap ? *cap * 2 : 32;
-    *arr = realloc(*arr, sizeof(dir_entry_t) * (*cap));
+    *arr = xrealloc(*arr, sizeof(dir_entry_t) * (*cap));
   }
   (*arr)[(*n)++] = (dir_entry_t){name, val};
 }
