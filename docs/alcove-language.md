@@ -725,6 +725,35 @@ reach for a `float` when you want an inexact large magnitude. `rational?`
 tests for a true (non-integer) fraction; `numerator`/`denominator` also
 accept a plain integer (returning it and `1`).
 
+### Decimals (exact base-10)
+
+`(decimal "1.50")` builds an exact base-10 number; the literal `1.5m` (note
+the `m` suffix — `1.5` is a binary float, `1.5m` is a decimal) reads the same.
+Construct from a string (the normal, exact path), an integer, or another
+decimal. A **float** argument is refused — a binary float can't represent
+`0.1` exactly, so pass a string to say which decimal you mean.
+
+```
+0.1m + 0.2m         ; 0.3m   (exact — vs 0.1 + 0.2 = 0.30000000000000004)
+(- 10.00m 0.01m)    ; 9.99m
+(* 0.2m 0.3m)       ; 0.06m
+(/ 1m 8m)           ; 0.125m
+(/ 10m 3m)          ; 3.3333333333333333333333333333m  (28 digits, rounded)
+```
+
+Decimals are normalized (trailing fractional zeros trimmed), so `1.50m` and
+`1.5m` are the same value and `is`/`iso`-equal, and a set keeps just one of
+them. The stored form is a **128-bit coefficient + scale**, bounded to **28
+significant digits** (rust_decimal-class); a product or quotient beyond that,
+and `÷0`, **raise** — there is no bignum.
+
+The contagion rules are **strict** (Python's): a decimal combines with
+integers and other decimals (the result is a decimal), but mixing a decimal
+with a **float** or a **rational** is an **error** — converting between an
+exact decimal, an exact fraction, and a binary float should be explicit, not
+silent. (Ordered comparison across these is still allowed; only arithmetic is
+strict.) `decimal?` tests for the type.
+
 Equality:
 - `is` — identity / EQ for atoms (symbols, fixnums, chars). Cheap.
 - `iso` — structural equality, recurses into lists/strings.

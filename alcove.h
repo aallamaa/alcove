@@ -950,6 +950,8 @@ exp_t *load_float(exp_t *e, FILE *stream);
 exp_t *dump_float(exp_t *e, FILE *stream);
 exp_t *load_rational(exp_t *e, FILE *stream);
 exp_t *dump_rational(exp_t *e, FILE *stream);
+exp_t *load_decimal(exp_t *e, FILE *stream);
+exp_t *dump_decimal(exp_t *e, FILE *stream);
 exp_t *load_symbol(exp_t *e, FILE *stream);
 exp_t *dump_symbol(exp_t *e, FILE *stream);
 exp_t *load_pair(exp_t *e, FILE *stream);
@@ -1124,6 +1126,17 @@ typedef struct {
   int64_t num; /* sign lives here */
   int64_t den; /* always > 0 */
 } alc_rat_t;
+
+/* EXP_DECIMAL — exact bounded base-10 number, value = coef * 10^(-scale).
+   coef is a signed 128-bit integer bounded to <= 28 significant digits
+   (rust_decimal class); scale is the count of fractional digits (0..28). The
+   stored form is normalized (trailing fractional zeros trimmed; coef==0 has
+   scale 0), so structural equality is value equality. Operations in numeric.h. */
+typedef struct {
+  __int128 coef;
+  int32_t scale;
+} alc_dec_t;
+int dec_to_str(alc_dec_t *d, char *buf); /* defined in numeric.h; used by print.h */
 
 typedef struct alc_listnode {
   struct exp_t *val; /* owned ref */

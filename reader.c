@@ -108,6 +108,39 @@ exp_t *make_atom_from_token(token_t *token) {
       }
     }
   }
+  /* Decimal literal: [+-]?digits[.digits]m -> exact base-10. The trailing 'm'
+     distinguishes it from a float (1.5 is a float; 1.5m is a decimal). A token
+     ending in 'm' whose body isn't a plain decimal (e.g. the symbol "foom")
+     falls through to the symbol scanner. */
+  {
+    size_t tl = strlen(stro);
+    if (tl >= 2 && stro[tl - 1] == 'm') {
+      int ok = 1, dig = 0, dot = 0;
+      for (size_t k = 0; k < tl - 1; k++) {
+        char ch = stro[k];
+        if (ch == '.') {
+          if (dot) {
+            ok = 0;
+            break;
+          }
+          dot = 1;
+        } else if (ch >= '0' && ch <= '9')
+          dig++;
+        else if ((ch == '+' || ch == '-') && k == 0)
+          ; /* leading sign */
+        else {
+          ok = 0;
+          break;
+        }
+      }
+      if (ok && dig > 0) {
+        int over;
+        exp_t *d = dec_parse(stro, tl - 1, &over); /* parse without the 'm' */
+        if (d)
+          ATOM_NUM_RETURN(d);
+      }
+    }
+  }
   /* Classify the token as integer / float / symbol with a tiny state machine
      over `test`. A `goto scanned` (not `break`, which would only leave the
      switch) ends the scan: the char is illegal here, so the token is a symbol.

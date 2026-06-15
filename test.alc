@@ -4111,6 +4111,56 @@
 (assert-true "slashed name is a symbol" (error? (try foo/bar (fn (e) e))))
 
 ;; ====================================================================
+;; Decimals — exact bounded base-10 (numeric.h). Constructor + 1.5m literal,
+;; normalization, exactness (0.1m+0.2m == 0.3m), division with rounding,
+;; strict contagion (decimal + float/rational -> error), comparison/equality/
+;; predicate, set membership.
+;; ====================================================================
+(assert "decimal from string"           (decimal "1.5")     1.5m)
+(assert "decimal literal"               1.5m                (decimal "1.5"))
+(assert "decimal from int"              (decimal 42)        42m)
+(assert "decimal normalizes zeros"      1.50m               1.5m)
+(assert "decimal negative"              -0.25m              (decimal "-0.25"))
+(assert-true  "decimal? on decimal"     (decimal? 1.5m))
+(assert-false "decimal? on float"       (decimal? 1.5))
+(assert-false "decimal? on int"         (decimal? 5))
+;; exactness — the headline property (contrast with binary float)
+(assert "decimal add is exact"          (+ 0.1m 0.2m)       0.3m)
+(assert "decimal sub is exact"          (- 10.00m 0.01m)    9.99m)
+(assert "decimal * int"                 (* 1.5m 2)          3m)
+(assert "decimal * decimal"             (* 0.2m 0.3m)       0.06m)
+(assert "decimal / exact"               (/ 1m 8m)           0.125m)
+(assert "decimal / int"                 (/ 1.5m 3)          0.5m)
+(assert "int + decimal (order)"         (+ 2 0.5m)          2.5m)
+(assert "decimal unary minus"           (- 1.5m)            -1.5m)
+(assert "decimal variadic fold"         (+ 0.1m 0.1m 0.1m)  0.3m)
+(assert "decimal division rounds"       (* (/ 10m 3m) 3m)   (decimal "9.9999999999999999999999999999"))
+;; comparison + equality (normalized -> value equality)
+(assert-true  "decimal < decimal"       (< 0.1m 0.2m))
+(assert-false "decimal < false"         (< 0.2m 0.1m))
+(assert-true  "decimal <= equal scale"  (<= 1.50m 1.5m))
+(assert-true  "decimal vs int compare"  (< 1.5m 2))
+(assert-true  "is normalizes decimals"  (is 1.50m 1.5m))
+(refute       "distinct decimals"       1.5m 1.6m)
+;; strict contagion: decimal does not silently mix with float or rational
+(assert-true "decimal + float errors"
+             (error? (try (+ 1.5m 0.5) (fn (e) e))))
+(assert-true "float + decimal errors"
+             (error? (try (+ 0.5 1.5m) (fn (e) e))))
+(assert-true "decimal + rational errors"
+             (error? (try (+ 1.5m 1/2) (fn (e) e))))
+;; bounded: a magnitude beyond 28 significant digits errors; 1/0 errors
+(assert-true "decimal overflow errors"
+             (error? (try (* (decimal "100000000000000")
+                             (decimal "100000000000000000")) (fn (e) e))))
+(assert-true "decimal / 0 errors"
+             (error? (try (/ 1m 0m) (fn (e) e))))
+(assert-true "decimal from float refused"
+             (error? (try (decimal 1.5) (fn (e) e))))
+;; set membership: decimals canonicalize, equal values dedup
+(assert "decimal set dedups"            (count (set 1.50m 1.5m 2.5m)) 2)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner

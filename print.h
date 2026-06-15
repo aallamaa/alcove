@@ -86,6 +86,10 @@ void print_node(exp_t *node) {
   else if (node->type == EXP_RATIONAL) {
     alc_rat_t *r = (alc_rat_t *)node->ptr;
     printf("\x1B[92m%lld/%lld\x1B[39m", (long long)r->num, (long long)r->den);
+  } else if (node->type == EXP_DECIMAL) {
+    char db[48];
+    dec_to_str((alc_dec_t *)node->ptr, db);
+    printf("\x1B[92m%sm\x1B[39m", db);
   }
   else if (node->type == EXP_VECTOR) {
     int64_t n = vec_len(node);

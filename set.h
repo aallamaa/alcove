@@ -66,6 +66,13 @@ static char *set_key_for_value(exp_t *v) {
     set_key_put(&buf, &len, &cap, tmp);
     return buf;
   }
+  if (isdecimal(v)) { /* normalized -> canonical key */
+    char db[48];
+    dec_to_str((alc_dec_t *)v->ptr, db);
+    set_key_put(&buf, &len, &cap, "D:");
+    set_key_put(&buf, &len, &cap, db);
+    return buf;
+  }
   if (isstring(v) || issymbol(v)) {
     set_key_put(&buf, &len, &cap, isstring(v) ? "S:" : "Y:");
     {
@@ -100,6 +107,11 @@ static exp_t *set_value_clone(exp_t *v) {
   if (isrational(v)) {
     alc_rat_t *r = (alc_rat_t *)v->ptr;
     return make_rational(r->num, r->den);
+  }
+  if (isdecimal(v)) {
+    int o;
+    alc_dec_t *d = (alc_dec_t *)v->ptr;
+    return make_decimal_raw(d->coef, d->scale, &o); /* already normalized */
   }
   if (isstring(v)) {
     const char *_t = exp_text(v);

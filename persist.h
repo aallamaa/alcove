@@ -355,6 +355,32 @@ exp_t *load_rational(exp_t *e, FILE *stream) {
   return make_rational(num, den);
 }
 
+/* EXP_DECIMAL — raw __int128 coefficient + int32 scale. */
+exp_t *dump_decimal(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  alc_dec_t *d = (alc_dec_t *)e->ptr;
+  if (fwrite(&d->coef, sizeof(d->coef), 1, stream) != 1)
+    return NULL;
+  if (fwrite(&d->scale, sizeof(d->scale), 1, stream) != 1)
+    return NULL;
+  return e;
+}
+exp_t *load_decimal(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e);
+  __int128 coef;
+  int32_t scale;
+  if (fread(&coef, sizeof(coef), 1, stream) != 1)
+    return NULL;
+  if (fread(&scale, sizeof(scale), 1, stream) != 1)
+    return NULL;
+  if (scale < 0 || scale > DEC_MAX_SCALE)
+    return NULL; /* corrupt */
+  int over;
+  return make_decimal_raw(coef, scale, &over);
+}
+
 /* EXP_SYMBOL — same length-prefixed bytes as a string; on load we just
    stash the name into e->ptr. Symbol identity (eq?) isn't preserved
    across runs but iso-equality / lookup-by-name works fine. */

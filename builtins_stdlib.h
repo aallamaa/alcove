@@ -2092,6 +2092,11 @@ int isequal(exp_t *cur1, exp_t *cur2) {
       alc_rat_t *a = (alc_rat_t *)cur1->ptr;
       alc_rat_t *b = (alc_rat_t *)cur2->ptr;
       ret = (a->num == b->num && a->den == b->den);
+    } else if (isdecimal(cur1)) {
+      /* normalized (trailing zeros trimmed), so structural == value equality */
+      alc_dec_t *a = (alc_dec_t *)cur1->ptr;
+      alc_dec_t *b = (alc_dec_t *)cur2->ptr;
+      ret = (a->coef == b->coef && a->scale == b->scale);
     } else
       /* Dict/list: pointer identity. Deep equality would require walking
          every entry/node and is rarely what Redis-style users want. */

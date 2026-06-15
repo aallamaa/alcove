@@ -498,6 +498,8 @@ lispProc lispProcList[] = {
     LISPCMD_APP("numerator", numeratorcmd, doc_numerator),
     LISPCMD_APP("denominator", denominatorcmd, doc_denominator),
     LISPCMD_APP("rational?", rationalpcmd, doc_rationalp),
+    LISPCMD_APP("decimal", decimalcmd, doc_decimal),
+    LISPCMD_APP("decimal?", decimalpcmd, doc_decimalp),
     LISPCMD("mod", modcmd, doc_mod),
     LISPCMD("abs", abscmd, doc_abs),
     LISPCMD("max", maxcmd, doc_max),
@@ -4041,6 +4043,27 @@ const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
 /* Pairwise compare helper. Returns 1 on success with d set to the sign
    of (a - b); returns 0 on type mismatch (caller raises error). */
 static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
+  /* Decimal: exact when both are decimals; mixed with another numeric compares
+     via double (comparison is permissive — only *arithmetic* mixing is strict). */
+  if (isdecimal(a) || isdecimal(b)) {
+    if (isdecimal(a) && isdecimal(b)) {
+      *d = (double)dec_cmp((alc_dec_t *)a->ptr, (alc_dec_t *)b->ptr);
+      return 1;
+    }
+    int aok = isdecimal(a) || isnumber(a) || isfloat(a) || isrational(a);
+    int bok = isdecimal(b) || isnumber(b) || isfloat(b) || isrational(b);
+    if (aok && bok) {
+      double da = isdecimal(a)  ? dec_to_double(a)
+                  : isrational(a) ? rat_to_double(a)
+                                  : TO_DOUBLE(a);
+      double db = isdecimal(b)  ? dec_to_double(b)
+                  : isrational(b) ? rat_to_double(b)
+                                  : TO_DOUBLE(b);
+      *d = da - db;
+      return 1;
+    }
+    return 0;
+  }
   /* Exact vs exact (fixnum/rational): compare without precision loss. */
   if (is_exact(a) && is_exact(b)) {
     *d = (double)rat_cmp(a, b);
@@ -4225,6 +4248,77 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
   return acc;
 }
 
+/* Decimal sibling of tower_fold. Strict contagion (Python-style): a decimal
+   combines with integers (coerced to decimal) and other decimals only — a
+   float or a rational operand is a type error (two exact systems, or
+   exact-vs-inexact, don't silently mix). acc is an owned decimal. Bounded:
+   results beyond 28 significant digits, and 1/0, raise. */
+static exp_t *dec_err(exp_t *e, env_t *env, int over) {
+  return error(over == 2 ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
+               over == 2 ? "Illegal division by 0"
+                         : "decimal overflow (exceeds 28 significant digits)");
+}
+static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
+                           int is_div, int count, exp_t *e) {
+  int i = count, over;
+  for (; c; c = c->next) {
+    exp_t *w = EVAL(c->content, env);
+    if (iserror(w)) {
+      unrefexp(acc);
+      unrefexp(e);
+      return w;
+    }
+    i++;
+    exp_t *wd;
+    if (isdecimal(w)) {
+      wd = w; /* borrow */
+    } else if (isnumber(w)) {
+      wd = make_decimal_raw((__int128)FIX_VAL(w), 0, &over); /* fits: int64 */
+    } else { /* float or rational: strict refusal */
+      unrefexp(w);
+      unrefexp(acc);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, e, env,
+                   "decimal does not combine with float or rational "
+                   "(convert explicitly)");
+    }
+    exp_t *r = dec_binop(op, acc, wd, &over);
+    unrefexp(acc);
+    if (wd != w)
+      unrefexp(wd);
+    unrefexp(w);
+    if (over) {
+      unrefexp(e);
+      return dec_err(e, env, over);
+    }
+    acc = r;
+  }
+  if (i == 1) { /* unary (- d) negate, (/ d) reciprocal */
+    if (is_sub) {
+      alc_dec_t *d = (alc_dec_t *)acc->ptr;
+      exp_t *r = make_decimal_raw(-d->coef, d->scale, &over);
+      unrefexp(acc);
+      if (over) {
+        unrefexp(e);
+        return dec_err(e, env, over);
+      }
+      acc = r;
+    } else if (is_div) {
+      exp_t *one = make_decimal_raw(1, 0, &over);
+      exp_t *r = dec_binop('/', one, acc, &over);
+      unrefexp(one);
+      unrefexp(acc);
+      if (over) {
+        unrefexp(e);
+        return dec_err(e, env, over);
+      }
+      acc = r;
+    }
+  }
+  unrefexp(e);
+  return acc;
+}
+
 #define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV, OP_CHAR)                    \
   exp_t *name(exp_t *e, env_t *env) {                                          \
     int64_t sum_i = (init_i);                                                  \
@@ -4256,6 +4350,12 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
             sum_f OP v->f;                                                     \
           } else if (isrational(v)) { /* rational in float context -> float */ \
             sum_f OP rat_to_double(v);                                         \
+          } else if (isdecimal(v)) { /* float + decimal: strict refusal */     \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
+                        "decimal does not combine with float (convert "        \
+                        "explicitly)");                                        \
+            unrefexp(v);                                                       \
+            goto finish;                                                       \
           } else {                                                             \
             ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
                         "Illegal value in operation");                         \
@@ -4301,6 +4401,25 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
             }                                                                  \
             return tower_fold((OP_CHAR), acc, c->next, env, (IS_SUB),          \
                               (IS_DIV), i, e);                                 \
+          } else if (isdecimal(v)) {                                           \
+            /* Decimal: finish the fold in decimal mode. Seed with v, else     \
+               apply OP to the integer accumulated so far (coerced). */        \
+            int _o;                                                            \
+            exp_t *acc;                                                        \
+            if (i == 1) {                                                      \
+              acc = v;                                                         \
+            } else {                                                           \
+              exp_t *si = make_decimal_raw((__int128)sum_i, 0, &_o);           \
+              acc = dec_binop((OP_CHAR), si, v, &_o);                          \
+              unrefexp(si);                                                    \
+              unrefexp(v);                                                     \
+              if (_o) {                                                        \
+                ret = dec_err(e, env, _o);                                     \
+                goto finish;                                                   \
+              }                                                                \
+            }                                                                  \
+            return decimal_fold((OP_CHAR), acc, c->next, env, (IS_SUB),        \
+                                (IS_DIV), i, e);                               \
           } else {                                                             \
             ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
                         "Illegal value in operation");                         \
@@ -4426,6 +4545,46 @@ const char doc_rationalp[] =
 exp_t *rationalpcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(v);
   CLEAN_RETURN_1(v, isrational(v) ? refexp(TRUE_EXP) : refexp(NIL_EXP));
+}
+
+const char doc_decimal[] =
+    "(decimal x) — exact base-10 number. From a string \"1.50\" (exact, the "
+    "normal path), an integer (scale 0), or another decimal. The literal 1.5m "
+    "reads the same. Bounded to 28 significant digits; arithmetic that exceeds "
+    "that errors. A float arg is refused (it is binary-inexact — pass a string "
+    "to say exactly which decimal you mean).";
+exp_t *decimalcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  if (!v)
+    CLEAN_RETURN_1(v, error(ERROR_MISSING_PARAMETER, e, env,
+                            "decimal: needs one argument"));
+  int over = 0;
+  exp_t *d = NULL;
+  if (isdecimal(v))
+    CLEAN_RETURN_1(v, refexp(v));
+  if (isnumber(v))
+    d = make_decimal_raw((__int128)FIX_VAL(v), 0, &over);
+  else if (isstring(v)) {
+    const char *s = exp_text(v);
+    d = dec_parse(s, strlen(s), &over);
+  } else if (isfloat(v))
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
+                            "decimal: refusing a float (binary-inexact) — pass "
+                            "a string like \"1.5\""));
+  else
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
+                            "decimal: argument must be a string or integer"));
+  if (!d)
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
+                            over == 3 ? "decimal: malformed number string"
+                                      : "decimal: too many significant digits"));
+  CLEAN_RETURN_1(v, d);
+}
+
+const char doc_decimalp[] = "(decimal? x) — t if x is a decimal.";
+exp_t *decimalpcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  CLEAN_RETURN_1(v, isdecimal(v) ? refexp(TRUE_EXP) : refexp(NIL_EXP));
 }
 
 const char doc_sqrt[] =
@@ -4673,6 +4832,10 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     int n = snprintf(tmp, sizeof tmp, "%lld/%lld", (long long)r->num,
                      (long long)r->den);
     str_buf_put(buf, len, cap, tmp, (size_t)n);
+  } else if (isdecimal(v)) {
+    char db[48];
+    int n = dec_to_str((alc_dec_t *)v->ptr, db); /* value text, no 'm' marker */
+    str_buf_put(buf, len, cap, db, (size_t)n);
   } else if (isblob(v)) {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
     if (b && b->len)
@@ -12500,6 +12663,9 @@ env_t *alcove_init(void) {
   exp_tfuncList[EXP_RATIONAL] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_RATIONAL]->load = load_rational;
   exp_tfuncList[EXP_RATIONAL]->dump = dump_rational;
+  exp_tfuncList[EXP_DECIMAL] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_DECIMAL]->load = load_decimal;
+  exp_tfuncList[EXP_DECIMAL]->dump = dump_decimal;
   exp_tfuncList[EXP_SYMBOL] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_SYMBOL]->load = load_symbol;
   exp_tfuncList[EXP_SYMBOL]->dump = dump_symbol;
