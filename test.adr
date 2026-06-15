@@ -6368,6 +6368,94 @@ assert "ns cleared: plain def not prefixed" (do (def nsplain () 5) (nsplain)):
 
 assert-true "ns explicit slash not double-qualified" (do (ns nstest) (def nstest/already () 1) (ns) (no (error? (try (nstest/already) (fn (e) e)))))
 
+assert "rational literal" 1/3 (rational 1 3)
+
+assert "rational reduces" (rational 2 4) 1/2
+
+assert "rational sign to numerator" (rational 1 -3) (rational -1 3)
+
+assert "rational neg/neg -> pos" (rational -2 -4) 1/2
+
+assert "rational integer collapses" (rational 4 2) 2
+
+assert "rational (n) is n" (rational 7) 7
+
+assert-true "rational? on fraction" (rational? 1/3)
+
+assert-false "rational? on collapsed" (rational? (rational 6 2))
+
+assert-false "rational? on int" (rational? 5)
+
+assert-false "rational? on float" (rational? 0.5)
+
+assert "rat + rat" (+ 1/3 1/6) 1/2
+
+assert "rat + int" (+ 1/3 1) 4/3
+
+assert "int + rat (order)" (+ 1 1/3) 4/3
+
+assert "rat - rat collapses" (- 7/2 1/2) 3
+
+assert "rat * int collapses" (* 2/3 3) 2
+
+assert "rat * rat" (* 2/3 3/4) 1/2
+
+assert "rat / int" (/ 1/3 2) 1/6
+
+assert "rat / rat -> int" (/ 2/3 2/3) 1
+
+assert "unary minus rat" (- 1/3) (rational -1 3)
+
+assert "unary reciprocal rat" (/ 1/3) 3
+
+assert "variadic mixed fold" (+ 1 1/2 1/2 1) 3
+
+assert "long exact fold" (+ 1/7 1/7 1/7 1/7 1/7 1/7 1/7) 1
+
+assert "rat + float -> float" (+ 1/4 0.25) 0.5
+
+assert "float + rat -> float" (+ 0.5 1/2) 1.0
+
+assert "rat * float -> float" (* 1/2 4.0) 2.0
+
+assert-true "rat < rat exact" (< 1/3 1/2)
+
+assert-false "rat < rat false" (< 1/2 1/3)
+
+assert-true "rat <= equal" (<= 2/4 1/2)
+
+assert-true "rat > int" (> 3/2 1)
+
+assert-true "rat vs float compare" (< 1/3 0.34)
+
+assert-true "rat chained compare" (< 1/4 1/3 1/2)
+
+assert-true "is reduces both sides" (is 2/4 1/2)
+
+assert-true "iso on rationals" (iso 1/3 1/3)
+
+refute "distinct rationals" 1/3 1/4
+
+assert "numerator of fraction" (numerator 3/4) 3
+
+assert "denominator of fraction" (denominator 3/4) 4
+
+assert "numerator of integer" (numerator 5) 5
+
+assert "denominator of integer" (denominator 5) 1
+
+assert "numerator carries sign" (numerator -3/4) -3
+
+assert "rational set dedups" (count (set 1/3 2/3 1/3)) 2
+
+assert-true "rat overflow errors" (error? (try (* (rational 1 1000000000) (rational 1 1000000000000)) (fn (e) e)))
+
+assert-true "rat ctor div by zero errors" (error? (try (rational 1 0) (fn (e) e)))
+
+assert-true "rat / 0 errors" (error? (try (/ 1/3 0) (fn (e) e)))
+
+assert-true "slashed name is a symbol" (error? (try foo/bar (fn (e) e)))
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

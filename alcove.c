@@ -494,6 +494,10 @@ lispProc lispProcList[] = {
     LISPCMD("*", multiplycmd, doc_mul),
     LISPCMD("-", minuscmd, doc_minus),
     LISPCMD("/", dividecmd, doc_div),
+    LISPCMD_APP("rational", rationalcmd, doc_rational),
+    LISPCMD_APP("numerator", numeratorcmd, doc_numerator),
+    LISPCMD_APP("denominator", denominatorcmd, doc_denominator),
+    LISPCMD_APP("rational?", rationalpcmd, doc_rationalp),
     LISPCMD("mod", modcmd, doc_mod),
     LISPCMD("abs", abscmd, doc_abs),
     LISPCMD("max", maxcmd, doc_max),
@@ -1143,6 +1147,10 @@ int unrefexp_free(exp_t *e, int ret) { /* non-static: see alcove.h (native modul
       break;
     case EXP_BLOB:
       free(e->ptr); /* alc_blob_t is a single flex-array alloc */
+      break;
+    case EXP_RATIONAL: /* alc_rat_t / alc_dec_t: single malloc, no nested refs */
+    case EXP_DECIMAL:
+      free(e->ptr);
       break;
     case EXP_DICT:
     case EXP_SET:
@@ -1812,6 +1820,10 @@ inline exp_t *make_floatf(expfloat f) {
   cur->f = f;
   return cur;
 }
+
+/* Exact non-integer numeric types (rational, decimal). Needs make_nil,
+   memalloc, FIX_FITS/FIX_VAL/MAKE_FIX and EXP_RATIONAL — all in scope here. */
+#include "numeric.h"
 
 // exp_t dump and load
 
@@ -4029,9 +4041,16 @@ const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
 /* Pairwise compare helper. Returns 1 on success with d set to the sign
    of (a - b); returns 0 on type mismatch (caller raises error). */
 static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
-  if ((isnumber(a) || isfloat(a)) && (isnumber(b) || isfloat(b))) {
-    *d = (TO_DOUBLE(a)) -
-         (TO_DOUBLE(b));
+  /* Exact vs exact (fixnum/rational): compare without precision loss. */
+  if (is_exact(a) && is_exact(b)) {
+    *d = (double)rat_cmp(a, b);
+    return 1;
+  }
+  if ((isnumber(a) || isfloat(a) || isrational(a)) &&
+      (isnumber(b) || isfloat(b) || isrational(b))) {
+    double da = isrational(a) ? rat_to_double(a) : TO_DOUBLE(a);
+    double db = isrational(b) ? rat_to_double(b) : TO_DOUBLE(b);
+    *d = da - db;
     return 1;
   }
   if (isstring(a) && isstring(b)) {
@@ -4111,7 +4130,102 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
   return TRUE_EXP;
 }
 
-#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV)                             \
+/* Continue an arithmetic fold in exact (rational) mode. The fast int/float
+   MATH_CMD loop calls this the moment it meets a rational operand: `acc` is the
+   running result (owned: fixnum or rational), `c` is the remaining arg list,
+   `count` is how many operands were already folded into acc (incl. the one that
+   triggered the hand-off). Applies `op` ('+','-','*','/') across the rest with
+   Python-style contagion: meeting a float demotes the whole expression to float;
+   meeting a non-number errors. Bounded: an exact result that overflows int64
+   raises rather than wrapping. Consumes acc, e, and every arg it evaluates;
+   returns an owned result or an error exp_t. */
+static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
+                         int is_div, int count, exp_t *e) {
+  int i = count;
+  int saw_float = 0;
+  double facc = 0;
+  for (; c; c = c->next) {
+    exp_t *w = EVAL(c->content, env);
+    if (iserror(w)) {
+      if (!saw_float)
+        unrefexp(acc);
+      unrefexp(e);
+      return w;
+    }
+    i++;
+    if (saw_float) {
+      if (isnumber(w))
+        facc = apply_op_d(op, facc, (double)FIX_VAL(w));
+      else if (isfloat(w))
+        facc = apply_op_d(op, facc, w->f);
+      else if (isrational(w))
+        facc = apply_op_d(op, facc, rat_to_double(w));
+      else {
+        unrefexp(w);
+        unrefexp(e);
+        return error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+      }
+      unrefexp(w);
+      continue;
+    }
+    if (isfloat(w)) { /* exact + float -> float (contagion) */
+      facc = apply_op_d(op, exact_to_double(acc), w->f);
+      unrefexp(acc);
+      acc = NULL;
+      saw_float = 1;
+      unrefexp(w);
+      continue;
+    }
+    if (is_exact(w)) { /* fixnum or rational: stay exact */
+      const char *err;
+      exp_t *r = rat_binop(op, acc, w, &err);
+      unrefexp(acc);
+      unrefexp(w);
+      if (err) {
+        unrefexp(e);
+        return error(err[0] == 'd' ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
+                     err[0] == 'd' ? "Illegal division by 0"
+                                   : "exact arithmetic overflow (no bignum; use "
+                                     "float for inexact)");
+      }
+      acc = r;
+      continue;
+    }
+    /* rational/decimal mixing and non-numbers: refuse (two exact systems don't
+       silently combine; non-numbers are type errors). */
+    unrefexp(w);
+    unrefexp(acc);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+  }
+  if (saw_float) {
+    unrefexp(e);
+    return make_floatf(facc);
+  }
+  /* Unary (- a) / (/ a): negate / reciprocate. */
+  if (i == 1) {
+    const char *err;
+    exp_t *r = NULL;
+    if (is_sub)
+      r = rat_binop('-', MAKE_FIX(0), acc, &err);
+    else if (is_div)
+      r = rat_binop('/', MAKE_FIX(1), acc, &err);
+    if (is_sub || is_div) {
+      unrefexp(acc);
+      if (err) {
+        unrefexp(e);
+        return error(err[0] == 'd' ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
+                     err[0] == 'd' ? "Illegal division by 0"
+                                   : "exact arithmetic overflow");
+      }
+      acc = r;
+    }
+  }
+  unrefexp(e);
+  return acc;
+}
+
+#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV, OP_CHAR)                    \
   exp_t *name(exp_t *e, env_t *env) {                                          \
     int64_t sum_i = (init_i);                                                  \
     expfloat sum_f = (init_i);                                                 \
@@ -4140,6 +4254,8 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
             sum_f OP FIX_VAL(v);                                               \
           } else if (isfloat(v)) {                                             \
             sum_f OP v->f;                                                     \
+          } else if (isrational(v)) { /* rational in float context -> float */ \
+            sum_f OP rat_to_double(v);                                         \
           } else {                                                             \
             ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
                         "Illegal value in operation");                         \
@@ -4162,6 +4278,29 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
             }                                                                  \
             sum_i = 0;                                                         \
             saw_float = 1;                                                     \
+          } else if (isrational(v)) {                                          \
+            /* Exact non-integer: leave the int/float fast path and finish the \
+               fold in rational mode. acc = v seeds the first operand, else    \
+               apply OP to the integer accumulated so far. tower_fold consumes  \
+               e and the remaining args. */                                    \
+            exp_t *acc;                                                        \
+            if (i == 1) {                                                      \
+              acc = v; /* transfer ownership */                               \
+            } else {                                                           \
+              const char *_err;                                                \
+              acc = rat_binop((OP_CHAR), MAKE_FIX(sum_i), v, &_err);           \
+              unrefexp(v);                                                     \
+              if (_err) {                                                      \
+                ret = error(_err[0] == 'd' ? ERROR_DIV_BY0                      \
+                                           : ERROR_ILLEGAL_VALUE,              \
+                            e, env,                                            \
+                            _err[0] == 'd' ? "Illegal division by 0"           \
+                                           : "exact arithmetic overflow");     \
+                goto finish;                                                   \
+              }                                                                \
+            }                                                                  \
+            return tower_fold((OP_CHAR), acc, c->next, env, (IS_SUB),          \
+                              (IS_DIV), i, e);                                 \
           } else {                                                             \
             ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
                         "Illegal value in operation");                         \
@@ -4219,18 +4358,75 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
 
 const char doc_plus[] =
     "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
-MATH_CMD(pluscmd, 0, +=, 0, 0)
+MATH_CMD(pluscmd, 0, +=, 0, 0, '+')
 
 const char doc_mul[] = "(* x ...) — product of all args. (*) is 1.";
-MATH_CMD(multiplycmd, 1, *=, 0, 0)
+MATH_CMD(multiplycmd, 1, *=, 0, 0, '*')
 
 const char doc_minus[] =
     "(- a) negates; (- a b c ...) subtracts the rest from a.";
-MATH_CMD(minuscmd, 0, -=, 1, 0)
+MATH_CMD(minuscmd, 0, -=, 1, 0, '-')
 
 const char doc_div[] = "(/ a b ...) — divide a by the rest. Integer division "
                        "if all args are ints; otherwise float.";
-MATH_CMD(dividecmd, 0, /=, 0, 1)
+MATH_CMD(dividecmd, 0, /=, 0, 1, '/')
+
+const char doc_rational[] =
+    "(rational n d) — exact fraction n/d (d≠0), sign-normalized and reduced. "
+    "(rational n) is just n. Integer-valued results collapse to a plain int. "
+    "Components are int64; an operation whose exact result overflows int64 "
+    "errors (there is no bignum — use a float for inexact big magnitudes).";
+exp_t *rationalcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(n, d);
+  if (!n || !isnumber(n))
+    CLEAN_RETURN_2(n, d,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "rational: numerator must be an integer"));
+  int64_t den = 1;
+  if (d) {
+    if (!isnumber(d))
+      CLEAN_RETURN_2(n, d,
+                     error(ERROR_ILLEGAL_VALUE, e, env,
+                           "rational: denominator must be an integer"));
+    den = FIX_VAL(d);
+    if (den == 0)
+      CLEAN_RETURN_2(n, d,
+                     error(ERROR_DIV_BY0, e, env, "rational: denominator is 0"));
+  }
+  CLEAN_RETURN_2(n, d, make_rational(FIX_VAL(n), den));
+}
+
+const char doc_numerator[] =
+    "(numerator x) — numerator of a rational; x itself if x is an integer.";
+exp_t *numeratorcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  if (isrational(v))
+    CLEAN_RETURN_1(v, make_rational(((alc_rat_t *)v->ptr)->num, 1));
+  if (isnumber(v))
+    CLEAN_RETURN_1(v, v); /* integer: numerator is itself */
+  CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
+                          "numerator: argument must be a rational or integer"));
+}
+
+const char doc_denominator[] =
+    "(denominator x) — denominator of a rational; 1 if x is an integer.";
+exp_t *denominatorcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  if (isrational(v))
+    CLEAN_RETURN_1(v, make_rational(((alc_rat_t *)v->ptr)->den, 1));
+  if (isnumber(v))
+    CLEAN_RETURN_1(v, MAKE_FIX(1));
+  CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
+                          "denominator: argument must be a rational or integer"));
+}
+
+const char doc_rationalp[] =
+    "(rational? x) — t if x is a non-integer rational (an exact fraction). "
+    "Integer-valued rationals collapse to ints, so this is nil for plain ints.";
+exp_t *rationalpcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(v);
+  CLEAN_RETURN_1(v, isrational(v) ? refexp(TRUE_EXP) : refexp(NIL_EXP));
+}
 
 const char doc_sqrt[] =
     "(sqrt x) — float square root. See sqrt-int for the integer version.";
@@ -4471,6 +4667,11 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     { const char *_t = exp_text(v); str_buf_put(buf, len, cap, (char *)_t, strlen((char *)_t)); }
   } else if (isfloat(v)) {
     int n = snprintf(tmp, sizeof tmp, "%g", v->f);
+    str_buf_put(buf, len, cap, tmp, (size_t)n);
+  } else if (isrational(v)) {
+    alc_rat_t *r = (alc_rat_t *)v->ptr;
+    int n = snprintf(tmp, sizeof tmp, "%lld/%lld", (long long)r->num,
+                     (long long)r->den);
     str_buf_put(buf, len, cap, tmp, (size_t)n);
   } else if (isblob(v)) {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
@@ -12296,6 +12497,9 @@ env_t *alcove_init(void) {
   exp_tfuncList[EXP_FLOAT] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_FLOAT]->load = load_float;
   exp_tfuncList[EXP_FLOAT]->dump = dump_float;
+  exp_tfuncList[EXP_RATIONAL] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
+  exp_tfuncList[EXP_RATIONAL]->load = load_rational;
+  exp_tfuncList[EXP_RATIONAL]->dump = dump_rational;
   exp_tfuncList[EXP_SYMBOL] = (exp_tfunc *)memalloc(1, sizeof(exp_tfunc));
   exp_tfuncList[EXP_SYMBOL]->load = load_symbol;
   exp_tfuncList[EXP_SYMBOL]->dump = dump_symbol;

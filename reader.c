@@ -77,6 +77,37 @@ exp_t *make_atom_from_token(token_t *token) {
       }
     }
   }
+  /* Rational literal: [+-]?digits/digits -> a reduced rational. A '/' in any
+     other shape (e.g. the namespaced symbol json/foo, which starts with a
+     letter, or 1/2/3) is left to the symbol scanner below. Components must fit
+     int64 and the denominator be non-zero; otherwise fall through so the token
+     stays usable as a name. */
+  {
+    const char *p = stro;
+    int neg = 0;
+    if (*p == '+' || *p == '-') {
+      neg = (*p == '-');
+      p++;
+    }
+    const char *nd = p;
+    while (*nd >= '0' && *nd <= '9')
+      nd++;
+    if (nd > p && *nd == '/' && nd[1]) {
+      const char *dd = nd + 1, *de = dd;
+      while (*de >= '0' && *de <= '9')
+        de++;
+      if (de > dd && *de == '\0') { /* exactly digits/digits, nothing trailing */
+        errno = 0;
+        long long n = strtoll(p, NULL, 10);
+        long long d = strtoll(dd, NULL, 10);
+        if (errno != ERANGE && d != 0) {
+          if (neg)
+            n = -n;
+          ATOM_NUM_RETURN(make_rational((int64_t)n, (int64_t)d));
+        }
+      }
+    }
+  }
   /* Classify the token as integer / float / symbol with a tiny state machine
      over `test`. A `goto scanned` (not `break`, which would only leave the
      switch) ends the scan: the char is illegal here, so the token is a symbol.

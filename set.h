@@ -59,6 +59,13 @@ static char *set_key_for_value(exp_t *v) {
     set_key_put(&buf, &len, &cap, tmp);
     return buf;
   }
+  if (isrational(v)) { /* reduced+normalized -> canonical key */
+    alc_rat_t *r = (alc_rat_t *)v->ptr;
+    snprintf(tmp, sizeof tmp, "R:%lld/%lld", (long long)r->num,
+             (long long)r->den);
+    set_key_put(&buf, &len, &cap, tmp);
+    return buf;
+  }
   if (isstring(v) || issymbol(v)) {
     set_key_put(&buf, &len, &cap, isstring(v) ? "S:" : "Y:");
     {
@@ -90,6 +97,10 @@ static exp_t *set_value_clone(exp_t *v) {
     return refexp(v);
   if (isfloat(v))
     return make_floatf(v->f);
+  if (isrational(v)) {
+    alc_rat_t *r = (alc_rat_t *)v->ptr;
+    return make_rational(r->num, r->den);
+  }
   if (isstring(v)) {
     const char *_t = exp_text(v);
     return make_string((char *)_t, strlen((char *)_t));

@@ -330,6 +330,31 @@ exp_t *load_float(exp_t *e, FILE *stream) {
   return e;
 }
 
+/* EXP_RATIONAL — two raw int64 (num, den). Reconstructed via make_rational so
+   it re-normalizes (collapsing to a fixnum if integral) on load. */
+exp_t *dump_rational(exp_t *e, FILE *stream) {
+  if (dumptype(stream, &e->type) <= 0)
+    return NULL;
+  alc_rat_t *r = (alc_rat_t *)e->ptr;
+  if (fwrite(&r->num, sizeof(int64_t), 1, stream) != 1)
+    return NULL;
+  if (fwrite(&r->den, sizeof(int64_t), 1, stream) != 1)
+    return NULL;
+  return e;
+}
+exp_t *load_rational(exp_t *e, FILE *stream) {
+  if (e)
+    unrefexp(e); /* discard placeholder, like load_blob */
+  int64_t num, den;
+  if (fread(&num, sizeof(int64_t), 1, stream) != 1)
+    return NULL;
+  if (fread(&den, sizeof(int64_t), 1, stream) != 1)
+    return NULL;
+  if (den == 0)
+    return NULL; /* corrupt */
+  return make_rational(num, den);
+}
+
 /* EXP_SYMBOL — same length-prefixed bytes as a string; on load we just
    stash the name into e->ptr. Symbol identity (eq?) isn't preserved
    across runs but iso-equality / lookup-by-name works fine. */

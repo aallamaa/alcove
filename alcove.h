@@ -42,6 +42,12 @@ enum {
   EXP_LIST, /* doubly-linked deque; ptr → alc_list_t (O(1) head & tail) */
   EXP_SET,  /* hash set; ptr → dict_t* with canonical keys and t values */
   EXP_HAMT, /* persistent/immutable map; ptr → hamt_t* (structural sharing) */
+  /* Exact non-integer numeric atoms (see numeric.h). Placed inside the
+     self-evaluating BLOB..(here) range and BEFORE EXP_CONT so isatom stays a
+     single contiguous bound; persisted container ids (BLOB..HAMT) are
+     unchanged. ptr → alc_rat_t / alc_dec_t, freed like EXP_BLOB. */
+  EXP_RATIONAL, /* int64 num / int64 den (den>0, gcd-reduced) */
+  EXP_DECIMAL,  /* bounded base-10: int coefficient + scale */
   EXP_CONT, /* escape continuation (call/cc); id in `meta`. Callable, NOT a
                container — kept after the isatom container range below. */
 
@@ -194,7 +200,7 @@ enum {
 #define isatom(e)                                                              \
   (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
                                ((e)->type >= EXP_BLOB &&                       \
-                                (e)->type <= EXP_HAMT) ||                      \
+                                (e)->type <= EXP_DECIMAL) ||                   \
                                (e)->type >= EXP_MAXSIZE)))
 
 /* Helper for fast-path refcounting */
@@ -942,6 +948,8 @@ exp_t *load_number(exp_t *e, FILE *stream);
 exp_t *dump_number(exp_t *e, FILE *stream);
 exp_t *load_float(exp_t *e, FILE *stream);
 exp_t *dump_float(exp_t *e, FILE *stream);
+exp_t *load_rational(exp_t *e, FILE *stream);
+exp_t *dump_rational(exp_t *e, FILE *stream);
 exp_t *load_symbol(exp_t *e, FILE *stream);
 exp_t *dump_symbol(exp_t *e, FILE *stream);
 exp_t *load_pair(exp_t *e, FILE *stream);
@@ -1108,6 +1116,14 @@ typedef struct {
   size_t len;
   char bytes[]; /* flex-array: header + payload in one alloc */
 } alc_blob_t;
+
+/* EXP_RATIONAL — exact fraction. den > 0, gcd(num,den) == 1. Defined here (not
+   numeric.h) because print.h / equality run before that fragment is #included.
+   Operations are in numeric.h. */
+typedef struct {
+  int64_t num; /* sign lives here */
+  int64_t den; /* always > 0 */
+} alc_rat_t;
 
 typedef struct alc_listnode {
   struct exp_t *val; /* owned ref */

@@ -689,6 +689,42 @@ Comparisons `< > <= >=` are **variadic and chained** in the SQL/Python
 sense: `(< 1 2 3 4)` is `t` iff each adjacent pair is ordered. With
 zero or one argument they are vacuously `t`.
 
+### Rationals (exact fractions)
+
+`(rational n d)` builds the exact fraction `n/d`, sign-normalized
+(denominator always positive) and reduced to lowest terms. The literal
+`n/d` reads the same thing — `1/3`, `-7/2`, `22/7`. A fraction that
+reduces to a whole number collapses to a plain integer, so `(rational 4 2)`
+is `2` and `rational?` is `nil` for it.
+
+```
+1/3                 ; 1/3
+(rational 2 4)      ; 1/2   (reduced)
+(rational 1 -3)     ; -1/3  (sign normalized)
+(+ 1/3 1/6)         ; 1/2
+(- 7/2 1/2)         ; 3
+(* 2/3 3)           ; 2
+(/ 1/3 2)           ; 1/6
+(numerator 3/4)     ; 3
+(denominator 3/4)   ; 4
+```
+
+The exact tower mixes with the existing numbers by a **Python-style
+contagion lattice**:
+
+- `int` + `rational` → `rational` (exact stays exact);
+- `rational` + `float` → `float` (a binary float is inexact, so it wins
+  and the result is inexact);
+- comparisons between exact values (`int`/`rational`) are done **without
+  precision loss** (no float round-trip).
+
+Rationals are **bounded** — numerator and denominator are `int64`. There
+is no bignum, so an operation whose exact result would not fit `int64`
+**raises an error** rather than wrapping or silently losing precision;
+reach for a `float` when you want an inexact large magnitude. `rational?`
+tests for a true (non-integer) fraction; `numerator`/`denominator` also
+accept a plain integer (returning it and `1`).
+
 Equality:
 - `is` — identity / EQ for atoms (symbols, fixnums, chars). Cheap.
 - `iso` — structural equality, recurses into lists/strings.

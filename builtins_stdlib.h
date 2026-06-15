@@ -2087,6 +2087,11 @@ int isequal(exp_t *cur1, exp_t *cur2) {
       alc_blob_t *b = (alc_blob_t *)cur2->ptr;
       ret = (a && b && a->len == b->len &&
              (a->len == 0 || memcmp(a->bytes, b->bytes, a->len) == 0));
+    } else if (isrational(cur1)) {
+      /* reduced + sign-normalized, so structural equality is value equality */
+      alc_rat_t *a = (alc_rat_t *)cur1->ptr;
+      alc_rat_t *b = (alc_rat_t *)cur2->ptr;
+      ret = (a->num == b->num && a->den == b->den);
     } else
       /* Dict/list: pointer identity. Deep equality would require walking
          every entry/node and is rarely what Redis-style users want. */

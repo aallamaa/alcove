@@ -29,6 +29,12 @@ exp_t *genfilter_cmd(exp_t *e, env_t *env);
 extern const char doc_eq[], doc_setf[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
 extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
 extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
+extern const char doc_rational[], doc_numerator[], doc_denominator[],
+    doc_rationalp[];
+exp_t *rationalcmd(exp_t *e, env_t *env);
+exp_t *numeratorcmd(exp_t *e, env_t *env);
+exp_t *denominatorcmd(exp_t *e, env_t *env);
+exp_t *rationalpcmd(exp_t *e, env_t *env);
 extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
 extern const char doc_bitand[], doc_bitor[], doc_bitxor[], doc_bitnot[];
 extern const char doc_shl[], doc_shr[];
