@@ -127,3 +127,15 @@ setf adr-sqr (fn(x) (* x x))         # fn self-binder: fn(x) is a param list
 assert "fn(x) self-binder param"     adr-sqr(7) 49
 # idiomatic spaced let still works (regression guard)
 assert "spaced let binding-list"     (let ((x 10) (y 20)) (+ x y)) 30
+
+# ====================================================================
+# Arc-lambda `[body...]` -> (fn (_) (body...)), implicit param `_`. The
+# transpiler must group a bare `[...]` as ONE form; otherwise the loose
+# `[`/`]` tokens make the infix-`=` rule wrap the RHS in extra parens and
+# `adr-sq = [* _ _]` becomes a zero-arg call of the lambda.
+# ====================================================================
+adr-sq = [* _ _]
+assert "arc-lambda infix bind"       (adr-sq 7) 49
+assert "arc-lambda no extra parens"  ([+ _ 10] 5) 15
+assert "arc-lambda as map arg"       (map [+ _ 1] (list 1 2 3)) (list 2 3 4)
+assert "arc-lambda multi-form body"  ([do (+ _ 1) (* _ 2)] 4) 8
