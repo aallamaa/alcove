@@ -10379,7 +10379,7 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     int i;
     for (i = 0; i < nargs; i++)
       unrefexp(argv[i]);
-    return error(ERROR_ILLEGAL_VALUE, fn, env, "Bytecode call: not a lambda");
+    return error(ERROR_ILLEGAL_VALUE, fn, env, "call: head is not a function");
   }
 bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
   /* Honor closure capture (see invoke()). For top-level fns this is
@@ -11314,10 +11314,14 @@ exp_t *evaluate(exp_t *e, env_t *env) {
               ret = ifx;
               goto finisht;
             }
-            /* Any other value (including a pair) in operator position
-               self-evaluates: return the looked-up value as-is. */
-            ret = tmpexp2;
-            goto finisht;
+            /* Any other value (a number/float/rational/decimal/pair/nil) in
+               head position is NOT callable and NOT an infix form: calling it
+               is an error, matching the VM (vm_invoke_values). Identical
+               message text so the two tiers compare equal. */
+            unrefexp(tmpexp2);
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                        "call: head is not a function");
+            goto finish;
           }
         } else {
           const char *_nm = (const char *)exp_text(tmpexp);
@@ -11374,12 +11378,12 @@ exp_t *evaluate(exp_t *e, env_t *env) {
           goto finisht;
         }
       }
-      /* Pair head evaluated to a non-callable, non-error value (number, string,
-         or a list/pair): self-evaluate the form. Route through finisht so the
-         evaluated head (tmpevexp, which we own) is freed rather than leaked.
-         e keeps its incoming ref — that is the self-eval return. */
-      ret = e;
-      goto finisht;
+      /* Pair head evaluated to a non-callable, non-infix value (a number/
+         float/rational/decimal/pair/nil): calling it is an error, matching the
+         VM (vm_invoke_values). Identical message text so the two tiers compare
+         equal. goto finish (unref e) since e is no longer the return value. */
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "call: head is not a function");
+      goto finish;
     } else
       return e; /* head evaluated to NULL — return the form unchanged */
   } else {
