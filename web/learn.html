@@ -423,12 +423,26 @@ read-lines "/notes-script.txt"`,
     (fn () (do (= n (+ n 1)) n))))
 (= counter (make-counter))
 (list (counter) (counter) (counter))`,
-      adr: `def make-counter ():
-  let n 0:
-    fn ():
-      do (= n (+ n 1)) n
+      adr: `def make-counter():
+  with (n 0):
+    fn():
+      n = (+ n 1)        # = returns the new value
 setf counter (make-counter)
 list (counter) (counter) (counter)`,
+    },
+    {
+      title: "Infix Operators",
+      note: "When the head of a form is a value (not a function), (a op b) means (op a b) — so math reads naturally. Binary only; group with parens. Function heads like (apply + xs) stay normal calls.",
+      lisp: `(def fib (n)
+  (if (n < 2) n
+    ((fib (n - 1)) + (fib (n - 2)))))
+(map fib (range 0 10))`,
+      adr: `def fib(n):
+  if (n < 2):
+    n
+  else:
+    (fib (n - 1)) + (fib (n - 2))
+map fib (range 0 10)`,
     },
     {
       title: "Macros And Quasiquote",

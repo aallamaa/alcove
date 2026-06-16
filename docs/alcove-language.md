@@ -289,6 +289,29 @@ Container types follow the same emptiness rule: an empty `vec`,
 `blob`, hash-map, or deque is falsey; non-empty is truthy. So `(if v
 …)` and `(no v)` Just Work on any container.
 
+### Infix operators
+
+A 3-element form whose **head is a non-callable value** and whose middle
+is a binary operator is evaluated infix: `(a op b)` means `(op a b)`.
+This is the same head-dispatch that makes `("abc" 1)` index a string —
+it only fires when the head is *not* a function, so ordinary calls and
+higher-order uses are untouched:
+
+```
+(1 + 2)                 ; 3
+(let (n 0) (n < 1))     ; t
+(1/2 + 1/3)             ; 5/6   — works across the numeric tower
+(apply + (list 1 2 3))  ; 6     — head is a function, so a normal call
+(map + xs)              ; + stays a first-class argument, NOT infix
+```
+
+Operators: `+ - * / < > <= >= is iso isnt mod`. It is **binary only with
+no precedence** — group multiple operators with parens:
+`((fib (n - 1)) + (fib (n - 2)))`. In Adder the parens are usually
+implicit at the line level: `a + b`, `n < 1`. Calling a genuinely
+non-callable head that *isn't* an infix form (e.g. `(1 2 3)`) is an
+error — quote it (`'(1 2 3)`) if you mean a literal list.
+
 ---
 
 ## 3. Special forms
@@ -759,12 +782,18 @@ Equality:
 - `iso` — structural equality, recurses into lists/strings.
 - `in` — `(in x a b c)` is `(or (iso x a) (iso x b) (iso x c))`.
 
-Type predicates (all return `t` / `nil`): `number?`, `string?`,
-`symbol?`, `pair?`, `list?`, `null?`, `fn?`, `vec?`, `blob?`, `dict?`,
-`deque?`. All accept zero or one argument; the no-arg form returns
-`nil`. `pair?` is true only for *non-empty* pairs — the empty list
-(nil) is excluded. `list?` is true for nil **or** any proper list;
+Type predicates (all return `t` / `nil`): `number?` (any number —
+fixnum, float, rational, or decimal), `string?`, `symbol?`, `char?`,
+`pair?`, `list?`, `null?` (alias `nil?`), `fn?`, `vec?`, `blob?`,
+`dict?`, `deque?`. All accept zero or one argument; the no-arg form
+returns `nil`. `pair?` is true only for *non-empty* pairs — the empty
+list (nil) is excluded. `list?` is true for nil **or** any proper list;
 `null?` is true only for nil.
+
+Value predicates: `zero?` (the number 0), `yes` (truthy — the complement
+of `no`), `not` (alias of `no`), `isnt` (the complement of `is`). So
+`(not nil)`, `(yes 5)`, `(zero? 0)`, `(isnt 1 2)` are all `t`. Note `0`
+is falsey, so `(zero? 0)` is `t` but `(yes 0)` is `nil`.
 
 ### Bitwise
 
