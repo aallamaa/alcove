@@ -4002,7 +4002,14 @@
 (assert "re-find-all empty matches advance" (length (re-find-all "x*" "ab")) 3)
 (assert "re-replace" (re-replace "[0-9]+" "a1b22c" "#") "a#b#c")
 (assert "re-replace literal (no backrefs)" (re-replace "a" "aa" "$0") "$0$0")
-(assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-") "-a-b-c-")
+;; Empty-pattern behavior is libc-dependent: glibc (Linux) accepts an empty
+;; ERE and matches the zero-width gaps between chars; BSD libc (macOS/FreeBSD)
+;; rejects it with REG_EMPTY ("empty (sub)expression"). re-replace delegates to
+;; the host regcomp, so run the platform-appropriate check.
+(if (is (platform) 'linux)
+    (assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-") "-a-b-c-")
+    (assert-true "re-replace empty pattern errors (BSD libc)"
+                 (error? (try (re-replace "" "abc" "-") (fn (e) e)))))
 (assert "re-split" (re-split "[ ,]+" "a, b  c") (list "a" "b" "c"))
 (assert "re-split keeps empty edges" (re-split "," ",a,") (list "" "a" ""))
 (assert "re-split no match -> whole" (re-split "z" "abc") (list "abc"))
@@ -4090,7 +4097,12 @@
 (= _sh-ok (no (error? (try (shell "true") (fn (e) e)))))
 (if _sh-ok
     (do
-      (assert "shell captures stdout" (get (shell "echo -n hi") "out") "hi")
+      ;; `echo -n` is non-portable: dash (Linux /bin/sh) honors -n, but
+      ;; bash-as-sh (macOS /bin/sh) prints "-n hi" literally. printf has no
+      ;; such ambiguity, so use it on darwin (and anything non-Linux).
+      (assert "shell captures stdout"
+              (get (shell (if (is (platform) 'linux) "echo -n hi" "printf hi")) "out")
+              "hi")
       (assert "shell exit 0" (get (shell "true") "exit") 0)
       (assert "shell exit code" (get (shell "exit 7") "exit") 7)
       (assert "shell sees setenv"

@@ -6234,8 +6234,10 @@ assert "re-replace" (re-replace "[0-9]+" "a1b22c" "#") "a#b#c"
 
 assert "re-replace literal (no backrefs)" (re-replace "a" "aa" "$0") "$0$0"
 
-assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-"):
-  "-a-b-c-"
+if (is (platform) 'linux):
+  assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-"):
+    "-a-b-c-"
+  assert-true "re-replace empty pattern errors (BSD libc)" (error? (try (re-replace "" "abc" "-") (fn (e) e)))
 
 assert "re-split" (re-split "[ ,]+" "a, b  c") (list "a" "b" "c")
 
@@ -6370,7 +6372,8 @@ setf _sh-ok (no (error? (try (shell "true") (fn (e) e))))
 
 if _sh-ok:
   do:
-    assert "shell captures stdout" (get (shell "echo -n hi") "out") "hi"
+    assert "shell captures stdout" (get (shell (if (is (platform) 'linux) "echo -n hi" "printf hi")) "out"):
+      "hi"
     assert "shell exit 0" (get (shell "true") "exit") 0
     assert "shell exit code" (get (shell "exit 7") "exit") 7
     assert "shell sees setenv" (do (setenv "ALCOVE_SH_ZZ" "boo") (get (shell "printf %s \"$ALCOVE_SH_ZZ\"") "out")):

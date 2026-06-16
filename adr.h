@@ -227,6 +227,26 @@ static als_node *als_read_one(als_lr *r) {
     als_read_forms(r, ')', L);
     return L;
   }
+  /* arc-lambda [body...] -> (fn (_) (body...)). alcove's own reader reads a
+     bare `[...]` as a one-argument lambda whose implicit parameter is `_` and
+     whose body is the single call form spelled inside the brackets (so
+     `[* _ _]` is `(fn (_) (* _ _))`). We lower it here so the indentation
+     reader sees ONE form: without this, `[`, the body tokens, and `]` are read
+     as separate atoms, and the infix-`=` rule then wraps a multi-token RHS in
+     parens — turning `f = [* _ _]` into `(= f ([* _ _]))`, a zero-arg call of
+     the lambda. The `#[` vector case below still matches first via the `#`. */
+  if (c == '[') {
+    r->i++; /* consume [ */
+    als_node *body = als_list();
+    als_read_forms(r, ']', body); /* the (tok tok ...) call */
+    als_node *lam = als_list();
+    als_push(lam, als_atom("fn", 2));
+    als_node *params = als_list();
+    als_push(params, als_atom("_", 1));
+    als_push(lam, params); /* (_) */
+    als_push(lam, body);   /* (tok tok ...) */
+    return lam;
+  }
   if (c == '"') { /* string: keep quotes + escapes verbatim */
     size_t start = r->i++;
     while (r->i < r->n) {
