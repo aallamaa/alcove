@@ -8599,6 +8599,27 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       emit_u8(c, (uint8_t)k);
       return;
     }
+    /* A head bound to a user macro (defmacro) — not a reserved form and not
+       shadowed by a local — must be EXPANDED at compile time and the expansion
+       compiled, exactly as evaluate() does in the tree-walker. Without this the
+       compiler emits a call to the macro object, which fails at runtime with
+       "not a lambda" (OP_TAIL_CALL/Bytecode call). find_slot() < 0 ensures a
+       local of the same name still shadows the macro, matching lexical lookup. */
+    if (find_slot(c, (char *)s) < 0 && g_global_env && g_global_env->d) {
+      keyval_t *mkv = set_get_keyval_dict(g_global_env->d, (char *)s, NULL);
+      if (mkv && mkv->val && ismacro(mkv->val)) {
+        exp_t *expanded = expandmacro(e, mkv->val, g_global_env);
+        if (!expanded || iserror(expanded)) {
+          if (expanded)
+            unrefexp(expanded);
+          c->failed = 1;
+          return;
+        }
+        compile_expr(c, expanded, tail); /* recurses: nested macros expand too */
+        unrefexp(expanded);
+        return;
+      }
+    }
     compile_call(c, e, tail);
     return;
   }

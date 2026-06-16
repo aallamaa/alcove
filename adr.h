@@ -175,11 +175,27 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
       r->i++; /* consume ( */
       als_node *args = als_list();
       als_read_forms(r, ')', args);
-      if (args->n == 0) { /* name()  -> (name) */
-        als_node *call = als_list();
-        als_push(call, f);
-        als_free(args);
-        als_push(out, call);
+      if (args->n == 0) { /* name() */
+        /* After a binder keyword (def/defn/.../fn/lambda), `name()` is a
+           zero-parameter HEAD — `def foo():` should read as foo with no params,
+           i.e. emit  name ()  (mirroring `name(a b)` -> `name (a b)`), not the
+           call `(name)`. Anywhere else `name()` is a no-arg call -> `(name)`. */
+        als_node *prev = out->n > 0 ? out->kid[out->n - 1] : NULL;
+        int binder =
+            prev && !prev->is_list && prev->atom &&
+            (!strcmp(prev->atom, "def") || !strcmp(prev->atom, "defn") ||
+             !strcmp(prev->atom, "defc") || !strcmp(prev->atom, "defmacro") ||
+             !strcmp(prev->atom, "macro") || !strcmp(prev->atom, "fn") ||
+             !strcmp(prev->atom, "lambda"));
+        if (binder) {
+          als_push(out, f);    /* name */
+          als_push(out, args); /* () — empty parameter list */
+        } else {               /* name() -> (name) */
+          als_node *call = als_list();
+          als_push(call, f);
+          als_free(args);
+          als_push(out, call);
+        }
       } else { /* name(a b) -> name (a b) */
         als_push(out, f);
         als_push(out, args);

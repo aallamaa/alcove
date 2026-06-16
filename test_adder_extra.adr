@@ -45,3 +45,30 @@ assert "if/elif/else first arm" (adr-grade 95) 'A
 assert "if/elif/else 2nd arm"   (adr-grade 85) 'B
 assert "if/elif/else 3rd arm"   (adr-grade 72) 'C
 assert "if/elif/else else arm"  (adr-grade 50) 'F
+
+# def name():  — Python-style zero-param def with NO space before the empty
+# parens. The empty-call sugar must not turn `name()` into `(name)` in the
+# def-name position (regression for "missing name or name not a lambda").
+def no-space-zero():
+  42
+assert "def name(): zero params" (no-space-zero) 42
+
+# def with params, no space, still defines correctly.
+def no-space-params(a b):
+  + a b
+assert "def name(a b): params"   (no-space-params 3 4) 7
+
+# the make-counter shape end to end: a no-space def whose closure tail calls a
+# user macro — exercises both the def-name sugar and compile-time macroexpansion.
+defmacro adr-pp (n) `(= ,n (+ ,n 1))
+def adr-make-counter():
+  with (n 0):
+    fn ():
+      adr-pp n
+setf adr-c (adr-make-counter)
+assert "no-space def + macro closure #1" (adr-c) 1
+assert "no-space def + macro closure #2" (adr-c) 2
+
+# a real no-arg CALL (not after a binder) is still (name).
+def adr-ret7 (): 7
+assert "no-arg call after binder vs call" (adr-ret7) 7

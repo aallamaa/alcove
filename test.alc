@@ -4049,6 +4049,31 @@
                  (no (error? (try (nstest/already) (fn (e) e))))))
 
 ;; ====================================================================
+;; A user macro used inside a COMPILED function body must be macro-expanded by
+;; the bytecode compiler — the AST tree-walker always did, the compiler didn't,
+;; so a macro call in a compiled body became a call to the macro object
+;; ("OP_TAIL_CALL: not a lambda" in tail position). Regression guard.
+;; ====================================================================
+(defmacro m-inc (x) `(= ,x (+ ,x 1)))
+(def use-mac-tail (n) (m-inc n))              ; macro call in TAIL position
+(assert "macro expands in compiled tail"    (use-mac-tail 5)     6)
+(def use-mac-nontail (n) (m-inc n) (* n 10))  ; macro call NON-tail
+(assert "macro expands in compiled body"    (use-mac-nontail 5)  60)
+(defmacro m-dbl (x) `(* ,x 2))
+(defmacro m-add3 (x) `(+ ,x 3))
+(def use-nested (n) (m-add3 (m-dbl n)))       ; nested macro calls
+(assert "nested macros in compiled body"    (use-nested 5)       13)
+;; the make-counter shape: a closure over a local, with a macro in its tail
+(def mk-counter () (let c 0 (fn () (m-inc c))))
+(= the-counter (mk-counter))
+(assert "macro in compiled closure tail #1" (the-counter)        1)
+(assert "macro in compiled closure tail #2" (the-counter)        2)
+;; a LOCAL of the same name must shadow the macro (lexical scope), not expand
+(defmacro shadowme (x) `(+ ,x 1000))
+(def shadow-test (shadowme) (shadowme 5))     ; param shadows the macro name
+(assert "local shadows macro name"          (shadow-test (fn (x) (* x 2))) 10)
+
+;; ====================================================================
 ;; Integer overflow is an ERROR, never a silent wrap or implicit float
 ;; (explicit over implicit). Covers +,-,*, unary negate, expt, and the
 ;; integer literal — exercised through the AST, the bytecode VM, and the

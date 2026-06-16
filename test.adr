@@ -6368,6 +6368,50 @@ assert "ns cleared: plain def not prefixed" (do (def nsplain () 5) (nsplain)):
 
 assert-true "ns explicit slash not double-qualified" (do (ns nstest) (def nstest/already () 1) (ns) (no (error? (try (nstest/already) (fn (e) e)))))
 
+defmacro m-inc (x):
+  quasiquote (setf (unquote x) (+ (unquote x) 1))
+
+def use-mac-tail (n):
+  m-inc n
+
+assert "macro expands in compiled tail" (use-mac-tail 5) 6
+
+def use-mac-nontail (n):
+  m-inc n
+  * n 10
+
+assert "macro expands in compiled body" (use-mac-nontail 5) 60
+
+defmacro m-dbl (x):
+  quasiquote (* (unquote x) 2)
+
+defmacro m-add3 (x):
+  quasiquote (+ (unquote x) 3)
+
+def use-nested (n):
+  m-add3 (m-dbl n)
+
+assert "nested macros in compiled body" (use-nested 5) 13
+
+def mk-counter ():
+  let c 0:
+    fn ():
+      m-inc c
+
+setf the-counter (mk-counter)
+
+assert "macro in compiled closure tail #1" (the-counter) 1
+
+assert "macro in compiled closure tail #2" (the-counter) 2
+
+defmacro shadowme (x):
+  quasiquote (+ (unquote x) 1000)
+
+def shadow-test (shadowme):
+  shadowme 5
+
+assert "local shadows macro name" (shadow-test (fn (x) (* x 2))) 10
+
 def caught? (thunk):
   error? (try (thunk) (fn (e) e))
 
@@ -6618,6 +6662,33 @@ assert "if/elif/else first arm" (adr-grade 95) 'A
 assert "if/elif/else 2nd arm"   (adr-grade 85) 'B
 assert "if/elif/else 3rd arm"   (adr-grade 72) 'C
 assert "if/elif/else else arm"  (adr-grade 50) 'F
+
+# def name():  — Python-style zero-param def with NO space before the empty
+# parens. The empty-call sugar must not turn `name()` into `(name)` in the
+# def-name position (regression for "missing name or name not a lambda").
+def no-space-zero():
+  42
+assert "def name(): zero params" (no-space-zero) 42
+
+# def with params, no space, still defines correctly.
+def no-space-params(a b):
+  + a b
+assert "def name(a b): params"   (no-space-params 3 4) 7
+
+# the make-counter shape end to end: a no-space def whose closure tail calls a
+# user macro — exercises both the def-name sugar and compile-time macroexpansion.
+defmacro adr-pp (n) `(= ,n (+ ,n 1))
+def adr-make-counter():
+  with (n 0):
+    fn ():
+      adr-pp n
+setf adr-c (adr-make-counter)
+assert "no-space def + macro closure #1" (adr-c) 1
+assert "no-space def + macro closure #2" (adr-c) 2
+
+# a real no-arg CALL (not after a binder) is still (name).
+def adr-ret7 (): 7
+assert "no-arg call after binder vs call" (adr-ret7) 7
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 
