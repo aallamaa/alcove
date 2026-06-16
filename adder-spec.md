@@ -1026,6 +1026,23 @@ reads as:
 This is uniform with the no-arg case (`foo()` → `(foo)`) and with nesting
 (`foo(bar(baz))` → `(foo (bar baz))`).
 
+**Chaining (currying).** A `(...)` group glued directly to the *closing* `)`
+of a preceding call — with no whitespace between — re-heads the call, so
+`f(a)(b)(c)` curries left-to-right:
+
+```python
+f(a)(b)(c)
+```
+
+```lisp
+(((f a) b) c)
+```
+
+A space or newline before `(` breaks the chain: `f(a) (b)` is two separate
+forms (a call, then `(b)`), not `((f a) b)`. Empty groups chain too:
+`f()(x)` → `((f) x)`. Chaining applies only to a name-headed call (the atom
+sugar above); a parenthesized head like `(make-adder 5)(7)` is **not** glued.
+
 The one exception is **definition position**: directly after a binder keyword
 (`def`/`defn`/`defc`/`defmacro`/`macro`), or when the name is itself
 `fn`/`lambda`, the glued `(...)` is a PARAMETER LIST, not a call:

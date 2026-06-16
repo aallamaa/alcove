@@ -198,6 +198,22 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
           als_push(call, args->kid[i]);
         args->n = 0; /* kids moved into call; free only the shell */
         als_free(args);
+        /* Chained call: f(a)(b)(c) -> (((f a) b) c). Each '(' that follows the
+           previous ')' WITH NO WHITESPACE re-heads the call with the next arg
+           group. A space or newline before '(' breaks the chain (the next
+           group is a separate form). Empty groups are fine: f()() -> ((f)). */
+        while (r->i < r->n && r->s[r->i] == '(') {
+          r->i++; /* consume ( */
+          als_node *more = als_list();
+          als_read_forms(r, ')', more);
+          als_node *outer = als_list();
+          als_push(outer, call); /* prior result becomes the head */
+          for (int i = 0; i < more->n; i++)
+            als_push(outer, more->kid[i]);
+          more->n = 0; /* kids moved into outer */
+          als_free(more);
+          call = outer;
+        }
         als_push(out, call);
       }
       continue;
