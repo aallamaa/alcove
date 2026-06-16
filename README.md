@@ -12,10 +12,11 @@ persistence, FFI, and a WebAssembly build.
 
 ```python
 #!/usr/bin/env adder                 # ← Adder: Python-shaped
-def fib (n):
-  if (< n 2):
+def fib(n):
+  if (n < 2):
     n
-    + (fib (- n 1)) (fib (- n 2))
+  else:
+    (fib (n - 1)) + (fib (n - 2))    # infix: (a op b) == (op a b)
 
 prn "fib 30 = " (fib 30)
 ```
