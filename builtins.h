@@ -27,7 +27,7 @@ exp_t *gencollect_cmd(exp_t *e, env_t *env);
 exp_t *genmap_cmd(exp_t *e, env_t *env);
 exp_t *genfilter_cmd(exp_t *e, env_t *env);
 extern const char doc_eq[], doc_setf[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
-extern const char doc_is[], doc_iso[], doc_in[], doc_no[];
+extern const char doc_is[], doc_iso[], doc_in[], doc_no[], doc_isnt[], doc_yes[];
 extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
 extern const char doc_rational[], doc_numerator[], doc_denominator[],
     doc_rationalp[];
@@ -67,6 +67,7 @@ extern const char doc_def[], doc_defn[], doc_fn[], doc_defc[], doc_defmacro[],
 extern const char doc_eval[], doc_apply[], doc_setq[];
 extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
 extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
+extern const char doc_charp[], doc_zerop[];
 extern const char doc_listp[], doc_nullp[], doc_gensym[], doc_withgensyms[];
 exp_t *withgensymscmd(exp_t *e, env_t *env);
 extern const char doc_take[], doc_drop[], doc_range[], doc_zip[], doc_flatten[];

@@ -486,9 +486,12 @@ lispProc lispProcList[] = {
     LISPCMD("is", iscmd, doc_is),          /* has inline OP handling */
     LISPCMD_APP("eq", iscmd, doc_is),      /* alias of is (no inline path) */
     LISPCMD_APP("eq?", iscmd, doc_is),     /* alias of is (no inline path) */
+    LISPCMD_APP("isnt", isntcmd, doc_isnt), /* complement of is */
     LISPCMD("iso", isocmd, doc_iso),       /* has inline OP handling */
     LISPCMD_APP("in", incmd, doc_in),
     LISPCMD("no", nocmd, doc_no),          /* has inline OP handling */
+    LISPCMD_APP("not", nocmd, doc_no),     /* alias of no (no inline path) */
+    LISPCMD_APP("yes", yespcmd, doc_yes),  /* complement of no */
     /* Arithmetic */
     LISPCMD("+", pluscmd, doc_plus),
     LISPCMD("*", multiplycmd, doc_mul),
@@ -627,11 +630,14 @@ lispProc lispProcList[] = {
     LISPCMD("call/cc", callcccmd, doc_callcc),
     /* Predicates */
     LISPCMD_APP("number?", numberpcmd, doc_numberp),
+    LISPCMD_APP("zero?", zeropcmd, doc_zerop),
+    LISPCMD_APP("char?", charpcmd, doc_charp),
     LISPCMD_APP("string?", stringpcmd, doc_stringp),
     LISPCMD_APP("symbol?", symbolpcmd, doc_symbolp),
     LISPCMD_APP("pair?", pairpcmd, doc_pairp),
     LISPCMD_APP("list?", listpcmd, doc_listp),
     LISPCMD_APP("null?", nullpcmd, doc_nullp),
+    LISPCMD_APP("nil?", nullpcmd, doc_nullp), /* alias of null? */
     LISPCMD_APP("fn?", fnpcmd, doc_fnp),
     LISPCMD_APP("vec?", vecpcmd, doc_vecp),
     LISPCMD_APP("blob?", blobpcmd, doc_blobp),
@@ -2973,16 +2979,20 @@ exp_t *expandmacrocmd(exp_t *e, env_t *env) {
   exp_t *tmpexp;
   exp_t *tmpexp2;
 
-  tmpexp = car(cadr(cadr(e)));
+  exp_t *form = cadr(cadr(e)); /* the (quoted) form passed in */
+  tmpexp = car(form);
   if (tmpexp)
     if (issymbol(tmpexp))
       if ((tmpexp2 = lookup(refexp(tmpexp), env)))
         if ismacro (tmpexp2) {
-          tmpexp = expandmacro(refexp(cadr(cadr(e))), tmpexp2, env);
+          tmpexp = expandmacro(refexp(form), tmpexp2, env);
           goto finish;
         }
 
-  tmpexp = error(ERROR_ILLEGAL_VALUE, e, env, "Error parameter not a macro");
+  /* Not a macro call — return the form unchanged (standard Lisp behavior),
+     so macroexpand-1 works as an identity in expand-if-macro loops rather
+     than erroring on ordinary forms. */
+  tmpexp = form ? refexp(form) : NIL_EXP;
 finish:
   unrefexp(e);
   return tmpexp;
@@ -3232,7 +3242,8 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
             unrefexp(tmpexp2);
             unrefexp(e);
             in_tail_position = outer_tail;
-            return NULL;
+            return NIL_EXP; /* clauses exhausted, no match — canonical nil, not
+                               raw NULL (else iso/is mis-compare vs nil literal) */
           }
         } else {
           unrefexp(e);
@@ -3243,7 +3254,7 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
     else {
       unrefexp(e);
       in_tail_position = outer_tail;
-      return NULL;
+      return NIL_EXP; /* no else branch — canonical nil, not raw NULL */
     }
   }
 }
@@ -10055,14 +10066,17 @@ l_sqrt_int: {
   NEXT;
 }
 l_abs: {
-  /* (abs a) — mirrors abscmd. Fixnum: |v|, promoting FIXMIN to float on
-     overflow. Float: fabs. A fixnum operand is an immediate (no ref); a
-     float is heap (drop its ref after reading). */
+  /* (abs a) — mirrors abscmd. Fixnum: |v|, erroring on FIXMIN overflow
+     (explicit over implicit — no float promotion). Float: fabs. A fixnum
+     operand is an immediate (no ref); a float is heap (drop ref after read). */
   exp_t *a = POP();
   if (isnumber(a)) {
     int64_t v = FIX_VAL(a);
     int64_t av = v < 0 ? -v : v;
-    PUSH((v < 0 && !FIX_FITS(av)) ? make_floatf(-(expfloat)v) : MAKE_FIX(av));
+    if (v < 0 && !FIX_FITS(av))
+      RUNTIME_ERR("integer overflow (no implicit float; use a float, "
+                  "rational, or decimal)");
+    PUSH(MAKE_FIX(av));
   } else if (isfloat(a)) {
     expfloat f = a->f;
     unrefexp(a);

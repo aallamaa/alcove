@@ -63,12 +63,34 @@ assert "def name(a b): params"   (no-space-params 3 4) 7
 defmacro adr-pp (n) `(= ,n (+ ,n 1))
 def adr-make-counter():
   with (n 0):
-    fn ():
+    fn():               # fn() — keyword glued to its OWN empty param list
       adr-pp n
 setf adr-c (adr-make-counter)
-assert "no-space def + macro closure #1" (adr-c) 1
-assert "no-space def + macro closure #2" (adr-c) 2
+assert "no-space def + fn() + macro closure #1" (adr-c) 1
+assert "no-space def + fn() + macro closure #2" (adr-c) 2
+
+# fn () with a space still reads the same.
+def adr-mk2 ():
+  with (n 0):
+    fn ():
+      adr-pp n
+setf adr-c2 (adr-mk2)
+assert "spaced fn () closure" (adr-c2) 1
 
 # a real no-arg CALL (not after a binder) is still (name).
 def adr-ret7 (): 7
 assert "no-arg call after binder vs call" (adr-ret7) 7
+
+# infix assignment: `lhs = rhs` -> (= lhs rhs), Python-style, alongside the
+# prefix `= place val`. A multi-token RHS wraps: `a = + b c` -> (= a (+ b c)).
+= adr-iv 5
+adr-iv = (* adr-iv 10)
+assert "infix = reassign"        adr-iv 50
+adr-iv = + 1 2
+assert "infix = multi-token rhs" adr-iv 3
+= adr-sv "test"
+adr-sv = "toto"
+assert "infix = on a string var" adr-sv "toto"
+# prefix `= place val` (= as the FIRST form) is unchanged
+= adr-iv 7
+assert "prefix = still works"    adr-iv 7

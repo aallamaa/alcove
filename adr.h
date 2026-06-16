@@ -176,10 +176,10 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
       als_node *args = als_list();
       als_read_forms(r, ')', args);
       if (args->n == 0) { /* name() */
-        /* After a binder keyword (def/defn/.../fn/lambda), `name()` is a
-           zero-parameter HEAD — `def foo():` should read as foo with no params,
-           i.e. emit  name ()  (mirroring `name(a b)` -> `name (a b)`), not the
-           call `(name)`. Anywhere else `name()` is a no-arg call -> `(name)`. */
+        /* A binder HEAD with no params keeps `name ()`: after a name-binder
+           (def/defn/defc/defmacro/macro -> def f():), or when `name` is itself
+           fn/lambda glued to its own empty params (fn():). Otherwise `name()`
+           is a no-arg call -> (name). */
         als_node *prev = out->n > 0 ? out->kid[out->n - 1] : NULL;
         int binder =
             prev && !prev->is_list && prev->atom &&
@@ -187,7 +187,9 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
              !strcmp(prev->atom, "defc") || !strcmp(prev->atom, "defmacro") ||
              !strcmp(prev->atom, "macro") || !strcmp(prev->atom, "fn") ||
              !strcmp(prev->atom, "lambda"));
-        if (binder) {
+        int self_binder =
+            f->atom && (!strcmp(f->atom, "fn") || !strcmp(f->atom, "lambda"));
+        if (binder || self_binder) {
           als_push(out, f);    /* name */
           als_push(out, args); /* () — empty parameter list */
         } else {               /* name() -> (name) */
@@ -350,6 +352,27 @@ static als_node *als_line_node(const char *text) {
     forms->kid[0] = NULL;
     als_free(forms);
     return only; /* lone atom -> value; lone list -> as-is */
+  }
+  /* Infix assignment: `lhs = rhs...` -> (= lhs rhs...), Python-style. Fires
+     only when `=` is the SECOND form on the line, so the prefix form `= place
+     val` (where `=` is first) is untouched. A multi-token RHS is wrapped:
+     `a = + b c` -> (= a (+ b c)). */
+  if (forms->n >= 3 && !forms->kid[1]->is_list && forms->kid[1]->atom &&
+      !strcmp(forms->kid[1]->atom, "=")) {
+    als_node *asn = als_list();
+    als_push(asn, forms->kid[1]); /* the `=` atom, as the head */
+    als_push(asn, forms->kid[0]); /* lhs */
+    if (forms->n == 3) {
+      als_push(asn, forms->kid[2]); /* single-token RHS */
+    } else {
+      als_node *rhs = als_list();
+      for (int i = 2; i < forms->n; i++)
+        als_push(rhs, forms->kid[i]);
+      als_push(asn, rhs); /* (rhs...) */
+    }
+    forms->n = 0; /* all kids moved into asn; free only the forms shell */
+    als_free(forms);
+    return asn;
   }
   return forms; /* many -> (f f ...) */
 }

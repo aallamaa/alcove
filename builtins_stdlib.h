@@ -125,11 +125,14 @@ exp_t *abscmd(exp_t *e, env_t *env) {
     if (isnumber(a)) {
       int64_t v = FIX_VAL(a);
       int64_t av = v < 0 ? -v : v;
-      /* If negation overflows fixnum range (abs of most-negative fixnum),
-         promote to float rather than silently wrapping to negative.
-         Uses signed >>3 to match FIX_VAL's arithmetic-shift semantics. */
+      /* If negation leaves fixnum range (abs of the most-negative fixnum),
+         error rather than silently promoting to float or wrapping to negative
+         — explicit over implicit, matching unary/binary `-`. Uses signed >>3
+         to match FIX_VAL's arithmetic-shift semantics. */
       if (v < 0 && !FIX_FITS(av))
-        ret = make_floatf(-(expfloat)v);
+        ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                    "integer overflow (no implicit float; use a float, "
+                    "rational, or decimal)");
       else
         ret = MAKE_FIX(av);
     } else if (isfloat(a)) {
@@ -770,7 +773,15 @@ const char doc_blobp[] = "(blob? x) — t if x is a blob.";
 const char doc_dictp[] = "(dict? x) — t if x is a hash-map.";
 const char doc_dequep[] = "(deque? x) — t if x is a deque.";
 const char doc_setp[] = "(set? x) — t if x is a hash-set.";
+const char doc_charp[] = "(char? x) — t if x is a character.";
+const char doc_yes[] =
+    "(yes x) — t if x is truthy (the complement of `no`). nil/empty are falsey.";
+const char doc_zerop[] = "(zero? x) — t if x is the number 0 (fixnum or float).";
 PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
+PRED_CMD(charpcmd, ischar(a))
+PRED_CMD(yespcmd, istrue(a))
+PRED_CMD(zeropcmd,
+         ((isnumber(a) && FIX_VAL(a) == 0) || (isfloat(a) && a->f == 0.0)))
 PRED_CMD(stringpcmd, isstring(a))
 PRED_CMD(symbolpcmd, issymbol(a))
 PRED_CMD(pairpcmd, (ispair(a) && a->content))
@@ -1497,7 +1508,7 @@ exp_t *sortbycmd(exp_t *e, env_t *env) {
   if (!fn || !e->next->next) /* NULL list value = empty list, not missing arg */
     CLEAN_RETURN_2(
         fn, xs, error(ERROR_MISSING_PARAMETER, e, env, "(sort-by key-fn xs)"));
-  if (xs == NIL_EXP)
+  if (!xs || xs == NIL_EXP) /* NULL (e.g. cdr of a 1-elem list) is empty too */
     CLEAN_RETURN_2(fn, xs, NIL_EXP);
   if (!ispair(xs))
     CLEAN_RETURN_2(fn, xs,
@@ -2211,6 +2222,14 @@ const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into 
                        "pairs/strings/vectors.";
 EQUALITY_CMD(isocmd, isoequal)
 
+const char doc_isnt[] = "(isnt a b) — t if a and b are NOT identical (the "
+                        "complement of `is`).";
+exp_t *isntcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(a, b);
+  exp_t *ret = (isequal(a, b) ? NIL_EXP : TRUE_EXP);
+  CLEAN_RETURN_2(a, b, ret);
+}
+
 const char doc_in[] =
     "(in val a b c ...) — t if (is val) matches any of the rest.";
 exp_t *incmd(exp_t *e, env_t *env) {
@@ -2277,7 +2296,10 @@ exp_t *casecmd(exp_t *e, env_t *env) {
   in_tail_position = outer_tail;
   cur = EVAL(ret, env);
   unrefexp(e);
-  return cur;
+  /* No clause matched and no default => ret was NULL => EVAL gives NULL.
+     Return the canonical nil singleton so (iso (case ...) nil) holds — raw
+     NULL is falsy/prints as nil but is NOT iso/is-equal to the nil literal. */
+  return cur ? cur : NIL_EXP;
 }
 
 const char doc_for[] =

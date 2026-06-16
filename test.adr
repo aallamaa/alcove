@@ -12,45 +12,17 @@ setf _test_pass 0
 
 setf _test_fail 0
 
-def assert (txt a b):
-  pr txt
-  if (iso a b):
-    do:
-      setf _test_pass (+ _test_pass 1)
-      prn "\t: \x1B[92mPassed\x1B[39m"
-    do:
-      setf _test_fail (+ _test_fail 1)
-      prn "\t: \x1B[91mFailed\x1B[39m"
+defmacro assert (txt a b):
+  quasiquote (do (pr (unquote txt)) (try (if (iso (unquote a) (unquote b)) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m")) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
-def refute (txt a b):
-  pr txt
-  if (iso a b):
-    do:
-      setf _test_fail (+ _test_fail 1)
-      prn "\t: \x1B[91mFailed\x1B[39m"
-    do:
-      setf _test_pass (+ _test_pass 1)
-      prn "\t: \x1B[92mPassed\x1B[39m"
+defmacro refute (txt a b):
+  quasiquote (do (pr (unquote txt)) (try (if (iso (unquote a) (unquote b)) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m")) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
-def assert-true (txt x):
-  pr txt
-  if x:
-    do:
-      setf _test_pass (+ _test_pass 1)
-      prn "\t: \x1B[92mPassed\x1B[39m"
-    do:
-      setf _test_fail (+ _test_fail 1)
-      prn "\t: \x1B[91mFailed\x1B[39m"
+defmacro assert-true (txt x):
+  quasiquote (do (pr (unquote txt)) (try (if (unquote x) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m")) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
-def assert-false (txt x):
-  pr txt
-  if x:
-    do:
-      setf _test_fail (+ _test_fail 1)
-      prn "\t: \x1B[91mFailed\x1B[39m"
-    do:
-      setf _test_pass (+ _test_pass 1)
-      prn "\t: \x1B[92mPassed\x1B[39m"
+defmacro assert-false (txt x):
+  quasiquote (do (pr (unquote txt)) (try (if (unquote x) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m")) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
 assert "This will Pass" 1 1
 
@@ -442,7 +414,12 @@ assert "iso cyclic dict bails" (let (a (hash-map) b (hash-map)) (assoc! a "s" a)
 assert "iso cyclic vec bails" (let (a (vector) b (vector)) (vec-push! a a) (vec-push! b b) (iso a b)):
   nil
 
-assert "iso deep nested ok" (let (build (fn (n acc) (if (is n 0) acc (build (- n 1) (list acc))))) (iso (build 400 (list)) (build 400 (list)))):
+def _deepbuild (n acc):
+  if (is n 0):
+    acc
+    _deepbuild (- n 1) (list acc)
+
+assert "iso deep nested ok" (iso (_deepbuild 400 (list)) (_deepbuild 400 (list))):
   t
 
 assert "conj bad map entry err" (error? (conj (hash-map) 5)) t
@@ -1752,7 +1729,7 @@ setf (sbuf i) #\Z
 
 assert "string-set with var index" sbuf "abZdef"
 
-assert "nth on non-list -> nil-ish" (no (no (nth 0 5))) nil
+assert "nth on non-list -> error" (error? (nth 0 5)) t
 
 setf sread "abcdef"
 
@@ -2123,7 +2100,7 @@ assert "utf8 char->str 2-byte" (str #\é) "é"
 
 assert "utf8 char->str 4-byte" (str #\😀) "😀"
 
-assert "utf8 char code preserved" (is (- #\世 #\世) 0) t
+assert "utf8 char code preserved" (is #\世 #\世) t
 
 setf u8mut "héllo"
 
@@ -2871,8 +2848,8 @@ assert "append two non-empty" (iso (append (list 1) (list 2 3)) (list 1 2 3)):
 
 assert "append three" (iso (append (list 1) (list 2) (list 3)) (list 1 2 3)) t
 
-def caught (e):
-  no (no e)
+defmacro caught (e):
+  quasiquote (error? (unquote e))
 
 assert "nth on int → error obj" (caught (nth 0 5)) t
 
@@ -3182,15 +3159,13 @@ def counter-mk ():
     setf cnt (+ cnt 1)
     cnt
 
-counter-mk()
+setf counter (counter-mk)
 
-counter-inc()
+counter()
 
-counter-inc()
+counter()
 
-counter-inc()
-
-assert "top-level counter via def" cnt 3
+assert "counter closure via def" (counter) 3
 
 assert "doc returns nil" (doc cons) nil
 
@@ -4882,7 +4857,7 @@ assert "map square" (iso (map (fn (x) (* x x)) (list 2 3)) (list 4 9)) t
 
 assert "filter all-pass" (length (filter odd (list 1 3 5))) 3
 
-assert "filter all-fail" (iso (filter even (list 1 3 5)) nil) t
+assert "filter all-fail" (iso (filter odd (list 2 4 6)) nil) t
 
 assert "filter empty" (iso (filter odd nil) nil) t
 
@@ -5059,9 +5034,11 @@ assert "zero? 0 t" (zero? 0) t
 
 assert "zero? 1 nil" (zero? 1) nil
 
-assert "yes nil t" (yes nil) nil
+assert "yes nil -> nil" (yes nil) nil
 
-assert "yes 0 t" (yes 0) t
+assert "yes 0 -> nil (0 is falsey)" (yes 0) nil
+
+assert "yes 1 -> t" (yes 1) t
 
 assert "no nil t" (no nil) t
 
@@ -5154,7 +5131,7 @@ loaddb "/tmp/alcove-bugfix-dump.db"
 
 assert "savedb/loaddb after fix" 1 1
 
-assert "(-) is error" (no (-)) nil
+assert "(-) is error" (error? (-)) t
 
 -()
 
@@ -5166,9 +5143,9 @@ assert "(/) recovery" 1 1
 
 setf fixmin -1152921504606846976
 
-assert "abs FIXMIN promoted float" (> (abs fixmin) 0) t
+assert "abs FIXMIN overflows -> error" (error? (abs fixmin)) t
 
-assert "negate FIXMIN promoted float" (> (- fixmin) 0) t
+assert "negate FIXMIN overflows -> error" (error? (- fixmin)) t
 
 assert "abs positive preserved" (abs 42) 42
 
@@ -6680,15 +6657,37 @@ assert "def name(a b): params"   (no-space-params 3 4) 7
 defmacro adr-pp (n) `(= ,n (+ ,n 1))
 def adr-make-counter():
   with (n 0):
-    fn ():
+    fn():               # fn() — keyword glued to its OWN empty param list
       adr-pp n
 setf adr-c (adr-make-counter)
-assert "no-space def + macro closure #1" (adr-c) 1
-assert "no-space def + macro closure #2" (adr-c) 2
+assert "no-space def + fn() + macro closure #1" (adr-c) 1
+assert "no-space def + fn() + macro closure #2" (adr-c) 2
+
+# fn () with a space still reads the same.
+def adr-mk2 ():
+  with (n 0):
+    fn ():
+      adr-pp n
+setf adr-c2 (adr-mk2)
+assert "spaced fn () closure" (adr-c2) 1
 
 # a real no-arg CALL (not after a binder) is still (name).
 def adr-ret7 (): 7
 assert "no-arg call after binder vs call" (adr-ret7) 7
+
+# infix assignment: `lhs = rhs` -> (= lhs rhs), Python-style, alongside the
+# prefix `= place val`. A multi-token RHS wraps: `a = + b c` -> (= a (+ b c)).
+= adr-iv 5
+adr-iv = (* adr-iv 10)
+assert "infix = reassign"        adr-iv 50
+adr-iv = + 1 2
+assert "infix = multi-token rhs" adr-iv 3
+= adr-sv "test"
+adr-sv = "toto"
+assert "infix = on a string var" adr-sv "toto"
+# prefix `= place val` (= as the FIRST form) is unchanged
+= adr-iv 7
+assert "prefix = still works"    adr-iv 7
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 

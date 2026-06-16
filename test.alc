@@ -2,32 +2,46 @@
 ;; prints "TEST RESULT: N passed, M failed" at the end; M must be 0.
 (= _test_pass 0)
 (= _test_fail 0)
-(def assert (txt a b)
-  (pr txt)
-  (if (iso a b)
-      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))
-      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))))
+;; assert/refute/assert-true/assert-false are MACROS, not functions: a function
+;; evaluates its arguments BEFORE it runs, so an argument expression that raises
+;; would error the whole form, the top-level driver would recover, and the
+;; assertion would be SILENTLY UNCOUNTED — never passed or failed (this once hid
+;; ~33 broken tests behind "0 failed"). As macros they evaluate the comparison
+;; inside a `try`, so a raising expression is a visible FAILURE with its message.
+(defmacro assert (txt a b)
+  `(do (pr ,txt)
+       (try (if (iso ,a ,b)
+                (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))
+                (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m")))
+            (fn (e) (= _test_fail (+ _test_fail 1))
+                (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m"))))))
 ;; refute: passes when a and b are NOT equal (exercises assert's negative path).
-(def refute (txt a b)
-  (pr txt)
-  (if (iso a b)
-      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
-      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))))
+(defmacro refute (txt a b)
+  `(do (pr ,txt)
+       (try (if (iso ,a ,b)
+                (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
+                (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m")))
+            (fn (e) (= _test_fail (+ _test_fail 1))
+                (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m"))))))
 ;; assert-true / assert-false exercise the REAL truthiness path (the `if`
 ;; special form -> istrue) for a value, not iso equality. They close the
 ;; per-type coverage gap: a regression in how any value kind is judged
 ;; truthy/falsy (e.g. "empty vector becomes truthy", "lambda becomes falsy")
 ;; is caught here even though such a value is never compared with iso.
-(def assert-true (txt x)
-  (pr txt)
-  (if x
-      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))
-      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))))
-(def assert-false (txt x)
-  (pr txt)
-  (if x
-      (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
-      (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))))
+(defmacro assert-true (txt x)
+  `(do (pr ,txt)
+       (try (if ,x
+                (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))
+                (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m")))
+            (fn (e) (= _test_fail (+ _test_fail 1))
+                (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m"))))))
+(defmacro assert-false (txt x)
+  `(do (pr ,txt)
+       (try (if ,x
+                (do (= _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))
+                (do (= _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m")))
+            (fn (e) (= _test_fail (+ _test_fail 1))
+                (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m"))))))
 
 (assert "This will Pass" 1 1)
 (refute "assert detects inequality" 1 0)
@@ -255,8 +269,10 @@
                                    (assoc! a "s" a) (assoc! b "s" b) (iso a b)) nil)
 (assert "iso cyclic vec bails"   (let (a (vector) b (vector))
                                    (vec-push! a a) (vec-push! b b) (iso a b)) nil)
-(assert "iso deep nested ok"     (let (build (fn (n acc) (if (is n 0) acc (build (- n 1) (list acc)))))
-                                   (iso (build 400 (list)) (build 400 (list)))) t)
+;; `let` binds non-recursively (the lambda closes over the env BEFORE the name
+;; is bound), so a self-recursive helper must be a top-level def to see itself.
+(def _deepbuild (n acc) (if (is n 0) acc (_deepbuild (- n 1) (list acc))))
+(assert "iso deep nested ok"     (iso (_deepbuild 400 (list)) (_deepbuild 400 (list))) t)
 ;; conj/into must PROPAGATE errors from in-place ops, not swallow them.
 (assert "conj bad map entry err" (error? (conj (hash-map) 5)) t)
 (assert "conj propagates err"    (error? (try (conj (vector) (no-such-var-xyz)) (fn (e) e))) t)
@@ -1120,10 +1136,10 @@
 (= (sbuf i) #\Z)
 (assert "string-set with var index"   sbuf "abZdef")
 
-; The 6 list builtins must reject non-list args cleanly (no segfault)
-; — the assertion infra needs a value; we use the fact that all six errors
-;   propagate as exp_t* which iso-compares as nil-equal-nil:
-(assert "nth on non-list -> nil-ish"  (no (no (nth 0 5)))            nil)
+; The 6 list builtins must reject non-list args cleanly (no segfault). An
+; error VALUE propagates through a normal call, so probe it with error?
+; (which inspects without unwinding) rather than passing it as an argument.
+(assert "nth on non-list -> error"    (error? (nth 0 5))             t)
 
 ; Ticket 5: (s i) where s is a variable bound to a string
 (= sread "abcdef")
@@ -1327,7 +1343,7 @@
 (assert "utf8 char literal iso"        (iso #\é #\é)               t)
 (assert "utf8 char->str 2-byte"        (str #\é)                   "é")
 (assert "utf8 char->str 4-byte"        (str #\😀)                  "😀")
-(assert "utf8 char code preserved"     (is (- #\世 #\世) 0)        t)
+(assert "utf8 char code preserved"     (is #\世 #\世)              t) ;; chars are tagged by codepoint, so `is` compares the preserved code
 ;; index-assign: replacing a 2-byte codepoint with a 1-byte one rebuilds
 (= u8mut "héllo")
 (= (u8mut 1) #\X)
@@ -1761,8 +1777,12 @@
 (assert "append three"                (iso (append (list 1) (list 2) (list 3))
                                           (list 1 2 3))              t)
 ;; Non-list args: must error cleanly (not segfault) — these are the
-;; exact regressions caught in the audit. Use iserror via no.
-(def caught (e) (no (no e)))   ; truthy iff e is non-nil/non-false
+;; exact regressions caught in the audit. `caught` must be a MACRO: in alcove an
+;; error VALUE propagates when it would be passed as a normal function argument,
+;; so `(def caught (e) ...)` would unwind before its body ran. `error?` is the
+;; special form that inspects its argument's error without propagating, so we
+;; expand straight to it — letting `(caught EXPR)` assert "EXPR errors".
+(defmacro caught (e) `(error? ,e))
 (assert "nth on int → error obj"      (caught (nth 0 5))             t)
 (assert "map on int → error obj"      (caught (map prn 5))           t)
 (assert "filter on int → error obj"   (caught (filter odd 5))        t)
@@ -1950,14 +1970,17 @@
 (forget 'setq-a)
 (forget 'setq-b)
 
+;; A counter closure built with def. Both the inner `def counter-inc` and its
+;; `(= cnt 0)` are LOCAL to counter-mk's frame (neither leaks to top level), but
+;; counter-mk returns the inner fn, which closes over cnt and returns the running
+;; count. Capture the returned closure and assert on its successive returns.
 (def counter-mk ()
   (= cnt 0)
   (def counter-inc () (= cnt (+ cnt 1)) cnt))
-(counter-mk)
-(counter-inc)
-(counter-inc)
-(counter-inc)
-(assert "top-level counter via def"   cnt                            3)
+(= counter (counter-mk))
+(counter)
+(counter)
+(assert "counter closure via def"     (counter)                      3)
 
 ;; ---------- doc / help (don't crash, return nil) ----------
 (assert "doc returns nil"             (doc cons)                     nil)
@@ -3057,7 +3080,7 @@
 
 ;; ---------- filter edge cases ----------
 (assert "filter all-pass"            (length (filter odd (list 1 3 5))) 3)
-(assert "filter all-fail"            (iso (filter even (list 1 3 5)) nil) t)
+(assert "filter all-fail"            (iso (filter odd (list 2 4 6)) nil) t)
 (assert "filter empty"               (iso (filter odd nil) nil)         t)
 (assert "filter one-pass"            (iso (filter (fn (x) (> x 3)) (list 1 2 3 4 5)) (list 4 5)) t)
 
@@ -3170,8 +3193,9 @@
 (assert "nil? 0 nil"                 (nil? 0)                        nil)
 (assert "zero? 0 t"                  (zero? 0)                       t)
 (assert "zero? 1 nil"                (zero? 1)                       nil)
-(assert "yes nil t"                  (yes nil)                       nil)
-(assert "yes 0 t"                    (yes 0)                         t)
+(assert "yes nil -> nil"             (yes nil)                       nil)
+(assert "yes 0 -> nil (0 is falsey)" (yes 0)                         nil)
+(assert "yes 1 -> t"                 (yes 1)                         t)
 (assert "no nil t"                   (no nil)                        t)
 (assert "no 0 is t"                  (no 0)                          t)    ;; 0 is FALSY in Alcove
 (assert "in member"                  (in 2 1 2 3)                    t)
@@ -3235,18 +3259,20 @@
 (assert "savedb/loaddb after fix"    1                                 1)
 
 ;; Bug 3: (-)  and  (/)  with no args silently returned 0
-(assert "(-) is error"               (no (- ))                         nil) ;; (- ) is error → truthy → no=nil? no: error is truthy, no(truthy)=nil
+(assert "(-) is error"               (error? (- ))                     t) ;; (-) needs >=1 arg; error? inspects without propagating (a bare (- ) would unwind through `no`)
 ;; Better: recovery pattern — (- ) fires error, execution continues
 (- )
 (assert "(-) recovery"              1                                  1)
 (/ )
 (assert "(/) recovery"              1                                  1)
 
-;; Bug 4: (- FIXMIN) and (abs FIXMIN) wrapped to negative
-;; FIXMIN = -(2^60) = -1152921504606846976
+;; Bug 4: (- FIXMIN) and (abs FIXMIN) used to wrap to negative, then to
+;; float-promote. The numeric-tower policy is now explicit-over-implicit:
+;; any fixnum op leaving the 61-bit range ERRORS (no silent float). FIXMIN
+;; = -(2^60); negating/abs'ing it = +2^60, one past the +2^60-1 max, so both error.
 (= fixmin -1152921504606846976)
-(assert "abs FIXMIN promoted float"  (> (abs fixmin) 0)               t)
-(assert "negate FIXMIN promoted float" (> (- fixmin) 0)               t)
+(assert "abs FIXMIN overflows -> error"    (error? (abs fixmin))      t)
+(assert "negate FIXMIN overflows -> error" (error? (- fixmin))        t)
 (assert "abs positive preserved"     (abs 42)                          42)
 (assert "abs float unchanged"        (abs -2.5)                        2.5)
 (assert "(- 5) still works"          (- 5)                             -5)

@@ -91,13 +91,12 @@ The same features, both surfaces — pick whichever reads better to you:
 ```python
 # Adder ------------------------------------------------------------
 # Closures
-def make-counter ():
+def make-counter():
   with (n 0):
-    fn ():
-      = n (+ n 1)
-      n
+    fn():
+      n = (+ n 1)                    # `=` returns the new value
 
-= c (make-counter)
+c = make-counter()
 prn (c) (c) (c)                      # → 1 2 3
 
 # Scripting floor: JSON, regex, shell — same builtins, no parens tax
