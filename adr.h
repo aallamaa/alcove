@@ -175,32 +175,30 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
       r->i++; /* consume ( */
       als_node *args = als_list();
       als_read_forms(r, ')', args);
-      if (args->n == 0) { /* name() */
-        /* A binder HEAD with no params keeps `name ()`: after a name-binder
-           (def/defn/defc/defmacro/macro -> def f():), or when `name` is itself
-           fn/lambda glued to its own empty params (fn():). Otherwise `name()`
-           is a no-arg call -> (name). */
-        als_node *prev = out->n > 0 ? out->kid[out->n - 1] : NULL;
-        int binder =
-            prev && !prev->is_list && prev->atom &&
-            (!strcmp(prev->atom, "def") || !strcmp(prev->atom, "defn") ||
-             !strcmp(prev->atom, "defc") || !strcmp(prev->atom, "defmacro") ||
-             !strcmp(prev->atom, "macro") || !strcmp(prev->atom, "fn") ||
-             !strcmp(prev->atom, "lambda"));
-        int self_binder =
-            f->atom && (!strcmp(f->atom, "fn") || !strcmp(f->atom, "lambda"));
-        if (binder || self_binder) {
-          als_push(out, f);    /* name */
-          als_push(out, args); /* () — empty parameter list */
-        } else {               /* name() -> (name) */
-          als_node *call = als_list();
-          als_push(call, f);
-          als_free(args);
-          als_push(out, call);
-        }
-      } else { /* name(a b) -> name (a b) */
-        als_push(out, f);
-        als_push(out, args);
+      /* ALT2: a name glued to `(...)` is a CALL of ANY arity -> (name args...),
+         EXCEPT in a binder context, where `(...)` is a PARAMETER LIST: after a
+         name-binder (def/defn/defc/defmacro/macro -> def f(x):), or when `name`
+         is itself fn/lambda glued to its own params (fn(x):). */
+      als_node *prev = out->n > 0 ? out->kid[out->n - 1] : NULL;
+      int binder =
+          prev && !prev->is_list && prev->atom &&
+          (!strcmp(prev->atom, "def") || !strcmp(prev->atom, "defn") ||
+           !strcmp(prev->atom, "defc") || !strcmp(prev->atom, "defmacro") ||
+           !strcmp(prev->atom, "macro") || !strcmp(prev->atom, "fn") ||
+           !strcmp(prev->atom, "lambda"));
+      int self_binder =
+          f->atom && (!strcmp(f->atom, "fn") || !strcmp(f->atom, "lambda"));
+      if (binder || self_binder) { /* def/fn header: name + param list */
+        als_push(out, f);          /* name */
+        als_push(out, args);       /* (params...) — may be empty */
+      } else {                     /* name(args...) -> (name args...) */
+        als_node *call = als_list();
+        als_push(call, f);
+        for (int i = 0; i < args->n; i++)
+          als_push(call, args->kid[i]);
+        args->n = 0; /* kids moved into call; free only the shell */
+        als_free(args);
+        als_push(out, call);
       }
       continue;
     }

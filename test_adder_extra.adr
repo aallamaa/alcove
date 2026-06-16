@@ -94,3 +94,36 @@ assert "infix = on a string var" adr-sv "toto"
 # prefix `= place val` (= as the FIRST form) is unchanged
 = adr-iv 7
 assert "prefix = still works"    adr-iv 7
+
+# ====================================================================
+# Call sugar (spec §6): `name(args)` reads as (name args) for ANY arity, not
+# only the no-arg case. The binder exception still makes `def/fn/macro f(x):`
+# a PARAMETER LIST, so headers are unaffected. (Glued parens on a binding-list
+# form like let((..)) are NOT supported — use the spaced `let (..)`.)
+# ====================================================================
+def adr-add2 (a b): (+ a b)
+def adr-z (): 99
+# call WITH arguments via glued parens (the form HEAD could not express)
+assert "call sugar: args"            adr-add2(3 4) 7
+# nested call sugar
+assert "call sugar: nested"          adr-add2(adr-add2(1 2) 3) 6
+# no-arg call via glued parens: name() -> (name)
+assert "call sugar: no-arg ()"       adr-z() 99
+# builtins reached through the sugar
+assert "call sugar: builtin list"    list(1 2 3) (list 1 2 3)
+assert "call sugar: builtin car"     car(list(10 20)) 10
+# function-like special forms through the sugar
+assert "call sugar: and"             and(t t) t
+assert "call sugar: or"              or(nil 5) 5
+# infix = with a call-sugar RHS: adr-iv = adr-add2(8 9) -> (= adr-iv (adr-add2 8 9))
+adr-iv = adr-add2(8 9)
+assert "infix = with call-sugar rhs" adr-iv 17
+# binder exception: glued params stay a param list, name then callable via sugar
+defmacro adr-m2 (x) `(+ ,x 1)
+assert "defmacro glued header + call" adr-m2(41) 42
+macro adr-when2 (c body): `(if ,c ,body nil)
+assert "macro glued header + call"   adr-when2(t 7) 7
+setf adr-sqr (fn(x) (* x x))         # fn self-binder: fn(x) is a param list
+assert "fn(x) self-binder param"     adr-sqr(7) 49
+# idiomatic spaced let still works (regression guard)
+assert "spaced let binding-list"     (let ((x 10) (y 20)) (+ x y)) 30

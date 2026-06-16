@@ -1011,19 +1011,24 @@ Lisp:
 
 ### 16.7 Function Call Sugar
 
-Adder:
+A name glued directly to `(...)` is a CALL of any arity (matching §6):
 
 ```python
 foo(bar baz)
 ```
 
-Generic Lisp:
+reads as:
 
 ```lisp
-(foo (bar baz))
+(foo bar baz)
 ```
 
-But inside `def`, the pattern:
+This is uniform with the no-arg case (`foo()` → `(foo)`) and with nesting
+(`foo(bar(baz))` → `(foo (bar baz))`).
+
+The one exception is **definition position**: directly after a binder keyword
+(`def`/`defn`/`defc`/`defmacro`/`macro`), or when the name is itself
+`fn`/`lambda`, the glued `(...)` is a PARAMETER LIST, not a call:
 
 ```python
 def foo(a b):
@@ -1035,23 +1040,23 @@ is interpreted as:
 (def foo (a b) ...)
 ```
 
-because `foo(a b)` is normalized in definition position.
-
-A simpler alternative is to avoid special casing and require:
+The spaced form is equivalent and always reads as a parameter list, so it
+remains available when you prefer maximum homoiconicity:
 
 ```python
 def foo (a b):
   body
 ```
 
-which directly reads as:
-
 ```lisp
 (def foo (a b)
   body)
 ```
 
-This version is more homoiconic and easier to parse.
+Note: the call sugar applies to a name glued to `(...)`. A form whose first
+argument must be a literal list — e.g. `let`'s binding list — must use the
+spaced form (`let ((x 10) (y 20)): ...`); writing `let((x 10) (y 20))` would
+be read as the call `(let (x 10) (y 20))`.
 
 ---
 
