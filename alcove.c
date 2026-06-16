@@ -13083,6 +13083,34 @@ env_t *alcove_init(void) {
   set_get_keyval_dict(global->d, "*prompt-in*", NIL_EXP);
   set_get_keyval_dict(global->d, "*prompt-out*", NIL_EXP);
   set_get_keyval_dict(global->d, "*prompt-cont*", NIL_EXP);
+  /* Make the prompt hooks discoverable via (doc *prompt-in*) and friends. They
+     are plain globals (not builtins), so their help lives in user_doc rather
+     than lispProcList — registering them as builtins would shadow the variable
+     in normal lookup. */
+  {
+    static const struct {
+      const char *name, *doc;
+    } pdocs[] = {
+        {"*prompt-in*",
+         "*prompt-in* — REPL input-prompt hook. Bind to a function (fn (n) -> "
+         "string); the REPL calls it with the cell number n to render the In "
+         "prompt. Return \"\" to suppress it; nil/unset, a non-function, an "
+         "error, or a non-string falls back to the built-in In [n]: default."},
+        {"*prompt-out*",
+         "*prompt-out* — REPL result-prompt hook. Like *prompt-in* but renders "
+         "the prefix printed before a result (default Out[n]:)."},
+        {"*prompt-cont*",
+         "*prompt-cont* — REPL continuation-prompt hook. Like *prompt-in* but "
+         "renders the multi-line continuation prompt (default \"    ... \"), "
+         "including the wrapped rows of a pasted or recalled multi-line form."},
+    };
+    if (!user_doc)
+      user_doc = create_dict();
+    for (int i = 0; i < 3; i++)
+      set_get_keyval_dict(user_doc, (char *)pdocs[i].name,
+                          make_string((char *)pdocs[i].doc,
+                                      (int)strlen(pdocs[i].doc)));
+  }
   return global;
 }
 
