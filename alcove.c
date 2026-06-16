@@ -11693,6 +11693,17 @@ static int alc_prompt_vwidth(const char *p) {
    before every readline() call so the first paint starts clean. */
 static int g_rd_crow = 0;
 
+/* Resolved *prompt-cont* string for the current form (NULL = built-in default
+   "    ... "). Set once per form in rl_read_form/als_rl_read_form so BOTH the
+   explicit continuation prompt AND the redisplay (used for pasted/recalled
+   multi-line buffers) honor the hook. Owned here; freed at end of the form. */
+static char *g_repl_cont = NULL;
+/* The continuation prompt the redisplay should paint on wrapped rows, and its
+   visible width for cursor tracking. */
+static const char *repl_cont_text(void) {
+  return g_repl_cont ? g_repl_cont : "    ... ";
+}
+
 /* Approximate terminal column width of a codepoint: 0 for combining /
    zero-width marks, 2 for the common East-Asian-wide and emoji ranges,
    1 otherwise. Enough to place the REPL cursor correctly; not a full
@@ -11744,8 +11755,8 @@ static void alcove_colored_redisplay(void) {
      entry) gets the "    ... " continuation prompt on each later row so
      it looks the same as it did when typed. The prompt is display-only
      — it is never part of rl_line_buffer / the evaluated text. */
-  static const char *CONT = "    ... ";
-  const int CONT_W = 8;
+  const char *CONT = repl_cont_text();
+  const int CONT_W = alc_prompt_vwidth(CONT);
   alc_print_prompt_stripped(pr, o);
   for (int start = 0, i = 0; i <= rl_end; i++) {
     if (i == rl_end || rl_line_buffer[i] == '\n') {
@@ -11821,6 +11832,12 @@ static char *rl_read_form(int idx) {
            "\001\x1B[34m\002In "
            "[\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ",
            idx);
+  /* Resolve the continuation prompt once per form (freed at the next form's
+     start). Cached in g_repl_cont so BOTH the explicit continuation prompt and
+     the redisplay — which paints it on the wrapped rows of a pasted or recalled
+     multi-line buffer — honor *prompt-cont*. */
+  free(g_repl_cont);
+  g_repl_cont = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
   char *hook = repl_prompt_str(g_global_env, "*prompt-in*", idx);
   char *line = alc_readline(hook ? hook : prompt);
   free(hook);
@@ -11837,9 +11854,7 @@ static char *rl_read_form(int idx) {
   memcpy(acc, line, len + 1);
   free(line);
   while (rl_paren_depth(acc) > 0) {
-    char *contp = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
-    char *more = alc_readline(contp ? contp : "    ... ");
-    free(contp);
+    char *more = alc_readline(repl_cont_text());
     putchar('\n'); /* same fix for continuation lines */
     if (!more)
       break;
@@ -11939,6 +11954,12 @@ static char *als_rl_read_form(int idx) {
            "\001\x1B[34m\002In "
            "[\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ",
            idx);
+  /* Resolve the continuation prompt once per form (freed at the next form's
+     start). Cached in g_repl_cont so BOTH the explicit continuation prompt and
+     the redisplay — which paints it on the wrapped rows of a pasted or recalled
+     multi-line buffer — honor *prompt-cont*. */
+  free(g_repl_cont);
+  g_repl_cont = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
   char *hook = repl_prompt_str(g_global_env, "*prompt-in*", idx);
   char *line = alc_readline(hook ? hook : prompt);
   free(hook);
@@ -11962,9 +11983,7 @@ static char *als_rl_read_form(int idx) {
     for (;;) {
       als_pending_indent = als_next_indent(acc);
       rl_startup_hook = als_preinput;
-      char *contp = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
-    char *more = alc_readline(contp ? contp : "    ... ");
-    free(contp);
+      char *more = alc_readline(repl_cont_text());
       rl_startup_hook = NULL;
       putchar('\n');
       if (!more)
