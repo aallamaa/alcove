@@ -465,6 +465,10 @@ static const char *type_name_of(exp_t *a) {
     return "char";
   if (isfloat(a))
     return "float";
+  if (isrational(a))
+    return "rational";
+  if (isdecimal(a))
+    return "decimal";
   if (isstring(a))
     return "string";
   if (issymbol(a))
@@ -763,7 +767,8 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
   }
 /* Type-predicate cmds, expanded from the PRED_CMD macro above. Each
    takes zero or one arg and returns t / nil (no-arg form is nil). */
-const char doc_numberp[] = "(number? x) — t if x is a fixnum or float.";
+const char doc_numberp[] =
+    "(number? x) — t if x is a number (fixnum, float, rational, or decimal).";
 const char doc_stringp[] = "(string? x) — t if x is a string.";
 const char doc_symbolp[] = "(symbol? x) — t if x is a symbol.";
 const char doc_pairp[] = "(pair? x) — t if x is a non-empty pair (cons cell).";
@@ -777,7 +782,8 @@ const char doc_charp[] = "(char? x) — t if x is a character.";
 const char doc_yes[] =
     "(yes x) — t if x is truthy (the complement of `no`). nil/empty are falsey.";
 const char doc_zerop[] = "(zero? x) — t if x is the number 0 (fixnum or float).";
-PRED_CMD(numberpcmd, (isnumber(a) || isfloat(a)))
+PRED_CMD(numberpcmd,
+         (isnumber(a) || isfloat(a) || isrational(a) || isdecimal(a)))
 PRED_CMD(charpcmd, ischar(a))
 PRED_CMD(yespcmd, istrue(a))
 PRED_CMD(zeropcmd,
@@ -2084,6 +2090,12 @@ int isequal(exp_t *cur1, exp_t *cur2) {
      Fixnum 5 == Fixnum 5, char 'a' == char 'a', and cross-type never equal. */
   if (cur1 == cur2)
     return 1;
+  /* nil has two in-memory shapes: raw C NULL (returned by car/cdr, read for a
+     bare `nil` token in a quoted form) and the nil_singleton heap object (the
+     `nil`/`'()` literal). Both ARE nil — treat them as equal, else `(is 'nil
+     nil)`, `(iso (cdr (list 1)) nil)`, and `(case nil nil ...)` all wrongly miss. */
+  if ((!cur1 || cur1 == nil_singleton) && (!cur2 || cur2 == nil_singleton))
+    return 1;
   if (!is_ptr(cur1) || !is_ptr(cur2))
     return 0;
   if (cur1->type == cur2->type) {
@@ -2134,6 +2146,9 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
   exp_t *cur2n;
 
   if (cur1 == cur2)
+    return 1;
+  /* NULL and nil_singleton are both nil — see isequal. */
+  if ((!cur1 || cur1 == nil_singleton) && (!cur2 || cur2 == nil_singleton))
     return 1;
   if (!is_ptr(cur1) || !is_ptr(cur2))
     return 0;

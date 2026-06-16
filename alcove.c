@@ -9009,6 +9009,31 @@ static const char *alc_suggest_symbol(const char *name, env_t *env) {
   return (best <= thr) ? bestname : NULL;
 }
 
+/* Exact-arithmetic fallback for the VM's inline add/sub/mul/div ops when an
+   operand is a rational or decimal (not a fixnum/float). The inline ops know
+   fixnum and float shapes; coercing the tower to double would diverge from the
+   AST evaluator's EXACT result (1/2, 1.5m). Route through the very same builtin
+   (pluscmd/minuscmd/multiplycmd/dividecmd) the AST uses, via alc_apply_n, so
+   the compiled and interpreted results are byte-identical. Consumes a and b.
+   Returns an owned value or an error exp. The builtin internals are looked up
+   once and cached (reserved_symbol never rebinds these). */
+static exp_t *vm_arith_tower(char opchar, exp_t *a, exp_t *b, env_t *env) {
+  static exp_t *cache[4]; /* +, -, *, / */
+  int slot = opchar == '+' ? 0 : opchar == '-' ? 1 : opchar == '*' ? 2 : 3;
+  if (!cache[slot]) {
+    const char *nm = slot == 0 ? "+" : slot == 1 ? "-" : slot == 2 ? "*" : "/";
+    keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)nm, NULL);
+    cache[slot] = kv ? (exp_t *)kv->val : NULL;
+  }
+  if (!cache[slot]) {
+    unrefexp(a);
+    unrefexp(b);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "Illegal value in operation");
+  }
+  exp_t *argv[2] = {a, b}; /* alc_apply_n consumes both refs */
+  return alc_apply_n(cache[slot], 2, argv, env);
+}
+
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
@@ -9083,6 +9108,20 @@ tail_reentry:
                     "Unbound variable %s (did you mean '%s'?)", _nm, _sg)      \
             : error(ERROR_UNBOUND_VARIABLE, fn, env, "Unbound variable %s",    \
                     _nm);                                                      \
+    RUNTIME_ERR_LOC;                                                           \
+    int _i;                                                                    \
+    for (_i = 0; _i < sp; _i++)                                                \
+      unrefexp(stack[_i]);                                                     \
+    if (fn_owned)                                                              \
+      unrefexp(fn);                                                            \
+    return vm_unwind_handlers(_err, handler_base);                             \
+  } while (0)
+/* Propagate an ALREADY-BUILT error object (e.g. one returned by a builtin the
+   VM delegated to) through the handler stack — like RUNTIME_ERR but without
+   synthesizing a new error/message. */
+#define VM_PROPAGATE_ERR(errexp)                                               \
+  do {                                                                         \
+    exp_t *_err = (errexp);                                                    \
     RUNTIME_ERR_LOC;                                                           \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
@@ -9450,6 +9489,13 @@ l_unbind_slot: {
         RUNTIME_ERR("integer overflow (no implicit float; use a float, "      \
                     "rational, or decimal)"); /* identical to the AST msg */  \
       PUSH(MAKE_FIX(_r));                                                      \
+    } else if (isrational(a) || isdecimal(a) || isrational(b) ||              \
+               isdecimal(b)) {                                                 \
+      /* exact tower: defer to the AST builtin so VM == AST byte-for-byte */   \
+      exp_t *_tr = vm_arith_tower((opchar), a, b, env); /* consumes a,b */     \
+      if (_tr && iserror(_tr))                                                 \
+        VM_PROPAGATE_ERR(_tr);                                                 \
+      PUSH(_tr ? _tr : NIL_EXP);                                               \
     } else {                                                                   \
       double da, db;                                                           \
       COERCE_TO_DOUBLE(a, da, "Illegal value in " opname);                     \
@@ -9474,6 +9520,12 @@ l_div: {
     if (bb == 0)
       RUNTIME_ERR("Illegal division by 0");
     PUSH(MAKE_FIX(FIX_VAL(a) / bb));
+  } else if (isrational(a) || isdecimal(a) || isrational(b) || isdecimal(b)) {
+    /* exact tower division: defer to the AST builtin (VM == AST). */
+    exp_t *tr = vm_arith_tower('/', a, b, env); /* consumes a,b */
+    if (tr && iserror(tr))
+      VM_PROPAGATE_ERR(tr);
+    PUSH(tr ? tr : NIL_EXP);
   } else {
     double da, db;
     COERCE_TO_DOUBLE(a, da, "Illegal value in /");

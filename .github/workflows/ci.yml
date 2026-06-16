@@ -60,3 +60,16 @@ jobs:
         run: make adr-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
       - name: libFuzzer — msgpack decoder
         run: make msgpack-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
+
+  # JIT-tier differential: builds jit + nojit and asserts every fuzzed numeric
+  # loop / leaf / recursion shape produces byte-identical results on the native
+  # JIT and the bytecode VM. This is the ONLY gate that exercises the JIT tier
+  # against the VM, so it must run on every push (test-all does not cover it).
+  jit-fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
+      - name: JIT vs VM byte-identical fuzz
+        run: make jit-fuzz

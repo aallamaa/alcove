@@ -429,6 +429,25 @@ test-all:
 	  echo "  OK — bytecode VM == AST tree-walker on $$(grep -c "	" "$$rc") recursion/closure results"; \
 	else echo "  RECUR DIFFERENTIAL MISMATCH:"; diff "$$rc" "$$ri" | sed 's/^/    /' | head -20; ok=0; fi; \
 	rm -f "$$rc" "$$ri"; \
+	printf '\n=== top-level error spew gate (uncounted errors must not creep in) ===\n'; \
+	printf '%s\n' \
+	  "  The assert/* helpers count failures, but a top-level form that ERRORS" \
+	  "  OUTSIDE an assert prints to stderr and is NOT counted (exactly how the" \
+	  "  old assert-as-function bug hid ~40 broken tests). A known set of" \
+	  "  intentional error-recovery tests (div0, arity, non-numeric vec, ...)" \
+	  "  spews to stderr by design; these baselines pin that set. A regression" \
+	  "  that adds NEW uncounted error output trips this gate even though" \
+	  "  'TEST RESULT' still says 0 failed. If you intentionally add/remove a" \
+	  "  recovery test, update the baseline below."; \
+	ALC_BASE=29; ADR_BASE=30; \
+	ae=$$(./alcove --noload test.alc 2>&1 1>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -cE '^test\.alc:[0-9]+:'); \
+	if [ "$$ae" -le "$$ALC_BASE" ]; then echo "  OK — alcove top-level errors: $$ae (baseline $$ALC_BASE)"; \
+	else echo "  ALCOVE STDERR REGRESSION: $$ae top-level errors > baseline $$ALC_BASE — a new uncounted error crept in:"; \
+	  ./alcove --noload test.alc 2>&1 1>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^test\.alc:[0-9]+:' | sed 's/^/    /' | tail -40; ok=0; fi; \
+	de=$$(./adder --noload test.adr 2>&1 1>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -cE '^test\.adr:[0-9]+:'); \
+	if [ "$$de" -le "$$ADR_BASE" ]; then echo "  OK — adder top-level errors: $$de (baseline $$ADR_BASE)"; \
+	else echo "  ADDER STDERR REGRESSION: $$de top-level errors > baseline $$ADR_BASE — a new uncounted error crept in:"; \
+	  ./adder --noload test.adr 2>&1 1>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^test\.adr:[0-9]+:' | sed 's/^/    /' | tail -40; ok=0; fi; \
 	printf '\n'; \
 	if [ $$ok -eq 1 ]; then echo "==> ALL VARIANTS PASSED"; \
 	else echo "==> VARIANT FAILURES (see above)"; exit 1; fi

@@ -417,21 +417,21 @@
 (assert "(cdr '(a b c)) -> (b c)" 
         (cdr '(a b c)) 
         '(b c))
-(assert "(list 'a 1 "foo" '(b))  -> (a 1 "foo" (b))" 
-        (list 'a 1 "foo" '(b)) 
+(assert "list with string + quoted sublist"
+        (list 'a 1 "foo" '(b))
         '(a 1 "foo" (b)))
-(assert "(cons 'a (cons 1 (cons "foo" (cons '(b) nil)))) -> (a 1 "foo" (b))" 
-        (cons 'a 
-              (cons 1 
-                    (cons "foo" 
-                          (cons 
-                            '(b) nil)))) 
+(assert "cons chain with string + quoted sublist"
+        (cons 'a
+              (cons 1
+                    (cons "foo"
+                          (cons
+                            '(b) nil))))
         '(a 1 "foo" (b)))
 (= x '(a b))
 (assert "(= (car x) 'z) -> z" (= (car x) 'z) 'z)
 (assert "and x -> (z b)" x '(z b))
-(def average (x y) 
-  (/ (+ x y) 2)))
+(def average (x y)
+  (/ (+ x y) 2))
 (assert "(average 2 4) -> 3" (average 2 4) 3)
 (assert "((fn (x y) (/ (+ x y) 2)) 2 4) -> 3" ((fn (x y) (/ (+ x y) 2)) 2 4) 3)
 (assert "(\"foo\" 0) -> #\\f" ("foo" 0) #\f)
@@ -455,7 +455,7 @@
 
 (assert "(is 'a 'a) -> t" (is 'a 'a) t)
 
-(assert "(is "foo" "foo") -> t" (is "foo" "foo") t)
+(assert "(is interned-string interned-string) -> t" (is "foo" "foo") t)
 
 (assert "(let x (list 'a) (is x x)) -> t" (let x (list 'a) (is x x)) t)
 (assert "(is (list 'a) (list 'a)) -> nil" (is (list 'a) (list 'a)) nil)
@@ -1212,7 +1212,12 @@
 ;; expectation for the current build; the r:* asserts below pin the results
 ;; (the JIT must match the VM exactly, in every build).
 (= _jit_on (jit? itest-add))
-(def assert-jits (label f) (assert label (if _jit_on (jit? f) (no (jit? f))) t))
+;; MUST be a macro, not a def: as a function, `f` would be evaluated as a call
+;; argument before assert runs, so a raising `f` would unwind uncounted (the
+;; exact bug the assert-macro conversion fixed). The macro keeps `f` inside
+;; assert's try.
+(defmacro assert-jits (label f)
+  `(assert ,label (if _jit_on (jit? ,f) (no (jit? ,f))) t))
 ;; leaf shapes
 (def jc-const () 42)
 (def jc-add (s) (+ s 7))
@@ -4144,6 +4149,22 @@
 ;; ====================================================================
 (assert "rational literal"              1/3                 (rational 1 3))
 (assert "rational reduces"              (rational 2 4)      1/2)
+;; COMPILED-PATH tower arithmetic. Top-level literal forms like (+ 1/3 1/6) are
+;; constant-folded at compile time (they run through the AST folder), which is
+;; exactly why a VM bug here hid for a long time: the inline OP_ADD/SUB/MUL/DIV
+;; only knew fixnum/float and errored on runtime rational/decimal operands.
+;; These defs force the bytecode VM path with operands produced at run time.
+(def _radd (a b) (+ a b))
+(def _rsub (a b) (- a b))
+(def _rmul (a b) (* a b))
+(def _rdiv (a b) (/ a b))
+(assert "compiled + on rationals"       (_radd (rational 1 3) (rational 1 6)) 1/2)
+(assert "compiled - on rationals"       (_rsub (rational 1 2) (rational 1 6)) 1/3)
+(assert "compiled * on rationals"       (_rmul (rational 2 3) (rational 3 4)) 1/2)
+(assert "compiled / on rationals"       (_rdiv (rational 1 2) (rational 1 3)) 3/2)
+(assert "compiled int+rational"         (_radd 1 (rational 1 2))              3/2)
+(assert "compiled + on decimals"        (_radd (decimal "1.5") (decimal "2.25")) (decimal "3.75"))
+(assert "compiled * decimal int"        (_rmul (decimal "2") 3)               (decimal "6"))
 (assert "rational sign to numerator"    (rational 1 -3)     (rational -1 3))
 (assert "rational neg/neg -> pos"       (rational -2 -4)    1/2)
 (assert "rational integer collapses"    (rational 4 2)      2)
