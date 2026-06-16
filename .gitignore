@@ -31,6 +31,7 @@ db.dump
 # Other ad-hoc REPL persistence + auto-loaded init scratch.
 *.db
 .init.alc
+.init.adr
 
 # FFI example .so (built from .c on demand).
 ffi-examples/libmylib.so

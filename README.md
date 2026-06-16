@@ -544,6 +544,39 @@ and `alc2adr.py` (`.alc` → `.adr`, with builder laddering) are
 offline tools. See [`examples/adder/`](examples/adder/)
 and [`adder-spec.md`](adder-spec.md).
 
+**Customizing the REPL prompt.** The `In [N]:` / `Out[N]:` prompts are
+driven by three hooks — bind any of them to a function `(fn (n) → string)`
+and the REPL calls it with the cell number `n` to render that prompt:
+
+| variable        | renders                                         |
+| --------------- | ----------------------------------------------- |
+| `*prompt-in*`   | the input prompt (`In [N]:`)                    |
+| `*prompt-out*`  | the prefix before a result (`Out[N]:`)          |
+| `*prompt-cont*` | the multi-line continuation prompt (`    ... `) |
+
+Return `""` to suppress a prompt entirely (handy for clean copy/paste); an
+unset/nil value, a non-function, a hook error, or a non-string result falls
+back to the built-in default, so a broken hook can never brick the REPL.
+A custom prompt supplies its own text and color:
+
+```
+= *prompt-in* (fn (n) (str (dialect) "[" n "]> "))   # adder[3]> or alcove[3]>
+```
+
+`(dialect)` returns `'adder` or `'alcove` for the running binary (sibling of
+`(platform)` / `(arch)`). To strip every prompt for distraction-free pasting:
+
+```
+= *prompt-in*   (fn (n) "")
+= *prompt-out*  (fn (n) "")
+= *prompt-cont* (fn (n) "")
+```
+
+**Init files** load these at startup so the customization is permanent.
+Each dialect prefers its own: `adder` loads `./.init.adr` (Adder syntax),
+`alcove` loads `./.init.alc` (s-expressions), each falling back to the other
+and then to `~/.local/alcove/init.{adr,alc}`. First match wins.
+
 ### 10. Shell scripts — the scripting floor (v0.2)
 
 Scripts are real programs: `#!` is a comment in both readers, `*args*`
