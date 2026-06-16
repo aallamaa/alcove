@@ -99,6 +99,14 @@ def make-counter():
 c = make-counter()
 prn (c) (c) (c)                      # → 1 2 3
 
+# Infix: (a op b) means (op a b) when the head is a value, not a function
+def fib(n):
+  if (n < 2):
+    n
+  else:
+    (fib (n - 1)) + (fib (n - 2))
+prn (map fib (range 0 10))           # → (0 1 1 2 3 5 8 13 21 34)
+
 # Scripting floor: JSON, regex, shell — same builtins, no parens tax
 = cfg (json-decode (read-string "config.json"))
 prn (get cfg "port")
