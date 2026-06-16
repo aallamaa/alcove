@@ -972,6 +972,16 @@
 (def _mkadd (n) (fn (x) (+ x n)))
 (def _applyit (g) (g 5))
 (assert "closure tail-call captures" (_applyit (_mkadd 100))             105)
+; regression: a BUILTIN (not a lambda) held in a variable must be callable in
+; TAIL position from a compiled body — the OP_TAIL_CALL path used to reject
+; anything non-lambda as "not a lambda" (the AST evaluator always allowed it).
+(def _applyop (op a b) (op a b))                  ; (op a b) is in tail position
+(assert "tail-call a builtin operand +"  (_applyop + 3 4)               7)
+(assert "tail-call a builtin operand *"  (_applyop * 6 7)               42)
+(assert "tail-call a builtin operand is" (_applyop is 5 5)              t)
+(assert "tail-call builtin non-tail"     (+ (_applyop - 10 3) 100)      107)
+(def _redop (op acc xs) (if (no xs) acc (_redop op (op acc (car xs)) (cdr xs))))
+(assert "recur with builtin operand"     (_redop + 0 (list 1 2 3 4 5))  15)
 
 ; 20h. call/cc idioms — exercise the common real-world patterns.
 ; (a) find-first: early return from a recursive walk

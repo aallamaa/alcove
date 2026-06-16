@@ -143,6 +143,8 @@
 (equiv "closure"        ((fn (x) ((fn (y) (+ x y)) 10)) 5))
 (equiv "fact"           ((fn fact (n) (if (< n 2) 1 (* n (fact (- n 1))))) 5))
 (equiv "let with fn"    (let (f (fn (x) (+ x 1))) (f 41)))
+(equiv "tail-call builtin operand" ((fn (op a b) (op a b)) + 1 2))
+(equiv "tail-call builtin is"      ((fn (op a b) (op a b)) is 4 4))
 
 ;; ── containers ────────────────────────────────────────────────────────────
 (equiv "vector"         (vector 1 2 3))

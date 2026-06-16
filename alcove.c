@@ -9753,12 +9753,15 @@ l_tail_call: {
 #ifdef ALCOVE_FFI
   is_ffi_callee = isffi(new_fn);
 #endif
-  if (iscallable_container(new_fn) || iscont(new_fn) || is_ffi_callee) {
+  if (iscallable_container(new_fn) || iscont(new_fn) || is_ffi_callee ||
+      isinternal(new_fn)) {
     /* Callable container (string/vector/blob index, or dict/hamt/set key
-       lookup), escape continuation, or an ffi-fn value reached in tail
-       position: vm_invoke_values has the matching arms (the FFI arm
-       dispatches to alc_ffi_call). Without this such a callable as the tail
-       expression of a compiled body would be rejected as "not a lambda". */
+       lookup), escape continuation, an ffi-fn value, or a BUILTIN held in a
+       variable (e.g. (def f (op a b) (op a b)) called with +) reached in tail
+       position: vm_invoke_values has the matching arms (container index, FFI,
+       and the isinternal builtin-dispatch). Without this such a callee as the
+       tail expression of a compiled body is wrongly rejected as "not a
+       lambda" — the AST evaluator handles all of these. */
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);

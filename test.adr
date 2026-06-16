@@ -1483,6 +1483,24 @@ def _applyit (g):
 
 assert "closure tail-call captures" (_applyit (_mkadd 100)) 105
 
+def _applyop (op a b):
+  op a b
+
+assert "tail-call a builtin operand +" (_applyop + 3 4) 7
+
+assert "tail-call a builtin operand *" (_applyop * 6 7) 42
+
+assert "tail-call a builtin operand is" (_applyop is 5 5) t
+
+assert "tail-call builtin non-tail" (+ (_applyop - 10 3) 100) 107
+
+def _redop (op acc xs):
+  if (no xs):
+    acc
+    _redop op (op acc (car xs)) (cdr xs)
+
+assert "recur with builtin operand" (_redop + 0 (list 1 2 3 4 5)) 15
+
 def _cc_find (pred xs):
   call/cc (fn (return) (do (def go (ys) (if (no ys) nil (if (pred ys) (return (car ys)) (go (cdr ys))))) (go xs)))
 
