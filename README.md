@@ -95,7 +95,7 @@ The same features, both surfaces — pick whichever reads better to you:
 def make-counter():
   with (n 0):
     fn():
-      n = (+ n 1)                    # `=` returns the new value
+      n = (n + 1)                    # infix both sides; `=` returns the new value
 
 c = make-counter()
 prn (c) (c) (c)                      # → 1 2 3
