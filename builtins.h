@@ -192,7 +192,7 @@ extern const char doc_savedb[], doc_loaddb[];
 extern const char doc_ispersistent[];
 extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
 extern const char doc_time[], doc_exit[], doc_webp[], doc_sleepms[];
-extern const char doc_platform[], doc_arch[], doc_dylibsuffix[];
+extern const char doc_platform[], doc_arch[], doc_dylibsuffix[], doc_dialect[];
 extern const char doc_nowms[];
 extern const char doc_stringbuf[], doc_stringset[], doc_stringfill[],
     doc_stringcopy[];
@@ -200,6 +200,7 @@ exp_t *webpcmd(exp_t *e, env_t *env);
 exp_t *sleepmscmd(exp_t *e, env_t *env);
 exp_t *nowmscmd(exp_t *e, env_t *env);
 exp_t *platformcmd(exp_t *e, env_t *env);
+exp_t *dialectcmd(exp_t *e, env_t *env);
 exp_t *archcmd(exp_t *e, env_t *env);
 exp_t *dylibsuffixcmd(exp_t *e, env_t *env);
 exp_t *stringbufcmd(exp_t *e, env_t *env);

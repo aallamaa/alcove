@@ -4323,6 +4323,22 @@
 ;; set membership: decimals canonicalize, equal values dedup
 (assert "decimal set dedups"            (count (set 1.50m 1.5m 2.5m)) 2)
 
+;; ---- introspection: (dialect) + configurable REPL prompt hooks ----
+;; (dialect) reports THIS binary's surface syntax. The same source runs under
+;; both, so assert the value is one of the valid symbols, not a fixed one.
+(assert-true "dialect is a symbol"      (symbol? (dialect)))
+(assert-true "dialect alcove or adder"  (or (is (dialect) 'alcove) (is (dialect) 'adder)))
+;; Prompt hooks are plain globals: settable to a function and back to nil.
+;; (Their REPL effect is interactive-only, so it can't be asserted from a file;
+;; this just guards that the bindings exist and round-trip.)
+(= *prompt-in* (fn (n) "x"))
+(assert-true "*prompt-in* holds a fn"   (fn? *prompt-in*))
+(= *prompt-in* nil)
+(assert "*prompt-in* resets to nil"     *prompt-in* nil)
+(= *prompt-cont* (fn (n) "..."))
+(assert-true "*prompt-cont* holds a fn" (fn? *prompt-cont*))
+(= *prompt-cont* nil)
+
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).

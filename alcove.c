@@ -733,6 +733,7 @@ lispProc lispProcList[] = {
     LISPCMD("time", timecmd, doc_time),
     LISPCMD("web?", webpcmd, doc_webp),
     LISPCMD("platform", platformcmd, doc_platform),
+    LISPCMD("dialect", dialectcmd, doc_dialect),
     LISPCMD("arch", archcmd, doc_arch),
     LISPCMD_UNSAFE("dylib-suffix", dylibsuffixcmd, doc_dylibsuffix),
     LISPCMD("now-ms", nowmscmd, doc_nowms),
@@ -11398,6 +11399,31 @@ finisht:
   return ret;
 }
 
+/* REPL prompt hook. If `varname` (*prompt-in* / *prompt-out*) is bound to a
+   function, call it with the cell number `idx` and return its string result as
+   a fresh malloc'd buffer (the caller frees) — so the hook supplies its own
+   text/coloring/spacing. Returns NULL on unset/nil, a non-function value, a
+   hook error, or a non-string result, so the caller falls back to the built-in
+   default; a broken hook can therefore never brick the REPL. The hook takes
+   one argument (the cell number) and returns a string. Used by every prompt
+   site: the interactive readline readers and the piped/non-TTY printf paths. */
+static char *repl_prompt_str(env_t *env, const char *varname, int idx) {
+  if (!env || !env->d)
+    return NULL;
+  keyval_t *kv = set_get_keyval_dict(env->d, (char *)varname, NULL);
+  exp_t *fn = kv ? (exp_t *)kv->val : NULL;
+  if (!fn || !islambda(fn))
+    return NULL;
+  exp_t *argv[1] = {make_integeri(idx)}; /* alc_apply_n consumes this ref */
+  exp_t *res = alc_apply_n(fn, 1, argv, env);
+  char *out = NULL;
+  if (res && !iserror(res) && isstring(res))
+    out = strdup((const char *)exp_text(res));
+  if (res)
+    unrefexp(res);
+  return out;
+}
+
 #ifdef ALCOVE_READLINE
 #undef ISDIGIT /* char.h defines ISDIGIT as a bitmask; readline redefines it */
 #include <readline/history.h>
@@ -11795,7 +11821,9 @@ static char *rl_read_form(int idx) {
            "\001\x1B[34m\002In "
            "[\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ",
            idx);
-  char *line = alc_readline(prompt);
+  char *hook = repl_prompt_str(g_global_env, "*prompt-in*", idx);
+  char *line = alc_readline(hook ? hook : prompt);
+  free(hook);
   /* The custom redisplay (alcove_colored_redisplay) leaves the cursor
      inside the input line — readline's default redisplay would emit a
      trailing \r\n itself, but our hook doesn't, so the eval result
@@ -11809,7 +11837,9 @@ static char *rl_read_form(int idx) {
   memcpy(acc, line, len + 1);
   free(line);
   while (rl_paren_depth(acc) > 0) {
-    char *more = alc_readline("    ... ");
+    char *contp = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
+    char *more = alc_readline(contp ? contp : "    ... ");
+    free(contp);
     putchar('\n'); /* same fix for continuation lines */
     if (!more)
       break;
@@ -11909,7 +11939,9 @@ static char *als_rl_read_form(int idx) {
            "\001\x1B[34m\002In "
            "[\001\x1B[94m\002%d\001\x1B[34m\002]:\001\x1B[39m\002 ",
            idx);
-  char *line = alc_readline(prompt);
+  char *hook = repl_prompt_str(g_global_env, "*prompt-in*", idx);
+  char *line = alc_readline(hook ? hook : prompt);
+  free(hook);
   putchar('\n');
   if (!line)
     return NULL;
@@ -11930,7 +11962,9 @@ static char *als_rl_read_form(int idx) {
     for (;;) {
       als_pending_indent = als_next_indent(acc);
       rl_startup_hook = als_preinput;
-      char *more = alc_readline("    ... ");
+      char *contp = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
+    char *more = alc_readline(contp ? contp : "    ... ");
+    free(contp);
       rl_startup_hook = NULL;
       putchar('\n');
       if (!more)
@@ -12547,7 +12581,12 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
   int ecol = g_err_line ? g_err_col : g_form_col;
   if (!quiet) {
     if (res) {
-      printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
+      char *oph = repl_prompt_str(env, "*prompt-out*", idx);
+      if (oph) {
+        fputs(oph, stdout);
+        free(oph);
+      } else
+        printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
       print_node(res);
       if (iserror(res)) { /* show the offending line + caret under the message */
         render_form_caret(stdout, eln, ecol);
@@ -12825,6 +12864,28 @@ static int alcove_run_init_file(env_t *global, const char *path) {
   FILE *fp = fopen(path, "r");
   if (!fp)
     return 0;
+  /* Dialect by extension: a .adr init file is Adder surface syntax — slurp and
+     transpile to s-expressions (als_to_sexpr is compiled into both binaries),
+     then read that. .alc (and anything else) is read directly as s-expressions,
+     so an existing .init.alc still loads under adder via the fallback. */
+  char *transpiled = NULL;
+  size_t plen = strlen(path);
+  if (plen >= 4 && strcmp(path + plen - 4, ".adr") == 0) {
+    size_t len = 0;
+    char *text = slurp_stream(fp, &len);
+    fclose(fp);
+    if (!text)
+      return 0;
+    transpiled = als_to_sexpr(text);
+    free(text);
+    if (!transpiled)
+      return 0;
+    fp = fmemopen(transpiled, strlen(transpiled), "r");
+    if (!fp) {
+      free(transpiled);
+      return 0;
+    }
+  }
   for (;;) {
     exp_t *e = reader(fp, 0, 0);
     if (!e)
@@ -12849,26 +12910,42 @@ static int alcove_run_init_file(env_t *global, const char *path) {
     }
   }
   fclose(fp);
+  free(transpiled);
   return 1;
 }
 
-/* Try ./.init.alc first (project-local, takes priority); fall back to
-   $HOME/.local/alcove/init.alc (user-global). Stops at the first
-   match — never runs both. Silent on miss; one-line announce on hit. */
+/* Load the startup init file: dialect-native first (adder -> .init.adr,
+   alcove -> .init.alc), then the OTHER dialect's file as a fallback (the loader
+   transpiles .adr in either binary, so an .alc program can still pick up an
+   existing .init.alc and vice versa — no forced migration). Project-local
+   (./) takes priority over the user-global $HOME/.local/alcove/. Stops at the
+   first match — never runs more than one. Silent on miss; one-line announce. */
 static void alcove_try_init_files(env_t *global) {
-  if (alcove_run_init_file(global, "./.init.alc")) {
-    printf(ALCOVE_PROGNAME ": loaded ./.init.alc\n");
-    return;
-  }
+#ifdef ALCOVE_ALS
+  static const char *const locals[] = {"./.init.adr", "./.init.alc"};
+  static const char *const bases[] = {"init.adr", "init.alc"};
+#else
+  static const char *const locals[] = {"./.init.alc", "./.init.adr"};
+  static const char *const bases[] = {"init.alc", "init.adr"};
+#endif
+  for (int i = 0; i < 2; i++)
+    if (alcove_run_init_file(global, locals[i])) {
+      printf("%s: loaded %s\n", ALCOVE_PROGNAME, locals[i]);
+      return;
+    }
   const char *home = getenv("HOME");
   if (!home)
     return;
   char path[1024];
-  int n = snprintf(path, sizeof path, "%s/.local/alcove/init.alc", home);
-  if (n < 0 || (size_t)n >= (int)sizeof path)
-    return;
-  if (alcove_run_init_file(global, path))
-    printf(ALCOVE_PROGNAME ": loaded %s\n", path);
+  for (int i = 0; i < 2; i++) {
+    int n = snprintf(path, sizeof path, "%s/.local/alcove/%s", home, bases[i]);
+    if (n < 0 || (size_t)n >= (int)sizeof path)
+      continue;
+    if (alcove_run_init_file(global, path)) {
+      printf("%s: loaded %s\n", ALCOVE_PROGNAME, path);
+      return;
+    }
+  }
 }
 
 /* alcove_init — bring the engine up: the per-type (de)serializers, the immortal
@@ -12979,6 +13056,14 @@ env_t *alcove_init(void) {
   if (!global->d)
     global->d = create_dict();
   set_get_keyval_dict(global->d, "*args*", NIL_EXP);
+  /* REPL prompt hooks: when bound to a function (fn (n) -> string) the REPL
+     calls it to render a prompt for cell n; nil = built-in default. *-in* is the
+     input prompt, *-out* precedes a result, *-cont* is the multi-line
+     continuation prompt (the "    ... " before continued lines). Set them in
+     .init.alc to customize. See repl_prompt_str(). */
+  set_get_keyval_dict(global->d, "*prompt-in*", NIL_EXP);
+  set_get_keyval_dict(global->d, "*prompt-out*", NIL_EXP);
+  set_get_keyval_dict(global->d, "*prompt-cont*", NIL_EXP);
   return global;
 }
 
@@ -13464,8 +13549,14 @@ int main(int argc, char *argv[]) {
   g_reader_off = 0;
   while (1) {
     idx++;
-    if (!evaluatingfile)
-      printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m", idx);
+    if (!evaluatingfile) {
+      char *iph = repl_prompt_str(global, "*prompt-in*", idx);
+      if (iph) {
+        fputs(iph, stdout);
+        free(iph);
+      } else
+        printf("\x1B[34mIn [\x1B[94m%d\x1B[34m]:\x1B[39m", idx);
+    }
     g_form_line = g_reader_line; /* fallback if no significant byte is read */
     g_form_line_arm = 1;         /* reader() stamps the true form-start line */
     stre = reader(stream, 0, 0);

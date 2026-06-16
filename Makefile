@@ -389,14 +389,16 @@ test-all:
 	else echo "  BACKTRACE-WITH-INIT WRONG:"; echo "$$bt2" | sed 's/^/    /'; ok=0; fi; \
 	$(MAKE) -s jit >/dev/null 2>&1; $(MAKE) -s adder >/dev/null 2>&1; \
 	printf '\n=== script identity (*args* + shebang, both dialects) ===\n'; \
-	sa=/tmp/alcove-args.$$$$.alc; printf '#!/usr/bin/env alcove\n(pr (length *args*) ":" (first *args*))\n' > "$$sa"; \
-	out=$$(./alcove --noload "$$sa" one two 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); rm -f "$$sa"; \
+	sd=/tmp/alcove-args.$$$$.d; mkdir -p "$$sd"; \
+	sa="$$sd/s.alc"; printf '#!/usr/bin/env alcove\n(pr (length *args*) ":" (first *args*))\n' > "$$sa"; \
+	out=$$( (cd "$$sd" && exec "$(CURDIR)/alcove" --noload "$$sa" one two) 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	if [ "$$out" = "2:one" ]; then echo "  OK — alcove script receives *args*, shebang line ignored"; \
 	else echo "  SCRIPT ARGS WRONG (alcove): '$$out'"; ok=0; fi; \
-	sb=/tmp/alcove-args.$$$$.adr; printf '#!/usr/bin/env adder\npr (length *args*) ":" (first *args*)\n' > "$$sb"; \
-	out=$$(./adder --noload "$$sb" uno dos 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); rm -f "$$sb"; \
+	sb="$$sd/s.adr"; printf '#!/usr/bin/env adder\npr (length *args*) ":" (first *args*)\n' > "$$sb"; \
+	out=$$( (cd "$$sd" && exec "$(CURDIR)/adder" --noload "$$sb" uno dos) 2>&1 | sed 's/\x1b\[[0-9;]*m//g'); \
 	if [ "$$out" = "2:uno" ]; then echo "  OK — adder script receives *args*, shebang line ignored"; \
 	else echo "  SCRIPT ARGS WRONG (adder): '$$out'"; ok=0; fi; \
+	rm -rf "$$sd"; \
 	printf '\n=== LSP server (tools/lsp.alc over real JSON-RPC framing) ===\n'; \
 	if command -v python3 >/dev/null 2>&1; then \
 	  lout=$$(python3 tools/test_lsp.py 2>&1 | tail -1); \

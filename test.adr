@@ -6685,6 +6685,24 @@ assert-true "decimal from float refused" (error? (try (decimal 1.5) (fn (e) e)))
 
 assert "decimal set dedups" (count (set 1.50m 1.5m 2.5m)) 2
 
+assert-true "dialect is a symbol" (symbol? (dialect))
+
+assert-true "dialect alcove or adder" (or (is (dialect) 'alcove) (is (dialect) 'adder))
+
+setf *prompt-in* (fn (n) "x")
+
+assert-true "*prompt-in* holds a fn" (fn? *prompt-in*)
+
+setf *prompt-in* nil
+
+assert "*prompt-in* resets to nil" *prompt-in* nil
+
+setf *prompt-cont* (fn (n) "...")
+
+assert-true "*prompt-cont* holds a fn" (fn? *prompt-cont*)
+
+setf *prompt-cont* nil
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

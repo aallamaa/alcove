@@ -2805,6 +2805,19 @@ exp_t *platformcmd(exp_t *e, env_t *env) {
 #endif
 }
 
+const char doc_dialect[] =
+    "(dialect) — the surface syntax of THIS binary as a symbol: adder | alcove. "
+    "Useful in .init.alc / prompt hooks to branch per dialect.";
+exp_t *dialectcmd(exp_t *e, env_t *env) {
+  (void)e;
+  (void)env;
+#ifdef ALCOVE_ALS
+  return make_symbol("adder", 5);
+#else
+  return make_symbol("alcove", 6);
+#endif
+}
+
 const char doc_arch[] =
     "(arch) — host CPU as a symbol: arm64 | amd64 | x86 | wasm | unknown.";
 exp_t *archcmd(exp_t *e, env_t *env) {
