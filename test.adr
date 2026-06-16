@@ -1501,6 +1501,35 @@ def _redop (op acc xs):
 
 assert "recur with builtin operand" (_redop + 0 (list 1 2 3 4 5)) 15
 
+def _ix1 ():
+  1 + 2
+
+def _ix2 (a b):
+  a + b
+
+def _ix3 (n):
+  n < 1
+
+assert "infix literal +" (_ix1) 3
+
+assert "infix var + (4 9)" (_ix2 4 9) 13
+
+assert "infix var + (6 7)" (_ix2 6 7) 13
+
+assert "infix comparison true" (_ix3 0) t
+
+assert "infix comparison false" (_ix3 5) nil
+
+assert "infix on rationals" (_ix2 1/2 1/3) 5/6
+
+assert "infix is" ((fn (a b) (a is b)) 5 5) t
+
+assert "infix mod" ((fn (a b) (a mod b)) 7 3) 1
+
+assert "hof head stays a call" (apply + (list 1 2 3)) 6
+
+assert "number-list stays data" (iso (1 2 3) '(1 2 3)) t
+
 def _cc_find (pred xs):
   call/cc (fn (return) (do (def go (ys) (if (no ys) nil (if (pred ys) (return (car ys)) (go (cdr ys))))) (go xs)))
 

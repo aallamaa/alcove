@@ -9034,6 +9034,58 @@ static exp_t *vm_arith_tower(char opchar, exp_t *a, exp_t *b, env_t *env) {
   return alc_apply_n(cache[slot], 2, argv, env);
 }
 
+/* ---- infix dispatch: (VALUE op VALUE) -> (op VALUE VALUE) -----------------
+   When the head of a 3-element form evaluates to a NON-callable value (a number
+   etc.) and the operator position holds one of these binary builtins, evaluate
+   it as infix. Gating on "head is non-callable" is what makes this safe: a HOF
+   call like (apply + xs) has a function head, so it never becomes infix. This
+   lives only in the cold not-a-function dispatch branch, so hot calls pay
+   nothing. Both the AST evaluator and the VM funnel through is_infix_op +
+   infix_apply, so the two tiers stay byte-identical (equiv_sweep/jit-fuzz). */
+static const char *const g_infix_names[] = {"+",  "-",  "*",   "/",
+                                            "<",  ">",  "<=",  ">=",
+                                            "is", "iso", "isnt", "mod"};
+#define N_INFIX_OPS ((int)(sizeof g_infix_names / sizeof g_infix_names[0]))
+static exp_t *g_infix_ops[N_INFIX_OPS];
+/* If v is one of the cached binary-operator builtins, return its index in
+   g_infix_names; else -1. Identity check against the (lazily cached) internals
+   reserved_symbol holds — those never rebind. */
+static int infix_op_index(exp_t *v) {
+  if (!v || !is_ptr(v) || !isinternal(v))
+    return -1;
+  if (!g_infix_ops[0])
+    for (int i = 0; i < N_INFIX_OPS; i++) {
+      keyval_t *kv =
+          set_get_keyval_dict(reserved_symbol, (char *)g_infix_names[i], NULL);
+      g_infix_ops[i] = kv ? (exp_t *)kv->val : NULL;
+    }
+  for (int i = 0; i < N_INFIX_OPS; i++)
+    if (v == g_infix_ops[i])
+      return i;
+  return -1;
+}
+/* Wrap an evaluated value as a form element: self-evaluating values pass
+   through, but a symbol or pair would re-resolve / be applied, so quote it.
+   Returns an owned ref (the new node content). Mirrors alc_apply_n. */
+static exp_t *infix_wrap_value(exp_t *v) {
+  if (v && is_ptr(v) && (issymbol(v) || ispair(v)))
+    return make_quote(refexp(v));
+  return refexp(v);
+}
+/* Apply infix operator (by index) to (head_val, rhs_val): build the real form
+   (OP-SYMBOL head rhs) and evaluate it, so the operator's own builtin sees the
+   operator SYMBOL in head position (cmpcmd decodes < > <= >= from it) — exactly
+   as a hand-written (op a b) would. head_val/rhs_val borrowed; returns owned. */
+static exp_t *infix_apply(int op_idx, exp_t *head_val, exp_t *rhs_val,
+                          env_t *env) {
+  exp_t *opsym = make_symbol((char *)g_infix_names[op_idx],
+                             (int)strlen(g_infix_names[op_idx]));
+  exp_t *form = make_node(opsym);
+  form->next = make_node(infix_wrap_value(head_val));
+  form->next->next = make_node(infix_wrap_value(rhs_val));
+  return evaluate(form, env); /* consumes form + the wrapped value refs */
+}
+
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
@@ -9753,15 +9805,19 @@ l_tail_call: {
 #ifdef ALCOVE_FFI
   is_ffi_callee = isffi(new_fn);
 #endif
-  if (iscallable_container(new_fn) || iscont(new_fn) || is_ffi_callee ||
-      isinternal(new_fn)) {
-    /* Callable container (string/vector/blob index, or dict/hamt/set key
-       lookup), escape continuation, an ffi-fn value, or a BUILTIN held in a
-       variable (e.g. (def f (op a b) (op a b)) called with +) reached in tail
-       position: vm_invoke_values has the matching arms (container index, FFI,
-       and the isinternal builtin-dispatch). Without this such a callee as the
-       tail expression of a compiled body is wrongly rejected as "not a
-       lambda" — the AST evaluator handles all of these. */
+  (void)is_ffi_callee;
+  if (!islambda(new_fn)) {
+    /* ANYTHING that is not a plain lambda — a callable container (string/vector
+       index, dict/set key), an escape continuation, an ffi-fn, a builtin held
+       in a variable, an infix (value op value) head, or a genuinely
+       non-callable value — defers to vm_invoke_values, the single authority on
+       callee dispatch. It has every arm (and produces the right error for a
+       truly-bad callee). Routing all non-lambda callees here is deliberate:
+       it makes tail position handle exactly what non-tail OP_CALL and the AST
+       evaluator handle, so a callee shape can never be accepted in one place
+       and rejected as "not a lambda" in another (the regression that
+       motivated this). One C-stack frame for the hop; lambdas keep full TCO
+       below. */
     exp_t *ret = vm_invoke_values(new_fn, n, &stack[base], env);
     sp = base - 1;
     unrefexp(new_fn);
@@ -9770,15 +9826,6 @@ l_tail_call: {
     if (fn_owned)
       unrefexp(fn);
     VM_RETURN(ret);
-  }
-  if (!islambda(new_fn)) {
-    /* Release the n argument values above base before shrinking sp,
-       otherwise RUNTIME_ERR's cleanup loop misses stack[base..base+n-1]. */
-    for (int _i = 0; _i < n; _i++)
-      unrefexp(stack[base + _i]);
-    sp = base - 1;
-    unrefexp(new_fn);
-    RUNTIME_ERR("OP_TAIL_CALL: not a lambda");
   }
 
   if (!(new_fn->flags & FLAG_COMPILED) ||
@@ -10319,6 +10366,16 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     return alc_apply_n(fn, nargs, argv, env);
   }
   if (!islambda(fn)) {
+    /* Infix: a non-callable head with exactly 2 args whose operator value is a
+       binary builtin -> (op head rhs). e.g. (1 + 2), or (a + b) where a is a
+       number. argv[0] is the evaluated operator, argv[1] the rhs. */
+    int idx;
+    if (nargs == 2 && (idx = infix_op_index(argv[0])) >= 0) {
+      exp_t *r = infix_apply(idx, fn, argv[1], env);
+      unrefexp(argv[0]);
+      unrefexp(argv[1]);
+      return r;
+    }
     int i;
     for (i = 0; i < nargs; i++)
       unrefexp(argv[i]);
@@ -11054,6 +11111,39 @@ exp_t *invokemacro(exp_t *e, exp_t *fn, env_t *env) {
   return ret;
 }
 
+/* AST side of infix dispatch (see is_infix_op). `e` is a form whose head has
+   ALREADY evaluated to the non-callable value `head_val` (borrowed). If `e` is
+   exactly (head op rhs) and the operator position evaluates to a binary
+   builtin, evaluate it as (op head rhs): sets *matched=1 and returns the owned
+   result (or an owned error). Otherwise *matched=0 and returns NULL — the
+   caller self-evaluates the form as before. */
+static exp_t *ast_try_infix(exp_t *head_val, exp_t *e, env_t *env,
+                            int *matched) {
+  *matched = 0;
+  if (!e || !e->next || !e->next->next || e->next->next->next)
+    return NULL; /* not exactly a 3-element (head op rhs) */
+  int outer_tail = in_tail_position;
+  in_tail_position = 0;
+  exp_t *op = EVAL(e->next->content, env); /* operator position */
+  int idx = infix_op_index(op);
+  if (idx < 0) {
+    in_tail_position = outer_tail;
+    unrefexp(op);
+    return NULL; /* 2nd element isn't a binary operator — self-evaluate */
+  }
+  *matched = 1;
+  exp_t *rhs = EVAL(e->next->next->content, env);
+  in_tail_position = outer_tail;
+  if (iserror(rhs)) {
+    unrefexp(op);
+    return rhs;
+  }
+  exp_t *res = infix_apply(idx, head_val, rhs, env); /* head_val/rhs borrowed */
+  unrefexp(op);
+  unrefexp(rhs);
+  return res;
+}
+
 exp_t *evaluate(exp_t *e, env_t *env) {
   /* TO DO UN REF VARS*/
   exp_t *tmpexp = NULL;
@@ -11214,6 +11304,16 @@ exp_t *evaluate(exp_t *e, env_t *env) {
             unrefexp(tmpexp2);
             goto finish;
           } else {
+            /* Infix: (a op b) where a is a variable bound to a non-callable
+               value and op is a binary operator -> (op a b). Gated on
+               non-callable head, so (apply + xs) etc. are unaffected. */
+            int ifx_matched;
+            exp_t *ifx = ast_try_infix(tmpexp2, e, env, &ifx_matched);
+            if (ifx_matched) {
+              unrefexp(tmpexp2);
+              ret = ifx;
+              goto finisht;
+            }
             /* Any other value (including a pair) in operator position
                self-evaluates: return the looked-up value as-is. */
             ret = tmpexp2;
@@ -11262,6 +11362,17 @@ exp_t *evaluate(exp_t *e, env_t *env) {
       } else if (ismacro(tmpexp)) {
         ret = invokemacro(e, tmpexp, env);
         goto finisht;
+      }
+      /* Infix: (head op rhs) with a non-callable head and a binary-operator
+         middle evaluates as (op head rhs) — e.g. (a + b) where a is a number.
+         Gated on non-callable head, so HOF calls like (apply + xs) are safe. */
+      {
+        int ifx_matched;
+        exp_t *ifx = ast_try_infix(tmpexp, e, env, &ifx_matched);
+        if (ifx_matched) {
+          ret = ifx;
+          goto finisht;
+        }
       }
       /* Pair head evaluated to a non-callable, non-error value (number, string,
          or a list/pair): self-evaluate the form. Route through finisht so the
