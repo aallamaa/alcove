@@ -982,6 +982,17 @@
 (assert "tail-call builtin non-tail"     (+ (_applyop - 10 3) 100)      107)
 (def _redop (op acc xs) (if (no xs) acc (_redop op (op acc (car xs)) (cdr xs))))
 (assert "recur with builtin operand"     (_redop + 0 (list 1 2 3 4 5))  15)
+; Callee-shape parity guard: EVERY non-lambda callee shape the AST evaluator
+; accepts must also work in TAIL position from a compiled body (all funnel
+; through vm_invoke_values, the single dispatch authority). These cover the
+; shapes that the OP_TAIL_CALL bug class would break.
+(def _tcall (g x) (g x))                          ; (g x) in tail position
+(assert "tail-call a string (index)"     (_tcall "hello" 1)             #\e)
+(assert "tail-call a vector (index)"     (_tcall (vector 10 20 30) 2)   30)
+(assert "tail-call a dict (key lookup)"  (_tcall (hash-map "k" 9) "k")  9)
+(assert "tail-call a lambda"             (_tcall (fn (n) (* n n)) 6)    36)
+(assert "tail-call an escape cont"
+        (call/cc (fn (k) (_tcall k 77)))                                77)
 ; infix dispatch: a non-callable head with a binary operator in the middle
 ; evaluates as (op a b). Collision-safe (only fires when the head isn't a
 ; function, so (apply + xs) stays a call). Compiled (these run in a def body).

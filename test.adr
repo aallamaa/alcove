@@ -1501,6 +1501,19 @@ def _redop (op acc xs):
 
 assert "recur with builtin operand" (_redop + 0 (list 1 2 3 4 5)) 15
 
+def _tcall (g x):
+  g x
+
+assert "tail-call a string (index)" (_tcall "hello" 1) #\e
+
+assert "tail-call a vector (index)" (_tcall (vector 10 20 30) 2) 30
+
+assert "tail-call a dict (key lookup)" (_tcall (hash-map "k" 9) "k") 9
+
+assert "tail-call a lambda" (_tcall (fn (n) (* n n)) 6) 36
+
+assert "tail-call an escape cont" (call/cc (fn (k) (_tcall k 77))) 77
+
 def _ix1 ():
   1 + 2
 
