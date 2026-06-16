@@ -1203,6 +1203,12 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
       } else {
         int rr = ipool[nl_ireg(st, d - 1, nl.nislots)];
         n += x64_imul_reg_reg_imm32(buf + n, X64_RAX, rr, 8); /* re-tag: v<<3 */
+        /* If the untagged int result left the 61-bit fixnum range, the v<<3
+           overflows int64 here — deopt to the VM, which raises (overflow is an
+           error, not a wrap or implicit float). Float results never reach this
+           path, so the perf-critical float kernels gain nothing. */
+        dj0[ndj0++] = n;
+        n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt0 */
         n += x64_add_imm32(buf + n, X64_RAX, 1);              /* | 1 */
       }
       if (framed)
@@ -1596,13 +1602,13 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     n += x64_jmp_rel32(buf + n, 0);
     x64_patch_rel32(buf, jmp_back, 5, loop_top);
 
-    /* done: re-tag b (rdx) into rax; tear down frame; ret. */
+    /* done: re-tag b (rdx) into rax; tear down frame; ret. Use imul (not shl)
+       for v<<3 so OF is defined — a result outside the 61-bit range overflows
+       int64 here and jo deopts to the VM, which raises. */
     int done_pc = n;
-    /* shl rdx, 3 */
-    buf[n++] = 0x48;
-    buf[n++] = 0xC1;
-    buf[n++] = (uint8_t)(0xE0 | (X64_RDX & 7));
-    buf[n++] = 3;
+    n += x64_imul_reg_reg_imm32(buf + n, X64_RDX, X64_RDX, 8); /* rdx = b<<3 */
+    int jo_it = n;
+    n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo ovf_it */
     /* or rdx, 1 */
     buf[n++] = 0x48;
     buf[n++] = 0x83;
@@ -1612,6 +1618,14 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     n += x64_add_imm32(buf + n, 4 /* rsp */, 8);
     n += x64_pop_reg(buf + n, X64_RBX);
     n += x64_ret(buf + n);
+
+    /* overflow deopt: tear down frame, return NULL so the VM re-runs + raises */
+    int ovf_it = n;
+    n += x64_add_imm32(buf + n, 4 /* rsp */, 8);
+    n += x64_pop_reg(buf + n, X64_RBX);
+    n += x64_zero_reg(buf + n, X64_RAX);
+    n += x64_ret(buf + n);
+    x64_patch_rel32(buf, jo_it, 6, ovf_it);
 
     /* base case: rax already holds untagged n; tag and return. */
     int base_pc = n;
@@ -1707,8 +1721,12 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   int jz_bail2 = n;
   n += x64_jcc_rel32(buf + n, 0x04, 0);
 
-  /* tagged add: rax = call2 + call1 - 1 */
+  /* tagged add: rax = call2 + call1 - 1. The operands are tagged (v<<3|1), so a
+     sum whose value leaves the 61-bit range overflows int64 here — jo deopts to
+     the VM, which raises (overflow is an error, not a wrap). */
   n += x64_add_reg_rsp(buf + n, X64_RAX);  /* rax += [rsp]   */
+  int jo_ovf = n;
+  n += x64_jcc_rel32(buf + n, 0x00, 0);    /* jo overflow_deopt */
   n += x64_sub_imm32(buf + n, X64_RAX, 1); /* drop the duplicated tag bit */
 
   /* tear down frame and return */
@@ -1722,6 +1740,13 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_pop_reg(buf + n, X64_RBX);
   n += x64_ret(buf + n);
 
+  /* overflow deopt: tear down frame, return NULL so the VM re-runs and raises */
+  int ovf_pc = n;
+  n += x64_add_imm32(buf + n, 4 /* rsp */, 16);
+  n += x64_pop_reg(buf + n, X64_RBX);
+  n += x64_zero_reg(buf + n, X64_RAX);
+  n += x64_ret(buf + n);
+
   /* deopt (no frame): */
   int deopt_pc = n;
   X64_EMIT_DEOPT();
@@ -1730,6 +1755,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jz_bail1, 6, bail_pc);
   x64_patch_rel32(buf, jz_bail2, 6, bail_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
+  x64_patch_rel32(buf, jo_ovf, 6, ovf_pc);
 
   /* Worst case ~190 bytes (entry tag-check + 2 ~45-byte call sequences
      + tag-checks + tagged add + frame teardown + bail + deopt). buf
@@ -2951,8 +2977,11 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* Silence the unused-var warning for inv_cc (kept for symmetry). */
   (void)inv_cc;
 
-  /* acc = acc * n  (both untagged) */
+  /* acc = acc * n  (both untagged). jo deopts if the product leaves int64 (a
+     value > 2^63); the 2^60..2^63 band is caught at the re-tag below. */
   n += x64_imul_reg_reg(buf + n, X64_RCX, X64_RAX);
+  int jo_mul = n;
+  n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt */
 
   /* n = n op K2 (untagged) */
   if (step_op == OP_SLOT_SUB_FIX)
@@ -2965,13 +2994,12 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_jmp_rel32(buf + n, 0);
   x64_patch_rel32(buf, jmp_back_pc, 5, loop_top);
 
-  /* done: re-tag acc into rax, return. */
+  /* done: re-tag acc into rax, return. imul (not shl) so OF is defined — a
+     value outside the 61-bit range overflows here and jo deopts to the VM. */
   int done_pc = n;
-  /* shl rcx, 3 */
-  buf[n++] = 0x48;
-  buf[n++] = 0xC1;
-  buf[n++] = (uint8_t)(0xE0 | (X64_RCX & 7));
-  buf[n++] = 3;
+  n += x64_imul_reg_reg_imm32(buf + n, X64_RCX, X64_RCX, 8); /* rcx = acc<<3 */
+  int jo_tag = n;
+  n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt */
   /* or rcx, 1 */
   buf[n++] = 0x48;
   buf[n++] = 0x83;
@@ -2983,6 +3011,8 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* deopt → return NULL */
   int deopt_pc = n;
   X64_EMIT_DEOPT();
+  x64_patch_rel32(buf, jo_mul, 6, deopt_pc);
+  x64_patch_rel32(buf, jo_tag, 6, deopt_pc);
 
   /* Suppress unused-var warnings for variables that became dead when we
      switched from recursive emission to iterative. */
@@ -3175,9 +3205,14 @@ int jit_compile(bytecode_t *bc) {
     n += x64_test_reg8_imm8(buf + n, X64_RAX, 1);
     int jz_start = n;
     n += x64_jcc_rel32(buf + n, 0x04, 0);
+    /* All three ops run on the shifted (v<<3) representation, so a result
+       outside the 61-bit range overflows int64 — jo deopts to the VM. */
+    int jo_op;
     if (c[5] == OP_MUL) {
       n += x64_sub_imm32(buf + n, X64_RAX, 1); /* drop tag */
       n += x64_imul_reg_reg_imm32(buf + n, X64_RAX, X64_RAX, (int32_t)k);
+      jo_op = n;
+      n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt */
       n += x64_add_imm32(buf + n, X64_RAX, 1); /* re-tag */
     } else {
       int32_t delta = ((int32_t)k) << 3;
@@ -3185,11 +3220,14 @@ int jit_compile(bytecode_t *bc) {
         n += x64_add_imm32(buf + n, X64_RAX, delta);
       else
         n += x64_sub_imm32(buf + n, X64_RAX, delta);
+      jo_op = n;
+      n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt */
     }
     n += x64_ret(buf + n);
     int deopt_pc = n;
     X64_EMIT_DEOPT();
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+    x64_patch_rel32(buf, jo_op, 6, deopt_pc);
   }
   /* slot-fix superinstruction form: SLOT_ADD_FIX/SLOT_SUB_FIX slot K, RET */
   else if (bc->ncode == 5 &&
@@ -3208,10 +3246,13 @@ int jit_compile(bytecode_t *bc) {
       n += x64_add_imm32(buf + n, X64_RAX, delta);
     else
       n += x64_sub_imm32(buf + n, X64_RAX, delta);
+    int jo_op = n; /* tagged add/sub on an unbounded arg → overflow deopts */
+    n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt */
     n += x64_ret(buf + n);
     int deopt_pc = n;
     X64_EMIT_DEOPT();
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+    x64_patch_rel32(buf, jo_op, 6, deopt_pc);
   } else if (try_jit_numloop(bc, buf, &n)) {
     JT("numloop"); /* general numeric self-tail loop (last-resort, after shapes) */
   } else {

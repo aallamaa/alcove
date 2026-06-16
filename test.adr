@@ -2614,7 +2614,7 @@ assert "expt N^0 = 1" (expt 99 0) 1
 
 assert "** alias" (** 3 4) 81
 
-assert "expt int overflow → float" (iso (expt 2 80) (** 2 80)) t
+assert-true "expt int overflow errors" (error? (try (expt 2 80) (fn (e) e)))
 
 assert "sqrt-int" (sqrt-int 100) 10
 
@@ -6367,6 +6367,57 @@ assert "ns cleared: plain def not prefixed" (do (def nsplain () 5) (nsplain)):
   5
 
 assert-true "ns explicit slash not double-qualified" (do (ns nstest) (def nstest/already () 1) (ns) (no (error? (try (nstest/already) (fn (e) e)))))
+
+def caught? (thunk):
+  error? (try (thunk) (fn (e) e))
+
+assert-true "+ overflow errors" (caught? (fn () (+ 1152921504606846975 1)))
+
+assert-true "* overflow errors" (caught? (fn () (* 1000000000000 1000000000000)))
+
+assert-true "- underflow errors" (caught? (fn () (- -1152921504606846976 1)))
+
+assert-true "unary negate overflow" (caught? (fn () (- -1152921504606846976)))
+
+assert "near-max + still ok" (+ 1152921504606846974 1) 1152921504606846975
+
+assert "product in range ok" (* 1000000000 1000000000) 1000000000000000000
+
+assert-true "expt overflow errors" (caught? (fn () (expt 2 80)))
+
+assert "expt in range" (expt 2 40) 1099511627776
+
+assert "expt float base ok" (expt 2.0 80) (** 2.0 80)
+
+assert "max fixnum literal ok" 1152921504606846975 1152921504606846975
+
+assert "int + float stays float" (+ 1152921504606846975 1.0):
+  1.152921504606847e18
+
+def jfact (n):
+  if (< n 2):
+    1
+    * n (jfact (- n 1))
+
+assert-true "JIT factorial overflow" (caught? (fn () (jfact 25)))
+
+assert "JIT factorial in range" (jfact 10) 3628800
+
+def tfib (n a b):
+  if (is n 0):
+    a
+    tfib (- n 1) b (+ a b)
+
+assert-true "tail-fib add overflow" (caught? (fn () (tfib 91 0 1)))
+
+assert "tail-fib in range" (tfib 30 0 1) 832040
+
+def jmul (x):
+  * x 7
+
+assert-true "JIT leaf-mul overflow" (caught? (fn () (jmul 1000000000000000000)))
+
+assert "JIT leaf-mul in range" (jmul 5) 35
 
 assert "rational literal" 1/3 (rational 1 3)
 

@@ -152,6 +152,27 @@ static exp_t *rat_binop(char op, exp_t *a, exp_t *b, const char **err) {
   return r;
 }
 
+/* Overflow-checked fixnum arithmetic: *acc = *acc <op> b. Returns 1 on int64
+   overflow (caller raises — no silent wrap, no implicit float). Division by
+   zero is handled by the caller; INT64_MIN / -1 is flagged as overflow. The
+   61-bit fixnum-tag range is checked separately via FIX_FITS on the result. */
+static inline int fix_op_ovf(char op, int64_t *acc, int64_t b) {
+  switch (op) {
+  case '+':
+    return __builtin_add_overflow(*acc, b, acc);
+  case '-':
+    return __builtin_sub_overflow(*acc, b, acc);
+  case '*':
+    return __builtin_mul_overflow(*acc, b, acc);
+  case '/':
+    if (*acc == INT64_MIN && b == -1)
+      return 1;
+    *acc /= b;
+    return 0;
+  }
+  return 0;
+}
+
 static inline double apply_op_d(char op, double a, double b) {
   switch (op) {
   case '+':

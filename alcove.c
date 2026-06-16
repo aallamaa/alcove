@@ -1800,9 +1800,12 @@ inline exp_t *make_integer(char *str) {
   int64_t fix_max = ((int64_t)1 << 60) - 1;
   int64_t fix_min = -((int64_t)1 << 60);
   if (errno == ERANGE || v > fix_max || v < fix_min) {
-    /* Out of fixnum range — fall through to float. strtod handles the
-       same digit string and gives the closest double. */
-    return make_floatf(strtod(str, &end));
+    /* Out of fixnum range. Explicit over implicit: an integer literal that
+       doesn't fit is an error, not a silent float — write a float literal
+       (1e24), a rational (n/d), or a decimal (...m) if that's what you mean. */
+    return error(ERROR_ILLEGAL_VALUE, NULL, NULL,
+                 "integer literal out of range (exceeds the fixnum range; "
+                 "write a float, rational, or decimal)");
   }
   return MAKE_FIX((int64_t)v);
 }
@@ -4365,7 +4368,13 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
         } else {                                                               \
           if (isnumber(v)) {                                                   \
             if (i > 1 || (init_i) != 0) {                                      \
-              sum_i OP FIX_VAL(v);                                             \
+              if (fix_op_ovf((OP_CHAR), &sum_i, FIX_VAL(v))) {                  \
+                ret = error(ERROR_ILLEGAL_VALUE, e, env,                        \
+                            "integer overflow (no implicit float; use a "      \
+                            "float, rational, or decimal)");                   \
+                unrefexp(v);                                                   \
+                goto finish;                                                   \
+              }                                                                \
             } else {                                                           \
               sum_i = FIX_VAL(v);                                              \
             }                                                                  \
@@ -4442,16 +4451,17 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
         if (saw_float) {                                                       \
           sum_f = -sum_f;                                                      \
         } else {                                                               \
-          int64_t _neg = -sum_i;                                               \
-          /* Detect fixnum range overflow: if the negation doesn't             \
-             round-trip through the 61-bit tag (arithmetic shift),             \
-             promote to float. Uses signed cast before >>3 to match FIX_VAL. */\
-          if (!FIX_FITS(_neg)) { /* pointer-width-correct; not a 64-bit-only check */ \
-            sum_f = -(expfloat)sum_i;                                          \
-            saw_float = 1;                                                     \
-          } else {                                                             \
-            sum_i = _neg;                                                      \
+          int64_t _neg;                                                        \
+          /* Negation that leaves the 61-bit fixnum range errors — no implicit \
+             float (explicit over implicit). */                                \
+          if (__builtin_sub_overflow((int64_t)0, sum_i, &_neg) ||              \
+              !FIX_FITS(_neg)) {                                               \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
+                        "integer overflow (no implicit float; use a float, "   \
+                        "rational, or decimal)");                              \
+            goto finish;                                                       \
           }                                                                    \
+          sum_i = _neg;                                                        \
         }                                                                      \
       } else if (IS_DIV) {                                                     \
         if (saw_float) {                                                       \
@@ -4469,14 +4479,22 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
         }                                                                      \
       }                                                                        \
     }                                                                          \
-    ret = saw_float ? make_floatf(sum_f) : make_integeri(sum_i);               \
+    if (saw_float)                                                             \
+      ret = make_floatf(sum_f);                                                \
+    else if (!FIX_FITS(sum_i)) /* result left the 61-bit fixnum range */       \
+      ret = error(ERROR_ILLEGAL_VALUE, e, env,                                 \
+                  "integer overflow (no implicit float; use a float, "         \
+                  "rational, or decimal)");                                    \
+    else                                                                       \
+      ret = make_integeri(sum_i);                                              \
   finish:                                                                      \
     unrefexp(e);                                                               \
     return ret;                                                                \
   }
 
 const char doc_plus[] =
-    "(+ x ...) — sum of all args. (+) is 0. Mixed int/float promotes to float.";
+    "(+ x ...) — sum of all args. (+) is 0. Integer overflow errors (no "
+    "implicit float); mix in a float for inexact math.";
 MATH_CMD(pluscmd, 0, +=, 0, 0, '+')
 
 const char doc_mul[] = "(* x ...) — product of all args. (*) is 1.";
@@ -4682,6 +4700,7 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
     /* Integer fast path: both args fixnums, exponent non-negative, and
        the running product never overflows int64 nor escapes int61.
        Repeated squaring; falls through to pow() if any step overflows. */
+    int int_overflow = 0;
     if (isnumber(v) && isnumber(v2)) {
       int64_t k = FIX_VAL(v2);
       if (k >= 0) {
@@ -4697,14 +4716,22 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
           if (k > 0 && !overflow)
             overflow |= __builtin_mul_overflow(base, base, &base);
         }
-        if (!overflow && r >= fix_min && r <= fix_max) {
+        if (!overflow && r >= fix_min && r <= fix_max)
           ret = MAKE_FIX(r);
-        }
+        else
+          int_overflow = 1; /* integer result doesn't fit — error, no float */
       }
+      /* k < 0: a negative exponent is a fractional result (2^-1 = 0.5), not an
+         overflow — that still yields a float below. */
     }
     if (!ret) {
-      ret = make_floatf(pow(isfloat(v) ? v->f : (double)FIX_VAL(v),
-                            isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
+      if (int_overflow)
+        ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                    "integer overflow in expt (no implicit float; use a float "
+                    "base or exponent for an inexact result)");
+      else
+        ret = make_floatf(pow(isfloat(v) ? v->f : (double)FIX_VAL(v),
+                              isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
     }
   } else {
     ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
@@ -9382,11 +9409,15 @@ l_unbind_slot: {
       RUNTIME_ERR(opname);                                                     \
     }                                                                          \
   } while (0)
-#define BIN_ARITH(op, opname)                                                  \
+#define BIN_ARITH(op, opchar, opname)                                          \
   do {                                                                         \
     exp_t *b = POP(), *a = POP();                                              \
     if (isnumber(a) && isnumber(b)) {                                          \
-      PUSH(MAKE_FIX(FIX_VAL(a) op FIX_VAL(b)));                                \
+      int64_t _r = FIX_VAL(a);                                                 \
+      if (fix_op_ovf((opchar), &_r, FIX_VAL(b)) || !FIX_FITS(_r))              \
+        RUNTIME_ERR("integer overflow (no implicit float; use a float, "      \
+                    "rational, or decimal)"); /* identical to the AST msg */  \
+      PUSH(MAKE_FIX(_r));                                                      \
     } else {                                                                   \
       double da, db;                                                           \
       COERCE_TO_DOUBLE(a, da, "Illegal value in " opname);                     \
@@ -9396,13 +9427,13 @@ l_unbind_slot: {
   } while (0)
 
 l_add:
-  BIN_ARITH(+, "+");
+  BIN_ARITH(+, '+', "+");
   NEXT;
 l_sub:
-  BIN_ARITH(-, "-");
+  BIN_ARITH(-, '-', "-");
   NEXT;
 l_mul:
-  BIN_ARITH(*, "*");
+  BIN_ARITH(*, '*', "*");
   NEXT;
 l_div: {
   exp_t *b = POP(), *a = POP();
@@ -9836,12 +9867,21 @@ l_list: {
       RUNTIME_ERR("Illegal value in " opname);                                 \
   } while (0)
 
+/* Overflow-checked fixnum slot±imm: error rather than wrap or implicit float. */
+#define SLOT_FIX_CHECKED(opchar)                                               \
+  do {                                                                         \
+    int64_t _r = FIX_VAL(a);                                                   \
+    if (fix_op_ovf((opchar), &_r, (int64_t)imm) || !FIX_FITS(_r))              \
+      RUNTIME_ERR("integer overflow (no implicit float; use a float, "         \
+                  "rational, or decimal)");                                    \
+    PUSH(MAKE_FIX(_r));                                                        \
+  } while (0)
 l_slot_add_fix:
-  SLOT_FIX_NUMERIC(PUSH(MAKE_FIX(FIX_VAL(a) + imm)),
+  SLOT_FIX_NUMERIC(SLOT_FIX_CHECKED('+'),
                    PUSH(make_floatf(da + (double)imm)), "+");
   NEXT;
 l_slot_sub_fix:
-  SLOT_FIX_NUMERIC(PUSH(MAKE_FIX(FIX_VAL(a) - imm)),
+  SLOT_FIX_NUMERIC(SLOT_FIX_CHECKED('-'),
                    PUSH(make_floatf(da - (double)imm)), "-");
   NEXT;
 l_slot_lt_fix:

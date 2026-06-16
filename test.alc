@@ -1609,7 +1609,7 @@
 (assert "expt 1^N = 1"                (expt 1 100)                   1)
 (assert "expt N^0 = 1"                (expt 99 0)                    1)
 (assert "** alias"                    (** 3 4)                       81)
-(assert "expt int overflow → float"   (iso (expt 2 80) (** 2 80))    t)
+(assert-true "expt int overflow errors" (error? (try (expt 2 80) (fn (e) e))))
 (assert "sqrt-int"                    (sqrt-int 100)                 10)
 (assert "sqrt-int floor"              (sqrt-int 99)                  9)
 (assert "sqrt-int 0"                  (sqrt-int 0)                   0)
@@ -4047,6 +4047,43 @@
 (assert-true "ns explicit slash not double-qualified"
              (do (ns nstest) (def nstest/already () 1) (ns)
                  (no (error? (try (nstest/already) (fn (e) e))))))
+
+;; ====================================================================
+;; Integer overflow is an ERROR, never a silent wrap or implicit float
+;; (explicit over implicit). Covers +,-,*, unary negate, expt, and the
+;; integer literal — exercised through the AST, the bytecode VM, and the
+;; JIT shapes (factorial / fibonacci / leaf op) via deep enough recursion.
+;; FIXMAX = 2^60-1 = 1152921504606846975.
+;; ====================================================================
+(def caught? (thunk) (error? (try (thunk) (fn (e) e))))
+(assert-true "+ overflow errors"      (caught? (fn () (+ 1152921504606846975 1))))
+(assert-true "* overflow errors"      (caught? (fn () (* 1000000000000 1000000000000))))
+(assert-true "- underflow errors"     (caught? (fn () (- -1152921504606846976 1))))
+(assert-true "unary negate overflow"  (caught? (fn () (- -1152921504606846976))))
+(assert "near-max + still ok"         (+ 1152921504606846974 1)  1152921504606846975)
+(assert "product in range ok"         (* 1000000000 1000000000)  1000000000000000000)
+;; expt: integer overflow errors; float base/exponent or in-range still fine
+(assert-true "expt overflow errors"   (caught? (fn () (expt 2 80))))
+(assert "expt in range"               (expt 2 40)                1099511627776)
+(assert "expt float base ok"          (expt 2.0 80)              (** 2.0 80))
+;; (an oversize integer literal is a parse-time error — validated via the CLI,
+;;  since it can't be embedded inline without failing the whole-file read.)
+(assert "max fixnum literal ok"       1152921504606846975        1152921504606846975)
+;; mixed with an explicit float is NOT overflow — float wins, as written
+(assert "int + float stays float"     (+ 1152921504606846975 1.0) 1.152921504606847e18)
+;; JIT shapes deopt + raise (factorial / fibonacci / leaf), matching the VM
+(def jfact (n) (if (< n 2) 1 (* n (jfact (- n 1)))))
+(assert-true "JIT factorial overflow" (caught? (fn () (jfact 25))))
+(assert "JIT factorial in range"      (jfact 10)                 3628800)
+;; tail-recursive (LINEAR) fib so the overflow is reached in O(n) — a naive
+;; two-call fib(91) is exponential and only terminates under the JIT's
+;; iterative fold, hanging the non-JIT variants. The (+ a b) overflows ~fib(91).
+(def tfib (n a b) (if (is n 0) a (tfib (- n 1) b (+ a b))))
+(assert-true "tail-fib add overflow"  (caught? (fn () (tfib 91 0 1))))
+(assert "tail-fib in range"           (tfib 30 0 1)              832040)
+(def jmul (x) (* x 7))
+(assert-true "JIT leaf-mul overflow"  (caught? (fn () (jmul 1000000000000000000))))
+(assert "JIT leaf-mul in range"       (jmul 5)                   35)
 
 ;; ====================================================================
 ;; Rationals — exact int64/int64 fractions (numeric.h). Constructor + n/d

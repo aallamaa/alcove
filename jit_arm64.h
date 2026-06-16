@@ -128,6 +128,40 @@ __attribute__((unused)) static uint32_t arm64_sub_reg(int rd, int rn, int rm) {
 static uint32_t arm64_cmp_reg(int rn, int rm) {
   return 0xEB000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) | 31u;
 }
+/* Flag-setting arithmetic for integer-overflow detection (no jo on arm64 — we
+   read the V flag with B.VS, or compare the SMULH high word for MUL). */
+/* ADDS Xd, Xn, #imm12 (sets NZCV). */
+static uint32_t arm64_adds_imm(int rd, int rn, int imm) {
+  return 0xB1000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* SUBS Xd, Xn, #imm12 (sets NZCV). */
+static uint32_t arm64_subs_imm(int rd, int rn, int imm) {
+  return 0xF1000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* ADDS Xd, Xn, Xm (register, no shift; sets NZCV). */
+static uint32_t arm64_adds_reg(int rd, int rn, int rm) {
+  return 0xAB000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* ADDS Xd, XZR, Xm, LSL #sh — re-tag (v<<sh) that sets V on signed overflow. */
+static uint32_t arm64_adds_lsl_zr(int rd, int rm, int sh) {
+  return 0xAB000000u | ((uint32_t)rm << 16) | ((uint32_t)(sh & 0x3f) << 10) |
+         (31u << 5) | (uint32_t)rd;
+}
+/* SMULH Xd, Xn, Xm — signed high 64 bits of the 128-bit product. */
+static uint32_t arm64_smulh(int rd, int rn, int rm) {
+  return 0x9B407C00u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
+         (uint32_t)rd;
+}
+/* CMP Xn, Xm, ASR #sh — alias SUBS XZR, Xn, Xm, ASR #sh (sets NZCV). */
+static uint32_t arm64_cmp_reg_asr(int rn, int rm, int sh) {
+  return 0xEB800000u | ((uint32_t)rm << 16) | ((uint32_t)(sh & 0x3f) << 10) |
+         ((uint32_t)rn << 5) | 31u;
+}
+#define ARM64_COND_NE 0x1
+#define ARM64_COND_VS 0x6 /* overflow set */
 /* ASR Xd, Xn, #shift  (arithmetic shift right; sign-extends top bit).
    Encoded via SBFM Xd, Xn, #shift, #63. */
 static uint32_t arm64_asr_imm(int rd, int rn, int shift) {
@@ -357,6 +391,26 @@ __attribute__((unused)) static uint32_t arm64_fcmp_d_zero(int dn) {
     out[n++] = arm64_orr_imm_bit0(0, 0);       /* x0 |= 1 (fixnum tag) */      \
     out[n++] = arm64_ret();                                                    \
   } while (0)
+
+/* Checked re-tag: x0 = (src<<3)|1, with a round-trip test that the value fits
+   the 61-bit range — (src<<3)>>3 == src, else the shift dropped high bits.
+   (ADDS with a shifted operand can't be used: the barrel shifter computes
+   src<<3 mod 2^64 before the add, so 0+X never sets V.) Uses x9 as scratch
+   (caller-saved); reserves a B.NE slot at `ovf_slot` to patch toward deopt_pc. */
+#define ARM64_EMIT_RETAG_RET_CK(src_reg, ovf_slot)                             \
+  do {                                                                         \
+    out[n++] = arm64_lsl_imm(0, (src_reg), 3); /* x0 = src<<3 */               \
+    out[n++] = arm64_asr_imm(9, 0, 3);         /* x9 = x0 >>arith 3 */         \
+    out[n++] = arm64_cmp_reg(9, (src_reg));    /* round-trips? */              \
+    (ovf_slot) = n++;                          /* reserve B.NE deopt */        \
+    out[n++] = arm64_orr_imm_bit0(0, 0);                                       \
+    out[n++] = arm64_ret();                                                    \
+  } while (0)
+/* Patch a reserved B.cond branch word toward the shared deopt_pc. */
+#define PATCH_DEOPT_BNE(slot)                                                  \
+  (out[(slot)] = arm64_b_cond(ARM64_COND_NE, deopt_pc - (slot)))
+#define PATCH_DEOPT_BVS(slot)                                                  \
+  (out[(slot)] = arm64_b_cond(ARM64_COND_VS, deopt_pc - (slot)))
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs.
  */
@@ -1462,11 +1516,13 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
     out[cur] = arm64_b(loop_top - cur); /* b loop_top */
   }
 
-  /* done: x0 = (b << 3) | 1 (re-tag), ret. */
+  /* done: x0 = (b << 3) | 1 (re-tag), ret. Checked: a fib value beyond the
+     61-bit range overflows the shift and deopts to the VM, which raises. */
   int done_pc = n;
-  ARM64_EMIT_RETAG_RET(3);
+  int ovf_done;
+  ARM64_EMIT_RETAG_RET_CK(3, ovf_done);
 
-  /* base: re-tag x1 (untagged n) into x0, ret. */
+  /* base: re-tag x1 (untagged n) into x0, ret. n < K1 (small) → no overflow. */
   int base_pc = n;
   ARM64_EMIT_RETAG_RET(1);
 
@@ -1481,6 +1537,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_done] = arm64_b_cond(12, done_pc - patch_done);
   out[patch_base] = arm64_b_cond(exit_cc, base_pc - patch_base);
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  PATCH_DEOPT_BNE(ovf_done);
 
   JIT_GUARD(32);
   *outn = n;
@@ -1547,7 +1604,13 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_cmp_imm(1, (int)K1);
   int patch_done = n;
   out[n++] = 0;                  /* b.<exit_cc> done */
-  out[n++] = arm64_mul(2, 2, 1); /* acc *= n */
+  /* acc *= n (untagged). Detect int64 overflow of the product via SMULH (high
+     bits must be the sign-extension of the low bits); the 2^60..2^63 band is
+     caught at the checked re-tag below. */
+  out[n++] = arm64_smulh(9, 2, 1);          /* x9 = high(acc*n) */
+  out[n++] = arm64_mul(2, 2, 1);            /* x2 = low(acc*n)  */
+  out[n++] = arm64_cmp_reg_asr(9, 2, 63);   /* high == sext(low)? */
+  int ovf_mul = n++;                        /* reserve B.NE deopt */
   if (step_op == OP_SLOT_SUB_FIX)
     out[n++] = arm64_sub_imm(1, 1, k2_abs);
   else
@@ -1558,13 +1621,16 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   }
 
   int done_pc = n;
-  ARM64_EMIT_RETAG_RET(2);
+  int ovf_tag;
+  ARM64_EMIT_RETAG_RET_CK(2, ovf_tag);
 
   int deopt_pc = n;
   ARM64_EMIT_DEOPT();
 
   out[patch_done] = arm64_b_cond(exit_cc, done_pc - patch_done);
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  PATCH_DEOPT_BNE(ovf_mul);
+  PATCH_DEOPT_BNE(ovf_tag);
 
   JIT_GUARD(32);
   *outn = n;
@@ -2723,14 +2789,21 @@ int jit_compile(bytecode_t *bc) {
       insns[n++] = arm64_ldr_imm(0, 0, slot_off);
       int patch_tbz = n;
       insns[n++] = 0;                      /* tbz x0,#0,deopt */
-      insns[n++] = arm64_sub_imm(0, 0, 1); /* drop tag bit */
+      insns[n++] = arm64_sub_imm(0, 0, 1); /* drop tag bit -> x0 = v<<3 */
       n += emit_mov64(insns + n, 1,
                       (uint64_t)(int64_t)k); /* x1 = K (sign-ext) */
-      insns[n++] = arm64_mul(0, 0, 1);       /* x0 = (v<<3) * K = (v*K)<<3 */
-      insns[n++] = arm64_add_imm(0, 0, 1);   /* re-tag */
+      /* (v<<3)*K overflows int64 iff v*K leaves the 61-bit range — SMULH high
+         must equal the sign-extension of the low word, else deopt. */
+      insns[n++] = arm64_smulh(9, 0, 1);        /* high((v<<3)*K) */
+      insns[n++] = arm64_mul(0, 0, 1);          /* low = (v*K)<<3 */
+      insns[n++] = arm64_cmp_reg_asr(9, 0, 63); /* high == sext(low)? */
+      int patch_ovf = n;
+      insns[n++] = 0;                      /* b.ne deopt */
+      insns[n++] = arm64_add_imm(0, 0, 1); /* re-tag */
       insns[n++] = arm64_ret();
       int deopt_pc = n;
       insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+      insns[patch_ovf] = arm64_b_cond(ARM64_COND_NE, deopt_pc - patch_ovf);
       /* ARM64_EMIT_DEOPT() cannot be used here: this dispatcher uses
          insns[], while the macro references `out` (the shape emitter param). */
       insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
@@ -2742,11 +2815,15 @@ int jit_compile(bytecode_t *bc) {
       insns[n++] = arm64_ldr_imm(0, 0, slot_off);
       int patch_tbz = n;
       insns[n++] = 0; /* tbz x0,#0,deopt */
-      insns[n++] = (c[5] == OP_ADD) ? arm64_add_imm(0, 0, delta)
-                                    : arm64_sub_imm(0, 0, delta);
+      /* ADDS/SUBS so a tagged result outside the 61-bit range sets V -> deopt. */
+      insns[n++] = (c[5] == OP_ADD) ? arm64_adds_imm(0, 0, delta)
+                                    : arm64_subs_imm(0, 0, delta);
+      int patch_ovf = n;
+      insns[n++] = 0; /* b.vs deopt */
       insns[n++] = arm64_ret();
       int deopt_pc = n;
       insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+      insns[patch_ovf] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf);
       /* See comment above — ARM64_EMIT_DEOPT() uses `out`, not `insns`. */
       insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
       insns[n++] = arm64_ret();
@@ -2762,11 +2839,15 @@ int jit_compile(bytecode_t *bc) {
     insns[n++] = arm64_ldr_imm(0, 0, slot_off);
     int patch_tbz = n;
     insns[n++] = 0; /* tbz x0,#0,deopt */
-    insns[n++] = (c[0] == OP_SLOT_ADD_FIX) ? arm64_add_imm(0, 0, delta)
-                                           : arm64_sub_imm(0, 0, delta);
+    /* ADDS/SUBS so a tagged result outside the 61-bit range sets V -> deopt. */
+    insns[n++] = (c[0] == OP_SLOT_ADD_FIX) ? arm64_adds_imm(0, 0, delta)
+                                           : arm64_subs_imm(0, 0, delta);
+    int patch_ovf = n;
+    insns[n++] = 0; /* b.vs deopt */
     insns[n++] = arm64_ret();
     int deopt_pc = n;
     insns[patch_tbz] = arm64_tbz(0, 0, deopt_pc - patch_tbz);
+    insns[patch_ovf] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf);
     /* See comment above — ARM64_EMIT_DEOPT() uses `out`, not `insns`. */
     insns[n++] = arm64_movz(0, 0, 0); /* x0 = NULL */
     insns[n++] = arm64_ret();
