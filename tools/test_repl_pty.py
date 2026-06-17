@@ -136,6 +136,20 @@ def run_dialect(binary, dialect):
           "In[1]: (+ 1 2)" in nbc and "Error: Illegal division by 0" in nbc)
 
 
+def run_doc(binary, dialect):
+    """M-d/doc-under-cursor: type a builtin name, fire the handler, expect ITS
+    doc (not the literal 'tok', and nothing when the token is empty). Bound to
+    C-t here because a single control byte triggers reliably over a pty, while
+    an ESC-prefixed meta key (M-d) does not."""
+    init = ('require("repl")\nrepl/install-all()\nbind-key "C-t" repl/doc-here\n')
+    if binary.endswith("alcove"):
+        init = ('(require "repl")\n(repl/install-all)\n(bind-key "C-t" repl/doc-here)\n')
+    raw, _ = drive(binary, init, ["prn\x14"])  # type "prn", then C-t (0x14)
+    clean = ANSI.sub("", raw)
+    check(f"{dialect}: doc-under-cursor docs the token", "like pr, then a newline" in clean)
+    check(f"{dialect}: doc-under-cursor not the literal 'tok'", "for 'tok'" not in clean)
+
+
 def run_graceful(binary, dialect):
     """A nil / erroring hook must never brick the REPL."""
     init = (
@@ -163,6 +177,7 @@ def main():
             failed += 1
             continue
         run_dialect(binary, dialect)
+        run_doc(binary, dialect)
         run_graceful(binary, dialect)
     print(f"checks: {passed} passed, {failed} failed")
     if failed == 0:

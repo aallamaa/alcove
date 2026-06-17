@@ -97,9 +97,10 @@ def repl/kill-to-eol():
   (repl-delete (repl-point) (repl-end))
 def repl/doc-here():              # docs for the symbol under the cursor
   with (tok (repl/token-before-point)):
-    if (> (length tok) 0):
-      (prn "")
-      (doc tok)
+    # NB: `if cond:` with TWO body lines is Arc-style (if cond THEN ELSE), so a
+    # two-statement then-branch must be one (do ...) or the 2nd line becomes the
+    # ELSE. apply (not (doc tok)) so tok's string VALUE is documented, not "tok".
+    (if (> (length tok) 0) (do (prn "") (apply doc (list tok))))
     (repl-refresh)
 def repl/show-hud():
   (prn "")
