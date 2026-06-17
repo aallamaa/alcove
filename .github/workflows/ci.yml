@@ -87,3 +87,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
       - name: JIT vs VM byte-identical fuzz
         run: make jit-fuzz
+
+  # Generative whole-program differential fuzzer for the evaluator/VM/JIT:
+  # random terminating/pure programs across the full breadth of constructs,
+  # each checked AST==VM byte-identical under nojit + jit + an ASan/UBSan build
+  # (no crash, sanitizer-clean). The reader/transpiler/msgpack have libFuzzer
+  # targets; this is the only adversarial-program gate over the eval path.
+  eval-fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
+      - name: AST vs VM byte-identical program fuzz (+ ASan)
+        run: make eval-fuzz

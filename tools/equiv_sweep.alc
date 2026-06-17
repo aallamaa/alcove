@@ -312,6 +312,23 @@
 (equiv "cdr-empty isnil" (iso (cdr (list 1)) nil))
 (equiv "if-no-match nil" (iso (if nil 1) nil))
 (equiv "case-no-match"  (iso (case 9 1 "a") nil))
+;; length parity: the AST lengthcmd must mirror the VM's inline l_length for
+;; vector/blob args and for the empty list produced by cdr (C NULL, not the
+;; nil literal). Before the fix the AST path errored where the VM returned 0/n.
+(equiv "length vector"  (length (vector 1 2 3)))
+(equiv "length vec empty" (length (vector)))
+(equiv "length blob"    (length (string->blob "hello")))
+(equiv "length cdr-nil" (length (cdr nil)))
+(equiv "length cdr-1"   (length (cdr (list 5))))
+(equiv "length nil lit" (length nil))
+;; numeric-tower error parity (these used to UAF the form on the error path —
+;; build-error-before-unref; the eval fuzzer is the cumulative-crash guard).
+(equiv "dec+float refuse" (error? (+ (decimal "10.0") 10.0)))
+(equiv "dec*float refuse" (error? (* (decimal "1.5") 2.0)))
+(equiv "rat+nonnum refuse" (error? (+ (rational 1 3) "x")))
+(equiv "tower mixed expr" (error? (- (+ (* (rational 5 3) (rational 3 3))
+                                        (* 1.0 0.5))
+                                     (+ (decimal "10.0") 10.0))))
 
 ;; ── quasiquote nested / edge ──────────────────────────────────────────────
 (equiv "qq nested"      `(1 (2 ,(+ 1 2)) ,(* 2 3)))

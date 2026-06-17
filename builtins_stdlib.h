@@ -165,8 +165,9 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
   exp_t *name(exp_t *e, env_t *env) {                                          \
     exp_t *cur = e->next;                                                      \
     if (!cur) {                                                                \
-      unrefexp(e);                                                             \
-      return error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)");        \
+      exp_t *er = error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)");    \
+      unrefexp(e); /* error() refs e; drop ours after (else UAF) */            \
+      return er;                                                               \
     }                                                                          \
     exp_t *best = EVAL(cur->content, env);                                     \
     if (iserror(best)) {                                                       \
@@ -184,10 +185,12 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
       int err;                                                                 \
       int lt = (is_lt) ? alc_numlt(v, best, &err) : alc_numlt(best, v, &err);  \
       if (err) {                                                               \
+        exp_t *er =                                                            \
+            error(ERROR_ILLEGAL_VALUE, e, env, err_name ": non-numeric");      \
         unrefexp(best);                                                        \
         unrefexp(v);                                                           \
         unrefexp(e);                                                           \
-        return error(ERROR_ILLEGAL_VALUE, e, env, err_name ": non-numeric");   \
+        return er;                                                             \
       }                                                                        \
       if (lt) {                                                                \
         unrefexp(best);                                                        \
@@ -207,32 +210,45 @@ MINMAX_CMD(maxcmd, 0, "max")
 const char doc_min[] = "(min x ...) — smallest of the args.";
 MINMAX_CMD(mincmd, 1, "min")
 
-/* (length x) — list length, string length, or 0 for nil. */
-const char doc_length[] = "(length x) — element count of a list/string/vector.";
+/* (length x) — element count of a list/string/vector/blob, or 0 for nil.
+   MUST mirror the VM's inline l_length (alcove.c) exactly, or `length`
+   diverges between the AST interpreter and compiled bodies — an empty list
+   from cdr (C NULL), a vector, or a blob counts compiled but errored
+   interpreted. The differential eval fuzzer guards this parity. */
+const char doc_length[] =
+    "(length x) — element count of a list/string/vector/blob.";
 exp_t *lengthcmd(exp_t *e, env_t *env) {
   exp_t *ret = NULL;
-  EVAL_ARG_1(a);
-  if (a) {
-    int64_t n = 0;
-    if (isstring(a)) {
-      const char *_t = exp_text(a);
-      n = _t ? utf8_strlen(_t) : 0;
-    } else if (a == nil_singleton)
-      n = 0;
-    else if (ispair(a)) {
-      exp_t *cur = a;
-      while (cur && cur->content) {
-        n++;
-        cur = cur->next;
-      }
-    } else {
-      ret = error(ERROR_ILLEGAL_VALUE, e, env, "length: not a list/string");
-      goto done;
-    }
-    ret = MAKE_FIX(n);
-  } else
+  if (!e->next) { /* truly missing argument (vs an arg that evaluates to nil) */
     ret = error(ERROR_MISSING_PARAMETER, e, env, "(length x)");
-done:
+    unrefexp(e);
+    return ret;
+  }
+  EVAL_ARG_1(a);
+  int64_t n = 0;
+  if (a == NULL || a == nil_singleton) {
+    n = 0;
+  } else if (isstring(a)) {
+    const char *_t = exp_text(a);
+    n = _t ? utf8_strlen(_t) : 0;
+  } else if (ispair(a)) {
+    exp_t *cur = a;
+    while (is_ptr(cur) && cur->type == EXP_PAIR) {
+      n++;
+      cur = cur->next;
+    }
+  } else if (is_ptr(a) && a->type == EXP_VECTOR && a->ptr) {
+    n = vec_len(a);
+  } else if (isblob(a)) {
+    n = a->ptr ? (int64_t)((alc_blob_t *)a->ptr)->len : 0;
+  } else if (islist(a)) {
+    n = a->ptr ? (int64_t)((alc_list_t *)a->ptr)->len : 0;
+  } else {
+    ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                "length: not a list/string/vector/blob");
+    CLEAN_RETURN_1(a, ret);
+  }
+  ret = MAKE_FIX(n);
   CLEAN_RETURN_1(a, ret);
 }
 

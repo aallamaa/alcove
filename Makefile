@@ -639,6 +639,19 @@ fuzz:
 jit-fuzz:
 	python3 jit_fuzz.py $(JITFUZZ_ARGS)
 
+# Generative whole-program differential fuzzer for the evaluator/VM/JIT. The
+# reader/transpiler/msgpack are fuzzed, but the eval path only had equiv_sweep's
+# fixed form-set and jit_fuzz's narrow loop shapes. eval_fuzz.py generates a
+# large batch of random TERMINATING, PURE programs across the full breadth of
+# constructs (arithmetic, the numeric tower, conditionals, let, lists, vectors,
+# strings, HOFs, bounded recursion, quasiquote) and asserts each is
+# byte-identical AST==VM (msgpack, type+bit exact), under nojit + jit + an
+# ASan/UBSan build (memory-safe, no crash). Found the length vector/blob/cdr-nil
+# AST divergence and the numeric-tower error-path use-after-free. Tune via
+# EVALFUZZ_ARGS (e.g. --seed N --count N --no-asan).
+eval-fuzz:
+	python3 tools/eval_fuzz.py $(EVALFUZZ_ARGS)
+
 # Adder transpiler (adr.h) tests. adr.h is self-contained string->string, so
 # this links nothing else. unit tests + bounded deterministic fuzz, under ASan.
 adr-test:
@@ -733,4 +746,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

@@ -4211,9 +4211,14 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
       else if (isrational(w))
         facc = apply_op_d(op, facc, rat_to_double(w));
       else {
+        /* error() refs `e` for the caret/backtrace, so build it BEFORE
+           dropping our own ref (unrefexp(e) first would free e, then
+           error()'s refexp(e) would resurrect a freed node — a UAF that
+           corrupts refcounts cumulatively). */
+        exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
         unrefexp(w);
         unrefexp(e);
-        return error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+        return er;
       }
       unrefexp(w);
       continue;
@@ -4232,21 +4237,26 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
       unrefexp(acc);
       unrefexp(w);
       if (err) {
-        unrefexp(e);
-        return error(err[0] == 'd' ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
-                     err[0] == 'd' ? "Illegal division by 0"
-                                   : "exact arithmetic overflow (no bignum; use "
-                                     "float for inexact)");
+        exp_t *er =
+            error(err[0] == 'd' ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
+                  err[0] == 'd' ? "Illegal division by 0"
+                                : "exact arithmetic overflow (no bignum; use "
+                                  "float for inexact)");
+        unrefexp(e); /* error() holds its own ref to e; drop ours after */
+        return er;
       }
       acc = r;
       continue;
     }
     /* rational/decimal mixing and non-numbers: refuse (two exact systems don't
        silently combine; non-numbers are type errors). */
-    unrefexp(w);
-    unrefexp(acc);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+    {
+      exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+      unrefexp(w);
+      unrefexp(acc);
+      unrefexp(e);
+      return er;
+    }
   }
   if (saw_float) {
     unrefexp(e);
@@ -4263,10 +4273,12 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
     if (is_sub || is_div) {
       unrefexp(acc);
       if (err) {
+        exp_t *er =
+            error(err[0] == 'd' ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
+                  err[0] == 'd' ? "Illegal division by 0"
+                                : "exact arithmetic overflow");
         unrefexp(e);
-        return error(err[0] == 'd' ? ERROR_DIV_BY0 : ERROR_ILLEGAL_VALUE, e, env,
-                     err[0] == 'd' ? "Illegal division by 0"
-                                   : "exact arithmetic overflow");
+        return er;
       }
       acc = r;
     }
@@ -4302,12 +4314,15 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
     } else if (isnumber(w)) {
       wd = make_decimal_raw((__int128)FIX_VAL(w), 0, &over); /* fits: int64 */
     } else { /* float or rational: strict refusal */
+      /* build the error before unref'ing e (error() refs e; freeing it first
+         would make that refexp resurrect a freed node — cumulative UAF). */
+      exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env,
+                        "decimal does not combine with float or rational "
+                        "(convert explicitly)");
       unrefexp(w);
       unrefexp(acc);
       unrefexp(e);
-      return error(ERROR_ILLEGAL_VALUE, e, env,
-                   "decimal does not combine with float or rational "
-                   "(convert explicitly)");
+      return er;
     }
     exp_t *r = dec_binop(op, acc, wd, &over);
     unrefexp(acc);
@@ -4315,8 +4330,9 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
       unrefexp(wd);
     unrefexp(w);
     if (over) {
+      exp_t *er = dec_err(e, env, over);
       unrefexp(e);
-      return dec_err(e, env, over);
+      return er;
     }
     acc = r;
   }
@@ -4326,8 +4342,9 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
       exp_t *r = make_decimal_raw(-d->coef, d->scale, &over);
       unrefexp(acc);
       if (over) {
+        exp_t *er = dec_err(e, env, over);
         unrefexp(e);
-        return dec_err(e, env, over);
+        return er;
       }
       acc = r;
     } else if (is_div) {
@@ -4336,8 +4353,9 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
       unrefexp(one);
       unrefexp(acc);
       if (over) {
+        exp_t *er = dec_err(e, env, over);
         unrefexp(e);
-        return dec_err(e, env, over);
+        return er;
       }
       acc = r;
     }
