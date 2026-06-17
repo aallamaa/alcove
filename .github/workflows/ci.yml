@@ -34,6 +34,20 @@ jobs:
           done
           echo "::group::adr-test"; make adr-test; echo "::endgroup::"
 
+  # Full interpreter (jit variant) under ASan+UBSan. test-all runs the
+  # evaluator/VM/JIT WITHOUT sanitizers; this is the only job that exercises the
+  # HOT PATH under instrumentation, so a memory-safety/UB bug there can't pass
+  # CI silently. Runs the whole test.alc / test.adr; leaks are off (intentional
+  # global/arena retention at exit; per-alloc leaks are covered by the unit job).
+  asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
+      - name: Hot path under ASan+UBSan (make test-asan)
+        run: make test-asan
+
   # wasm/Emscripten build + node smoke battery (asserts results == native).
   wasm:
     runs-on: ubuntu-latest

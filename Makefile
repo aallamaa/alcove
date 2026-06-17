@@ -247,6 +247,39 @@ deps:
 # failure or crash (test.alc prints "TEST RESULT: N passed, M failed";
 # M must be 0). Then the ffi examples. For the cross-variant matrix use
 # `make test-all`.
+# Full interpreter (jit variant) under ASan + UBSan. The cross-variant `test-all`
+# runs the evaluator/VM/JIT WITHOUT sanitizers — only the isolated *-test C
+# harnesses get them — so a memory-safety/UB bug in the hot path would pass CI.
+# This closes that hole: build alcove + adder with -fsanitize=address,undefined
+# (UBSan set to abort via -fno-sanitize-recover) and run the full test.alc /
+# test.adr. Leak detection is OFF (the interpreter intentionally retains the
+# global env + exp_t arena blocks at exit; per-allocation leaks are covered by
+# the *-test unit harnesses). Fails on any sanitizer report, a non-zero exit, or
+# a non-"0 failed" result.
+ASAN_BUILD := -fno-strict-aliasing -g -O1 -fsanitize=address,undefined \
+              -fno-sanitize-recover=all
+test-asan:
+	$(CC) -Wall -W $(ASAN_BUILD) $(MARCH) $(JIT_FLAGS) -o alcove_asan alcove.c \
+	  $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(ASAN_BUILD) $(MARCH) $(JIT_FLAGS) -DALCOVE_ALS -o adder_asan \
+	  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	@ok=1; \
+	for spec in "alcove_asan test.alc" "adder_asan test.adr"; do \
+	  set -- $$spec; bin=$$1; f=$$2; \
+	  out=$$(ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	         ./$$bin --noload $$f 2>&1); rc=$$?; \
+	  res=$$(echo "$$out" | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	  if echo "$$out" | grep -qiE 'AddressSanitizer|runtime error:|LeakSanitizer'; then \
+	    echo "  SANITIZER REPORT [$$bin]:"; \
+	    echo "$$out" | grep -iE 'Sanitizer|runtime error:' | sed 's/^/    /' | head -8; ok=0; \
+	  elif [ $$rc -ne 0 ]; then echo "  NON-ZERO EXIT [$$bin] ($$rc): $$res"; ok=0; \
+	  else case "$$res" in *" 0 failed") echo "  OK [$$bin] — $$res (ASan+UBSan clean)";; \
+	    *) echo "  FAIL [$$bin] — $$res"; ok=0;; esac; fi; \
+	done; \
+	rm -f alcove_asan adder_asan; \
+	[ $$ok -eq 1 ] || { echo "==> test-asan FAILED"; exit 1; }
+	@echo "==> test-asan PASSED (hot path clean under ASan+UBSan)"
+
 test: parser
 	@tmp=/tmp/alcove-test.$$$$.out; \
 	./alcove --noload test.alc 2>&1 | tee "$$tmp"; \
@@ -700,4 +733,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
