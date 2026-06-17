@@ -1007,6 +1007,8 @@ exp_t *docmd(exp_t *e, env_t *env);
 exp_t *whencmd(exp_t *e, env_t *env);
 exp_t *whilecmd(exp_t *e, env_t *env);
 exp_t *repeatcmd(exp_t *e, env_t *env);
+exp_t *withtimelimitcmd(exp_t *e, env_t *env);
+extern const char doc_with_time_limit[];
 exp_t *andcmd(exp_t *e, env_t *env);
 exp_t *orcmd(exp_t *e, env_t *env);
 exp_t *nocmd(exp_t *e, env_t *env);

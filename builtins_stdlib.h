@@ -1960,6 +1960,11 @@ exp_t *whilecmd(exp_t *e, env_t *env) {
   exp_t *curi = cur;
   exp_t *ret = NULL;
   while (istrue(ret = EVAL(val, env)) && (!iserror(ret))) {
+    if (budget_exceeded()) { /* runaway-budget checkpoint (AST while) */
+      unrefexp(ret);
+      ret = error(ERROR_ILLEGAL_VALUE, e, env, "interrupted: time limit exceeded");
+      break;
+    }
     cur = curi;
     do {
       unrefexp(ret);
@@ -1979,6 +1984,35 @@ exp_t *whilecmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return NIL_EXP;
   }
+}
+
+const char doc_with_time_limit[] =
+    "(with-time-limit MS THUNK) — call (THUNK) with a wall-clock budget of MS "
+    "milliseconds; if it runs longer it is aborted with a catchable "
+    "\"interrupted: time limit exceeded\" error. Bounds runaway loops / tail "
+    "recursion (e.g. for untrusted or buggy code). Nested limits use the sooner "
+    "deadline. Only INTERPRETED (VM/AST) loops are bounded — a JIT'd numeric "
+    "loop is a terminating counting shape, and a runaway loop is not a JIT "
+    "shape, so it stays interruptible in the VM.";
+exp_t *withtimelimitcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(ms, thunk);
+  if (!ms || !isnumber(ms) || FIX_VAL(ms) <= 0)
+    CLEAN_RETURN_2(ms, thunk,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "with-time-limit: MS must be a positive integer (ms)"));
+  if (!thunk || !islambda(thunk))
+    CLEAN_RETURN_2(
+        ms, thunk,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "with-time-limit: second arg must be a thunk (0-arg lambda)"));
+  int64_t want = alc_monotonic_ms() + FIX_VAL(ms);
+  int64_t saved = g_deadline_ms;
+  /* nested: keep the SOONER deadline so an inner, larger limit can't loosen an
+     outer, tighter one */
+  g_deadline_ms = (saved && saved < want) ? saved : want;
+  exp_t *ret = alc_apply_n(thunk, 0, NULL, env); /* borrows thunk */
+  g_deadline_ms = saved;
+  CLEAN_RETURN_2(ms, thunk, ret);
 }
 
 const char doc_repeat[] = "(repeat n expr ...) — run body n times, returning "

@@ -445,6 +445,7 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("unless", unlesscmd, doc_unless),
     LISPCMD("while", whilecmd, doc_while),
     LISPCMD("repeat", repeatcmd, doc_repeat),
+    LISPCMD("with-time-limit", withtimelimitcmd, doc_with_time_limit),
     LISPCMD_TAIL("and", andcmd, doc_and),
     LISPCMD_TAIL("or", orcmd, doc_or),
     LISPCMD_TAIL("case", casecmd, doc_case),
@@ -1113,6 +1114,34 @@ static int stack_guard_exhausted(void) {
   }
   /* stack grows down on the supported targets: deeper frame => lower sp */
   return g_stack_base > sp && (g_stack_base - sp) > g_stack_budget;
+}
+
+/* ---- runaway-computation budget (Tier 1.4) --------------------------------
+   An optional wall-clock deadline that bounds a runaway loop / tail recursion
+   and raises a CATCHABLE "interrupted" error, so embedding untrusted or buggy
+   code can't hang the host. Off by default: g_deadline_ms == 0 makes the check
+   a single predicted-not-taken branch at loop back-edges, so straight-line and
+   JIT'd code pay nothing. When armed, the monotonic clock is sampled only once
+   per ~1024 back-edges, so even a tight VM loop pays ~one clock read / 1024
+   iterations. Per-thread (TLS) so each RESP reactor / embedding caller is
+   independent. NOTE: only INTERPRETED (VM/AST) loops are bounded — a JIT'd
+   numeric loop is a terminating counting shape by construction, and a runaway
+   (while t ...) / infinite tail loop is not a JIT shape, so it stays in the VM
+   where the check lives. */
+static ALCOVE_TLS int64_t g_deadline_ms = 0; /* 0 = unlimited; else abs mono-ms */
+static ALCOVE_TLS uint32_t g_budget_tick = 0;
+
+static int64_t alc_monotonic_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+static int budget_exceeded(void) {
+  if (!g_deadline_ms)
+    return 0;
+  if ((++g_budget_tick & 0x3FFu) != 0) /* sample the clock ~every 1024 edges */
+    return 0;
+  return alc_monotonic_ms() >= g_deadline_ms;
 }
 
 inline exp_t *refexp(exp_t *e) {
@@ -9892,6 +9921,9 @@ l_not: {
 l_jump: {
   int16_t off = READ_I16;
   pc += off;
+  /* loop back-edge (negative offset): the runaway-budget checkpoint */
+  if (off < 0 && budget_exceeded())
+    RUNTIME_ERR("interrupted: time limit exceeded");
   NEXT;
 }
 l_br_if_false: {
@@ -9929,6 +9961,9 @@ l_tail_self: {
     unrefexp(stack[base + i]);
   sp = base;
   pc = 0;
+  /* self-tail loop back-edge: the runaway-budget checkpoint */
+  if (budget_exceeded())
+    RUNTIME_ERR("interrupted: time limit exceeded");
   NEXT;
 }
 
@@ -10138,6 +10173,9 @@ l_tail_call: {
   if (g_calldepth >= 1 && g_calldepth <= ALC_BT_MAX)
     g_callstack[g_calldepth - 1] =
         new_fn->meta ? (const char *)new_fn->meta : "<anonymous>";
+  /* cross-function tail loop back-edge: the runaway-budget checkpoint */
+  if (budget_exceeded())
+    RUNTIME_ERR("interrupted: time limit exceeded");
   goto tail_reentry;
 }
 
@@ -11269,6 +11307,17 @@ tailrec: {
         }
 
         unrefexp(marker);
+        /* self-tail loop back-edge (AST tier): runaway-budget checkpoint.
+           Build the error before unref'ing e (error() refs it). */
+        if (budget_exceeded()) {
+          exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env,
+                            "interrupted: time limit exceeded");
+          destroy_env(newenv);
+          unrefexp(fn);
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return er;
+        }
         cur = body; /* restart the body loop */
         continue;
       }

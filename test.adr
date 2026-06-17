@@ -908,6 +908,18 @@ def _tail_sum (n acc):
 assert "deep tail recursion unaffected by the guard" (_tail_sum 2000000 0):
   2000000
 
+assert "with-time-limit: fast thunk returns its value" (with-time-limit 1000 (fn () (+ 2 3))):
+  5
+
+assert "with-time-limit: runaway (while t) → catchable interrupt" (try (with-time-limit 30 (fn () (while t 1))) (fn (e) (string-contains? (error-message e) "interrupted"))):
+  t
+
+def _spin (n):
+  _spin (+ n 1)
+
+assert "with-time-limit: runaway self-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e))):
+  t
+
 def ts-let (n acc):
   let s (+ acc n):
     if (is n 0):
