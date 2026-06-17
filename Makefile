@@ -582,8 +582,31 @@ web:
 	  -sSTACK_SIZE=8388608 \
 	  -o web/adder-core.js adder.c -lm
 
+# Code-coverage SIGNAL for the hot path (evaluator / VM / JIT + core fragments).
+# alcove.c is one TU that #includes every fragment, so a single gcov-instrumented
+# build + one gcov pass gives per-fragment line coverage. Exercises the whole
+# test.alc suite plus the differential gates (equiv_sweep, recur_battery), then
+# reports the trust-critical fragments and a weighted aggregate. Answers "are we
+# testing the evaluator enough?" — it is a SIGNAL, never a pass/fail gate (a
+# threshold would just be flaky). Writes .gcov files for the CI artifact.
+# Needs gcov (ships with gcc); no gcovr/lcov dependency.
+coverage:
+	rm -f *.gcno *.gcda *.gcov alcove_cov
+	$(CC) -Wall -W $(SAFE_FLAGS) -O0 -g --coverage -fprofile-update=atomic \
+	  $(MARCH) $(JIT_FLAGS) -o alcove_cov alcove.c \
+	  $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	-./alcove_cov --noload test.alc >/dev/null 2>&1
+	-./alcove_cov --noload tools/equiv_sweep.alc >/dev/null 2>&1
+	-./alcove_cov --noload tools/recur_battery.alc >/dev/null 2>&1
+	@gcov -o . alcove_cov-alcove >/dev/null 2>&1 || true
+	@echo "==> code coverage — hot path (evaluator / VM / JIT / core fragments):"
+	@sh tools/cov_report.sh alcove_cov-alcove
+	@echo "    (signal only, not a gate; .gcov files written for the CI artifact)"
+	@rm -f alcove_cov
+
 clean:
-	rm -f alcove adder mpsc_test mpsc_test_tsan
+	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov
+	rm -f *.gcno *.gcda *.gcov
 	rm -f web/alcove-core.js web/alcove-core.wasm web/adder-core.js web/adder-core.wasm
 
 # ---------------------------------------------------------------------------
@@ -746,4 +769,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz coverage install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

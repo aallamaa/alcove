@@ -112,3 +112,23 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
       - name: AST vs VM byte-identical program fuzz (+ ASan)
         run: make eval-fuzz
+
+  # Code-coverage SIGNAL (not a gate): how much of the hot path (evaluator / VM /
+  # JIT + core fragments) does the suite + differential gates actually exercise?
+  # Reports per-fragment line coverage and uploads the .gcov files as an
+  # artifact. No pass/fail threshold — a flaky one would just be noise; the value
+  # is making "are we testing the evaluator enough?" answerable.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
+      - name: Coverage report (make coverage)
+        run: make coverage
+      - name: Upload .gcov report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-gcov
+          path: "*.gcov"
+          if-no-files-found: warn
