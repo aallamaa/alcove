@@ -5,6 +5,16 @@
    embedder can compile-time-check what it's building against. */
 #define ALCOVE_VERSION "0.2.0"
 
+/* Embedding API/ABI version. Bump this whenever a change could break a
+   separately-compiled consumer of this header: the exp_t/env_t layout, the
+   signature/semantics of an exported function (alcove_register_cmd, make_*,
+   refexp, the dump/load hooks…), or the calling convention a native module
+   relies on. A native module SHOULD export
+       int alcove_module_abi(void) { return ALCOVE_API_VERSION; }
+   so the host can REFUSE a mismatch at (require) time instead of crashing on a
+   silently-incompatible layout. See examples/embed/. */
+#define ALCOVE_API_VERSION 1
+
 #include "char.h"
 #include <stdint.h>
 #include <stdio.h> /* FILE — used in the dump/load declarations below; keeps

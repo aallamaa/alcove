@@ -6277,6 +6277,21 @@ static exp_t *load_native_module(const char *path, const char *spec,
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "require: native module '%s' exports no alcove_module_init",
                  path);
+  /* ABI guard: if the module declares the embedding-API version it was built
+     against, refuse a mismatch here rather than let an incompatible exp_t/env_t
+     layout corrupt silently. A module without the (optional) symbol predates the
+     convention and is loaded as before. */
+  void *abisym = dlsym(h, "alcove_module_abi");
+  if (abisym) {
+    int (*abi)(void);
+    memcpy(&abi, &abisym, sizeof abi);
+    int mod_abi = abi();
+    if (mod_abi != ALCOVE_API_VERSION)
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "require: native module '%s' built against alcove API v%d, "
+                   "but this host is API v%d — rebuild the module",
+                   path, mod_abi, ALCOVE_API_VERSION);
+  }
   int (*init)(void);
   memcpy(&init, &sym, sizeof init);
   const char *prev_spec = g_current_module_spec;

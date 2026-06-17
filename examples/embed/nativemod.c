@@ -116,6 +116,11 @@ static exp_t *counter_get(exp_t *e, env_t *env) { /* (nm/get c) -> int */
   return r;
 }
 
+/* Declare the embedding-API version this module was built against. The host
+   checks it at (require) time and refuses a mismatch, so an ABI-incompatible
+   module fails loudly instead of corrupting silently. */
+int alcove_module_abi(void) { return ALCOVE_API_VERSION; }
+
 int alcove_module_init(void) {
   if (alcove_register_cmd("nm/add", nm_add, 0) != 0)
     return -1;

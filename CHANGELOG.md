@@ -38,6 +38,14 @@ what is frozen vs experimental.
 - `tools/release.sh` now emits a minimal `SBOM.txt`, a `SHA256SUMS` manifest
   over every artifact, and detached GPG signatures when `ALCOVE_GPG_KEY` is set.
 
+### Embedding
+- **`ALCOVE_API_VERSION`** — an embedding API/ABI version macro. Native modules
+  may export `int alcove_module_abi(void) { return ALCOVE_API_VERSION; }`; the
+  host checks it at `(require)` time and **refuses an ABI mismatch** with a clear
+  error instead of dlopen'ing a silently-incompatible binary. The single-engine-
+  per-process constraint and the pre-1.0/not-yet-ABI-frozen status of the C embed
+  API are now documented (`examples/embed/README.md`, `docs/stability.md`).
+
 ### Changed
 - **Integer overflow is an error**, never a silent wrap or implicit float
   promotion — use a float, rational, or decimal explicitly.

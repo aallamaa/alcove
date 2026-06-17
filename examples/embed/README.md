@@ -47,6 +47,12 @@ cc -I. -O2 -fno-strict-aliasing -o host examples/embed/host.c -lm
 - **One engine per process.** The runtime uses global singletons, so there is a
   single interpreter instance (call `alcove_init` once). This matches the
   embedding model; multiple independent states are not supported.
+- **API/ABI version.** `ALCOVE_API_VERSION` (in `alcove.h`) is the embedding
+  API/ABI version; it bumps whenever a change could break a separately-compiled
+  consumer (the `exp_t`/`env_t` layout, an exported function's signature, the
+  calling convention). The embedding C API is **pre-1.0 and not yet ABI-frozen**
+  (see [`docs/stability.md`](../../docs/stability.md)) — rebuild embedders and
+  native modules against the same source revision.
 - **Dialect.** `alcove_eval_string` reads Alcove s-expressions. To run Adder
   (`.adr`) surface syntax, transpile first with `als_to_sexpr` (always
   available) or use `require` on a `.adr` file.
@@ -69,8 +75,16 @@ static exp_t *nm_add(exp_t *e, env_t *env) {
   unrefexp(e);   /* a builtin MUST consume its call form — see below */
   return r;
 }
+int alcove_module_abi(void) { return ALCOVE_API_VERSION; } /* ABI guard */
 int alcove_module_init(void) { return alcove_register_cmd("nm/add", nm_add, 0); }
 ```
+
+**Export `alcove_module_abi`.** It returns the `ALCOVE_API_VERSION` the module
+was compiled against; the host checks it at `(require)` time and **refuses a
+mismatch** with a clear error rather than dlopen'ing a binary whose `exp_t`
+layout no longer matches (which would corrupt silently). The symbol is optional
+for backward compatibility — a module without it loads as before — but every new
+module should export it.
 
 **Ownership: a builtin must consume its call form.** Read every argument, then
 `unrefexp(e)` exactly once before returning — just like every core builtin
