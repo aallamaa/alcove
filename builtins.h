@@ -193,6 +193,19 @@ extern const char doc_ispersistent[];
 extern const char doc_inspect[], doc_disasm[], doc_source[], doc_dir[];
 extern const char doc_time[], doc_exit[], doc_webp[], doc_sleepms[];
 extern const char doc_platform[], doc_arch[], doc_dylibsuffix[], doc_dialect[];
+extern const char doc_bindkey[], doc_replline[], doc_replpoint[], doc_replend[],
+    doc_replgoto[], doc_replinsert[], doc_repldelete[], doc_replreplaceline[],
+    doc_replrefresh[], doc_replcompletions[];
+exp_t *bindkeycmd(exp_t *e, env_t *env);
+exp_t *repllinecmd(exp_t *e, env_t *env);
+exp_t *replpointcmd(exp_t *e, env_t *env);
+exp_t *replendcmd(exp_t *e, env_t *env);
+exp_t *replgotocmd(exp_t *e, env_t *env);
+exp_t *replinsertcmd(exp_t *e, env_t *env);
+exp_t *repldeletecmd(exp_t *e, env_t *env);
+exp_t *replreplacelinecmd(exp_t *e, env_t *env);
+exp_t *replrefreshcmd(exp_t *e, env_t *env);
+exp_t *replcompletionscmd(exp_t *e, env_t *env);
 extern const char doc_nowms[];
 extern const char doc_stringbuf[], doc_stringset[], doc_stringfill[],
     doc_stringcopy[];

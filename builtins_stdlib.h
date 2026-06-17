@@ -2818,6 +2818,30 @@ exp_t *dialectcmd(exp_t *e, env_t *env) {
 #endif
 }
 
+const char doc_bindkey[] =
+    "(bind-key keyspec handler) — bind a terminal key to a no-arg handler that "
+    "edits the live input line (repl-insert, repl-goto, ...). keyspec aliases: "
+    "tab S-tab home end C-<a-z> M-<char>, else raw keyseq bytes. nil handler = "
+    "inert key. REPL/readline only. Note: terminals often fold C-Tab into Tab.";
+const char doc_replline[] =
+    "(repl-line) — the input line currently being edited (a string), or \"\" "
+    "outside a bind-key handler.";
+const char doc_replpoint[] = "(repl-point) — cursor byte offset in the line.";
+const char doc_replend[] = "(repl-end) — length (bytes) of the current line.";
+const char doc_replgoto[] =
+    "(repl-goto n) — move the cursor to byte offset n (clamped). nil.";
+const char doc_replinsert[] =
+    "(repl-insert s) — insert string s at the cursor. nil.";
+const char doc_repldelete[] =
+    "(repl-delete a b) — delete the byte range [a, b) from the line. nil.";
+const char doc_replreplaceline[] =
+    "(repl-replace-line s) — replace the whole input with s; cursor to end. nil.";
+const char doc_replrefresh[] =
+    "(repl-refresh) — force a redisplay of the current line. nil.";
+const char doc_replcompletions[] =
+    "(repl-completions prefix) — list of names (builtins + visible vars) starting "
+    "with prefix; for offering completion from a bind-key handler.";
+
 const char doc_arch[] =
     "(arch) — host CPU as a symbol: arm64 | amd64 | x86 | wasm | unknown.";
 exp_t *archcmd(exp_t *e, env_t *env) {

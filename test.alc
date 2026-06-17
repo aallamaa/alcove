@@ -4338,6 +4338,30 @@
 (= *prompt-cont* (fn (n) "..."))
 (assert-true "*prompt-cont* holds a fn" (fn? *prompt-cont*))
 (= *prompt-cont* nil)
+;; Eval hooks: *input-hook* (pre-eval transform) and *output-hook* (post-eval
+;; capture) are plain globals too. Their REPL effect is interactive (covered by
+;; pty tests); here just guard the bindings round-trip.
+(= *input-hook* (fn (s) s))
+(assert-true "*input-hook* holds a fn"  (fn? *input-hook*))
+(= *input-hook* nil)
+(= *output-hook* (fn (n i o) nil))
+(assert-true "*output-hook* holds a fn" (fn? *output-hook*))
+(= *output-hook* nil)
+
+;; ---- programmable REPL: bind-key + line-editing builtins ----
+;; The editing effects are interactive (pty-tested); from a file we can only
+;; assert the builtins exist, return sane no-op values off-line, and that
+;; bind-key/repl-completions accept their args.
+(assert "bind-key returns t"            (bind-key "S-tab" (fn () nil)) t)
+(assert "bind-key nil handler ok"       (bind-key "C-q" nil) t)
+(assert "repl-line empty off-line"      (repl-line) "")
+(assert "repl-point 0 off-line"         (repl-point) 0)
+(assert "repl-end 0 off-line"           (repl-end) 0)
+(assert "repl-goto is a no-op off-line" (repl-goto 3) nil)
+(assert "repl-insert is a no-op"        (repl-insert "x") nil)
+(assert-true "repl-completions -> list" (or (nil? (repl-completions "zzzznope"))
+                                            (list? (repl-completions "plat"))))
+(assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0))
 
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires

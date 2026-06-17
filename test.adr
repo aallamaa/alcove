@@ -6703,6 +6703,36 @@ assert-true "*prompt-cont* holds a fn" (fn? *prompt-cont*)
 
 setf *prompt-cont* nil
 
+setf *input-hook* (fn (s) s)
+
+assert-true "*input-hook* holds a fn" (fn? *input-hook*)
+
+setf *input-hook* nil
+
+setf *output-hook* (fn (n i o) nil)
+
+assert-true "*output-hook* holds a fn" (fn? *output-hook*)
+
+setf *output-hook* nil
+
+assert "bind-key returns t" (bind-key "S-tab" (fn () nil)) t
+
+assert "bind-key nil handler ok" (bind-key "C-q" nil) t
+
+assert "repl-line empty off-line" (repl-line) ""
+
+assert "repl-point 0 off-line" (repl-point) 0
+
+assert "repl-end 0 off-line" (repl-end) 0
+
+assert "repl-goto is a no-op off-line" (repl-goto 3) nil
+
+assert "repl-insert is a no-op" (repl-insert "x") nil
+
+assert-true "repl-completions -> list" (or (nil? (repl-completions "zzzznope")) (list? (repl-completions "plat")))
+
+assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0)
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

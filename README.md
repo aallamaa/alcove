@@ -577,6 +577,39 @@ Each dialect prefers its own: `adder` loads `./.init.adr` (Adder syntax),
 `alcove` loads `./.init.alc` (s-expressions), each falling back to the other
 and then to `~/.local/alcove/init.{adr,alc}`. First match wins.
 
+**Scripting the REPL.** Two more hooks make the read/eval loop programmable —
+intercept input before it runs, and capture the result after:
+
+```
+= *input-hook*  (fn (input) (str "(time " input ")"))   # wrap every entry
+= *output-hook* (fn (n input output)                    # log a transcript
+  (append-string "session.log" (str "In[" n "] " input " => " output "\n")))
+```
+
+`*input-hook*` rewrites the typed line (its string return is what gets
+evaluated, and what `*output-hook*` sees as `input`); `*output-hook*` observes
+the cell number, the (post-transform) input, and the result value. Both fall
+back gracefully — a nil/bad hook is ignored.
+
+**Key bindings.** `(bind-key keyspec handler)` binds a terminal key to a no-arg
+handler that edits the live input line — Emacs `define-key` in spirit. Key
+specs: `tab`, `S-tab`, `home`, `end`, `C-<a-z>`, `M-<char>`, or raw keyseq
+bytes. (Terminals commonly fold `C-Tab` into plain `Tab`.) Inside the handler,
+manipulate the buffer with `repl-line` / `repl-point` / `repl-end` /
+`repl-goto` / `repl-insert` / `repl-delete` / `repl-replace-line` /
+`repl-refresh`, and get candidates with `(repl-completions prefix)`:
+
+```
+# Shift-Tab accepts a ghost-text suggestion
+= suggest (fn (line) "...your completion logic...")
+bind-key "S-tab" (fn () (repl-insert (suggest (repl-line))))
+# Home jumps to start of line
+bind-key "home" (fn () (repl-goto 0))
+```
+
+All of these live happily in `.init.adr` / `.init.alc`. `(doc *input-hook*)`,
+`(doc bind-key)`, etc. print usage.
+
 ### 10. Shell scripts — the scripting floor (v0.2)
 
 Scripts are real programs: `#!` is a comment in both readers, `*args*`

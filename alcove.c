@@ -734,6 +734,18 @@ lispProc lispProcList[] = {
     LISPCMD("web?", webpcmd, doc_webp),
     LISPCMD("platform", platformcmd, doc_platform),
     LISPCMD("dialect", dialectcmd, doc_dialect),
+    /* Programmable REPL: bind a key to a handler, and edit the live input line
+       from inside that handler. */
+    LISPCMD("bind-key", bindkeycmd, doc_bindkey),
+    LISPCMD("repl-line", repllinecmd, doc_replline),
+    LISPCMD("repl-point", replpointcmd, doc_replpoint),
+    LISPCMD("repl-end", replendcmd, doc_replend),
+    LISPCMD("repl-goto", replgotocmd, doc_replgoto),
+    LISPCMD("repl-insert", replinsertcmd, doc_replinsert),
+    LISPCMD("repl-delete", repldeletecmd, doc_repldelete),
+    LISPCMD("repl-replace-line", replreplacelinecmd, doc_replreplaceline),
+    LISPCMD("repl-refresh", replrefreshcmd, doc_replrefresh),
+    LISPCMD("repl-completions", replcompletionscmd, doc_replcompletions),
     LISPCMD("arch", archcmd, doc_arch),
     LISPCMD_UNSAFE("dylib-suffix", dylibsuffixcmd, doc_dylibsuffix),
     LISPCMD("now-ms", nowmscmd, doc_nowms),
@@ -11424,6 +11436,36 @@ static char *repl_prompt_str(env_t *env, const char *varname, int idx) {
   return out;
 }
 
+/* The post-transform input text of the line currently being evaluated, set in
+   repl_eval_text after *input-hook* runs and read by the *output-hook* call in
+   repl_eval_print_form. NULL when no line text is available (e.g. the piped
+   non-readline stream loop), where the output hook serializes the form instead. */
+static const char *g_repl_input = NULL;
+
+/* Input-transform hook. If `varname` (*input-hook*) is bound to a function, call
+   it with `input` (the source text) and return its STRING result as a fresh
+   malloc'd buffer (caller frees) — the text to evaluate in place of the original.
+   Returns NULL on unset/nil, a non-function, a hook error, or a non-string
+   result, so the caller keeps the original input; a broken hook can't break the
+   REPL. The hook takes one argument (the input string) and returns a string. */
+static char *repl_hook_transform(env_t *env, const char *varname,
+                                 const char *input) {
+  if (!env || !env->d || !input)
+    return NULL;
+  keyval_t *kv = set_get_keyval_dict(env->d, (char *)varname, NULL);
+  exp_t *fn = kv ? (exp_t *)kv->val : NULL;
+  if (!fn || !islambda(fn))
+    return NULL;
+  exp_t *argv[1] = {make_string((char *)input, (int)strlen(input))};
+  exp_t *res = alc_apply_n(fn, 1, argv, env);
+  char *out = NULL;
+  if (res && !iserror(res) && isstring(res))
+    out = strdup((const char *)exp_text(res));
+  if (res)
+    unrefexp(res);
+  return out;
+}
+
 #ifdef ALCOVE_READLINE
 #undef ISDIGIT /* char.h defines ISDIGIT as a bitmask; readline redefines it */
 #include <readline/history.h>
@@ -12503,6 +12545,8 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
    readline's own trailing newline (als_rl_read_form emits one itself), so
    without it -R doubled every line's newline. History FILE load/save stays
    with each caller (the standalone REPL gates it on --no-history). */
+static int g_rl_ready;                  /* tentative def; real one below */
+static void repl_apply_bindings(void);  /* defined with the key-binding helpers */
 static void repl_readline_setup(env_t *global) {
   /* Honor the terminal's locale so readline treats UTF-8 input as whole
      characters — cursor movement, deletion, and width math operate per
@@ -12527,6 +12571,11 @@ static void repl_readline_setup(env_t *global) {
   rl_redisplay_function = alcove_colored_redisplay; /* real-time highlighting */
   using_history();
   stifle_history(1000);
+  /* Apply user key bindings AFTER the defaults above, so a (bind-key ...) from
+     .init (which runs before this) overrides Tab/Shift-Tab etc. Mark readline
+     live so later (bind-key ...) calls bind immediately. */
+  g_rl_ready = 1;
+  repl_apply_bindings();
 }
 
 /* History-file persistence, shared by the standalone REPL and the -R
@@ -12559,7 +12608,282 @@ static void repl_history_save(void) {
   history_truncate_file(alc_hist_path, 1000);
   chmod(alc_hist_path, 0600); /* may have pasted secrets */
 }
+
+/* ---- programmable key bindings (Emacs-style) ----------------------------- */
+/* keyseq (the actual terminal bytes) -> Lisp handler thunk. Persistent across
+   the session so (bind-key ...) from .init survives until repl_readline_setup
+   applies it. g_rl_ready gates live rl_bind_keyseq calls: .init runs BEFORE
+   readline is set up (see main), so a bind from there is stored now and applied
+   in bulk at the end of repl_readline_setup. */
+static dict_t *g_key_bindings = NULL;
+static int g_rl_ready = 0;
+
+/* Resolve a friendly key spec to the raw readline keyseq bytes. Aliases:
+   tab S-tab home end C-<a-z> M-<char>; anything else is taken as raw bytes
+   (e.g. a literal ESC sequence). Returns 1 on success, filling `out`. */
+static int repl_resolve_keyseq(const char *spec, char *out, size_t outsz) {
+  if (!spec || !*spec || outsz < 4)
+    return 0;
+  if (!strcmp(spec, "tab")) {
+    out[0] = '\t';
+    out[1] = 0;
+  } else if (!strcmp(spec, "S-tab") || !strcmp(spec, "shift-tab")) {
+    snprintf(out, outsz, "\033[Z");
+  } else if (!strcmp(spec, "home")) {
+    snprintf(out, outsz, "\033[H");
+  } else if (!strcmp(spec, "end")) {
+    snprintf(out, outsz, "\033[F");
+  } else if ((spec[0] == 'C' || spec[0] == 'c') && spec[1] == '-' && spec[2] &&
+             !spec[3]) {
+    /* C-<letter> -> the control byte (C-a == 1 ... C-z == 26). */
+    int c = tolower((unsigned char)spec[2]);
+    if (c < 'a' || c > 'z')
+      return 0;
+    out[0] = (char)(c - 'a' + 1);
+    out[1] = 0;
+  } else if ((spec[0] == 'M' || spec[0] == 'm') && spec[1] == '-' && spec[2] &&
+             !spec[3]) {
+    out[0] = '\033'; /* Meta-<char> -> ESC + char */
+    out[1] = spec[2];
+    out[2] = 0;
+  } else {
+    if (strlen(spec) + 1 > outsz)
+      return 0;
+    strcpy(out, spec); /* raw keyseq bytes */
+  }
+  return 1;
+}
+
+/* The single trampoline bound to every user keyseq. readline reports the exact
+   sequence that fired in rl_executing_keyseq; we look up its handler and call
+   it as a no-arg thunk, then repaint so any buffer edits show. */
+static int alcove_key_dispatch(int count, int key) {
+  (void)count;
+  (void)key;
+  exp_t *fn = NULL;
+  const char *seq = rl_executing_keyseq;
+  if (seq && g_key_bindings) {
+    keyval_t *kv = set_get_keyval_dict(g_key_bindings, (char *)seq, NULL);
+    fn = kv ? (exp_t *)kv->val : NULL;
+  }
+  if (fn && islambda(fn)) {
+    exp_t *r = alc_apply_n(fn, 0, NULL, g_global_env);
+    if (r)
+      unrefexp(r);
+    rl_forced_update_display();
+  }
+  return 0;
+}
+
+/* Record (or replace) a binding and, if readline is live, bind it now. A nil
+   handler stores nil → the key becomes an inert no-op (dispatch ignores it). */
+static void repl_bind_one(const char *seq, exp_t *handler) {
+  if (!g_key_bindings)
+    g_key_bindings = create_dict();
+  keyval_t *old = set_get_keyval_dict(g_key_bindings, (char *)seq, NULL);
+  if (old && old->val)
+    unrefexp((exp_t *)old->val);
+  set_get_keyval_dict(g_key_bindings, (char *)seq, refexp(handler));
+  if (g_rl_ready)
+    rl_bind_keyseq(seq, alcove_key_dispatch);
+}
+
+/* Apply every recorded binding to the current keymap. Called at the end of
+   repl_readline_setup (after the default Tab/Shift-Tab binds) so user bindings
+   from .init take precedence over the defaults. */
+static void repl_apply_bindings(void) {
+  if (!g_key_bindings)
+    return;
+  for (int h = 0; h < 2; h++) {
+    if (!g_key_bindings->ht[h].size)
+      continue;
+    for (size_t i = 0; i < g_key_bindings->ht[h].size; i++)
+      for (keyval_t *k = g_key_bindings->ht[h].table[i]; k; k = k->next)
+        if (k->key)
+          rl_bind_keyseq((const char *)k->key, alcove_key_dispatch);
+  }
+}
 #endif
+
+/* ---- Lisp-facing REPL editing + key-binding builtins ----------------------
+   Always compiled (lispProcList references them in every build); the readline
+   machinery is real only under ALCOVE_READLINE and inert otherwise. The editing
+   builtins are meaningful inside a (bind-key ...) handler, where readline is
+   mid-line; elsewhere they read empty / are no-ops. */
+
+/* (bind-key keyspec handler) — bind a terminal key to a no-arg handler thunk.
+   keyspec aliases: tab S-tab home end C-<a-z> M-<char>, else raw keyseq bytes.
+   A nil handler makes the key an inert no-op. Returns t on success. */
+exp_t *bindkeycmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(spec, handler);
+  exp_t *ret = refexp(NIL_EXP);
+#ifdef ALCOVE_READLINE
+  if (spec && isstring(spec)) {
+    char seq[64];
+    if (repl_resolve_keyseq((const char *)exp_text(spec), seq, sizeof seq)) {
+      repl_bind_one(seq, handler ? handler : NIL_EXP);
+      unrefexp(ret);
+      ret = refexp(TRUE_EXP);
+    }
+  }
+#else
+  (void)spec;
+  (void)handler;
+#endif
+  if (spec)
+    unrefexp(spec);
+  if (handler)
+    unrefexp(handler);
+  unrefexp(e);
+  return ret;
+}
+
+/* (repl-line) — the line currently being edited, or "" outside a handler. */
+exp_t *repllinecmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+#ifdef ALCOVE_READLINE
+  if (rl_line_buffer)
+    return make_string(rl_line_buffer, (int)strlen(rl_line_buffer));
+#endif
+  return make_string("", 0);
+}
+
+/* (repl-point) — cursor byte offset; (repl-end) — buffer length. */
+exp_t *replpointcmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+#ifdef ALCOVE_READLINE
+  return make_integeri(rl_point);
+#else
+  return make_integeri(0);
+#endif
+}
+exp_t *replendcmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+#ifdef ALCOVE_READLINE
+  return make_integeri(rl_end);
+#else
+  return make_integeri(0);
+#endif
+}
+
+/* (repl-goto n) — move the cursor to byte offset n (clamped). */
+exp_t *replgotocmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(nv);
+#ifdef ALCOVE_READLINE
+  if (nv && isnumber(nv)) {
+    int n = (int)FIX_VAL(nv);
+    if (n < 0)
+      n = 0;
+    if (n > rl_end)
+      n = rl_end;
+    rl_point = n;
+  }
+#endif
+  if (nv)
+    unrefexp(nv);
+  unrefexp(e);
+  return refexp(NIL_EXP);
+}
+
+/* (repl-insert s) — insert string s at the cursor. */
+exp_t *replinsertcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(sv);
+#ifdef ALCOVE_READLINE
+  if (sv && isstring(sv) && rl_line_buffer)
+    rl_insert_text((char *)exp_text(sv));
+#endif
+  if (sv)
+    unrefexp(sv);
+  unrefexp(e);
+  return refexp(NIL_EXP);
+}
+
+/* (repl-delete a b) — delete the byte range [a, b). */
+exp_t *repldeletecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(av, bv);
+#ifdef ALCOVE_READLINE
+  if (av && isnumber(av) && bv && isnumber(bv) && rl_line_buffer) {
+    int a = (int)FIX_VAL(av), b = (int)FIX_VAL(bv);
+    if (a < 0)
+      a = 0;
+    if (b > rl_end)
+      b = rl_end;
+    if (a < b)
+      rl_delete_text(a, b);
+  }
+#endif
+  if (av)
+    unrefexp(av);
+  if (bv)
+    unrefexp(bv);
+  unrefexp(e);
+  return refexp(NIL_EXP);
+}
+
+/* (repl-replace-line s) — replace the whole buffer with s; cursor to end. */
+exp_t *replreplacelinecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(sv);
+#ifdef ALCOVE_READLINE
+  if (sv && isstring(sv) && rl_line_buffer) {
+    rl_replace_line((char *)exp_text(sv), 0);
+    rl_point = rl_end;
+  }
+#endif
+  if (sv)
+    unrefexp(sv);
+  unrefexp(e);
+  return refexp(NIL_EXP);
+}
+
+/* (repl-refresh) — force a redisplay of the current line. */
+exp_t *replrefreshcmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+#ifdef ALCOVE_READLINE
+  rl_forced_update_display();
+#endif
+  return refexp(NIL_EXP);
+}
+
+/* (repl-completions prefix) — list of names (builtins + visible vars) that
+   start with prefix; lets a handler offer its own completion. */
+exp_t *replcompletionscmd(exp_t *e, env_t *env) {
+  (void)env;
+  EVAL_ARG_1(pv);
+  exp_t *lst = refexp(NIL_EXP);
+#ifdef ALCOVE_READLINE
+  if (pv && isstring(pv)) {
+    const char *pfx = (const char *)exp_text(pv);
+    size_t plen = strlen(pfx);
+    char **m = NULL;
+    int nm = 0, cap = 0;
+    rl_collect_dict(reserved_symbol, pfx, plen, &m, &nm, &cap);
+    rl_collect_env_chain(g_global_env, pfx, plen, &m, &nm, &cap);
+    exp_t *head = NULL, *tail = NULL;
+    for (int i = 0; i < nm; i++) {
+      exp_t *node = make_node(make_string(m[i], (int)strlen(m[i])));
+      if (!head)
+        head = node;
+      else
+        tail->next = node;
+      tail = node;
+      free(m[i]);
+    }
+    free(m);
+    if (head) {
+      unrefexp(lst);
+      lst = head;
+    }
+  }
+#endif
+  if (pv)
+    unrefexp(pv);
+  unrefexp(e);
+  return lst;
+}
 
 /* Eval one already-read top-level form with REPL semantics. `quiet` (file
    load) suppresses the Out[] print. Handles the quit/exit and toeval REPL
@@ -12587,6 +12911,23 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
   bt_clear();
   g_err_line = 0; /* precise error position, filled by error()/RUNTIME_ERR */
   g_err_col = 0;
+  /* *output-hook* input fallback: the piped/stream path has no line text
+     (g_repl_input is NULL), so serialize the form NOW — before eval consumes it
+     — but only when an *output-hook* is actually bound. Interactive lines
+     already carry their text in g_repl_input, so this stays NULL there. */
+  char *oh_in = NULL;
+  if (!quiet && !g_repl_input && env && env->d) {
+    keyval_t *ohkv = set_get_keyval_dict(env->d, "*output-hook*", NULL);
+    if (ohkv && ohkv->val && islambda((exp_t *)ohkv->val)) {
+      size_t cap = 64, len = 0;
+      char *b = memalloc(cap, 1);
+      exp_to_string_buf(form, &b, &len, &cap);
+      exp_t *s = make_string(b, (int)len);
+      free(b);
+      oh_in = strdup((const char *)exp_text(s));
+      unrefexp(s);
+    }
+  }
   if (toeval) {
     g_dbg_evaluating = 1; /* arm break-on-raise only for this top-level form */
     res = evaluate(form, env);
@@ -12628,6 +12969,23 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     render_backtrace(stderr);
     g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
   }
+  /* Output hook: hand (cell-number, input-text, result-value) to *output-hook*
+     for capture/logging. Interactive only (fires once per evaluated form, after
+     the result is shown); a broken hook can't break the REPL. */
+  if (!quiet && res && env && env->d) {
+    keyval_t *ohkv = set_get_keyval_dict(env->d, "*output-hook*", NULL);
+    exp_t *ohf = ohkv ? (exp_t *)ohkv->val : NULL;
+    if (ohf && islambda(ohf)) {
+      const char *instr = g_repl_input ? g_repl_input : (oh_in ? oh_in : "");
+      exp_t *argv[3] = {make_integeri(idx),
+                        make_string((char *)instr, (int)strlen(instr)),
+                        refexp(res)}; /* alc_apply_n consumes all three */
+      exp_t *hr = alc_apply_n(ohf, 3, argv, env);
+      if (hr)
+        unrefexp(hr);
+    }
+  }
+  free(oh_in);
   if (res)
     unrefexp(res);
   return 0;
@@ -12638,7 +12996,7 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
    Returns 1 iff quit/exit was seen. The interactive readline REPL and the
    -R combined REPL both feed it one complete unit at a time, so neither
    has to know about transpilation or form iteration. */
-static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
+static int repl_eval_text_raw(const char *src, size_t n, env_t *env, int idx) {
 #ifdef ALCOVE_ALS
   char *tmp = (char *)malloc(n + 1);
   if (!tmp)
@@ -12724,6 +13082,29 @@ static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
   als_map_free(&amap);
 #endif
   return quit;
+}
+
+/* Evaluate one REPL line, first passing it through *input-hook* (if bound): the
+   hook may rewrite the text, and the rewritten text is both what gets evaluated
+   AND what the *output-hook* receives as `input`. g_repl_input points at it for
+   the duration so repl_eval_print_form can hand it to the output hook. */
+static int repl_eval_text(const char *src, size_t n, env_t *env, int idx) {
+  char *in0 = (char *)malloc(n + 1);
+  if (!in0)
+    return repl_eval_text_raw(src, n, env, idx); /* OOM: skip the hook */
+  memcpy(in0, src, n);
+  in0[n] = 0;
+  char *xf = repl_hook_transform(env, "*input-hook*", in0);
+  if (xf) {
+    free(in0);
+    in0 = xf;
+  }
+  const char *prev = g_repl_input;
+  g_repl_input = in0;
+  int rc = repl_eval_text_raw(in0, strlen(in0), env, idx);
+  g_repl_input = prev;
+  free(in0);
+  return rc;
 }
 
 /* RESP2 server prototype lives in its own file but is included as
@@ -13083,6 +13464,12 @@ env_t *alcove_init(void) {
   set_get_keyval_dict(global->d, "*prompt-in*", NIL_EXP);
   set_get_keyval_dict(global->d, "*prompt-out*", NIL_EXP);
   set_get_keyval_dict(global->d, "*prompt-cont*", NIL_EXP);
+  /* REPL eval hooks: *input-hook* (fn (input) -> string) rewrites a typed line
+     before it is evaluated; *output-hook* (fn (n input output) ...) observes the
+     (post-transform) input and the result value for capture/logging. nil = off.
+     See repl_hook_transform() and the *output-hook* call in repl_eval_print_form. */
+  set_get_keyval_dict(global->d, "*input-hook*", NIL_EXP);
+  set_get_keyval_dict(global->d, "*output-hook*", NIL_EXP);
   /* Make the prompt hooks discoverable via (doc *prompt-in*) and friends. They
      are plain globals (not builtins), so their help lives in user_doc rather
      than lispProcList — registering them as builtins would shadow the variable
@@ -13103,10 +13490,20 @@ env_t *alcove_init(void) {
          "*prompt-cont* — REPL continuation-prompt hook. Like *prompt-in* but "
          "renders the multi-line continuation prompt (default \"    ... \"), "
          "including the wrapped rows of a pasted or recalled multi-line form."},
+        {"*input-hook*",
+         "*input-hook* — REPL input transform. Bind to (fn (input) -> string); "
+         "called with the typed line text and its result replaces what gets "
+         "evaluated (and what *output-hook* sees as input). nil/non-string falls "
+         "back to the original. Line-scoped (not the piped stream path)."},
+        {"*output-hook*",
+         "*output-hook* — REPL capture hook. Bind to (fn (n input output) ...); "
+         "called after each interactive eval with the cell number, the "
+         "(post-transform) input string, and the result value (errors passed as "
+         "the error value). Return ignored — for transcripts/logging."},
     };
     if (!user_doc)
       user_doc = create_dict();
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < (int)(sizeof pdocs / sizeof pdocs[0]); i++)
       set_get_keyval_dict(user_doc, (char *)pdocs[i].name,
                           make_string((char *)pdocs[i].doc,
                                       (int)strlen(pdocs[i].doc)));
