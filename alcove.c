@@ -446,6 +446,7 @@ lispProc lispProcList[] = {
     LISPCMD("while", whilecmd, doc_while),
     LISPCMD("repeat", repeatcmd, doc_repeat),
     LISPCMD("with-time-limit", withtimelimitcmd, doc_with_time_limit),
+    LISPCMD("heap-stats", heapstatscmd, doc_heap_stats),
     LISPCMD_TAIL("and", andcmd, doc_and),
     LISPCMD_TAIL("or", orcmd, doc_or),
     LISPCMD_TAIL("case", casecmd, doc_case),
@@ -1171,6 +1172,13 @@ static ALCOVE_TLS exp_t *exp_freelist = NULL;
 #define EXP_BUMP_CHUNK 256
 static ALCOVE_TLS exp_t *exp_bump_next = NULL;
 static ALCOVE_TLS int exp_bump_left = 0;
+/* # of EXP_BUMP_CHUNK-sized chunks ever calloc'd on this thread's arena. Bumped
+   only on the rare chunk-exhaustion path (every 256 allocations), so it adds
+   nothing to the hot make_nil path. Backs (heap-stats) — the leak/cycle audit
+   handle: arbitrary reference cycles (cyclic lists, callback↔dict) are not
+   reclaimed by refcounting and stay live, so diffing the live count across a
+   workload that should free everything surfaces a leak. See docs. */
+static ALCOVE_TLS int64_t g_exp_chunks = 0;
 
 /* Cold free path, reached from the inline unrefexp() ONLY once a refcount has
    hit <= 0: ret == 0 → e is dead (free its payload, push to the freelist, and
@@ -1519,6 +1527,7 @@ static inline exp_t *make_nil() {
     if (exp_bump_left == 0) {
       exp_bump_next = (exp_t *)calloc(EXP_BUMP_CHUNK, sizeof(exp_t));
       exp_bump_left = EXP_BUMP_CHUNK;
+      g_exp_chunks++; /* rare path: per-chunk, not per-alloc */
     }
     nil_exp = exp_bump_next++;
     exp_bump_left--;

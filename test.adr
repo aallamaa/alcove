@@ -920,6 +920,25 @@ def _spin (n):
 assert "with-time-limit: runaway self-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e))):
   t
 
+assert "heap-stats first key is :live" (nth (heap-stats) 0) :live
+
+setf _h0 (nth (heap-stats) 1)
+
+repeat 500 (let (x (list 1 2 3)) (length x))
+
+setf _noncyc (- (nth (heap-stats) 1) _h0)
+
+setf _h1 (nth (heap-stats) 1)
+
+repeat 500 (let (v (vector 1)) (vec-set! v 0 v))
+
+setf _cyc (- (nth (heap-stats) 1) _h1)
+
+assert "non-cyclic workload barely grows live cells" (< _noncyc 100) t
+
+assert "(heap-stats) detects a reference-cycle leak (cyclic >> acyclic)" (> _cyc (+ _noncyc 400)):
+  t
+
 def ts-let (n acc):
   let s (+ acc n):
     if (is n 0):

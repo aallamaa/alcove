@@ -172,3 +172,40 @@ survives churn`, the mutual-recursion cases) and ASan.
 Fix #1 alone unmasks the cycle for once-called closures; fix #2 reclaims the
 true cycle (e.g. a closure created but whose frame would otherwise persist).
 Together the repro is flat. Tests added under "20c" in test.alc.
+
+---
+
+## General reference cycles & the `(heap-stats)` leak audit (2026-06)
+
+The closure↔env 2-node cycle above is broken automatically
+(`env_break_self_cycle`). **Arbitrary** reference cycles are not — a cyclic
+list, a vector that contains itself, a callback that captures a dict that holds
+the callback, etc. Manual refcounting cannot reclaim them and they leak by
+design (alcove has **no tracing GC** — a settled non-goal). For long-running
+processes this is unbounded growth if the workload creates cycles.
+
+`(heap-stats)` is the audit handle. It returns a property list for the calling
+thread's `exp_t` arena:
+
+```
+(heap-stats)  ; => (:live L :free F :allocated A :chunks C)
+```
+
+`:live` is the number of cells currently in use (allocated minus the free-list).
+To detect a cycle leak, diff `:live` across a workload that *should* free
+everything it allocates:
+
+```
+(= before (nth (heap-stats) 1))
+(repeat 100000 (do-one-request))     ; should be net-zero if cycle-free
+(prn (- (nth (heap-stats) 1) before)) ; ~0 = clean; steadily rising = a cycle leak
+```
+
+An acyclic workload returns to its baseline (the cells go back to the
+free-list); a cyclic one grows ~one cell per cycle created. The check is
+zero-cost on the hot path (only a per-chunk counter and an on-demand free-list
+walk), so it is always available, including under `--threads` (per reactor).
+
+Avoiding cycles: break them explicitly before dropping the last external
+reference (e.g. `(vec-set! v 0 nil)` before letting a self-referential vector
+go), or keep cyclic ownership out of long-lived structures.

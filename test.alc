@@ -616,6 +616,24 @@
 (assert "with-time-limit: runaway self-tail recursion → catchable interrupt"
         (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e)))  t)
 
+; Reference-cycle leak audit (Tier 1.2): refcounting reclaims everything EXCEPT
+; cycles (no tracing GC). (heap-stats) :live exposes the leak so operators can
+; detect it: a non-cyclic workload frees what it allocates (≈0 live growth); a
+; self-referential structure leaks (live grows ~1 cell per cycle made).
+(assert "heap-stats first key is :live"     (nth (heap-stats) 0)  :live)
+;; Capture each delta into a binding FIRST (in its own form), then assert on the
+;; stored integer — reading heap-stats inside the assert macro perturbs the very
+;; count it measures.
+(= _h0 (nth (heap-stats) 1))
+(repeat 500 (let (x (list 1 2 3)) (length x)))             ; acyclic: all freed
+(= _noncyc (- (nth (heap-stats) 1) _h0))
+(= _h1 (nth (heap-stats) 1))
+(repeat 500 (let (v (vector 1)) (vec-set! v 0 v)))         ; self-cycle: leaks
+(= _cyc (- (nth (heap-stats) 1) _h1))
+(assert "non-cyclic workload barely grows live cells"  (< _noncyc 100)  t)
+(assert "(heap-stats) detects a reference-cycle leak (cyclic >> acyclic)"
+        (> _cyc (+ _noncyc 400))  t)
+
 ; 8h. OP_TAIL_SELF inside a let/let*/with body. A self-tail call wrapped in a
 ;     binding form now emits OP_TAIL_SELF (rebind inline slots in place, jump to
 ;     pc=0, re-run the binding prologue) instead of OP_TAIL_CALL+LOAD_GLOBAL —

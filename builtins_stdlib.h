@@ -2015,6 +2015,39 @@ exp_t *withtimelimitcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(ms, thunk, ret);
 }
 
+const char doc_heap_stats[] =
+    "(heap-stats) — property list of this thread's exp_t arena: "
+    "(:live L :free F :allocated A :chunks C). LIVE is the number of exp_t cells "
+    "currently in use (not on the free-list). Refcounting reclaims everything "
+    "EXCEPT reference cycles (cyclic lists, callback↔dict), which leak by design "
+    "(no tracing GC). LEAK AUDIT: snapshot (nth (heap-stats) 1) before and after "
+    "a workload that should free all it allocates; a rising live count is a cycle "
+    "leak. Per-thread (reflects the calling reactor's arena).";
+exp_t *heapstatscmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  int64_t freec = 0;
+  for (exp_t *p = exp_freelist; p; p = p->next)
+    freec++;
+  int64_t allocated = g_exp_chunks * EXP_BUMP_CHUNK - exp_bump_left;
+  int64_t live = allocated - freec;
+  exp_t *items[8] = {
+      make_symbol(":live", 5),       make_integeri(live),
+      make_symbol(":free", 5),       make_integeri(freec),
+      make_symbol(":allocated", 10), make_integeri(allocated),
+      make_symbol(":chunks", 7),     make_integeri(g_exp_chunks),
+  };
+  exp_t *head = NULL, *tail = NULL;
+  for (int i = 0; i < 8; i++) {
+    exp_t *node = make_node(items[i]); /* takes the content ref */
+    if (tail)
+      tail = tail->next = node;
+    else
+      head = tail = node;
+  }
+  return head ? head : NIL_EXP;
+}
+
 const char doc_repeat[] = "(repeat n expr ...) — run body n times, returning "
                           "the last expression's value.";
 exp_t *repeatcmd(exp_t *e, env_t *env) {
