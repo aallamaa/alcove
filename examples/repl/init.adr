@@ -1,0 +1,11 @@
+# Example init for the programmable-REPL toolkit (lib/repl.adr).
+#
+# Copy this to ./.init.adr (project-local) or ~/.local/alcove/init.adr (global),
+# with lib/ on ALCOVE_PATH so `require("repl")` resolves, e.g.:
+#       cp examples/repl/init.adr .init.adr  &&  ALCOVE_PATH=lib adder
+# (The file is named init.adr here because .init.adr is gitignored scratch.)
+require("repl")
+repl/install-all()                  # status prompt + output hook + editing keys
+repl/transcript-to("repl-session.log")
+repl/errlog-to("repl-errors.log")
+prn "[repl toolkit loaded — M-d=doc under cursor, C-o=stats, C-k=kill-to-eol]"

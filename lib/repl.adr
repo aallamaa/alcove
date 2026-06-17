@@ -1,0 +1,129 @@
+# lib/repl.adr — a programmable-REPL toolkit for Adder & Alcove.
+#
+# Drives the interactive REPL hooks: *prompt-in* / *prompt-out* / *prompt-cont*
+# (prompt rendering), *output-hook* (observe each result), and bind-key + the
+# repl-* line editor. (*input-hook* line rewriting is left for a later slice.)
+#
+# Usage — in ./.init.adr (or .init.alc):  require("repl")  then  repl/install-all()
+# or pick features:  repl/install-prompt() / repl/install-output() / repl/install-editing()
+#
+# State globals avoid earmuffs on purpose: in Adder `*` is the infix-multiply
+# token, so `*name*` is awkward to write. The C-side hook globals (*prompt-in*,
+# *output-hook*, ...) ARE earmuffed — those are set via setf.
+ns repl
+
+# ---- session state -------------------------------------------------
+(= repl/results (list))     # newest-first ring of result VALUES
+(= repl/cells   (list))     # newest-first (n input output) triples (transcript/notebook)
+(= repl/stats   (hash-map)) # "evals" / "errors" counters (mutated via assoc!)
+(= repl/last-ok t)          # did the previous eval avoid erroring? (drives prompt color)
+(= repl/transcript nil)     # path | nil — append every (in => out) here
+(= repl/errlog     nil)     # path | nil — append only erroring forms here
+
+# ---- ANSI helper ---------------------------------------------------
+def repl/ansi(code s):
+  (str "\x1B[" code "m" s "\x1B[0m")
+
+# ---- result ring ---------------------------------------------------
+def repl/count():
+  (length repl/cells)
+def repl/last(k):           # k steps back from newest: repl/last(1) = most recent
+  (nth (- k 1) repl/results)
+def repl/out(n):            # by absolute cell number n
+  (nth (- (repl/count) n) repl/results)
+
+# ---- metrics -------------------------------------------------------
+def repl/bump(output):
+  (assoc! repl/stats "evals" (+ 1 (or (get repl/stats "evals") 0)))
+  if (error? output):
+    (assoc! repl/stats "errors" (+ 1 (or (get repl/stats "errors") 0)))
+def repl/hud():
+  (str "evals=" (or (get repl/stats "evals") 0) " errors=" (or (get repl/stats "errors") 0) " ring=" (length repl/results))
+
+# Safe stringify: errors PROPAGATE through normal calls like (str x), so a bare
+# (str an-error) would re-raise and abort the hook. error?/error-message don't
+# propagate — branch on them.
+def repl/show(v):
+  (if (error? v) (str "Error: " (error-message v)) (str v))
+
+# ---- the shared output hook (record + ring + status + log + stats) -
+# `output` is a bound PARAM here, so it's an inert value even when it's an
+# error — safe to pass to repl/show. We stringify once, now, and store the
+# STRING in cells: a stored error re-arms when later returned by nth, so the
+# notebook/transcript must never re-stringify it downstream.
+def repl/on-output(n input output):
+  (= repl/cells (cons (list n input (repl/show output)) repl/cells))
+  (= repl/results (cons output repl/results))
+  (= repl/last-ok (no (error? output)))
+  (repl/bump output)
+  if repl/transcript:
+    (append-string repl/transcript (str "In[" n "]: " input "\nOut[" n "]: " (repl/show output) "\n"))
+  if (and repl/errlog (error? output)):
+    (append-string repl/errlog (str "In[" n "]: " input " => " (repl/show output) "\n"))
+
+# ---- prompt (green when last eval was ok, red after an error) ------
+def repl/prompt-in(n):
+  (repl/ansi (if repl/last-ok "92" "91") (str (dialect) " [" n "]> "))
+def repl/prompt-out(n):
+  (repl/ansi "90" (str "[" n "]= "))
+
+# ---- notebook export (markdown) ------------------------------------
+def repl/export-md(path):
+  with (out "# REPL session\n\n"):
+    each cell (reverse repl/cells):
+      (= out (str out "```\nIn[" (nth 0 cell) "]: " (nth 1 cell) "\nOut: " (nth 2 cell) "\n```\n\n"))
+    (write-string path out)
+    path
+
+# ---- line-editing helpers ------------------------------------------
+def repl/boundary?(c):            # is c a token separator? (named char literals
+  (string-contains? " \t()[]{}\"'" (str c)) # like #\space aren't supported, so test membership)
+def repl/token-start(line p):     # index where the symbol ending at p begins
+  with (i p):
+    while (and (> i 0) (no (repl/boundary? (line (- i 1))))):
+      (= i (- i 1))
+    i
+def repl/token-before-point():    # the symbol the cursor sits at the end of
+  with (line (repl-line) p (repl-point)):
+    (substr line (repl/token-start line p) p)
+
+# ---- editing actions (call inside a bind-key handler) --------------
+def repl/complete():              # complete the token before point (first match)
+  with (tok (repl/token-before-point)):
+    with (cands (repl-completions tok)):
+      if (and cands (> (length cands) 0)):
+        (repl-insert (substr (nth 0 cands) (length tok) (length (nth 0 cands))))
+def repl/kill-to-eol():
+  (repl-delete (repl-point) (repl-end))
+def repl/doc-here():              # docs for the symbol under the cursor
+  with (tok (repl/token-before-point)):
+    if (> (length tok) 0):
+      (prn "")
+      (doc tok)
+    (repl-refresh)
+def repl/show-hud():
+  (prn "")
+  (prn (repl/hud))
+  (repl-refresh)
+def repl/snippet(text):           # insert literal text at the cursor
+  (repl-insert text)
+
+# ---- installers ----------------------------------------------------
+def repl/install-prompt():
+  (setf *prompt-in* repl/prompt-in)
+  (setf *prompt-out* repl/prompt-out)
+def repl/install-output():
+  (setf *output-hook* repl/on-output)
+def repl/transcript-to(path):
+  (= repl/transcript path)
+def repl/errlog-to(path):
+  (= repl/errlog path)
+def repl/install-editing():
+  (bind-key "tab" repl/complete)
+  (bind-key "C-k" repl/kill-to-eol)
+  (bind-key "M-d" repl/doc-here)
+  (bind-key "C-o" repl/show-hud)
+def repl/install-all():
+  (repl/install-prompt)
+  (repl/install-output)
+  (repl/install-editing)
