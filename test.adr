@@ -887,6 +887,27 @@ def is-ack (m n):
 
 assert "is-fused ackermann (jit shape)" (is-ack 3 6) 509
 
+def _nontail_sum (n):
+  if (< n 1):
+    0
+    + n (_nontail_sum (- n 1))
+
+assert "deep non-tail recursion → catchable error, not segfault" (try (_nontail_sum 1000000) (fn (e) (error? e))):
+  t
+
+assert "stack-overflow error message" (try (_nontail_sum 1000000) (fn (e) (string-contains? (error-message e) "stack overflow"))):
+  t
+
+assert "shallow non-tail recursion still computes" (_nontail_sum 100) 5050
+
+def _tail_sum (n acc):
+  if (< n 1):
+    acc
+    _tail_sum (- n 1) (+ acc 1)
+
+assert "deep tail recursion unaffected by the guard" (_tail_sum 2000000 0):
+  2000000
+
 def ts-let (n acc):
   let s (+ acc n):
     if (is n 0):

@@ -587,6 +587,22 @@
                           (is-ack (- m 1) (is-ack m (- n 1))))))
 (assert "is-fused ackermann (jit shape)"   (is-ack 3 6)      509)
 
+; Stack-overflow guard (Tier 1.1): deep NON-tail recursion used to segfault the
+; C stack uncatchably. It must now raise an ORDINARY, catchable error. The guard
+; is a stack-pointer probe at the call boundaries (vm_run / invoke_body), so it
+; trips on C-stack depth — never on tail calls (which trampoline, no new frame).
+(def _nontail_sum (n) (if (< n 1) 0 (+ n (_nontail_sum (- n 1)))))
+(assert "deep non-tail recursion → catchable error, not segfault"
+        (try (_nontail_sum 1000000) (fn (e) (error? e))) t)
+(assert "stack-overflow error message"
+        (try (_nontail_sum 1000000)
+             (fn (e) (string-contains? (error-message e) "stack overflow"))) t)
+; shallow non-tail recursion is unaffected (well under the limit)
+(assert "shallow non-tail recursion still computes" (_nontail_sum 100) 5050)
+; deep TAIL recursion must NOT trip the guard (trampoline, O(1) C stack)
+(def _tail_sum (n acc) (if (< n 1) acc (_tail_sum (- n 1) (+ acc 1))))
+(assert "deep tail recursion unaffected by the guard" (_tail_sum 2000000 0) 2000000)
+
 ; 8h. OP_TAIL_SELF inside a let/let*/with body. A self-tail call wrapped in a
 ;     binding form now emits OP_TAIL_SELF (rebind inline slots in place, jump to
 ;     pc=0, re-run the binding prologue) instead of OP_TAIL_CALL+LOAD_GLOBAL —

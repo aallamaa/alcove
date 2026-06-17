@@ -30,6 +30,7 @@
 #include <time.h> /* clock_gettime(CLOCK_MONOTONIC) for (now-ms) */
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
+#include <sys/resource.h> /* getrlimit(RLIMIT_STACK) for the stack-overflow guard */
 /* Adder front end: a string->string transpiler that turns the
    whitespace/`:`-block surface syntax into ordinary alcove s-expressions
    before they reach reader(). Included UNCONDITIONALLY (not just in the adder
@@ -1059,6 +1060,59 @@ void *xrealloc(void *ptr, size_t size) {
   if (!p && size)
     graceful_shutdown("Fatal error: Out of memory");
   return p;
+}
+
+/* ---- C-stack-overflow guard (Tier 1.1) ------------------------------------
+   Deep NON-tail recursion grows the C stack — every nested vm_run / AST
+   invoke_body is a frame. Unbounded it SEGFAULTs with no catchable error, which
+   is fatal when embedding untrusted/buggy code or running a server. A stack-
+   pointer probe at the call boundaries raises an ordinary, *catchable* error
+   instead, leaving enough headroom to build + raise + unwind it. Tail calls
+   reuse the frame (VM trampoline / AST tail-marker), so they never trip it — the
+   probe is in BYTES, so it adapts to the real per-frame size automatically.
+
+   g_stack_base is per-thread, captured lazily at the first guarded call (always
+   shallow — a top-level form's evaluation), so RESP worker threads each stamp
+   their own base. The budget is the stack rlimit less a 1/4 margin (≥2 MiB on a
+   default 8 MiB stack) — comfortably more than error()'s vasprintf + backtrace
+   capture need. */
+/* base held as an INTEGER, not a char* — storing &probe (a local) in a
+   longer-lived object trips -Wdangling-pointer, and we only ever do arithmetic
+   on it, never dereference it. */
+static ALCOVE_TLS uintptr_t g_stack_base = 0;
+static size_t g_stack_budget = 0; /* bytes of usable depth; computed once */
+
+static int stack_guard_exhausted(void) {
+  /* __builtin_frame_address tracks the REAL frame pointer; a plain `&local`
+     is relocated to a heap "fake stack" under ASan's
+     detect_stack_use_after_return, which would fool the depth measurement. */
+  uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+  if (!g_stack_base) {
+    g_stack_base = sp;
+    if (!g_stack_budget) {
+      /* 8 MiB is the default main-thread stack on Linux/macOS. Only ever
+         SHRINK from it: a smaller `ulimit -s` must trip the guard earlier, but
+         we must NOT trust a larger/unlimited RLIMIT_STACK — ASan (and some
+         libcs) report a huge or infinite limit while the real guard page is
+         still at 8 MiB, and trusting it would disable the guard and let the
+         process segfault. */
+      size_t lim = 8u * 1024 * 1024;
+      struct rlimit rl;
+      if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
+          rl.rlim_cur >= (1u * 1024 * 1024) && (size_t)rl.rlim_cur < lim)
+        lim = (size_t)rl.rlim_cur;
+      /* Reserve a 1 MiB tail so the error path (vasprintf + backtrace capture)
+         always has room, then allow the rest. 1 MiB is ample for the shallow
+         error path in every build (the deepest legitimate recursion in the
+         suite — Ackermann(3,7) in the unoptimized AST build — peaks near 6 MiB
+         of an 8 MiB stack, so the budget must sit well above half). */
+      size_t margin = 1024u * 1024;
+      g_stack_budget = lim > margin * 2 ? lim - margin : lim / 2;
+    }
+    return 0;
+  }
+  /* stack grows down on the supported targets: deeper frame => lower sp */
+  return g_stack_base > sp && (g_stack_base - sp) > g_stack_budget;
 }
 
 inline exp_t *refexp(exp_t *e) {
@@ -9248,6 +9302,19 @@ exp_t *vm_run(exp_t *fn, env_t *env) {
      (correct: they're all live until the base case returns). */
   int handler_base = g_handler_sp;
 
+  /* Stack-overflow guard: a nested vm_run (a non-tail call into another
+     compiled body) is a fresh C frame; bail with a catchable error before the
+     C stack overflows. Placed before tail_reentry so the in-frame tail
+     trampoline (which adds no C frame) is never charged. Nothing is pushed yet
+     (sp would be 0) and fn is borrowed (fn_owned == 0), so just unwind any
+     enclosing handlers with the error — an outer (try ...) still catches it. */
+  if (stack_guard_exhausted()) {
+    exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env,
+                        "stack overflow: recursion too deep (use tail "
+                        "recursion, or raise the OS stack limit)");
+    return vm_unwind_handlers(_err, handler_base);
+  }
+
 tail_reentry:
   bc = fn->bc;
   code = bc->code;
@@ -11034,6 +11101,17 @@ static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env) {
      symbols (whose ->ptr we borrow into env->inline_keys) can never be
      freed while the env is live. Tail calls reuse the frame via a
      trampoline loop — O(1) C stack for tail recursion. */
+
+  /* Stack-overflow guard: bail with a catchable error before deep non-tail
+     recursion blows the C stack. Cleanup mirrors the multi-arity error path
+     below — e is owned (unref it), fn is borrowed (the caller releases it). */
+  if (stack_guard_exhausted()) {
+    exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env,
+                      "stack overflow: recursion too deep (use tail recursion, "
+                      "or raise the OS stack limit)");
+    unrefexp(e);
+    return er;
+  }
 
   /* Multi-arity (defn): dispatch on argument count to the matching clause,
      then run that ordinary clause lambda through the normal path. Must come
