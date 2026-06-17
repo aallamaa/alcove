@@ -12,6 +12,10 @@
 #                                               wrappers + demo pages)
 #
 # Each binary tarball carries README.md, agpl-3.0.txt, and the language doc.
+# Also produced for supply-chain provenance:
+#   dist/SBOM.txt        minimal software bill of materials
+#   dist/SHA256SUMS       sha256 of every tarball + the SBOM
+#   dist/*.asc            detached GPG signatures (only if ALCOVE_GPG_KEY is set)
 # The script rebuilds ./alcove and ./adder for the HOST at the end, so your
 # dev binaries stay tuned (-march=native) after a release build.
 set -e
@@ -96,9 +100,63 @@ else
   echo "== skipping wasm (no emcc) =="
 fi
 
+# ---- 4. SBOM, checksums, and (optional) signatures --------------------------
+# Supply-chain provenance: a minimal SBOM, a SHA256SUMS manifest over every
+# artifact (always), and detached GPG signatures when a key is available.
+echo "== SBOM + checksums + signatures =="
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILT=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)
+
+# Minimal, honest bill of materials. alcove's own code is AGPL-3.0; the only
+# third-party code is the C runtime + optional readline/FFI (full build) and the
+# Emscripten runtime (wasm). No vendored libraries.
+cat > "$DIST/SBOM.txt" <<SBOM
+alcove $VERSION — Software Bill of Materials
+commit:    $COMMIT
+generated: $BUILT
+
+Project components (this source tree, AGPL-3.0):
+  alcove  — the interpreter (JIT'd numeric Lisp)
+  adder   — the Pythonic dialect front end (same source)
+
+Third-party runtime dependencies, by artifact:
+  alcove-$VERSION-linux-x86_64    libc, libm, libreadline, libffi  (dynamic)
+  alcove-$VERSION-linux-aarch64   libc, libm                       (static; no readline/FFI)
+  alcove-$VERSION-wasm            Emscripten runtime               (bundled; no external libs)
+
+Build flags:
+  linux-x86_64    cc  -O3 -march=x86-64-v2 -DALCOVE_JIT=1  (+readline +FFI)
+  linux-aarch64   aarch64-linux-gnu-gcc -static -O3 -DALCOVE_JIT=1
+  wasm            emcc  (see the Makefile 'web' target)
+SBOM
+echo "   -> $DIST/SBOM.txt"
+
+# SHA256 manifest over the tarballs + the SBOM (portable: GNU or BSD tooling).
+checksum() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"
+  else shasum -a 256 "$@"; fi
+}
+( cd "$DIST" && checksum *.tar.gz SBOM.txt > SHA256SUMS )
+echo "   -> $DIST/SHA256SUMS"
+
+# Detached, armored GPG signatures — only when a signing key is configured, so
+# the script still works on hosts without signing infra. Signs each tarball and
+# the SHA256SUMS manifest (signing the manifest covers the SBOM transitively).
+if command -v gpg >/dev/null 2>&1 && [ -n "${ALCOVE_GPG_KEY:-}" ]; then
+  echo "   signing with GPG key $ALCOVE_GPG_KEY"
+  for f in "$DIST"/*.tar.gz "$DIST/SHA256SUMS"; do
+    gpg --batch --yes --local-user "$ALCOVE_GPG_KEY" --detach-sign --armor "$f"
+    echo "   -> $f.asc"
+  done
+else
+  echo "   (no GPG signature — set ALCOVE_GPG_KEY (and install gpg) to sign;"
+  echo "    SHA256SUMS is always produced so downloads can be verified)"
+fi
+
 # ---- restore host-tuned dev binaries ----------------------------------------
 echo "== restoring host-tuned ./alcove and ./adder =="
 make -s jit adder
 
 echo "== artifacts =="
 ls -lh "$DIST"
+echo "== verify: sha256sum -c dist/SHA256SUMS (in dist/) =="

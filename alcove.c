@@ -13789,6 +13789,15 @@ env_t *alcove_init(void) {
   if (!global->d)
     global->d = create_dict();
   set_get_keyval_dict(global->d, "*args*", NIL_EXP);
+  /* *readline* — t when this build links the readline line-editor (bind-key and
+     the repl-* line-editing builtins are live), nil otherwise (e.g. the static
+     release binary). Lets programs and the test suite skip interactive-only
+     features rather than misbehave. */
+#ifdef ALCOVE_READLINE
+  set_get_keyval_dict(global->d, "*readline*", TRUE_EXP);
+#else
+  set_get_keyval_dict(global->d, "*readline*", NIL_EXP);
+#endif
   /* REPL prompt hooks: when bound to a function (fn (n) -> string) the REPL
      calls it to render a prompt for cell n; nil = built-in default. *-in* is the
      input prompt, *-out* precedes a result, *-cont* is the multi-line

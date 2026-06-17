@@ -4461,8 +4461,13 @@
 ;; The editing effects are interactive (pty-tested); from a file we can only
 ;; assert the builtins exist, return sane no-op values off-line, and that
 ;; bind-key/repl-completions accept their args.
-(assert "bind-key returns t"            (bind-key "S-tab" (fn () nil)) t)
-(assert "bind-key nil handler ok"       (bind-key "C-q" nil) t)
+;; bind-key and the completion scan are live only in a readline build; a
+;; no-readline binary (e.g. the static release artifact) leaves them inert, so
+;; gate the behavior-dependent asserts on *readline*.
+(when *readline*
+  (assert "bind-key returns t"            (bind-key "S-tab" (fn () nil)) t)
+  (assert "bind-key nil handler ok"       (bind-key "C-q" nil) t)
+  (assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0)))
 (assert "repl-line empty off-line"      (repl-line) "")
 (assert "repl-point 0 off-line"         (repl-point) 0)
 (assert "repl-end 0 off-line"           (repl-end) 0)
@@ -4470,7 +4475,6 @@
 (assert "repl-insert is a no-op"        (repl-insert "x") nil)
 (assert-true "repl-completions -> list" (or (nil? (repl-completions "zzzznope"))
                                             (list? (repl-completions "plat"))))
-(assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0))
 
 ;; ---- general infix: (a f b) -> (f a b) for ANY function ----
 ;; Beyond the fixed operators (+ - * / < > ...), any function in the operator

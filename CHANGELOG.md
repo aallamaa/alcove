@@ -30,6 +30,13 @@ what is frozen vs experimental.
     catchable "interrupted: memory limit exceeded" error.
   - `(heap-stats)` — per-thread arena stats (`:live :free :allocated :chunks`)
     for reference-cycle leak audits (refcounting does not reclaim cycles).
+- **`*readline*`** — a global that is `t` when the build links the readline
+  line-editor, `nil` otherwise (e.g. the static release binary), so programs can
+  skip interactive-only features.
+
+### Supply chain
+- `tools/release.sh` now emits a minimal `SBOM.txt`, a `SHA256SUMS` manifest
+  over every artifact, and detached GPG signatures when `ALCOVE_GPG_KEY` is set.
 
 ### Changed
 - **Integer overflow is an error**, never a silent wrap or implicit float
