@@ -446,6 +446,7 @@ lispProc lispProcList[] = {
     LISPCMD("while", whilecmd, doc_while),
     LISPCMD("repeat", repeatcmd, doc_repeat),
     LISPCMD("with-time-limit", withtimelimitcmd, doc_with_time_limit),
+    LISPCMD("with-memory-limit", withmemlimitcmd, doc_with_memory_limit),
     LISPCMD("heap-stats", heapstatscmd, doc_heap_stats),
     LISPCMD_TAIL("and", andcmd, doc_and),
     LISPCMD_TAIL("or", orcmd, doc_or),
@@ -1129,20 +1130,34 @@ static int stack_guard_exhausted(void) {
    numeric loop is a terminating counting shape by construction, and a runaway
    (while t ...) / infinite tail loop is not a JIT shape, so it stays in the VM
    where the check lives. */
-static ALCOVE_TLS int64_t g_deadline_ms = 0; /* 0 = unlimited; else abs mono-ms */
+static ALCOVE_TLS int64_t g_deadline_ms = 0;    /* 0 = unlimited; else abs mono-ms */
+static ALCOVE_TLS int64_t g_chunk_ceiling = 0;  /* 0 = unlimited; else max g_exp_chunks (Tier 1.3) */
 static ALCOVE_TLS uint32_t g_budget_tick = 0;
+/* exp_t arena high-water: # of EXP_BUMP_CHUNK-sized chunks ever calloc'd on this
+   thread. Bumped only on the rare chunk-exhaustion path (every 256 allocations),
+   so the hot make_nil path is untouched. Backs both (heap-stats) [1.2] and the
+   memory budget [1.3]: it rises only on genuine cell ACCUMULATION, never on
+   alloc/free churn. Defined here (ahead of make_nil) so budget_check can read it. */
+static ALCOVE_TLS int64_t g_exp_chunks = 0;
 
 static int64_t alc_monotonic_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
-static int budget_exceeded(void) {
-  if (!g_deadline_ms)
-    return 0;
-  if ((++g_budget_tick & 0x3FFu) != 0) /* sample the clock ~every 1024 edges */
-    return 0;
-  return alc_monotonic_ms() >= g_deadline_ms;
+/* Runaway checkpoint, called at loop back-edges. 0 = keep going; 1 = time
+   budget (1.4) exceeded; 2 = memory budget (1.3) exceeded. Both off by default
+   → two predicted-not-taken branches, so the hot path pays nothing. The memory
+   test uses g_exp_chunks (the arena high-water from heap-stats): it rises only
+   on genuine cell ACCUMULATION, never on steady-state alloc/free churn, so a
+   tight loop that frees what it makes is not charged. */
+static int budget_check(void) {
+  if (g_chunk_ceiling && g_exp_chunks > g_chunk_ceiling)
+    return 2;
+  if (g_deadline_ms && (++g_budget_tick & 0x3FFu) == 0 &&
+      alc_monotonic_ms() >= g_deadline_ms)
+    return 1;
+  return 0;
 }
 
 inline exp_t *refexp(exp_t *e) {
@@ -1172,13 +1187,8 @@ static ALCOVE_TLS exp_t *exp_freelist = NULL;
 #define EXP_BUMP_CHUNK 256
 static ALCOVE_TLS exp_t *exp_bump_next = NULL;
 static ALCOVE_TLS int exp_bump_left = 0;
-/* # of EXP_BUMP_CHUNK-sized chunks ever calloc'd on this thread's arena. Bumped
-   only on the rare chunk-exhaustion path (every 256 allocations), so it adds
-   nothing to the hot make_nil path. Backs (heap-stats) — the leak/cycle audit
-   handle: arbitrary reference cycles (cyclic lists, callback↔dict) are not
-   reclaimed by refcounting and stay live, so diffing the live count across a
-   workload that should free everything surfaces a leak. See docs. */
-static ALCOVE_TLS int64_t g_exp_chunks = 0;
+/* g_exp_chunks (the arena high-water backing heap-stats + the memory budget) is
+   declared earlier, ahead of budget_check. */
 
 /* Cold free path, reached from the inline unrefexp() ONLY once a refcount has
    hit <= 0: ret == 0 → e is dead (free its payload, push to the freelist, and
@@ -9931,8 +9941,11 @@ l_jump: {
   int16_t off = READ_I16;
   pc += off;
   /* loop back-edge (negative offset): the runaway-budget checkpoint */
-  if (off < 0 && budget_exceeded())
-    RUNTIME_ERR("interrupted: time limit exceeded");
+  if (off < 0) {
+    int _b = budget_check();
+    if (_b == 1) RUNTIME_ERR("interrupted: time limit exceeded");
+    if (_b == 2) RUNTIME_ERR("interrupted: memory limit exceeded");
+  }
   NEXT;
 }
 l_br_if_false: {
@@ -9971,8 +9984,11 @@ l_tail_self: {
   sp = base;
   pc = 0;
   /* self-tail loop back-edge: the runaway-budget checkpoint */
-  if (budget_exceeded())
-    RUNTIME_ERR("interrupted: time limit exceeded");
+  {
+    int _b = budget_check();
+    if (_b == 1) RUNTIME_ERR("interrupted: time limit exceeded");
+    if (_b == 2) RUNTIME_ERR("interrupted: memory limit exceeded");
+  }
   NEXT;
 }
 
@@ -10183,8 +10199,11 @@ l_tail_call: {
     g_callstack[g_calldepth - 1] =
         new_fn->meta ? (const char *)new_fn->meta : "<anonymous>";
   /* cross-function tail loop back-edge: the runaway-budget checkpoint */
-  if (budget_exceeded())
-    RUNTIME_ERR("interrupted: time limit exceeded");
+  {
+    int _b = budget_check();
+    if (_b == 1) RUNTIME_ERR("interrupted: time limit exceeded");
+    if (_b == 2) RUNTIME_ERR("interrupted: memory limit exceeded");
+  }
   goto tail_reentry;
 }
 
@@ -11318,9 +11337,11 @@ tailrec: {
         unrefexp(marker);
         /* self-tail loop back-edge (AST tier): runaway-budget checkpoint.
            Build the error before unref'ing e (error() refs it). */
-        if (budget_exceeded()) {
+        int _b = budget_check();
+        if (_b) {
           exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env,
-                            "interrupted: time limit exceeded");
+                            _b == 2 ? "interrupted: memory limit exceeded"
+                                    : "interrupted: time limit exceeded");
           destroy_env(newenv);
           unrefexp(fn);
           unrefexp(e);

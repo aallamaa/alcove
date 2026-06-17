@@ -616,6 +616,15 @@
 (assert "with-time-limit: runaway self-tail recursion → catchable interrupt"
         (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e)))  t)
 
+; Memory budget (Tier 1.3): (with-memory-limit BYTES THUNK) bounds runaway
+; ACCUMULATION with a catchable error; bounded work under a limit returns normally.
+(assert "with-memory-limit: bounded work returns its value"
+        (with-memory-limit 10000000 (fn () (reduce + 0 (range 1 101))))  5050)
+(def _grow (acc) (_grow (cons 1 acc)))
+(assert "with-memory-limit: runaway accumulation → catchable memory interrupt"
+        (try (with-memory-limit 2000000 (fn () (_grow nil)))
+             (fn (e) (string-contains? (error-message e) "memory limit")))  t)
+
 ; Reference-cycle leak audit (Tier 1.2): refcounting reclaims everything EXCEPT
 ; cycles (no tracing GC). (heap-stats) :live exposes the leak so operators can
 ; detect it: a non-cyclic workload frees what it allocates (≈0 live growth); a

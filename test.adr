@@ -920,6 +920,15 @@ def _spin (n):
 assert "with-time-limit: runaway self-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e))):
   t
 
+assert "with-memory-limit: bounded work returns its value" (with-memory-limit 10000000 (fn () (reduce + 0 (range 1 101)))):
+  5050
+
+def _grow (acc):
+  _grow (cons 1 acc)
+
+assert "with-memory-limit: runaway accumulation → catchable memory interrupt" (try (with-memory-limit 2000000 (fn () (_grow nil))) (fn (e) (string-contains? (error-message e) "memory limit"))):
+  t
+
 assert "heap-stats first key is :live" (nth (heap-stats) 0) :live
 
 setf _h0 (nth (heap-stats) 1)

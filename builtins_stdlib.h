@@ -1960,10 +1960,15 @@ exp_t *whilecmd(exp_t *e, env_t *env) {
   exp_t *curi = cur;
   exp_t *ret = NULL;
   while (istrue(ret = EVAL(val, env)) && (!iserror(ret))) {
-    if (budget_exceeded()) { /* runaway-budget checkpoint (AST while) */
-      unrefexp(ret);
-      ret = error(ERROR_ILLEGAL_VALUE, e, env, "interrupted: time limit exceeded");
-      break;
+    { /* runaway-budget checkpoint (AST while) */
+      int _b = budget_check();
+      if (_b) {
+        unrefexp(ret);
+        ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                    _b == 2 ? "interrupted: memory limit exceeded"
+                            : "interrupted: time limit exceeded");
+        break;
+      }
     }
     cur = curi;
     do {
@@ -2013,6 +2018,38 @@ exp_t *withtimelimitcmd(exp_t *e, env_t *env) {
   exp_t *ret = alc_apply_n(thunk, 0, NULL, env); /* borrows thunk */
   g_deadline_ms = saved;
   CLEAN_RETURN_2(ms, thunk, ret);
+}
+
+const char doc_with_memory_limit[] =
+    "(with-memory-limit BYTES THUNK) — call (THUNK) but abort it with a catchable "
+    "\"interrupted: memory limit exceeded\" error if it grows this thread's "
+    "exp_t arena by more than ~BYTES. Bounds runaway ACCUMULATION (building an "
+    "unbounded list/structure) for untrusted/buggy code, checked at loop "
+    "back-edges. Nested limits use the tighter ceiling. SCOPE: bounds exp_t cell "
+    "growth (lists/pairs/closures), the common runaway; it does NOT bound a "
+    "single huge string/blob/vector allocation, and a genuine malloc failure "
+    "still terminates the process (graceful_shutdown). Granularity is the 256-cell "
+    "arena chunk (~a few KiB).";
+exp_t *withmemlimitcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(bytes, thunk);
+  if (!bytes || !isnumber(bytes) || FIX_VAL(bytes) <= 0)
+    CLEAN_RETURN_2(
+        bytes, thunk,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "with-memory-limit: BYTES must be a positive integer"));
+  if (!thunk || !islambda(thunk))
+    CLEAN_RETURN_2(
+        bytes, thunk,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "with-memory-limit: second arg must be a thunk (0-arg lambda)"));
+  /* bytes → cells → chunks (round up, +1), relative to the current high-water */
+  int64_t cells = FIX_VAL(bytes) / (int64_t)sizeof(exp_t);
+  int64_t want = g_exp_chunks + cells / EXP_BUMP_CHUNK + 1;
+  int64_t saved = g_chunk_ceiling;
+  g_chunk_ceiling = (saved && saved < want) ? saved : want; /* nested: tighter */
+  exp_t *ret = alc_apply_n(thunk, 0, NULL, env);
+  g_chunk_ceiling = saved;
+  CLEAN_RETURN_2(bytes, thunk, ret);
 }
 
 const char doc_heap_stats[] =
