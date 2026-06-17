@@ -7346,6 +7346,61 @@ static int op_for_head(const char *s);
 static void compile_expr(compiler_t *c, exp_t *e, int tail);
 static void patch_i16(compiler_t *c, int patch, int target);
 
+/* Is `e` one of the native infix-operator symbols (+ - * / < > <= >= is iso
+   isnt mod)? These are the ops the compiler/VM/JIT have fast paths for. */
+static int is_native_op_symbol(exp_t *e) {
+  if (!e || !is_ptr(e) || !issymbol(e))
+    return 0;
+  static const char *const ops[] = {"+",  "-",  "*",   "/",   "<",   ">",
+                                     "<=", ">=", "is",  "iso", "isnt", "mod"};
+  const char *t = (const char *)exp_text(e);
+  for (int i = 0; i < 12; i++)
+    if (strcmp(t, ops[i]) == 0)
+      return 1;
+  return 0;
+}
+/* Infix -> prefix at COMPILE time: (A OP B) -> (OP A B) when OP is a native
+   operator AND A is statically NON-CALLABLE — a sub-expression head ((fib ..)),
+   a numeric literal, or a param carrying a :type hint. This is what lets infix
+   numeric code compile to the native ops and JIT (e.g. (def fib (n :int) (if
+   (n < 2) n ((fib (n - 1)) + (fib (n - 2)))))).
+   It must NOT fire on a bare un-hinted symbol head: (my-fold + lst) is a real
+   CALL passing + to a HOF, and infix-vs-call there is a RUNTIME value question
+   — left to the generic call path + the runtime infix dispatch. The AST
+   evaluator already computes the same result via that value dispatch, so the
+   rewrite keeps AST==VM (verified by equiv_sweep). Returns a fresh owned
+   (OP A B) (sharing A/B/op refs) or NULL. */
+static exp_t *compile_infix_rewrite(compiler_t *c, exp_t *e) {
+  if (!ispair(e))
+    return NULL;
+  exp_t *a = e->content, *r1 = e->next;
+  if (!r1)
+    return NULL;
+  exp_t *op = r1->content, *r2 = r1->next;
+  if (!r2 || r2->next) /* need exactly 3 elements: (A OP B) */
+    return NULL;
+  if (!is_native_op_symbol(op))
+    return NULL;
+  int noncallable = 0;
+  if (a && is_ptr(a) && ispair(a))
+    noncallable = 1; /* sub-expression head: (fib ..) etc. */
+  else if (isnumber(a) || (a && is_ptr(a) && isfloat(a)))
+    noncallable = 1; /* numeric literal */
+  else if (a && is_ptr(a) && issymbol(a)) {
+    int slot = find_slot(c, (char *)exp_text(a));
+    if (slot >= 0 && slot < c->nparams && c->param_hints &&
+        c->param_hints[slot] != TYPE_HINT_NONE)
+      noncallable = 1; /* hint-typed param is a known value, never a function */
+  }
+  if (!noncallable)
+    return NULL;
+  exp_t *n2 = make_node(refexp(a));
+  n2->next = make_node(refexp(r2->content));
+  exp_t *h = make_node(refexp(op));
+  h->next = n2;
+  return h;
+}
+
 /* Returns OP_ADD..OP_NOT for pure-arithmetic/cmp symbols, -1 otherwise. */
 static int op_for_head(const char *s) {
   if (!strcmp(s, "+"))
@@ -8263,6 +8318,18 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
 
   /* Call form. Dispatch on head. */
   exp_t *head = car(e);
+  /* Infix -> prefix when the head is statically non-callable (see
+     compile_infix_rewrite). Done before special-form dispatch — but those have
+     a keyword head, never a hinted param / sub-expression / literal, so they're
+     untouched. */
+  {
+    exp_t *pfx = compile_infix_rewrite(c, e);
+    if (pfx) {
+      compile_expr(c, pfx, tail);
+      unrefexp(pfx);
+      return;
+    }
+  }
   if (issymbol(head)) {
     const char *s = exp_text(head);
     if (!strcmp(s, "if")) {
@@ -8707,6 +8774,7 @@ int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
   exp_t *body = fn->next->content;
   compiler_t c = {0};
   c.self_name = (const char *)fn->meta; /* may be NULL for anon fn */
+  c.param_hints = param_hints;          /* borrowed; for infix->prefix rewrite */
   /* One-shot body pre-pass: decide whether the let-body OP_TAIL_SELF
      relaxation is permitted for this whole lambda (order-independent — a
      capturing form anywhere, incl. a let val re-run each iteration, must

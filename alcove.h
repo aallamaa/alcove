@@ -1211,6 +1211,9 @@ typedef struct compiler_t {
      = let/with-bound names. Scope-managed as a stack. */
   char *slot_names[ENV_INLINE_SLOTS];
   int nparams;
+  const uint8_t *param_hints; /* borrowed: per-param TYPE_HINT_* (or NULL). Lets
+                                 compile_expr treat a hinted param as a known
+                                 non-callable value for infix->prefix rewriting. */
   int nslots;            /* current total: nparams + active let/with bindings */
   int nlet_depth;        /* let/with/for nesting depth of the cursor */
   int capture_unsafe;    /* 1 if the lambda body may create an env-capturing

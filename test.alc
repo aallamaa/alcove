@@ -1014,6 +1014,23 @@
 (assert "non-callable head errors"   (error? (1 2 3))    t)
 (assert "non-callable 2-arg errors"  (error? (5 6))      t)
 (assert "nil head errors"            (error? (nil 1))    t)
+; infix -> native at COMPILE time when the head is statically non-callable: a
+; :type-hinted param or a sub-expression head. The function must then bytecode-
+; compile (and JIT, when the build has it) just like the prefix form would.
+(def _isq (x :int) (x * x))
+(assert "hinted infix compiles"      (compiled? _isq)        t)
+(assert "hinted infix value"         (_isq 7)                49)
+(def _ifib (n :int) (if (n < 2) n ((_ifib (n - 1)) + (_ifib (n - 2)))))
+(assert "hinted infix fib compiles"  (compiled? _ifib)       t)
+(assert "hinted infix fib value"     (_ifib 10)              55)
+; (the jit? assertion lives below, once assert-jits/_jit_on are defined)
+; subform-head infix needs no hint (a sub-expression head is never a HOF-arg form)
+(assert "subform-head infix"
+        (((fn (x) (* x 2)) 3) + ((fn (y) (+ y 1)) 4))        11)
+; an UN-hinted symbol head stays a CALL — passing an operator to a user HOF must
+; keep working (the infix-vs-call distinction there is a runtime value question).
+(def _myfold (op acc xs) (if (no xs) acc (_myfold op (op acc (car xs)) (cdr xs))))
+(assert "operator passed to user HOF" (_myfold + 0 (list 1 2 3 4)) 10)
 
 ; 20h. call/cc idioms — exercise the common real-world patterns.
 ; (a) find-first: early return from a recursive walk
@@ -1317,6 +1334,10 @@
 (assert-jits "jit leaf: (fn () K)"        jc-const)
 (assert-jits "jit leaf: (+ s K)"          jc-add)
 (assert-jits "jit leaf: (* s K)"          jc-mul)
+; infix compiled to native via a type hint JITs exactly like the prefix form
+; (_ifib is defined far above in the infix block; the recursive (n<2)/(+ ..)
+; shape is the fib-shape the JIT matcher recognizes).
+(assert-jits "jit hinted infix fib"       _ifib)
 (assert-jits "jit loop: < (wide limit)"   jc-lt)
 (assert-jits "jit loop: <= (wide limit)"  jc-le)
 (assert-jits "jit loop: > countdown"      jc-gt)

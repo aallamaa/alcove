@@ -1547,6 +1547,31 @@ assert "non-callable 2-arg errors" (error? (5 6)) t
 
 assert "nil head errors" (error? (nil 1)) t
 
+def _isq (x :int):
+  x * x
+
+assert "hinted infix compiles" (compiled? _isq) t
+
+assert "hinted infix value" (_isq 7) 49
+
+def _ifib (n :int):
+  if (n < 2):
+    n
+    (_ifib (n - 1)) + (_ifib (n - 2))
+
+assert "hinted infix fib compiles" (compiled? _ifib) t
+
+assert "hinted infix fib value" (_ifib 10) 55
+
+assert "subform-head infix" (((fn (x) (* x 2)) 3) + ((fn (y) (+ y 1)) 4)) 11
+
+def _myfold (op acc xs):
+  if (no xs):
+    acc
+    _myfold op (op acc (car xs)) (cdr xs)
+
+assert "operator passed to user HOF" (_myfold + 0 (list 1 2 3 4)) 10
+
 def _cc_find (pred xs):
   call/cc (fn (return) (do (def go (ys) (if (no ys) nil (if (pred ys) (return (car ys)) (go (cdr ys))))) (go xs)))
 
@@ -2034,6 +2059,8 @@ assert-jits "jit leaf: (fn () K)" jc-const
 assert-jits "jit leaf: (+ s K)" jc-add
 
 assert-jits "jit leaf: (* s K)" jc-mul
+
+assert-jits "jit hinted infix fib" _ifib
 
 assert-jits "jit loop: < (wide limit)" jc-lt
 
