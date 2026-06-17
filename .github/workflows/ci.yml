@@ -29,10 +29,19 @@ jobs:
       - name: C unit + fuzz harnesses (ASan/UBSan)
         run: |
           set -e
-          for t in parser hamt dict blob set vector msgpack utf8; do
+          for t in parser hamt dict blob set vector msgpack utf8 json; do
             echo "::group::$t-test"; make $t-test; echo "::endgroup::"
           done
           echo "::group::adr-test"; make adr-test; echo "::endgroup::"
+      - name: MPSC primitive under ThreadSanitizer
+        # The lock-free MPSC queue backing RESP --threads. gcc ships libtsan on
+        # ubuntu-latest, so build+run directly and FAIL the job on any race or
+        # test failure (the `make mpsc-test-tsan` target is lenient — it swallows
+        # a nonzero exit as "skipping" for dev machines without libtsan; in CI we
+        # want it to be a hard gate).
+        run: |
+          cc -O1 -g -Wall -W -pthread -fsanitize=thread -o mpsc_test_tsan mpsc_test.c
+          TSAN_OPTIONS=halt_on_error=1 ./mpsc_test_tsan
 
   # Full interpreter (jit variant) under ASan+UBSan. test-all runs the
   # evaluator/VM/JIT WITHOUT sanitizers; this is the only job that exercises the
@@ -74,6 +83,8 @@ jobs:
         run: make adr-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
       - name: libFuzzer — msgpack decoder
         run: make msgpack-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
+      - name: libFuzzer — JSON decoder
+        run: make json-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
 
   # JIT-tier differential: builds jit + nojit and asserts every fuzzed numeric
   # loop / leaf / recursion shape produces byte-identical results on the native
