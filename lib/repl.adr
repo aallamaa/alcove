@@ -20,9 +20,17 @@ ns repl
 (= repl/transcript nil)     # path | nil — append every (in => out) here
 (= repl/errlog     nil)     # path | nil — append only erroring forms here
 
-# ---- ANSI helper ---------------------------------------------------
+# ---- ANSI helpers --------------------------------------------------
+# repl/ansi: raw color, for text alcove prints itself (results, prompt-out).
 def repl/ansi(code s):
   (str "\x1B[" code "m" s "\x1B[0m")
+# repl/pansi: color for a READLINE prompt (*prompt-in*/*prompt-cont*). The
+# color escapes MUST be wrapped in \x01..\x02 (readline's RL_PROMPT_START/END
+# _IGNORE) so readline counts them as zero-width — otherwise it miscounts the
+# prompt, and on redraw/wrap can truncate the trailing reset, leaving the
+# terminal stuck in the prompt's color (the "everything red after an error" bug).
+def repl/pansi(code s):
+  (str "\x01\x1B[" code "m\x02" s "\x01\x1B[0m\x02")
 
 # ---- result ring ---------------------------------------------------
 def repl/count():
@@ -62,9 +70,9 @@ def repl/on-output(n input output):
     (append-string repl/errlog (str "In[" n "]: " input " => " (repl/show output) "\n"))
 
 # ---- prompt (green when last eval was ok, red after an error) ------
-def repl/prompt-in(n):
-  (repl/ansi (if repl/last-ok "92" "91") (str (dialect) " [" n "]> "))
-def repl/prompt-out(n):
+def repl/prompt-in(n):            # readline prompt -> pansi (zero-width-marked)
+  (repl/pansi (if repl/last-ok "92" "91") (str (dialect) " [" n "]> "))
+def repl/prompt-out(n):           # printed by alcove, not readline -> raw ansi
   (repl/ansi "90" (str "[" n "]= "))
 
 # ---- notebook export (markdown) ------------------------------------
