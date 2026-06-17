@@ -18,7 +18,7 @@ def fib(n):
   else:
     (fib (n - 1)) + (fib (n - 2))    # infix: (a op b) == (op a b)
 
-prn "fib 30 = " (fib 30)
+prn "fib 30 = " fib(30)
 ```
 
 ```lisp
@@ -98,14 +98,13 @@ def make-counter():
       n = (n + 1)                    # infix both sides; `=` returns the new value
 
 c = make-counter()
-prn (c) (c) (c)                      # → 1 2 3
+prn c() c() c()                      # → 1 2 3
 
 # Infix: (a f b) means (f a b) when the head is a value, not a function — for
 # operators AND any function:  ("hi" starts-with? "h") → t,  (3 max 7) → 7
 def fib(n):
   if (n < 2):
     n
-  else:
     (fib (n - 1)) + (fib (n - 2))
 prn (map fib (range 0 10))           # → (0 1 1 2 3 5 8 13 21 34)
 
@@ -713,6 +712,10 @@ alcove -r 6379                  # RESP2 server mode
 
 ## Documentation
 
+- **Changelog**: [`CHANGELOG.md`](CHANGELOG.md) — notable changes per release.
+- **Stability & versioning**: [`docs/stability.md`](docs/stability.md) — what
+  you can depend on across releases (stable vs experimental surface), the
+  semver/pre-1.0 policy, and how correctness is defended.
 - **Language guide**: [`docs/alcove-language.md`](docs/alcove-language.md)
   — practical reference: literals, special forms, builtins, FFI,
   macros, persistence, closures, footguns. Generated from `alcove.c`
