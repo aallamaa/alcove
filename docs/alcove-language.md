@@ -1515,3 +1515,50 @@ reserved-symbol table it is not a builtin.
 - **Hex literals** (`0xFF`, `0X10`, optional leading `+`/`-`) parse as
   fixnums. Out-of-fixnum-range hex falls through to symbol — there is
   no hex float syntax.
+
+## 11. Semantics (pinned) — the trust-critical surface
+
+These rules are part of the **stable surface** (see
+[`docs/stability.md`](stability.md)). Each is pinned by a conformance assert in
+`test.alc` (search "Trust-critical semantics conformance"), so it cannot drift
+silently — changing one is a **breaking change** and must be recorded in
+[`CHANGELOG.md`](../CHANGELOG.md).
+
+**Truthiness.** `nil` is false, and so are the *empty/zero* values: `0`, `0.0`,
+the empty string `""`, the empty list, and the empty vector. Every other value —
+including non-zero numbers, non-empty strings/lists/vectors, symbols, keywords,
+and procedures — is true. `(if X then else)` and `and`/`or`/`no`/`when`/`while`
+all use this single predicate.
+
+**Evaluation order.** A call `(f a b c)` evaluates `f`, then `a`, `b`, `c`
+**left-to-right**, then applies. `let`/`let*` bindings evaluate top-to-bottom
+(`let*` sees earlier bindings; parallel `let` does not). `do` returns its last
+form's value.
+
+**Errors are values.** An error is a first-class value that **propagates**
+through ordinary calls (passing one as an operand re-raises it), but is inert
+once bound to a parameter. The only operations guaranteed safe on a
+possibly-error value are `error?`, `error-message`, and `try`. A stored error
+**re-arms** when it is surfaced again (e.g. returned by `nth` from a list), so
+inspect with `error?` before using a value that might be an error. `(try body
+handler)` runs `handler` with the error value on a raise.
+
+**Numeric tower & contagion.** Four kinds: fixnum (`int`), exact rational
+(`rational`), bounded decimal (`decimal`), and float (`float`). Combining:
+`int` promotes to whichever other kind it meets; `rational` + `float` →
+`float` (the exact value is converted, lossy); but a `decimal` combines **only**
+with integers — `decimal` + `float` and `decimal` + `rational` are **type
+errors** (two exact systems, or exact-vs-inexact, never mix silently). **Integer
+overflow is an error**, never a silent wrap or implicit float — use a float,
+rational, or decimal explicitly.
+
+**Infix.** A 3-element form whose head evaluates to a **non-callable** value,
+`(A op B)`, is read as `(op A B)` when `op` is a binary operator/function; this
+is value-based and collision-free, so a higher-order call like `(apply + xs)` —
+whose head *is* a function — is never reinterpreted. Generalized: `(a f b)` →
+`(f a b)` for any function `f`. The AST interpreter and the bytecode VM agree
+byte-for-byte (enforced by `tools/equiv_sweep.alc`).
+
+**Macro expansion.** Macros expand at compile time in a fresh environment; they
+see builtins and quasiquote but not user-defined runtime bindings at expansion
+time. Expansion is applied in both interpreted and compiled bodies.

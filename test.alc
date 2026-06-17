@@ -625,6 +625,38 @@
         (try (with-memory-limit 2000000 (fn () (_grow nil)))
              (fn (e) (string-contains? (error-message e) "memory limit")))  t)
 
+;; ── Trust-critical semantics conformance (Tier 2.2) ───────────────────────────
+;; Each assert PINS a rule documented in docs/alcove-language.md (Semantics
+;; appendix) and in docs/stability.md, so the trust-critical surface cannot
+;; silently drift. If one of these changes, that is a BREAKING change and must
+;; be recorded in CHANGELOG.md.
+;; Truthiness: nil and the empty/zero values are falsey; all else is truthy.
+(assert "falsey set (nil 0 0.0 \"\" () [])"
+        (map (fn (x) (if x 1 0)) (list nil 0 0.0 "" (list) (vector)))  (list 0 0 0 0 0 0))
+(assert "truthy set (1 -1 0.5 \"x\" (1) [1])"
+        (map (fn (x) (if x 1 0)) (list 1 -1 0.5 "x" (list 1) (vector 1)))  (list 1 1 1 1 1 1))
+;; Evaluation order: function arguments evaluate left-to-right.
+(assert "arguments evaluate left-to-right"
+        (let (s "") (do ((fn (a b c) nil) (= s (str s "a")) (= s (str s "b")) (= s (str s "c"))) s))  "abc")
+;; Error-as-value: errors are values; error?/error-message/try are the safe ops;
+;; a stored error re-arms when surfaced (e.g. returned by nth).
+(assert "error? t on a captured error"      (error? (try (/ 1 0) (fn (e) e)))  t)
+(assert "error re-arms when surfaced by nth" (error? (nth (list (try (/ 1 0) (fn (e) e)) 2) 0))  t)
+(assert "error? nil on a normal value"       (error? 42)  nil)
+;; Numeric-tower contagion (strict: decimals don't mix with float/rational).
+(assert "int+int = int"            (type-of (+ 1 2))                'int)
+(assert "int+float = float"        (type-of (+ 1 2.0))              'float)
+(assert "int+rational = rational"  (type-of (+ 1 1/2))              'rational)
+(assert "int+decimal = decimal"    (type-of (+ 1 (decimal "1.5")))  'decimal)
+(assert "rational+float = float (contagion)"  (type-of (+ 1/2 2.0))  'float)
+(assert "decimal+float refuses"    (error? (+ (decimal "1") 2.0))   t)
+(assert "decimal+rational refuses" (error? (+ (decimal "1") 1/2))   t)
+(assert "integer overflow is an error"  (error? (* 1152921504606846975 1000000000))  t)
+;; Infix: (value op value) -> (op value value); a function head stays a call.
+(assert "infix (1 + 2) = 3"        (1 + 2)                  3)
+(assert "infix (3 < 5) = t"        (3 < 5)                  t)
+(assert "HOF head is not infix"    (apply + (list 1 2 3))   6)
+
 ; Reference-cycle leak audit (Tier 1.2): refcounting reclaims everything EXCEPT
 ; cycles (no tracing GC). (heap-stats) :live exposes the leak so operators can
 ; detect it: a non-cyclic workload frees what it allocates (≈0 live growth); a

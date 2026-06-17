@@ -929,6 +929,45 @@ def _grow (acc):
 assert "with-memory-limit: runaway accumulation → catchable memory interrupt" (try (with-memory-limit 2000000 (fn () (_grow nil))) (fn (e) (string-contains? (error-message e) "memory limit"))):
   t
 
+assert "falsey set (nil 0 0.0 \"\" () [])" (map (fn (x) (if x 1 0)) (list nil 0 0.0 "" (list) (vector))):
+  list 0 0 0 0 0 0
+
+assert "truthy set (1 -1 0.5 \"x\" (1) [1])" (map (fn (x) (if x 1 0)) (list 1 -1 0.5 "x" (list 1) (vector 1))):
+  list 1 1 1 1 1 1
+
+assert "arguments evaluate left-to-right" (let (s "") (do ((fn (a b c) nil) (setf s (str s "a")) (setf s (str s "b")) (setf s (str s "c"))) s)):
+  "abc"
+
+assert "error? t on a captured error" (error? (try (/ 1 0) (fn (e) e))) t
+
+assert "error re-arms when surfaced by nth" (error? (nth (list (try (/ 1 0) (fn (e) e)) 2) 0)):
+  t
+
+assert "error? nil on a normal value" (error? 42) nil
+
+assert "int+int = int" (type-of (+ 1 2)) 'int
+
+assert "int+float = float" (type-of (+ 1 2.0)) 'float
+
+assert "int+rational = rational" (type-of (+ 1 1/2)) 'rational
+
+assert "int+decimal = decimal" (type-of (+ 1 (decimal "1.5"))) 'decimal
+
+assert "rational+float = float (contagion)" (type-of (+ 1/2 2.0)) 'float
+
+assert "decimal+float refuses" (error? (+ (decimal "1") 2.0)) t
+
+assert "decimal+rational refuses" (error? (+ (decimal "1") 1/2)) t
+
+assert "integer overflow is an error" (error? (* 1152921504606846975 1000000000)):
+  t
+
+assert "infix (1 + 2) = 3" (1 + 2) 3
+
+assert "infix (3 < 5) = t" (3 < 5) t
+
+assert "HOF head is not infix" (apply + (list 1 2 3)) 6
+
 assert "heap-stats first key is :live" (nth (heap-stats) 0) :live
 
 setf _h0 (nth (heap-stats) 1)
