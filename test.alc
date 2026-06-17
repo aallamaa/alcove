@@ -4363,6 +4363,29 @@
                                             (list? (repl-completions "plat"))))
 (assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0))
 
+;; ---- general infix: (a f b) -> (f a b) for ANY function ----
+;; Beyond the fixed operators (+ - * / < > ...), any function in the operator
+;; slot of (VALUE f VALUE) dispatches as (f VALUE VALUE). Only fires when the
+;; head is non-callable as a function (a number, string, etc.), so normal calls
+;; like (map f xs) are untouched. Works for numbers, strings (callable as
+;; indexers), and user functions, in both interpreter and compiled tiers.
+(assert "infix op: number lhs"          (5 + 3) 8)
+(assert "infix op: comparator preserved" (5 < 3) nil)
+(assert "infix fn: string literal lhs"  ("hello" starts-with? "he") t)
+(= _ifx-s "test")
+(assert "infix fn: string var lhs"      (_ifx-s starts-with? "t") t)
+(assert "infix fn: string var miss"     (_ifx-s starts-with? "x") nil)
+(def _ifx-add2 (a b) (+ a b))
+(assert "infix fn: user fn"             (3 _ifx-add2 4) 7)
+;; normal calls (function head) are NOT reinterpreted as infix
+(assert "infix: normal call intact"     (map (fn (x) (* x 2)) (list 1 2 3)) (list 2 4 6))
+;; compiled tier (inside a fn body) agrees
+(def _ifx-c (a) (a starts-with? "t"))
+(assert "infix fn: compiled body"       (_ifx-c "test") t)
+(assert "infix fn: compiled body miss"  (_ifx-c "xyz") nil)
+;; 1-arg container index is unaffected by the infix rule
+(assert "container index still works"   ("abcd" 1) #\b)
+
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).

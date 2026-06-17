@@ -6733,6 +6733,35 @@ assert-true "repl-completions -> list" (or (nil? (repl-completions "zzzznope")) 
 
 assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0)
 
+assert "infix op: number lhs" (5 + 3) 8
+
+assert "infix op: comparator preserved" (5 < 3) nil
+
+assert "infix fn: string literal lhs" ("hello" starts-with? "he") t
+
+setf _ifx-s "test"
+
+assert "infix fn: string var lhs" (_ifx-s starts-with? "t") t
+
+assert "infix fn: string var miss" (_ifx-s starts-with? "x") nil
+
+def _ifx-add2 (a b):
+  + a b
+
+assert "infix fn: user fn" (3 _ifx-add2 4) 7
+
+assert "infix: normal call intact" (map (fn (x) (* x 2)) (list 1 2 3)):
+  list 2 4 6
+
+def _ifx-c (a):
+  a starts-with? "t"
+
+assert "infix fn: compiled body" (_ifx-c "test") t
+
+assert "infix fn: compiled body miss" (_ifx-c "xyz") nil
+
+assert "container index still works" ("abcd" 1) #\b
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

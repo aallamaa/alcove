@@ -9098,6 +9098,48 @@ static exp_t *infix_apply(int op_idx, exp_t *head_val, exp_t *rhs_val,
   form->next->next = make_node(infix_wrap_value(rhs_val));
   return evaluate(form, env); /* consumes form + the wrapped value refs */
 }
+/* True when `v` is a real function — a builtin (internal) or a lambda/closure —
+   i.e. something alc_apply_n can call as `(v a b)`. Used to extend infix beyond
+   the fixed operator set: `a f b` -> (f a b) for ANY function f, while leaving
+   strings/dicts (callable only as indexers) and special-form-only values out. */
+static int infix_is_fn(exp_t *v) {
+  return v && is_ptr(v) && (isinternal(v) || islambda(v));
+}
+/* General infix: apply an arbitrary binary function VALUE as (op head rhs).
+   alc_apply_n quote-protects symbol/list arg values, so head_val/rhs_val pass
+   through safely. op/head_val/rhs_val borrowed; returns an owned result. */
+static exp_t *infix_apply_fn(exp_t *op, exp_t *head_val, exp_t *rhs_val,
+                             env_t *env) {
+  exp_t *argv[2] = {refexp(head_val), refexp(rhs_val)};
+  return alc_apply_n(op, 2, argv, env); /* consumes argv; not op */
+}
+/* Container-head infix: a string/dict/etc. is callable as an indexer, so a form
+   like (s starts-with? "t") would otherwise try to index s. When the form is
+   exactly (container op rhs) and `op` (the ALREADY-evaluated first arg) is an
+   operator or a function, evaluate it as infix (op container rhs) and return
+   the owned result with *matched=1; otherwise *matched=0 and the caller indexes
+   the container by op as before. container/op borrowed; rhs is e's 3rd element,
+   evaluated here. */
+static exp_t *ast_container_infix(exp_t *container, exp_t *op, exp_t *e,
+                                  env_t *env, int *matched) {
+  *matched = 0;
+  if (!e->next || !e->next->next || e->next->next->next)
+    return NULL; /* not exactly (container op rhs) */
+  int oi = infix_op_index(op);
+  if (oi < 0 && !infix_is_fn(op))
+    return NULL; /* op isn't an operator or function — it's a real index */
+  *matched = 1;
+  int outer_tail = in_tail_position;
+  in_tail_position = 0;
+  exp_t *rhs = EVAL(e->next->next->content, env);
+  in_tail_position = outer_tail;
+  if (iserror(rhs))
+    return rhs;
+  exp_t *res = oi >= 0 ? infix_apply(oi, container, rhs, env)
+                       : infix_apply_fn(op, container, rhs, env);
+  unrefexp(rhs);
+  return res;
+}
 
 /* Bytecode dispatch loop. Entered with `env` already populated (params
    in inline slots). Returns an owned exp_t* (or NULL).
@@ -10323,6 +10365,19 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
        (dict/hamt/set): value/member by key. The AST evaluator has the same
        arm on its two head paths; this keeps compiled bodies in sync. */
     int i;
+    /* (s op rhs) infix on a container LHS -> (op s rhs): a 2-arg call whose
+       first arg is an operator/function is infix, not indexing. Matches the AST
+       container arms (ast_container_infix). argv[0]=op, argv[1]=rhs. */
+    if (nargs == 2) {
+      int oi = infix_op_index(argv[0]);
+      if (oi >= 0 || infix_is_fn(argv[0])) {
+        exp_t *r = oi >= 0 ? infix_apply(oi, fn, argv[1], env)
+                           : infix_apply_fn(argv[0], fn, argv[1], env);
+        unrefexp(argv[0]);
+        unrefexp(argv[1]);
+        return r;
+      }
+    }
     if (nargs != 1) {
       for (i = 0; i < nargs; i++)
         unrefexp(argv[i]);
@@ -10385,6 +10440,14 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     int idx;
     if (nargs == 2 && (idx = infix_op_index(argv[0])) >= 0) {
       exp_t *r = infix_apply(idx, fn, argv[1], env);
+      unrefexp(argv[0]);
+      unrefexp(argv[1]);
+      return r;
+    }
+    /* General infix: a non-callable head with a FUNCTION in the operator slot
+       -> (op head rhs). e.g. (s starts-with? "t") -> (starts-with? s "t"). */
+    if (nargs == 2 && infix_is_fn(argv[0])) {
+      exp_t *r = infix_apply_fn(argv[0], fn, argv[1], env);
       unrefexp(argv[0]);
       unrefexp(argv[1]);
       return r;
@@ -11139,10 +11202,10 @@ static exp_t *ast_try_infix(exp_t *head_val, exp_t *e, env_t *env,
   in_tail_position = 0;
   exp_t *op = EVAL(e->next->content, env); /* operator position */
   int idx = infix_op_index(op);
-  if (idx < 0) {
+  if (idx < 0 && !infix_is_fn(op)) {
     in_tail_position = outer_tail;
     unrefexp(op);
-    return NULL; /* 2nd element isn't a binary operator — self-evaluate */
+    return NULL; /* 2nd element is neither an operator nor a function */
   }
   *matched = 1;
   exp_t *rhs = EVAL(e->next->next->content, env);
@@ -11151,7 +11214,11 @@ static exp_t *ast_try_infix(exp_t *head_val, exp_t *e, env_t *env,
     unrefexp(op);
     return rhs;
   }
-  exp_t *res = infix_apply(idx, head_val, rhs, env); /* head_val/rhs borrowed */
+  /* head_val/rhs borrowed. Fixed operators keep the symbol path (so cmpcmd
+     decodes < > <= >= and the arith tower stays identical); any other function
+     is applied directly as (op head rhs). */
+  exp_t *res = idx >= 0 ? infix_apply(idx, head_val, rhs, env)
+                        : infix_apply_fn(op, head_val, rhs, env);
   unrefexp(op);
   unrefexp(rhs);
   return res;
@@ -11313,6 +11380,16 @@ exp_t *evaluate(exp_t *e, env_t *env) {
               ret = idx;
               goto finish;
             }
+            /* (s op rhs) with op an operator/function -> infix (op s rhs),
+               reusing the already-evaluated idx as the operator. */
+            int cinfix;
+            exp_t *cifx = ast_container_infix(tmpexp2, idx, e, env, &cinfix);
+            if (cinfix) {
+              unrefexp(idx);
+              unrefexp(tmpexp2);
+              ret = cifx;
+              goto finish;
+            }
             ret = container_apply(tmpexp2, idx, env); /* consumes idx */
             unrefexp(tmpexp2);
             goto finish;
@@ -11362,6 +11439,15 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         in_tail_position = outer_tail;
         if (iserror(tmpexp2)) {
           ret = tmpexp2;
+          goto finish;
+        }
+        /* (s op rhs) infix on a literal container head — see ast_container_infix.
+           tmpexp (container) is borrowed from e; tmpexp2 (op) is owned. */
+        int lcinfix;
+        exp_t *lcifx = ast_container_infix(tmpexp, tmpexp2, e, env, &lcinfix);
+        if (lcinfix) {
+          unrefexp(tmpexp2);
+          ret = lcifx;
           goto finish;
         }
         ret = container_apply(tmpexp, tmpexp2, env); /* consumes tmpexp2 */

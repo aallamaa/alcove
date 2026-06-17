@@ -100,7 +100,8 @@ def make-counter():
 c = make-counter()
 prn (c) (c) (c)                      # → 1 2 3
 
-# Infix: (a op b) means (op a b) when the head is a value, not a function
+# Infix: (a f b) means (f a b) when the head is a value, not a function — for
+# operators AND any function:  ("hi" starts-with? "h") → t,  (3 max 7) → 7
 def fib(n):
   if (n < 2):
     n
