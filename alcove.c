@@ -13472,7 +13472,11 @@ int respN_serve(int port, int nthreads) {
      g_resp_multi = 0 and callbacks free to mutate globals.) */
   g_resp_multi = (nthreads > 1);
   /* Spawn workers 1..N-1; main thread runs worker 0. */
-  printf(ALCOVE_PROGNAME ": spawning %d reactor threads on port %d\n", nthreads, port);
+  printf(ALCOVE_PROGNAME
+         ": spawning %d reactor threads on port %d (--threads is EXPERIMENTAL: "
+         "the lock-free keyspace is concurrency-safe, but RESP callbacks must be "
+         "read-only w.r.t. Lisp globals — see docs/multithreading.md)\n",
+         nthreads, port);
   fflush(stdout);
   for (int i = 1; i < nthreads; i++) {
     args[i].sh = shards[i];

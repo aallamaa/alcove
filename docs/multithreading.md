@@ -628,3 +628,43 @@ Microbenchmark, single shard, MacBook Pro M-series, loopback, P=16:
 These are unchanged from the pre-acceptor baseline, confirming the
 SO_REUSEPORT pivot is performance-neutral at N=1. The Step 2.5
 benchmark gate will measure N>1.
+
+---
+
+## Concurrency contract for `--threads N` (user-facing, EXPERIMENTAL)
+
+`alcove -r --threads N` (N>1) runs N reactor pthreads. This mode is
+**EXPERIMENTAL**. What is and isn't safe, and *why* it's safe without
+per-request locking:
+
+**Safe and fully parallel**
+- The keyspace (`redis-get`/`redis-set`/… and the RESP data commands) is a
+  lock-free sharded structure (`lfkv.c`) designed for concurrent access. This
+  is where your throughput comes from.
+
+**The shared RESP command table is immutable-after-spawn**
+- `(redis-defcmd "NAME" fn)` / `(redis-undefcmd …)` mutate process-global state
+  (`resp_user_commands`, `resp_user_env`). They are intended to run **once at
+  setup, before the server starts** — `respN_serve` spawns the reactor pool
+  *after* setup, so `pthread_create` publishes the table to every worker with a
+  happens-before edge. Dispatch then only **reads** the table, lock-free, with
+  no concurrent writer — so there is no data race and no per-request lock cost.
+- To keep that invariant unbreakable, `redis-defcmd`/`redis-undefcmd` **refuse**
+  (raise an error) once multi-reactor serving is live — both from inside a RESP
+  callback and from any other context. Register all commands before serving.
+
+**RESP callbacks must be read-only w.r.t. Lisp state**
+- A `(redis-defcmd …)` callback runs concurrently on whatever reactor received
+  the request. Mutating Lisp globals from a callback (`def`, `=` on a global,
+  `persist`/`forget`/`unpersist`) is **refused** under `--threads N>1` (it would
+  race on the shared global env). Operate on the keyspace instead.
+- Not yet enforced (your responsibility): in-place mutation of a shared object
+  the callback reaches (e.g. `vec-set!` on a captured vector), or reassigning a
+  captured closure variable. Treat callbacks as pure functions of their args +
+  the keyspace.
+
+**Single-reactor (`N=1`) is unrestricted** — callbacks may mutate globals
+freely; none of the above guards apply.
+
+CI runs the MPSC queue primitive under ThreadSanitizer (`mpsc-test-tsan`); a
+full multi-reactor TSan harness is future work.

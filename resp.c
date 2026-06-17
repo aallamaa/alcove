@@ -3239,9 +3239,15 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
 
 const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of blobs (nil if none). Returns t. Under --threads N the callback runs concurrently; it must be READ-ONLY w.r.t. Lisp globals (no def/=/persist of globals — those error) and must not mutate state shared across invocations (captured closure vars, in-place container mutation); operate on the keyspace, which is concurrency-safe.";
 exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
-  /* Registering a command mutates the shared command table + resp_user_env —
-     refuse from a concurrent RESP callback. */
-  if (g_resp_cb_guard) {
+  /* Registering a command mutates the shared command table + resp_user_env.
+     These are written only during single-threaded setup (before respN_serve
+     spawns the reactor pool — pthread_create then publishes them with a
+     happens-before to every worker) and read lock-free on every dispatch.
+     Refuse any write once the multi-reactor server is live — both from a
+     concurrent callback (g_resp_cb_guard) and, defensively, from any context
+     while g_resp_multi holds — so the "immutable after spawn" invariant that
+     makes lock-free dispatch correct can never be violated. */
+  if (g_resp_cb_guard || g_resp_multi) {
     unrefexp(e);
     return resp_cb_readonly_error(env);
   }
@@ -3273,8 +3279,10 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
 
 const char doc_redis_undefcmd[] = "(redis-undefcmd \"NAME\") — remove a previously registered Redis command. Returns t if removed, nil if not found.";
 exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
-  /* Unregistering mutates the shared command table — refuse from a cb. */
-  if (g_resp_cb_guard) {
+  /* Unregistering mutates the shared command table — refuse from a callback
+     and (defensively) from any context once multi-reactor serving is live, so
+     the table stays immutable-after-spawn (see rediscmddefcmd). */
+  if (g_resp_cb_guard || g_resp_multi) {
     unrefexp(e);
     return resp_cb_readonly_error(env);
   }
