@@ -131,7 +131,12 @@ static lfkv_t *g_resp_kv = NULL;
    load at <60% fill factor. Tune via RESP_KV_SLOTS env var if needed. */
 #define RESP_KV_DEFAULT_SLOTS (1u << 20)
 #define resp_kv (current_shard->kv)
-static volatile sig_atomic_t resp_stop = 0;
+/* _Atomic int (not volatile sig_atomic_t): the SIGINT handler writes it on one
+   thread while every reactor reads it in its loop — sig_atomic_t is the C signal
+   idiom but TSan (rightly, for the multi-thread case) flags the cross-thread
+   access as a race. A lock-free _Atomic makes the plain reads/writes below
+   atomic (C11) and async-signal-safe in the handler. */
+static _Atomic int resp_stop = 0;
 static _Atomic int64_t resp_last_sweep_us = 0;
 /* Set by resp_serve / resp_repl_serve once bind succeeds; read by the
    (redis-port) builtin so REPL code can discover the listening port
@@ -140,7 +145,9 @@ static int resp_active_port = 0;
 
 static void resp_sigint(int sig) {
   (void)sig;
+  int saved = errno; /* a handler must not perturb the interrupted thread's errno */
   resp_stop = 1;
+  errno = saved;
 }
 
 /* ---------- storage helpers ----------
