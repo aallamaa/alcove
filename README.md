@@ -102,12 +102,12 @@ prn c() c() c()                      # → 1 2 3
 
 # Infix: (a f b) means (f a b) when the head is a value, not a function — for
 # operators AND any function:  ("hi" starts-with? "h") → t,  (3 max 7) → 7
-def fib(n):
+def fib(n :int):
   if (n < 2):
     n
     (fib (n - 1)) + (fib (n - 2))
 prn (map fib (range 0 10))           # → (0 1 1 2 3 5 8 13 21 34)
-
+jit? fib    # → t
 # Scripting floor: JSON, regex, shell — same builtins, no parens tax
 = cfg (json-decode (read-string "config.json"))
 prn (get cfg "port")
