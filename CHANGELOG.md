@@ -51,6 +51,14 @@ what is frozen vs experimental.
   promotion — use a float, rational, or decimal explicitly.
 - **Deep non-tail recursion raises a catchable error** instead of segfaulting
   the C stack.
+- **Out-of-memory is recoverable.** A failed allocation on the eval path used to
+  `exit()` the process; it now aborts the current top-level form with a surfaced
+  out-of-memory error and the process + engine survive (the next form runs).
+  It unwinds to the eval boundary, so it is *not* catchable by an in-program
+  `(try …)` — it is a process-survival guarantee, not a normal condition. An
+  unsafe `(alloc-fail-after N)` fault-injection builtin + an `oom-test` CI gate
+  exercise it (normal and ASan builds). True OOM also no longer segfaults the
+  exp_t arena (the bump-chunk allocation was an unchecked `calloc`).
 - **`--threads N` (RESP) is marked EXPERIMENTAL** with a documented concurrency
   contract (see `docs/multithreading.md`): the keyspace is concurrency-safe;
   the user-command table is immutable-after-spawn (`redis-defcmd`/`undefcmd`

@@ -31,6 +31,7 @@
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
 #include <sys/resource.h> /* getrlimit(RLIMIT_STACK) for the stack-overflow guard */
+#include <setjmp.h> /* OOM recovery: longjmp from a failed alloc to the eval boundary */
 /* Adder front end: a string->string transpiler that turns the
    whitespace/`:`-block surface syntax into ordinary alcove s-expressions
    before they reach reader(). Included UNCONDITIONALLY (not just in the adder
@@ -448,6 +449,7 @@ lispProc lispProcList[] = {
     LISPCMD("with-time-limit", withtimelimitcmd, doc_with_time_limit),
     LISPCMD("with-memory-limit", withmemlimitcmd, doc_with_memory_limit),
     LISPCMD("heap-stats", heapstatscmd, doc_heap_stats),
+    LISPCMD_UNSAFE("alloc-fail-after", allocfailaftercmd, doc_alloc_fail_after),
     LISPCMD_TAIL("and", andcmd, doc_and),
     LISPCMD_TAIL("or", orcmd, doc_or),
     LISPCMD_TAIL("case", casecmd, doc_case),
@@ -1048,10 +1050,48 @@ void graceful_shutdown(const char *msg) {
   exit(1);
 }
 
+/* ---- OOM recovery (Tier 1.3 follow-up) ------------------------------------
+   A failed allocation on the eval path used to exit() the process — fatal for
+   an embedding host or server. When a recovery point is armed (a top-level
+   form evaluation / alcove_eval_string), a failed alloc instead longjmps back
+   there, which resets interpreter state and surfaces a CATCHABLE out-of-memory
+   error; the next form runs cleanly. The partially-built allocation and its
+   refs leak (the process survives — far better than dying), and global eval
+   state is reset at the landing. Unarmed (during init, or in a RESP reactor —
+   the experimental --threads path), a failed alloc still graceful_shutdowns. */
+static ALCOVE_TLS jmp_buf g_oom_jmp;
+static ALCOVE_TLS int g_oom_armed = 0;
+/* Test-only fault injection (driven by the unsafe (alloc-fail-after N) builtin):
+   when >= 0, count down on each guarded alloc and fail when it reaches 0. Only
+   consulted while armed, so it can't fire during init. */
+static ALCOVE_TLS long g_alloc_fail_after = -1;
+
+/* Raise OOM: longjmp to the armed recovery point, else die. Never returns. */
+static void oom_raise(void) {
+  if (g_oom_armed) {
+    g_oom_armed = 0; /* disarm before unwinding so a re-fail can't re-longjmp */
+    longjmp(g_oom_jmp, 1);
+  }
+  graceful_shutdown("Fatal error: Out of memory");
+}
+/* True (once) when injected failure should trigger; only while armed. */
+static int alloc_should_fail(void) {
+  if (g_oom_armed && g_alloc_fail_after >= 0) {
+    if (g_alloc_fail_after == 0) {
+      g_alloc_fail_after = -1; /* one-shot: disable after firing */
+      return 1;
+    }
+    g_alloc_fail_after--;
+  }
+  return 0;
+}
+
 void *memalloc(size_t count, size_t size) {
+  if (alloc_should_fail())
+    oom_raise();
   void *ptr = calloc(count, size);
   if (!ptr)
-    graceful_shutdown("Fatal error: Out of memory");
+    oom_raise();
   return ptr;
 }
 
@@ -1059,9 +1099,11 @@ void *memalloc(size_t count, size_t size) {
    the `p = xrealloc(p, n)` idiom safely — a bare `p = realloc(p, n)` both leaks
    the old block and NULL-derefs on failure. Mirrors memalloc's OOM policy. */
 void *xrealloc(void *ptr, size_t size) {
+  if (size && alloc_should_fail())
+    oom_raise();
   void *p = realloc(ptr, size);
   if (!p && size)
-    graceful_shutdown("Fatal error: Out of memory");
+    oom_raise();
   return p;
 }
 
@@ -1536,6 +1578,8 @@ static inline exp_t *make_nil() {
   } else {
     if (exp_bump_left == 0) {
       exp_bump_next = (exp_t *)calloc(EXP_BUMP_CHUNK, sizeof(exp_t));
+      if (!exp_bump_next)
+        oom_raise(); /* was an unchecked NULL deref → segfault on exp_t OOM */
       exp_bump_left = EXP_BUMP_CHUNK;
       g_exp_chunks++; /* rare path: per-chunk, not per-alloc */
     }
@@ -1768,7 +1812,7 @@ exp_t *make_string_from_token(token_t *token, int offset, int final_length) {
   } else {
     char *ptr = realloc(token->data, final_length + 1);
     if (!ptr)
-      graceful_shutdown("Fatal error: Out of memory");
+      oom_raise();
     if (offset > 0)
       memmove(ptr, ptr + offset, final_length);
     ptr[final_length] = '\0';
@@ -1794,7 +1838,7 @@ exp_t *make_symbol_from_token(token_t *token) {
     /* Long name: reuse the token's own buffer as the heap symbol string. */
     char *ptr = realloc(token->data, n + 1);
     if (!ptr)
-      graceful_shutdown("Fatal error: Out of memory");
+      oom_raise();
     ptr[n] = '\0';
     cur->ptr = ptr;
   }
@@ -1875,7 +1919,7 @@ inline exp_t *make_quote(exp_t *node) {
 exp_t *make_blob(const char *bytes, size_t len) {
   alc_blob_t *b = (alc_blob_t *)malloc(sizeof(alc_blob_t) + len);
   if (!b)
-    graceful_shutdown("Fatal error: Out of memory");
+    oom_raise();
   b->len = len;
   if (len && bytes)
     memcpy(b->bytes, bytes, len);
@@ -4973,7 +5017,7 @@ static void str_buf_put(char **buf, size_t *len, size_t *cap, const char *s,
       *cap *= 2;
     char *p = realloc(*buf, *cap);
     if (!p)
-      graceful_shutdown("Fatal error: Out of memory");
+      oom_raise();
     *buf = p;
   }
   if (n)
@@ -13244,6 +13288,25 @@ exp_t *replcompletionscmd(exp_t *e, env_t *env) {
   return lst;
 }
 
+/* Reset the eval-state cursors abandoned by an OOM longjmp, so the next
+   top-level form starts clean. The partially-built allocation and its refs are
+   leaked (the process survives — the whole point); we only zero the global
+   cursors a fresh evaluation assumes. */
+static void oom_recover_reset(void) {
+  g_handler_sp = 0; /* abandon any open (try ...) handlers */
+  g_try_depth = 0;
+  in_tail_position = 0;
+  g_calldepth = 0;
+  bt_clear();
+  g_deadline_ms = 0; /* abandon any active with-time-limit / with-memory-limit */
+  g_chunk_ceiling = 0;
+  g_budget_tick = 0;
+  g_resp_cb_guard = 0;
+  g_in_client_cmd = 0;
+  g_dbg_evaluating = 0;
+  g_dbg_active = 0;
+}
+
 /* Eval one already-read top-level form with REPL semantics. `quiet` (file
    load) suppresses the Out[] print. Handles the quit/exit and toeval REPL
    words. Consumes `form`. Returns 1 iff quit/exit was seen. */
@@ -13289,7 +13352,26 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
   }
   if (toeval) {
     g_dbg_evaluating = 1; /* arm break-on-raise only for this top-level form */
-    res = evaluate(form, env);
+    /* OOM recovery point: a failed allocation anywhere under this form longjmps
+       back here instead of killing the process. Save/restore the prior jmp_buf
+       so a nested top-level eval (e.g. embedding alcove_eval_string) is safe. */
+    jmp_buf oom_prev;
+    int oom_prev_armed = g_oom_armed;
+    memcpy(&oom_prev, &g_oom_jmp, sizeof(jmp_buf));
+    if (setjmp(g_oom_jmp) == 0) {
+      g_oom_armed = 1;
+      res = evaluate(form, env);
+    } else {
+      /* g_oom_armed was cleared by oom_raise() before it unwound. Reset the
+         abandoned eval state, then surface a catchable out-of-memory error
+         (built now that allocation can succeed again). `form` and any partial
+         work leak — the process lives. */
+      oom_recover_reset();
+      res = error(ERROR_ILLEGAL_VALUE, NULL, env,
+                  "out of memory (computation aborted)");
+    }
+    memcpy(&g_oom_jmp, &oom_prev, sizeof(jmp_buf));
+    g_oom_armed = oom_prev_armed;
     g_dbg_evaluating = 0;
   } else
     unrefexp(form);
@@ -13913,7 +13995,23 @@ exp_t *alcove_eval_string(const char *src) {
       return form; /* parse error — caller checks iserror */
     }
     bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form) */
-    exp_t *r = evaluate(form, g_global_env);
+    /* OOM recovery point (see repl_eval_print_form): a failed allocation under
+       this form longjmps back here, yielding a catchable error to the embedder
+       instead of killing the host. Save/restore the prior jmp_buf for nesting. */
+    exp_t *volatile r; /* volatile: assigned across setjmp/longjmp (-Wclobbered) */
+    jmp_buf oom_prev;
+    int oom_prev_armed = g_oom_armed;
+    memcpy(&oom_prev, &g_oom_jmp, sizeof(jmp_buf));
+    if (setjmp(g_oom_jmp) == 0) {
+      g_oom_armed = 1;
+      r = evaluate(form, g_global_env);
+    } else {
+      oom_recover_reset();
+      r = error(ERROR_ILLEGAL_VALUE, NULL, g_global_env,
+                "out of memory (computation aborted)");
+    }
+    memcpy(&g_oom_jmp, &oom_prev, sizeof(jmp_buf));
+    g_oom_armed = oom_prev_armed;
     if (r && iserror(r)) {
       unrefexp(last);
       fclose(stream);

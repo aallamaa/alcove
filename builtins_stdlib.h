@@ -2085,6 +2085,22 @@ exp_t *heapstatscmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 
+const char doc_alloc_fail_after[] =
+    "(alloc-fail-after N) — TESTING: make the Nth subsequent heap allocation "
+    "fail, to exercise out-of-memory recovery (the running computation aborts "
+    "with a catchable error; the next top-level form runs normally). N<0 "
+    "disables. One-shot — clears itself once it fires. Returns the previous "
+    "setting. Unsafe (host-gated): refused under --safe and from RESP callbacks.";
+exp_t *allocfailaftercmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(nv);
+  if (!nv || !isnumber(nv))
+    CLEAN_RETURN_1(nv, error(ERROR_ILLEGAL_VALUE, e, env,
+                             "alloc-fail-after: N must be an integer"));
+  long prev = g_alloc_fail_after;
+  g_alloc_fail_after = (long)FIX_VAL(nv);
+  CLEAN_RETURN_1(nv, make_integeri(prev));
+}
+
 const char doc_repeat[] = "(repeat n expr ...) — run body n times, returning "
                           "the last expression's value.";
 exp_t *repeatcmd(exp_t *e, env_t *env) {

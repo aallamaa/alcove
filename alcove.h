@@ -1023,6 +1023,8 @@ exp_t *withmemlimitcmd(exp_t *e, env_t *env);
 extern const char doc_with_memory_limit[];
 exp_t *heapstatscmd(exp_t *e, env_t *env);
 extern const char doc_heap_stats[];
+exp_t *allocfailaftercmd(exp_t *e, env_t *env);
+extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);
 exp_t *orcmd(exp_t *e, env_t *env);
 exp_t *nocmd(exp_t *e, env_t *env);

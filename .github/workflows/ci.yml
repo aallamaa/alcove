@@ -56,6 +56,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libreadline-dev libffi-dev
       - name: Hot path under ASan+UBSan (make test-asan)
         run: make test-asan
+      - name: OOM recovery (make oom-test)
+        # Injected allocation failure mid-computation must abort the form with a
+        # catchable error and keep the process + engine usable — under a normal
+        # AND an ASan/UBSan build (longjmp recovery must not corrupt state).
+        run: make oom-test
 
   # wasm/Emscripten build + node smoke battery (asserts results == native).
   wasm:
