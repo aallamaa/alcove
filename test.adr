@@ -920,6 +920,15 @@ def _spin (n):
 assert "with-time-limit: runaway self-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e))):
   t
 
+def _ev2 (n):
+  _od2 n
+
+def _od2 (n):
+  _ev2 n
+
+assert "with-time-limit: mutual-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_ev2 0))) (fn (e) (error? e))):
+  t
+
 assert "with-memory-limit: bounded work returns its value" (with-memory-limit 10000000 (fn () (reduce + 0 (range 1 101)))):
   5050
 

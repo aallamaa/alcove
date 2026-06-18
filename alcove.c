@@ -11384,6 +11384,21 @@ tailrec: {
       fn = new_fn;
       e = marker;
       marker_args = 1; /* marker's arg nodes are pre-evaluated — don't re-eval */
+      /* cross-function tail loop back-edge (AST tier): runaway-budget
+         checkpoint. newenv is already destroyed above; we own fn (new_fn) and
+         e (marker). Build the error before unref'ing e (error() refs it). */
+      {
+        int _b = budget_check();
+        if (_b) {
+          exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env,
+                            _b == 2 ? "interrupted: memory limit exceeded"
+                                    : "interrupted: time limit exceeded");
+          unrefexp(fn);
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return er;
+        }
+      }
       goto tailrec;
     }
 
