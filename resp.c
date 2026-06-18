@@ -159,10 +159,13 @@ static unsigned long dict_count(dict_t *d) {
 /* Lazy-create the global lfkv on first write. Concurrent first-callers
    race via CAS on `g_resp_kv`; losers free their stillborn table. */
 static void resp_kv_ensure(void) {
-  if (atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
-                           memory_order_acquire)) {
-    /* Mirror the global into the TLS shard pointer once per shard. */
-    if (!current_shard->kv) current_shard->kv = g_resp_kv;
+  lfkv_t *cur = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                                     memory_order_acquire);
+  if (cur) {
+    /* Mirror the global into the TLS shard pointer once per shard. Use the
+       atomically-loaded value, never a second raw read of g_resp_kv (which
+       would race a concurrent CAS-write under --threads — TSan-flagged). */
+    if (!current_shard->kv) current_shard->kv = cur;
     return;
   }
   size_t slots = RESP_KV_DEFAULT_SLOTS;
@@ -180,7 +183,8 @@ static void resp_kv_ensure(void) {
           memory_order_release, memory_order_acquire)) {
     lfkv_destroy(fresh); /* lost race */
   }
-  current_shard->kv = g_resp_kv;
+  current_shard->kv = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
+                                           memory_order_acquire);
 }
 
 /* Public getter: alcove.c persistence code (savedb / loaddb / SAVE)
@@ -2315,6 +2319,23 @@ static inline void resp_reactor_teardown(int srv) {
   epoch_drain_all();
 }
 
+/* Process-global, set-once server setup: the active port, the command dispatch
+   table, the signal handlers, and the lock-free keyspace. Under --threads every
+   reactor would otherwise run this concurrently (TSan-flagged write races on
+   resp_active_port / the cmd table / g_resp_kv). respN_serve calls it ONCE
+   before spawning the pool (so the flag is published with a happens-before to
+   every worker); the single-reactor path calls it here. Idempotent. */
+static int resp_shared_inited = 0;
+void resp_serve_shared_init(int port) {
+  if (resp_shared_inited)
+    return;
+  resp_active_port = port;
+  resp_cmd_table_init();
+  resp_install_signals();
+  resp_kv_init(); /* eager: never lazily created under concurrent first-write */
+  resp_shared_inited = 1;
+}
+
 /* Public entry — blocks until SIGINT/SIGTERM, then returns a process
    exit code. Called from main() when -r is on the command line. */
 int resp_serve(int port) {
@@ -2327,9 +2348,7 @@ int resp_serve(int port) {
 #else
   int srv = resp_listen(port);
   if (srv < 0) return 1;
-  resp_active_port = port;
-  resp_cmd_table_init();
-  resp_install_signals();
+  resp_serve_shared_init(port); /* once-only (already done before a thread pool) */
 
   printf("alcove RESP2 server listening on 127.0.0.1:%d\n", port);
   fflush(stdout);

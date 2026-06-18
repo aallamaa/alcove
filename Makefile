@@ -684,6 +684,14 @@ eval-fuzz:
 oom-test:
 	sh tools/oom_test.sh
 
+# End-to-end multi-reactor RESP server under ThreadSanitizer: a 4-reactor server
+# driven by concurrent clients on a shared key (+ distinct keys + a redis-defcmd
+# callback) must be data-race-clean. Complements mpsc-test-tsan (the queue
+# primitive alone). Skips cleanly if redis-cli or libtsan is unavailable. See
+# tools/resp_tsan.sh.
+resp-tsan:
+	sh tools/resp_tsan.sh
+
 # Adder transpiler (adr.h) tests. adr.h is self-contained string->string, so
 # this links nothing else. unit tests + bounded deterministic fuzz, under ASan.
 adr-test:
@@ -778,4 +786,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test coverage install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan coverage install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

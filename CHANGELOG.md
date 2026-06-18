@@ -75,6 +75,15 @@ what is frozen vs experimental.
   non-infix head is a consistent error in both tiers.
 - Macros expand in compiled bodies; `def name()` parses with no space.
 
+### Fixed (concurrency)
+- **`--threads` startup data races** eliminated. A ThreadSanitizer harness
+  (`make resp-tsan`, a 4-reactor server under concurrent load) found that each
+  reactor ran the shared server setup concurrently — racing writes to
+  `resp_active_port`, the command table, and the lazily-created keyspace. Shared
+  setup now runs once before the reactor pool spawns (published with a
+  happens-before), and `resp_kv_ensure` reads the keyspace pointer atomically.
+  The lock-free keyspace algorithm itself was already sound.
+
 ### Security / Hardening (CI gates)
 - The hot path (evaluator / VM / JIT) now runs the full suite under
   **ASan+UBSan** in CI (previously only isolated unit harnesses were sanitized).

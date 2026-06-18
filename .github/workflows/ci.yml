@@ -62,6 +62,20 @@ jobs:
         # AND an ASan/UBSan build (longjmp recovery must not corrupt state).
         run: make oom-test
 
+  # End-to-end concurrency gate: a 4-reactor RESP server under ThreadSanitizer,
+  # driven by concurrent clients on a shared key (+ distinct keys + a
+  # redis-defcmd callback), must be data-race-clean. Complements mpsc-test-tsan
+  # (the queue primitive in isolation). The harness skips cleanly if redis-cli
+  # or libtsan is unavailable.
+  resp-tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps (redis-cli for the client driver)
+        run: sudo apt-get update && sudo apt-get install -y redis-tools
+      - name: Multi-reactor RESP under ThreadSanitizer (make resp-tsan)
+        run: make resp-tsan
+
   # wasm/Emscripten build + node smoke battery (asserts results == native).
   wasm:
     runs-on: ubuntu-latest

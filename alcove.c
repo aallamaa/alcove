@@ -13662,6 +13662,11 @@ int respN_serve(int port, int nthreads) {
      global env. (Single-reactor / mono paths return early above, leaving
      g_resp_multi = 0 and callbacks free to mutate globals.) */
   g_resp_multi = (nthreads > 1);
+  /* Set up the process-global server state (port, command table, signals,
+     keyspace) ONCE here, before any reactor spawns — pthread_create then
+     publishes it with a happens-before to every worker. Otherwise each
+     reactor's resp_serve would race on these (TSan-confirmed). */
+  resp_serve_shared_init(port);
   /* Spawn workers 1..N-1; main thread runs worker 0. */
   printf(ALCOVE_PROGNAME
          ": spawning %d reactor threads on port %d (--threads is EXPERIMENTAL: "
