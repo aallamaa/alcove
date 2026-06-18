@@ -201,18 +201,14 @@ endif
 # out entirely unless built with -DALCOVE_METRICS, so the default binary carries
 # zero per-command atomic-bump overhead on the RESP hot path. error-code and
 # leveled logging are always shipped (no passive cost); only metrics are gated.
+# Reuse the canonical jit/adder recipes, just adding -DALCOVE_METRICS to the
+# JIT flags — so the compile/link line stays single-sourced (no drift if FFI/
+# readline/SAFE_FLAGS handling changes). $(JIT_FLAGS) expands in this parent, so
+# the sub-make inherits the same arch-resolved flags plus the metrics define.
 alcove-with-metrics:
-ifeq ($(JIT_OK),)
-	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
-endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DALCOVE_METRICS -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
-	$(print_dep_hints)
+	$(MAKE) jit JIT_FLAGS="$(JIT_FLAGS) -DALCOVE_METRICS"
 adder-with-metrics:
-ifeq ($(JIT_OK),)
-	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
-endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DALCOVE_METRICS -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
-	$(print_dep_hints)
+	$(MAKE) adder JIT_FLAGS="$(JIT_FLAGS) -DALCOVE_METRICS"
 
 # Adder build: the full JIT runtime + the .adr front end, emitted
 # as the local adder binary. adder.c #includes alcove.c.

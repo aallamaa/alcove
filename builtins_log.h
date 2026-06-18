@@ -52,21 +52,9 @@ exp_t *errorcodecmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-/* ===== shared: render a value to a growable C buffer ====================== */
-
-/* Append raw bytes to a growable buffer (the exp_to_string_buf convention). */
-static void lb_add(char **b, size_t *n, size_t *cap, const char *s, size_t sl) {
-  if (*n + sl + 1 > *cap) {
-    size_t nc = *cap ? *cap * 2 : 64;
-    while (nc < *n + sl + 1)
-      nc *= 2;
-    *b = xrealloc(*b, nc);
-    *cap = nc;
-  }
-  memcpy(*b + *n, s, sl);
-  *n += sl;
-  (*b)[*n] = '\0';
-}
+/* Buffer growth + value rendering reuse alcove.c's str_buf_put / exp_to_string_buf
+ * (in scope: this fragment is #included after their definitions). str_buf_put is
+ * cap==0-safe, so the temp buffers below can start NULL/0 with no manual seeding. */
 
 /* ===== B. leveled logfmt logging ========================================== */
 
@@ -98,10 +86,8 @@ static void logfmt_value(char **b, size_t *n, size_t *cap, exp_t *v) {
   size_t tn = 0, tc = 0;
   if (isstring(v)) { /* a string's text directly (no surrounding quotes) */
     const char *t = exp_text(v);
-    lb_add(&tmp, &tn, &tc, t ? t : "", t ? strlen(t) : 0);
+    str_buf_put(&tmp, &tn, &tc, t ? t : "", t ? strlen(t) : 0);
   } else {
-    tc = 64; /* exp_to_string_buf/str_buf_put need a non-zero starting cap */
-    tmp = memalloc(tc, 1);
     exp_to_string_buf(v, &tmp, &tn, &tc);
   }
   int needq = (tn == 0);
@@ -109,15 +95,15 @@ static void logfmt_value(char **b, size_t *n, size_t *cap, exp_t *v) {
     if (tmp[i] == ' ' || tmp[i] == '=' || tmp[i] == '"' || tmp[i] == '\n')
       needq = 1;
   if (!needq) {
-    lb_add(b, n, cap, tmp ? tmp : "", tn);
+    str_buf_put(b, n, cap, tmp ? tmp : "", tn);
   } else {
-    lb_add(b, n, cap, "\"", 1);
+    str_buf_put(b, n, cap, "\"", 1);
     for (size_t i = 0; i < tn; i++) {
       if (tmp[i] == '"' || tmp[i] == '\\')
-        lb_add(b, n, cap, "\\", 1);
-      lb_add(b, n, cap, &tmp[i], 1);
+        str_buf_put(b, n, cap, "\\", 1);
+      str_buf_put(b, n, cap, &tmp[i], 1);
     }
-    lb_add(b, n, cap, "\"", 1);
+    str_buf_put(b, n, cap, "\"", 1);
   }
   free(tmp);
 }
@@ -128,15 +114,15 @@ static void logfmt_key(char **b, size_t *n, size_t *cap, exp_t *k) {
     const char *s = exp_text(k);
     if (s && *s == ':')
       s++;
-    lb_add(b, n, cap, s ? s : "k", s ? strlen(s) : 1);
+    str_buf_put(b, n, cap, s ? s : "k", s ? strlen(s) : 1);
   } else if (isstring(k)) {
     const char *s = exp_text(k);
-    lb_add(b, n, cap, s ? s : "k", s ? strlen(s) : 1);
+    str_buf_put(b, n, cap, s ? s : "k", s ? strlen(s) : 1);
   } else {
-    size_t tn = 0, tc = 64;
-    char *tmp = memalloc(tc, 1);
+    char *tmp = NULL;
+    size_t tn = 0, tc = 0;
     exp_to_string_buf(k, &tmp, &tn, &tc);
-    lb_add(b, n, cap, tmp ? tmp : "k", tn);
+    str_buf_put(b, n, cap, tmp ? tmp : "k", tn);
     free(tmp);
   }
 }
@@ -160,16 +146,16 @@ static exp_t *log_emit(int level, exp_t *msgnode, env_t *env) {
   gmtime_r(&sec, &tmv);
   size_t k = strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%S", &tmv);
   k += (size_t)snprintf(ts + k, sizeof ts - k, ".%03dZ", ms);
-  lb_add(&b, &n, &cap, "ts=", 3);
-  lb_add(&b, &n, &cap, ts, k);
-  lb_add(&b, &n, &cap, " level=", 7);
-  lb_add(&b, &n, &cap, g_log_level_names[level], strlen(g_log_level_names[level]));
+  str_buf_put(&b, &n, &cap, "ts=", 3);
+  str_buf_put(&b, &n, &cap, ts, k);
+  str_buf_put(&b, &n, &cap, " level=", 7);
+  str_buf_put(&b, &n, &cap, g_log_level_names[level], strlen(g_log_level_names[level]));
 
   exp_t *cur = msgnode;
   if (cur) { /* MSG */
     exp_t *m = EVAL(cur->content, env);
     if (m && iserror(m)) { free(b); return m; }
-    lb_add(&b, &n, &cap, " msg=", 5);
+    str_buf_put(&b, &n, &cap, " msg=", 5);
     logfmt_value(&b, &n, &cap, m ? m : NIL_EXP);
     if (m) unrefexp(m);
     cur = cur->next;
@@ -185,15 +171,15 @@ static exp_t *log_emit(int level, exp_t *msgnode, env_t *env) {
       if (vx && iserror(vx)) { if (kx) unrefexp(kx); free(b); return vx; }
       have_v = 1;
     }
-    lb_add(&b, &n, &cap, " ", 1);
+    str_buf_put(&b, &n, &cap, " ", 1);
     logfmt_key(&b, &n, &cap, kx ? kx : NIL_EXP);
-    lb_add(&b, &n, &cap, "=", 1);
+    str_buf_put(&b, &n, &cap, "=", 1);
     logfmt_value(&b, &n, &cap, have_v ? vx : NIL_EXP);
     if (kx) unrefexp(kx);
     if (have_v && vx) unrefexp(vx);
     cur = cur->next ? cur->next->next : NULL;
   }
-  lb_add(&b, &n, &cap, "\n", 1);
+  str_buf_put(&b, &n, &cap, "\n", 1);
   fwrite(b, 1, n, stderr); /* one write per line: lines don't interleave */
   fflush(stderr);
   exp_t *ret = make_string(b, (int)(n ? n - 1 : 0)); /* return without the \n */
@@ -286,20 +272,18 @@ static pthread_mutex_t g_metrics_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 /* Find or create a metric slot by name. The slot pointer is stable (the array
- * never moves), so callers may cache it and atomic-inc directly. Creation is
- * guarded; lookups of committed slots are lock-free (names are immutable once
- * published, and g_metrics_n is bumped with release after the slot is filled).
+ * never moves), so callers may cache it and atomic-inc directly. This is never a
+ * hot path — the RESP auto-metrics cache their pointers once at init and bump via
+ * metric_bump; only init and the counter!/gauge! builtins call this — so it just
+ * takes the lock and scans once. The release-store of g_metrics_n still publishes
+ * a filled, immutable slot to the lock-free readers in (metric)/(metrics).
  * Returns NULL only if the table is full. */
 static metric_t *metric_slot(const char *name) {
-  int n = atomic_load_explicit(&g_metrics_n, memory_order_acquire);
-  for (int i = 0; i < n; i++)
-    if (strcmp(g_metrics[i].name, name) == 0)
-      return &g_metrics[i];
   metric_t *slot = NULL;
 #if !ALCOVE_SINGLE_THREADED
   pthread_mutex_lock(&g_metrics_lock);
 #endif
-  n = atomic_load_explicit(&g_metrics_n, memory_order_acquire); /* re-scan */
+  int n = atomic_load_explicit(&g_metrics_n, memory_order_acquire);
   for (int i = 0; i < n; i++)
     if (strcmp(g_metrics[i].name, name) == 0) { slot = &g_metrics[i]; break; }
   if (!slot && n < METRIC_MAX) {

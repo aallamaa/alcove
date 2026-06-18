@@ -5028,6 +5028,8 @@ static const char *inspect_type_name(int t);
 static void str_buf_put(char **buf, size_t *len, size_t *cap, const char *s,
                         size_t n) {
   if (*len + n + 1 > *cap) {
+    if (*cap == 0)
+      *cap = 64; /* seed: doubling from 0 would loop forever (buf may be NULL) */
     while (*len + n + 1 > *cap)
       *cap *= 2;
     char *p = realloc(*buf, *cap);
