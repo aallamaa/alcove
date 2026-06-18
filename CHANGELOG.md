@@ -7,6 +7,31 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+### Added
+- **Observability** — make a server/embedded deployment debuggable.
+  - **Structured error codes** — `(error-code e)` returns an error's
+    machine-readable class as a stable, prose-independent symbol
+    (`'div-by-zero`, `'unbound-variable`, `'illegal-value`,
+    `'missing-parameter`, `'index-out-of-range`, `'parse-error`, …), or `nil`
+    for a non-error. Handlers can dispatch on it
+    (`(if (is (error-code e) 'div-by-zero) …)`) without matching prose. Like
+    `error-message`, it does not re-raise the error it inspects.
+  - **Leveled logfmt logging** — `(log! LEVEL MSG key val …)` emits one
+    `key=value` line to stderr (`ts=<ISO8601> level=<lvl> msg=<MSG> k=v …`)
+    when `LEVEL` is at or above `(log-level)`; below threshold it writes
+    nothing and returns `nil`. `(log-debug)`/`(log-info)`/`(log-warn)`/
+    `(log-error)` convenience wrappers; `(log-level)` / `(set-log-level …)`
+    read/set the threshold (atomic, shared across reactors). Always shipped —
+    zero passive cost. (`log!`, not `log` — `log` is the natural logarithm.)
+  - **Metrics (opt-in)** — counters/gauges with a small fixed registry:
+    `(counter! NAME n?)`, `(gauge! NAME v)`, `(metric NAME)`, `(metrics)`
+    snapshot. Compiled **only** with `-DALCOVE_METRICS` (`make
+    alcove-with-metrics` / `adder-with-metrics`); the default build ships none
+    of it, so the RESP hot path carries no shared-counter atomic bump. A metrics
+    build also auto-instruments the RESP server: `resp.connections`,
+    `resp.commands`, `resp.errors`. A new `obs-test` CI gate exercises both
+    halves.
+
 ## [0.3.0] — 2026-06-18
 
 The correctness-and-robustness arc: make the engine trustworthy for

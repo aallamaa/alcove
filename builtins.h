@@ -133,6 +133,27 @@ extern const char doc_jsonencode[], doc_jsondecode[];
 exp_t *jsonencodecmd(exp_t *e, env_t *env);
 exp_t *jsondecodecmd(exp_t *e, env_t *env);
 
+/* builtins_log.h — observability: error codes + logging (always shipped). */
+extern const char doc_error_code[], doc_log_emit[], doc_log_debug[],
+    doc_log_info[], doc_log_warn[], doc_log_error[], doc_log_level[],
+    doc_set_log_level[];
+exp_t *errorcodecmd(exp_t *e, env_t *env);
+exp_t *logemitcmd(exp_t *e, env_t *env);
+exp_t *logdebugcmd(exp_t *e, env_t *env);
+exp_t *loginfocmd(exp_t *e, env_t *env);
+exp_t *logwarncmd(exp_t *e, env_t *env);
+exp_t *logerrorcmd(exp_t *e, env_t *env);
+exp_t *loglevelcmd(exp_t *e, env_t *env);
+exp_t *setloglevelcmd(exp_t *e, env_t *env);
+#ifdef ALCOVE_METRICS /* metrics are opt-in (make alcove-with-metrics) */
+extern const char doc_counter_bang[], doc_gauge_bang[], doc_metric[],
+    doc_metrics[];
+exp_t *counterbangcmd(exp_t *e, env_t *env);
+exp_t *gaugebangcmd(exp_t *e, env_t *env);
+exp_t *metriccmd(exp_t *e, env_t *env);
+exp_t *metricscmd(exp_t *e, env_t *env);
+#endif
+
 /* blob.h byte codecs */
 extern const char doc_base64encode[], doc_base64decode[], doc_hexencode[],
                   doc_hexdecode[];

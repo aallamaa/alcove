@@ -449,6 +449,21 @@ lispProc lispProcList[] = {
     LISPCMD("with-time-limit", withtimelimitcmd, doc_with_time_limit),
     LISPCMD("with-memory-limit", withmemlimitcmd, doc_with_memory_limit),
     LISPCMD("heap-stats", heapstatscmd, doc_heap_stats),
+    /* observability (builtins_log.h) */
+    LISPCMD("error-code", errorcodecmd, doc_error_code),
+    LISPCMD("log!", logemitcmd, doc_log_emit),
+    LISPCMD("log-debug", logdebugcmd, doc_log_debug),
+    LISPCMD("log-info", loginfocmd, doc_log_info),
+    LISPCMD("log-warn", logwarncmd, doc_log_warn),
+    LISPCMD("log-error", logerrorcmd, doc_log_error),
+    LISPCMD("log-level", loglevelcmd, doc_log_level),
+    LISPCMD("set-log-level", setloglevelcmd, doc_set_log_level),
+#ifdef ALCOVE_METRICS /* metrics opt-in: make alcove-with-metrics */
+    LISPCMD("counter!", counterbangcmd, doc_counter_bang),
+    LISPCMD("gauge!", gaugebangcmd, doc_gauge_bang),
+    LISPCMD("metric", metriccmd, doc_metric),
+    LISPCMD("metrics", metricscmd, doc_metrics),
+#endif
     LISPCMD_UNSAFE("alloc-fail-after", allocfailaftercmd, doc_alloc_fail_after),
     LISPCMD_TAIL("and", andcmd, doc_and),
     LISPCMD_TAIL("or", orcmd, doc_or),
@@ -6358,6 +6373,7 @@ static exp_t *load_native_module(const char *path, const char *spec,
 
 /* The standard-library builtins live in a dedicated #included fragment. */
 #include "builtins_stdlib.h"
+#include "builtins_log.h"
 #include "builtins_os.h"
 #include "builtins_regex.h"
 

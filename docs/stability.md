@@ -39,8 +39,19 @@ it for artifact names and tags.
   non-empty, non-zero value is truthy.
 - **The RESP keyspace commands** and the on-disk dump format version (migrations
   are handled with explicit format-version bumps).
+- **Observability: error codes and logging** — `error-code` (the class symbols
+  it returns), `log!` / `log-debug` / `log-info` / `log-warn` / `log-error`, and
+  `log-level` / `set-log-level`. The error-class symbols and the logfmt field set
+  (`ts` / `level` / `msg` / your kv pairs) are stable; logging is always compiled
+  in. (Pinned with conformance asserts in `test.alc`.)
 
 ## Unstable / experimental surface (may change in a 0.x minor)
+
+- **Metrics** (`counter!` / `gauge!` / `metric` / `metrics` and the RESP
+  auto-counters `resp.connections` / `.commands` / `.errors`) — opt-in at compile
+  time (`-DALCOVE_METRICS`, `make alcove-with-metrics`); absent from the default
+  build. The builtin names are settled but the registry shape, capacity, and the
+  exact auto-instrumented counter set may still change.
 
 - **`--threads N` (multi-reactor RESP)** — EXPERIMENTAL. See the concurrency
   contract in `docs/multithreading.md`. Single-reactor (`N=1`) is stable.

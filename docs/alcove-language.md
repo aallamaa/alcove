@@ -1178,6 +1178,64 @@ textual include.
 - `(eval form)` evaluates a quoted form in the current evaluator
   environment.
 
+### Observability
+
+For operating a server or embedded deployment: machine-readable error
+classes, leveled logging, and (opt-in) metrics.
+
+**Error codes.** `(error-code e)` returns an error's class as a stable,
+prose-independent symbol — or `nil` if `e` is not an error. The code is
+fixed even if the message wording changes, so handlers can dispatch on it
+rather than string-matching:
+
+```
+(let ((e (try (/ 1 0) (fn (e) e))))
+  (error-code e))                       ; 'div-by-zero
+(error-code (try (foo) (fn (e) e)))     ; 'unbound-variable
+(error-code 42)                         ; nil — not an error
+(if (is (error-code e) 'div-by-zero) … …)
+```
+
+Classes include `'div-by-zero`, `'unbound-variable`, `'illegal-value`,
+`'number-expected`, `'missing-parameter`, `'index-out-of-range`,
+`'missing-name`, `'parse-error`, and a catch-all `'error`. Like
+`error-message`, `error-code` does **not** re-raise the error it inspects.
+
+**Logging.** `(log! LEVEL MSG key val …)` emits one [logfmt](https://brandur.org/logfmt)
+line to stderr when `LEVEL` is at or above the current threshold:
+
+```
+(log! :warn "cache miss" :key "users/42" :ms 12)
+; → ts=2026-06-18T13:51:47.407Z level=warn msg="cache miss" key=users/42 ms=12
+```
+
+Values containing a space, `=`, or `"` are quoted. The level is one of
+`:debug :info :warn :error`. Below the threshold, `log!` writes nothing and
+returns `nil`; otherwise it returns the emitted line as a string (so it is
+testable without capturing stderr). `(log-debug …)`, `(log-info …)`,
+`(log-warn …)`, `(log-error …)` are level-fixed wrappers. `(log-level)`
+returns the current minimum level (default `:info`); `(set-log-level :warn)`
+changes it. The threshold is atomic and shared across RESP reactors. (It is
+`log!`, not `log`, because `log` is the natural logarithm.)
+
+**Metrics (opt-in).** Counters and gauges live in a small fixed registry,
+compiled in **only** when you build with `-DALCOVE_METRICS` (`make
+alcove-with-metrics` or `adder-with-metrics`). The default binary ships none
+of it, so the RESP command path carries no shared-counter contention:
+
+```
+(counter! "jobs.done")        ; → 1   (adds 1, creating the counter)
+(counter! "jobs.done" 5)      ; → 6
+(gauge!   "queue.depth" 12)   ; → 12  (sets an absolute value)
+(metric   "jobs.done")        ; → 6   (or nil if it doesn't exist)
+(metrics)                     ; → ("jobs.done" 6 "queue.depth" 12 …)
+```
+
+A metrics build also auto-instruments the RESP server, surfacing
+`resp.connections`, `resp.commands`, and `resp.errors` in `(metrics)`.
+Increments are atomic (thread-safe across reactors); only slot *creation*
+takes a brief lock.
+
 ---
 
 ## 5. FFI — calling C

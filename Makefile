@@ -196,6 +196,24 @@ endif
 	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DALCOVE_SINGLE_THREADED=1 -o alcove alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
 
+# Opt-in observability metrics. The metrics registry + RESP auto-instrumentation
+# (counter!/gauge!/metric/metrics + resp.connections/.commands/.errors) compile
+# out entirely unless built with -DALCOVE_METRICS, so the default binary carries
+# zero per-command atomic-bump overhead on the RESP hot path. error-code and
+# leveled logging are always shipped (no passive cost); only metrics are gated.
+alcove-with-metrics:
+ifeq ($(JIT_OK),)
+	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
+endif
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DALCOVE_METRICS -o alcove  alcove.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(print_dep_hints)
+adder-with-metrics:
+ifeq ($(JIT_OK),)
+	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
+endif
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DALCOVE_METRICS -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(print_dep_hints)
+
 # Adder build: the full JIT runtime + the .adr front end, emitted
 # as the local adder binary. adder.c #includes alcove.c.
 adder:
@@ -692,6 +710,15 @@ oom-test:
 resp-tsan:
 	sh tools/resp_tsan.sh
 
+# Observability gate: leveled logfmt logging (assert one logfmt line per emit on
+# stderr + below-threshold silence) and RESP server auto-instrumentation metrics
+# (resp.connections/.commands/.errors > 0 under driven traffic, queried via a
+# metrics build's (metric …)). The metrics half builds with -DALCOVE_METRICS;
+# the logging half is in the default build. Skips the server half if redis-cli is
+# absent. See tools/obs_test.sh.
+obs-test:
+	sh tools/obs_test.sh
+
 # Adder transpiler (adr.h) tests. adr.h is self-contained string->string, so
 # this links nothing else. unit tests + bounded deterministic fuzz, under ASan.
 adr-test:
@@ -786,4 +813,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan coverage install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan obs-test coverage alcove-with-metrics adder-with-metrics install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

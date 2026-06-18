@@ -6897,6 +6897,44 @@ assert "infix fn: compiled body miss" (_ifx-c "xyz") nil
 
 assert "container index still works" ("abcd" 1) #\b
 
+assert "error-code div-by-zero" (error-code (try (/ 1 0) (fn (e) e))):
+  'div-by-zero
+
+assert "error-code unbound-variable" (error-code (try (_no_such_fn_zzz 1) (fn (e) e))):
+  'unbound-variable
+
+assert "error-code illegal-value (+ num str)" (error-code (try (+ 1 "x") (fn (e) e))):
+  'illegal-value
+
+assert "error-code missing-parameter (bad arity)" (error-code (try ((fn (a b) a) 1) (fn (e) e))):
+  'missing-parameter
+
+assert "error-code of a non-error is nil" (error-code 42) nil
+
+assert "error-code of nil is nil" (error-code nil) nil
+
+assert-true "error-code never re-raises" (is (error-code (try (/ 1 0) (fn (e) e))) 'div-by-zero)
+
+assert "log-level default is :info" (log-level) :info
+
+assert "set-log-level returns new level" (set-log-level :error) :error
+
+assert "log-level reflects the set value" (log-level) :error
+
+assert "log below threshold returns nil" (log! :info "suppressed") nil
+
+assert "log-info below threshold nil" (log-info "suppressed") nil
+
+assert-true "log at threshold returns a line" (let ((s (log! :error "hi" :k 1))) (and (string? s) (starts-with? s "ts=")))
+
+assert-true "log line carries level + msg + kv" (let ((s (log-error "boom" :code 7))) (and (re-find "level=error" s) (re-find "msg=boom" s) (re-find "code=7" s)))
+
+assert-true "log bad level errors" (error? (try (log! :nope "x") (fn (e) e)))
+
+set-log-level :info
+
+assert "log-level restored to :info" (log-level) :info
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

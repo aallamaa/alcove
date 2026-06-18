@@ -138,6 +138,14 @@ static lfkv_t *g_resp_kv = NULL;
    atomic (C11) and async-signal-safe in the handler. */
 static _Atomic int resp_stop = 0;
 static _Atomic int64_t resp_last_sweep_us = 0;
+/* Auto-instrumentation: cached metric slots (registry lives in builtins_log.h,
+   #included before this file). Created once in resp_serve_shared_init, then
+   atomic-bumped on the hot paths via metric_bump — no per-event name lookup.
+   Surfaced by (metrics) as resp.connections / resp.commands / resp.errors.
+   Opt-in: the whole feature compiles out unless built with -DALCOVE_METRICS. */
+#ifdef ALCOVE_METRICS
+static metric_t *g_m_conns = NULL, *g_m_cmds = NULL, *g_m_errs = NULL;
+#endif
 /* Set by resp_serve / resp_repl_serve once bind succeeds; read by the
    (redis-port) builtin so REPL code can discover the listening port
    without out-of-band coordination. 0 means "no server running". */
@@ -453,6 +461,10 @@ static inline int resp_client_drain_write(resp_client_t *c) {
    the lead char; kept inlinable so PONG/OK framing gains no call overhead. */
 static inline void resp_write_line(resp_client_t *c, char lead,
                                    const char *s, size_t n) {
+#ifdef ALCOVE_METRICS
+  if (lead == '-') /* RESP error reply: the single error chokepoint */
+    metric_bump(g_m_errs, 1);
+#endif
   char *dst = resp_write_reserve(c, n + 3);
   dst[0] = lead;
   memcpy(dst + 1, s, n);
@@ -1763,6 +1775,9 @@ static int resp_cmd_lookup(const char *cmd, long clen) {
 
 static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
   if (argc < 1) return;
+#ifdef ALCOVE_METRICS
+  metric_bump(g_m_cmds, 1); /* one command served */
+#endif
   const char *cmd = argv[0];
   long clen = argl[0];
   int kind = resp_cmd_lookup(cmd, clen);
@@ -1879,6 +1894,9 @@ static resp_client_t *resp_client_new(int cfd) {
   }
   cl->next = resp_clients;
   resp_clients = cl;
+#ifdef ALCOVE_METRICS
+  metric_bump(g_m_conns, 1); /* one accepted connection */
+#endif
   return cl;
 }
 
@@ -2352,6 +2370,13 @@ void resp_serve_shared_init(int port) {
   resp_cmd_table_init();
   resp_install_signals();
   resp_kv_init(); /* eager: never lazily created under concurrent first-write */
+#ifdef ALCOVE_METRICS
+  /* Pre-create the auto-metric slots once (single-threaded here), so the hot
+     paths bump cached pointers with no name lookup. */
+  g_m_conns = metric_slot("resp.connections");
+  g_m_cmds = metric_slot("resp.commands");
+  g_m_errs = metric_slot("resp.errors");
+#endif
   resp_shared_inited = 1;
 }
 

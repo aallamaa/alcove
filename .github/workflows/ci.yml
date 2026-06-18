@@ -76,6 +76,20 @@ jobs:
       - name: Multi-reactor RESP under ThreadSanitizer (make resp-tsan)
         run: make resp-tsan
 
+  # Observability gate: leveled logfmt logging emits exactly one logfmt line per
+  # emit on stderr (and is silent below threshold), and the opt-in metrics build
+  # (-DALCOVE_METRICS) auto-instruments the RESP server — resp.connections/
+  # .commands/.errors all climb under driven traffic. The server half skips
+  # cleanly if redis-cli is unavailable.
+  obs-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps (redis-cli for the client driver)
+        run: sudo apt-get update && sudo apt-get install -y redis-tools
+      - name: Logging + RESP auto-metrics (make obs-test)
+        run: make obs-test
+
   # wasm/Emscripten build + node smoke battery (asserts results == native).
   wasm:
     runs-on: ubuntu-latest

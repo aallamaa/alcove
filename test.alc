@@ -4506,6 +4506,45 @@
 (assert "container index still works"   ("abcd" 1) #\b)
 
 ;; ====================================================================
+;; Observability (builtins_log.h): structured error codes + leveled
+;; logfmt logging. Always shipped (zero passive cost). Metrics are
+;; opt-in (-DALCOVE_METRICS) and exercised in tools/obs_test.sh instead.
+;; These asserts produce NO stderr output: error-code never re-raises,
+;; and the log asserts run at/below threshold using the returned line
+;; (suppressed levels return nil and write nothing), so the stderr-spew
+;; gate stays clean.
+;; ====================================================================
+;; (error-code e) — stable machine-readable class, prose-independent.
+(assert "error-code div-by-zero"
+        (error-code (try (/ 1 0) (fn (e) e))) 'div-by-zero)
+(assert "error-code unbound-variable"
+        (error-code (try (_no_such_fn_zzz 1) (fn (e) e))) 'unbound-variable)
+(assert "error-code illegal-value (+ num str)"
+        (error-code (try (+ 1 "x") (fn (e) e))) 'illegal-value)
+(assert "error-code missing-parameter (bad arity)"
+        (error-code (try ((fn (a b) a) 1) (fn (e) e))) 'missing-parameter)
+(assert "error-code of a non-error is nil"   (error-code 42) nil)
+(assert "error-code of nil is nil"           (error-code nil) nil)
+(assert-true "error-code never re-raises"    (is (error-code (try (/ 1 0) (fn (e) e))) 'div-by-zero))
+;; (log-level)/(set-log-level) round-trip + filtering via the return value.
+(assert "log-level default is :info"         (log-level) :info)
+(assert "set-log-level returns new level"    (set-log-level :error) :error)
+(assert "log-level reflects the set value"   (log-level) :error)
+(assert "log below threshold returns nil"    (log! :info "suppressed") nil)
+(assert "log-info below threshold nil"       (log-info "suppressed") nil)
+(assert-true "log at threshold returns a line"
+             (let ((s (log! :error "hi" :k 1)))
+               (and (string? s) (starts-with? s "ts="))))
+(assert-true "log line carries level + msg + kv"
+             (let ((s (log-error "boom" :code 7)))
+               (and (re-find "level=error" s)
+                    (re-find "msg=boom" s)
+                    (re-find "code=7" s))))
+(assert-true "log bad level errors"          (error? (try (log! :nope "x") (fn (e) e))))
+(set-log-level :info)  ;; restore default so later/other suites are unaffected
+(assert "log-level restored to :info"        (log-level) :info)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner
