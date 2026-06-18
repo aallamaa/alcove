@@ -7,6 +7,8 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-18
+
 The correctness-and-robustness arc: make the engine trustworthy for
 mission-critical / embedded use. See [docs/stability.md](docs/stability.md) for
 what is frozen vs experimental.
@@ -107,6 +109,7 @@ what is frozen vs experimental.
   Python-flavored dialect (Adder), with three prebuilt artifacts and an Adder
   playground.
 
-[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/aallamaa/alcove/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/aallamaa/alcove/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aallamaa/alcove/releases/tag/v0.1.0
