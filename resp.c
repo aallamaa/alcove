@@ -2318,12 +2318,25 @@ static inline void resp_clients_free_all(void) {
    list, then clear the keyspace and drain the epoch retire list so
    valgrind/leaks see no live allocations. Don't lfkv_destroy here —
    peer reactors may still hold pointers into the same kv. */
-static inline void resp_reactor_teardown(int srv) {
-  close(srv);
+/* Set once shared server state is up (see resp_serve_shared_init); cleared by
+   the teardown. Declared here so both the init and teardown can see it. */
+static int resp_shared_inited = 0;
+/* Process-global teardown, the mirror of resp_serve_shared_init: run ONCE. Under
+   --threads every reactor would otherwise run it concurrently (racing the
+   resp_active_port write + the shared keyspace/epoch teardown — TSan-confirmed).
+   respN_serve calls it after JOINING the pool; the single-reactor path calls it
+   from resp_reactor_teardown below. */
+void resp_serve_shared_teardown(void) {
   resp_active_port = 0;
-  resp_clients_free_all();
   resp_kv_clear();
   epoch_drain_all();
+  resp_shared_inited = 0; /* a fresh in-process server may re-init */
+}
+static inline void resp_reactor_teardown(int srv) {
+  close(srv);
+  resp_clients_free_all(); /* per-reactor: this reactor's own client list */
+  if (!g_resp_multi)
+    resp_serve_shared_teardown(); /* multi: respN_serve does it post-join */
 }
 
 /* Process-global, set-once server setup: the active port, the command dispatch
@@ -2332,7 +2345,6 @@ static inline void resp_reactor_teardown(int srv) {
    resp_active_port / the cmd table / g_resp_kv). respN_serve calls it ONCE
    before spawning the pool (so the flag is published with a happens-before to
    every worker); the single-reactor path calls it here. Idempotent. */
-static int resp_shared_inited = 0;
 void resp_serve_shared_init(int port) {
   if (resp_shared_inited)
     return;

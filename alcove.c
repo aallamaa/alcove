@@ -13693,6 +13693,10 @@ int respN_serve(int port, int nthreads) {
     if (tids[i])
       pthread_join(tids[i], NULL);
   }
+  /* All reactors have exited → run the process-global teardown ONCE, here, where
+     it's single-threaded (each reactor skipped it under g_resp_multi to avoid
+     racing the shared port / keyspace / epoch state). */
+  resp_serve_shared_teardown();
   for (int i = 1; i < nthreads; i++) {
     free(shards[i]->arena);
     free(shards[i]);
