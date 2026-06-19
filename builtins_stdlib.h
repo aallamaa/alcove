@@ -1545,10 +1545,8 @@ const char doc_stringcontainsp[] =
     "(string-contains? s sub) — t if string s contains substring sub.";
 exp_t *stringcontainspcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(s, sub);
-  if (!isstring(s) || !isstring(sub))
-    CLEAN_RETURN_2(s, sub,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "string-contains?: args must be strings"));
+  REQUIRE_2_STRINGS(s, sub, CLEAN_RETURN_2(s, sub, _alc_e), ERROR_ILLEGAL_VALUE,
+                    NULL, env, "string-contains?: args must be strings");
   exp_t *ret =
       strstr((char *)exp_text(s), (char *)exp_text(sub)) ? TRUE_EXP : NIL_EXP;
   CLEAN_RETURN_2(s, sub, ret);
@@ -1559,10 +1557,8 @@ const char doc_stringindex[] =
     "(string-index s sub) — index of first occurrence of sub in s, or nil.";
 exp_t *stringindexcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(s, sub);
-  if (!isstring(s) || !isstring(sub))
-    CLEAN_RETURN_2(s, sub,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "string-index: args must be strings"));
+  REQUIRE_2_STRINGS(s, sub, CLEAN_RETURN_2(s, sub, _alc_e), ERROR_ILLEGAL_VALUE,
+                    NULL, env, "string-index: args must be strings");
   char *base = (char *)exp_text(s);
   char *found = strstr(base, (char *)exp_text(sub));
   exp_t *ret = found ? MAKE_FIX(utf8_count_bytes(base, (size_t)(found - base)))
@@ -1574,35 +1570,19 @@ exp_t *stringindexcmd(exp_t *e, env_t *env) {
 const char doc_stringreplace[] =
     "(string-replace s old new) — replace all occurrences of old with new.";
 exp_t *stringreplacecmd(exp_t *e, env_t *env) {
-  exp_t *s = NULL, *old = NULL, *nw = NULL;
-  if (!e->next || !e->next->next || !e->next->next->next)
-    goto bad;
-  s = EVAL(e->next->content, env);
-  if (iserror(s)) {
+  /* Arity precheck BEFORE evaluating args, preserving the missing-param error
+     (EVAL_ARG_3 would leave a missing arg NULL and not flag arity). */
+  if (!e->next || !e->next->next || !e->next->next->next) {
+    exp_t *err =
+        error(ERROR_MISSING_PARAMETER, e, env, "(string-replace s old new)");
     unrefexp(e);
-    return s;
+    return err;
   }
-  old = EVAL(e->next->next->content, env);
-  if (iserror(old)) {
-    unrefexp(s);
-    unrefexp(e);
-    return old;
-  }
-  nw = EVAL(e->next->next->next->content, env);
-  if (iserror(nw)) {
-    unrefexp(s);
-    unrefexp(old);
-    unrefexp(e);
-    return nw;
-  }
-  if (!isstring(s) || !isstring(old) || !isstring(nw)) {
-    unrefexp(s);
-    unrefexp(old);
-    unrefexp(nw);
-    unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                 "string-replace: args must be strings");
-  }
+  EVAL_ARG_3(s, old, nw);
+  if (!isstring(s) || !isstring(old) || !isstring(nw))
+    CLEAN_RETURN_3(s, old, nw,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "string-replace: args must be strings"));
   {
     const char *haystack = (char *)exp_text(s);
     const char *needle = (char *)exp_text(old);
@@ -1623,20 +1603,8 @@ exp_t *stringreplacecmd(exp_t *e, env_t *env) {
       str_buf_put(&buf, &len, &cap, p, strlen(p));
     }
     exp_t *ret = make_string_take(buf, (int)len);
-    unrefexp(s);
-    unrefexp(old);
-    unrefexp(nw);
-    unrefexp(e);
-    return ret;
+    CLEAN_RETURN_3(s, old, nw, ret);
   }
-bad: {
-  exp_t *err =
-      error(ERROR_MISSING_PARAMETER, e, env, "(string-replace s old new)");
-  unrefexp(s);
-  unrefexp(old);
-  unrefexp(e);
-  return err;
-}
 }
 
 /* (error? x) — t if x is an error value. */
@@ -3330,9 +3298,8 @@ const char doc_startswith[] =
     "(starts-with? s prefix) — t if string s begins with prefix.";
 exp_t *startswithcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(s, p);
-  if (!isstring(s) || !isstring(p))
-    CLEAN_RETURN_2(s, p, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                               "(starts-with? s prefix): both strings"));
+  REQUIRE_2_STRINGS(s, p, CLEAN_RETURN_2(s, p, _alc_e), ERROR_ILLEGAL_VALUE,
+                    NULL, env, "(starts-with? s prefix): both strings");
   const char *ss = (const char *)exp_text(s), *pp = (const char *)exp_text(p);
   exp_t *ret = strncmp(ss, pp, strlen(pp)) == 0 ? TRUE_EXP : NIL_EXP;
   CLEAN_RETURN_2(s, p, refexp(ret));
@@ -3342,9 +3309,8 @@ const char doc_endswith[] =
     "(ends-with? s suffix) — t if string s ends with suffix.";
 exp_t *endswithcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(s, p);
-  if (!isstring(s) || !isstring(p))
-    CLEAN_RETURN_2(s, p, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                               "(ends-with? s suffix): both strings"));
+  REQUIRE_2_STRINGS(s, p, CLEAN_RETURN_2(s, p, _alc_e), ERROR_ILLEGAL_VALUE,
+                    NULL, env, "(ends-with? s suffix): both strings");
   const char *ss = (const char *)exp_text(s), *pp = (const char *)exp_text(p);
   size_t sl = strlen(ss), pl = strlen(pp);
   exp_t *ret = (pl <= sl && memcmp(ss + sl - pl, pp, pl) == 0) ? TRUE_EXP

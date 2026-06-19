@@ -33,10 +33,9 @@ const char doc_setenv[] =
     "its children, e.g. (shell ...)). Returns t.";
 exp_t *setenvcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(nameexp, valexp);
-  if (!isstring(nameexp) || !isstring(valexp))
-    CLEAN_RETURN_2(nameexp, valexp,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "(setenv name val): both must be strings"));
+  REQUIRE_2_STRINGS(nameexp, valexp, CLEAN_RETURN_2(nameexp, valexp, _alc_e),
+                    ERROR_ILLEGAL_VALUE, NULL, env,
+                    "(setenv name val): both must be strings");
   if (setenv((const char *)exp_text(nameexp), (const char *)exp_text(valexp),
              1) != 0)
     CLEAN_RETURN_2(nameexp, valexp,
@@ -128,10 +127,8 @@ const char doc_renamefile[] =
     "(rename-file old new) — rename/move a file. Returns t, or an error.";
 exp_t *renamefilecmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(a, b);
-  if (!isstring(a) || !isstring(b))
-    CLEAN_RETURN_2(a, b,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "(rename-file old new): both must be strings"));
+  REQUIRE_2_STRINGS(a, b, CLEAN_RETURN_2(a, b, _alc_e), ERROR_ILLEGAL_VALUE,
+                    NULL, env, "(rename-file old new): both must be strings");
   if (rename((const char *)exp_text(a), (const char *)exp_text(b)) != 0)
     CLEAN_RETURN_2(a, b,
                    error(ERROR_ILLEGAL_VALUE, NULL, env, "rename-file: %s",

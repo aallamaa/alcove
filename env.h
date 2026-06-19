@@ -34,6 +34,18 @@
     }                                                                          \
   } while (0)
 
+/* Two-argument both-must-be-strings guard (the binary-string builtins:
+   string-contains?/index, starts-with?/ends-with?, setenv, rename-file). Same
+   shape as REQUIRE_TYPE — `cleanup` runs the caller's CLEAN_RETURN_n with _alc_e,
+   the trailing args are the error() call. */
+#define REQUIRE_2_STRINGS(a, b, cleanup, ...)                                  \
+  do {                                                                         \
+    if (!isstring(a) || !isstring(b)) {                                        \
+      exp_t *_alc_e = error(__VA_ARGS__);                                      \
+      cleanup;                                                                 \
+    }                                                                          \
+  } while (0)
+
 inline env_t *ref_env(env_t *env) {
   if (env) {
     REFCOUNT_INC(&env->nref);
