@@ -4263,19 +4263,22 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "compare: missing operator");
   }
-  /* Decode the operator once. Branches keep the same semantics that
-     bytecode SLOT_<cmp>_FIX uses, so chained results agree with the
-     compiler's per-pair comparisons. */
-  int op_kind;
-  if (strcmp(exp_text(op), "<") == 0)
-    op_kind = 0;
-  else if (strcmp(exp_text(op), ">") == 0)
-    op_kind = 1;
-  else if (strcmp(exp_text(op), "<=") == 0)
-    op_kind = 2;
-  else if (strcmp(exp_text(op), ">=") == 0)
-    op_kind = 3;
-  else {
+  /* Decode the operator once via a table (kept in lockstep with the apply
+     switch below). Semantics match bytecode SLOT_<cmp>_FIX, so chained results
+     agree with the compiler's per-pair comparisons. */
+  enum { CMP_LT, CMP_GT, CMP_LE, CMP_GE };
+  static const struct {
+    const char *sym;
+    int kind;
+  } cmp_ops[] = {{"<", CMP_LT}, {">", CMP_GT}, {"<=", CMP_LE}, {">=", CMP_GE}};
+  int op_kind = -1;
+  const char *opname = exp_text(op);
+  for (size_t i = 0; i < sizeof cmp_ops / sizeof cmp_ops[0]; i++)
+    if (strcmp(opname, cmp_ops[i].sym) == 0) {
+      op_kind = cmp_ops[i].kind;
+      break;
+    }
+  if (op_kind < 0) {
     unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "compare: unknown operator");
   }
@@ -4303,10 +4306,13 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
         return error(ERROR_ILLEGAL_VALUE, NULL, env,
                      "compare: incompatible types");
       }
-      int ok = (op_kind == 0)   ? (d < 0)
-               : (op_kind == 1) ? (d > 0)
-               : (op_kind == 2) ? (d <= 0)
-                                : (d >= 0);
+      int ok;
+      switch (op_kind) {
+      case CMP_LT: ok = d < 0; break;
+      case CMP_GT: ok = d > 0; break;
+      case CMP_LE: ok = d <= 0; break;
+      default:     ok = d >= 0; break; /* CMP_GE */
+      }
       unrefexp(prev);
       if (!ok) {
         unrefexp(v);
@@ -5045,34 +5051,59 @@ static void *buf_reserve(void *b, size_t len, size_t n, size_t *cap) {
 
 static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
   char tmp[128];
+  /* NULL/nil and the tagged immediates (fixnum, char) have no ->type word, so
+     they're handled before the switch; everything past here is is_ptr. */
   if (!v || v == NIL_EXP) {
     str_buf_put(buf, len, cap, "nil", 3);
-  } else if (isnumber(v)) {
+    return;
+  }
+  if (isnumber(v)) {
     int n = snprintf(tmp, sizeof tmp, "%lld", (long long)FIX_VAL(v));
     str_buf_put(buf, len, cap, tmp, (size_t)n);
-  } else if (ischar(v)) {
+    return;
+  }
+  if (ischar(v)) {
     char u[4];
     int k = utf8_encode((uint32_t)CHAR_VAL(v), u);
     str_buf_put(buf, len, cap, u, (size_t)k);
-  } else if (isstring(v) || issymbol(v)) {
-    { const char *_t = exp_text(v); str_buf_put(buf, len, cap, (char *)_t, strlen((char *)_t)); }
-  } else if (isfloat(v)) {
+    return;
+  }
+  if (!is_ptr(v)) { /* an unknown immediate — deterministic, no pointer */
+    str_buf_put(buf, len, cap, "#<value>", 8);
+    return;
+  }
+  switch (v->type) {
+  case EXP_STRING:
+  case EXP_SYMBOL: {
+    const char *_t = exp_text(v);
+    str_buf_put(buf, len, cap, (char *)_t, strlen((char *)_t));
+    break;
+  }
+  case EXP_FLOAT: {
     int n = snprintf(tmp, sizeof tmp, "%g", v->f);
     str_buf_put(buf, len, cap, tmp, (size_t)n);
-  } else if (isrational(v)) {
+    break;
+  }
+  case EXP_RATIONAL: {
     alc_rat_t *r = (alc_rat_t *)v->ptr;
     int n = snprintf(tmp, sizeof tmp, "%lld/%lld", (long long)r->num,
                      (long long)r->den);
     str_buf_put(buf, len, cap, tmp, (size_t)n);
-  } else if (isdecimal(v)) {
+    break;
+  }
+  case EXP_DECIMAL: {
     char db[48];
     int n = dec_to_str((alc_dec_t *)v->ptr, db); /* value text, no 'm' marker */
     str_buf_put(buf, len, cap, db, (size_t)n);
-  } else if (isblob(v)) {
+    break;
+  }
+  case EXP_BLOB: {
     alc_blob_t *b = (alc_blob_t *)v->ptr;
     if (b && b->len)
       str_buf_put(buf, len, cap, b->bytes, b->len);
-  } else if (ispair(v)) {
+    break;
+  }
+  case EXP_PAIR: {
     str_buf_put(buf, len, cap, "(", 1);
     exp_t *n = v;
     int first = 1;
@@ -5088,7 +5119,9 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
       exp_to_string_buf(n, buf, len, cap);
     }
     str_buf_put(buf, len, cap, ")", 1);
-  } else if (isvector(v)) {
+    break;
+  }
+  case EXP_VECTOR: {
     /* Structural, deterministic — mirrors prn's #[...] so (str vec) and
        (prn vec) agree. The old fallback emitted #<vector@PTR>, a
        non-deterministic address. */
@@ -5101,7 +5134,9 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
       unrefexp(cell);
     }
     str_buf_put(buf, len, cap, "]", 1);
-  } else if (isdict(v)) {
+    break;
+  }
+  case EXP_DICT: {
     str_buf_put(buf, len, cap, "{", 1);
     dict_t *d = (dict_t *)v->ptr;
     int first = 1;
@@ -5116,7 +5151,9 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
           exp_to_string_buf(k->val, buf, len, cap);
         }
     str_buf_put(buf, len, cap, "}", 1);
-  } else if (isset(v)) {
+    break;
+  }
+  case EXP_SET: {
     str_buf_put(buf, len, cap, "#{", 2);
     dict_t *d = (dict_t *)v->ptr;
     int first = 1;
@@ -5128,7 +5165,9 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
           exp_to_string_buf(k->val, buf, len, cap);
         }
     str_buf_put(buf, len, cap, "}", 1);
-  } else if (islist(v)) {
+    break;
+  }
+  case EXP_LIST: {
     str_buf_put(buf, len, cap, "(", 1);
     alc_list_t *l = (alc_list_t *)v->ptr;
     if (l) {
@@ -5140,26 +5179,30 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
       }
     }
     str_buf_put(buf, len, cap, ")", 1);
-  } else if (islambda(v)) {
+    break;
+  }
+  case EXP_LAMBDA:
     if (v->meta) {
       str_buf_put(buf, len, cap, "#<procedure:", 12);
       str_buf_put(buf, len, cap, (char *)v->meta, strlen((char *)v->meta));
       str_buf_put(buf, len, cap, ">", 1);
     } else
       str_buf_put(buf, len, cap, "#<procedure>", 12);
-  } else if (ismacro(v)) {
+    break;
+  case EXP_MACRO:
     if (v->meta) {
       str_buf_put(buf, len, cap, "#<macro:", 8);
       str_buf_put(buf, len, cap, (char *)v->meta, strlen((char *)v->meta));
       str_buf_put(buf, len, cap, ">", 1);
     } else
       str_buf_put(buf, len, cap, "#<macro>", 8);
-  } else {
+    break;
+  default: {
     /* builtins / ffi / anything else — deterministic type name, no
        pointer (str output must be reproducible). */
-    int n = snprintf(tmp, sizeof tmp, "#<%s>",
-                     is_ptr(v) ? inspect_type_name(v->type) : "value");
+    int n = snprintf(tmp, sizeof tmp, "#<%s>", inspect_type_name(v->type));
     str_buf_put(buf, len, cap, tmp, (size_t)n);
+  }
   }
 }
 

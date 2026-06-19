@@ -764,6 +764,14 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 
+/* proper-list test used by (list?) below — defined before the PRED_CMD block. */
+static int is_proper_list(exp_t *a) {
+  exp_t *cur = a;
+  while (ispair(cur) && cur->content)
+    cur = cur->next;
+  return !cur || cur == NIL_EXP;
+}
+
 /* Type predicates — return t/nil. */
 #define PRED_CMD(name, pred)                                                   \
   exp_t *name(exp_t *e, env_t *env) {                                          \
@@ -822,6 +830,11 @@ PRED_CMD(compiledpcmd, (islambda(a) && (a->flags & FLAG_COMPILED) && a->bc))
 PRED_CMD(jitpcmd,
          (islambda(a) && (a->flags & FLAG_COMPILED) && a->bc && a->bc->jit))
 PRED_CMD(inlinepcmd, (is_ptr(a) && (a->flags & FLAG_INLINE_TXT)))
+/* list?/null? join the family (must precede the #undef below). */
+const char doc_listp[] = "(list? x) — t if x is nil or a proper list.";
+PRED_CMD(listpcmd, is_proper_list(a))
+const char doc_nullp[] = "(null? x) — t if x is nil.";
+PRED_CMD(nullpcmd, (!a || a == NIL_EXP))
 #undef PRED_CMD
 
 const char doc_compiledp[] =
@@ -1246,45 +1259,7 @@ static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env) {
 }
 
 /* ---- New stdlib additions -------------------------------------------- */
-
-/* (list? x) — t if x is nil or a proper list (all cdrs end with nil). */
-const char doc_listp[] = "(list? x) — t if x is nil or a proper list.";
-exp_t *listpcmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *ret = NIL_EXP;
-  if (e->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
-    exp_t *cur = a;
-    while (ispair(cur) && cur->content)
-      cur = cur->next;
-    if (!cur || cur == NIL_EXP)
-      ret = TRUE_EXP;
-  }
-  unrefexp(a);
-  unrefexp(e);
-  return ret;
-}
-
-/* (null? x) — t if x is nil (empty list / false). Complements pair?. */
-const char doc_nullp[] = "(null? x) — t if x is nil.";
-exp_t *nullpcmd(exp_t *e, env_t *env) {
-  exp_t *a = NULL, *ret = NIL_EXP;
-  if (e->next) {
-    a = EVAL(e->next->content, env);
-    if (iserror(a)) {
-      unrefexp(e);
-      return a;
-    }
-    if (!a || a == NIL_EXP)
-      ret = TRUE_EXP;
-  }
-  unrefexp(a);
-  unrefexp(e);
-  return ret;
-}
+/* (list? / null? moved up into the PRED_CMD family block above.) */
 
 static int64_t gensym_counter = 0;
 static exp_t *make_gensym(void) {

@@ -668,43 +668,49 @@ exp_t *veccopycmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(dexp, sexp, ret);
 }
 
-const char doc_vecadd[] = "(vec-add! y x) — in place y[i] += x[i]. Returns y.";
-exp_t *vecaddcmd(exp_t *e, env_t *env) {
-  EVAL_ARG_2(yexp, xexp);
-  if (!isvector(yexp) || !isvector(xexp))
-    CLEAN_RETURN_2(yexp, xexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(vec-add! y x): both must be vectors"));
-  int64_t ny = vec_len(yexp);
-  if (ny != vec_len(xexp))
-    CLEAN_RETURN_2(
-        yexp, xexp,
-        error(ERROR_ILLEGAL_VALUE, e, env, "vec-add!: length mismatch"));
-  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-add!",
-                             CLEAN_RETURN_2(yexp, xexp, _alc_e));
-  int err = 0;
-  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
-    double *ycells = VEC_F64_CELLS(yexp);
-    double *xcells = VEC_F64_CELLS(xexp);
-    VEC_SIMD
-    for (int64_t i = 0; i < ny; i++)
-      ycells[i] += xcells[i];
-  } else {
-    for (int64_t i = 0; i < ny; i++) {
-      double yv = vec_read_double(yexp, i, &err);
-      double xv = vec_read_double(xexp, i, &err);
-      if (err)
-        break;
-      vec_write_double(yexp, i, yv + xv);
-    }
+/* Elementwise in-place binary op y[i] OP= x[i] over two equal-length vectors.
+   The F64/F64 fast path uses the native ASSIGN_OP (SIMD-friendly); the generic
+   path reads/writes doubles with BIN_OP. The binary sibling of VEC_ACTIVATION. */
+#define VEC_BINOP_INPLACE(cmdname, docname, ASSIGN_OP, BIN_OP)                  \
+  exp_t *cmdname(exp_t *e, env_t *env) {                                       \
+    EVAL_ARG_2(yexp, xexp);                                                    \
+    if (!isvector(yexp) || !isvector(xexp))                                    \
+      CLEAN_RETURN_2(yexp, xexp,                                               \
+                     error(ERROR_ILLEGAL_VALUE, e, env,                        \
+                           "(" docname " y x): both must be vectors"));        \
+    int64_t ny = vec_len(yexp);                                               \
+    if (ny != vec_len(xexp))                                                   \
+      CLEAN_RETURN_2(yexp, xexp,                                               \
+                     error(ERROR_ILLEGAL_VALUE, e, env,                        \
+                           docname ": length mismatch"));                      \
+    VEC_REQUIRE_FLOAT_WRITABLE(yexp, docname,                                  \
+                               CLEAN_RETURN_2(yexp, xexp, _alc_e));            \
+    int err = 0;                                                              \
+    if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {   \
+      double *ycells = VEC_F64_CELLS(yexp);                                   \
+      double *xcells = VEC_F64_CELLS(xexp);                                   \
+      VEC_SIMD                                                                \
+      for (int64_t i = 0; i < ny; i++)                                        \
+        ycells[i] ASSIGN_OP xcells[i];                                        \
+    } else {                                                                  \
+      for (int64_t i = 0; i < ny; i++) {                                      \
+        double yv = vec_read_double(yexp, i, &err);                           \
+        double xv = vec_read_double(xexp, i, &err);                           \
+        if (err)                                                              \
+          break;                                                             \
+        vec_write_double(yexp, i, yv BIN_OP xv);                              \
+      }                                                                       \
+    }                                                                         \
+    if (err)                                                                  \
+      CLEAN_RETURN_2(yexp, xexp,                                              \
+                     error(ERROR_NUMBER_EXPECTED, e, env,                     \
+                           docname ": non-numeric element"));                 \
+    exp_t *ret = refexp(yexp);                                                \
+    CLEAN_RETURN_2(yexp, xexp, ret);                                          \
   }
-  if (err)
-    CLEAN_RETURN_2(
-        yexp, xexp,
-        error(ERROR_NUMBER_EXPECTED, e, env, "vec-add!: non-numeric element"));
-  exp_t *ret = refexp(yexp);
-  CLEAN_RETURN_2(yexp, xexp, ret);
-}
+
+const char doc_vecadd[] = "(vec-add! y x) — in place y[i] += x[i]. Returns y.";
+VEC_BINOP_INPLACE(vecaddcmd, "vec-add!", +=, +)
 
 /* Data-parallel masked counter: count[i] += (src[i] <= limit) ? 1 : 0, in one
    SIMD pass. The building block for vectorized escape-time fractals — one call
@@ -891,78 +897,10 @@ exp_t *vecmaxcmd(exp_t *e, env_t *env) {
 
 const char doc_vecmul[] = "(vec-mul! y x) — in place y[i] *= x[i] (Hadamard "
                           "product). Returns y.";
-exp_t *vecmulcmd(exp_t *e, env_t *env) {
-  EVAL_ARG_2(yexp, xexp);
-  if (!isvector(yexp) || !isvector(xexp))
-    CLEAN_RETURN_2(yexp, xexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(vec-mul! y x): both must be vectors"));
-  int64_t ny = vec_len(yexp);
-  if (ny != vec_len(xexp))
-    CLEAN_RETURN_2(
-        yexp, xexp,
-        error(ERROR_ILLEGAL_VALUE, e, env, "vec-mul!: length mismatch"));
-  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-mul!",
-                             CLEAN_RETURN_2(yexp, xexp, _alc_e));
-  int err = 0;
-  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
-    double *ycells = VEC_F64_CELLS(yexp);
-    double *xcells = VEC_F64_CELLS(xexp);
-    VEC_SIMD
-    for (int64_t i = 0; i < ny; i++)
-      ycells[i] *= xcells[i];
-  } else {
-    for (int64_t i = 0; i < ny; i++) {
-      double yv = vec_read_double(yexp, i, &err);
-      double xv = vec_read_double(xexp, i, &err);
-      if (err)
-        break;
-      vec_write_double(yexp, i, yv * xv);
-    }
-  }
-  if (err)
-    CLEAN_RETURN_2(yexp, xexp, error(ERROR_NUMBER_EXPECTED, e, env,
-                                     "vec-mul!: non-numeric element"));
-  exp_t *ret = refexp(yexp);
-  CLEAN_RETURN_2(yexp, xexp, ret);
-}
+VEC_BINOP_INPLACE(vecmulcmd, "vec-mul!", *=, *)
 
 const char doc_vecsub[] = "(vec-sub! y x) — in place y[i] -= x[i]. Returns y.";
-exp_t *vecsubcmd(exp_t *e, env_t *env) {
-  EVAL_ARG_2(yexp, xexp);
-  if (!isvector(yexp) || !isvector(xexp))
-    CLEAN_RETURN_2(yexp, xexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(vec-sub! y x): both must be vectors"));
-  int64_t ny = vec_len(yexp);
-  if (ny != vec_len(xexp))
-    CLEAN_RETURN_2(
-        yexp, xexp,
-        error(ERROR_ILLEGAL_VALUE, e, env, "vec-sub!: length mismatch"));
-  VEC_REQUIRE_FLOAT_WRITABLE(yexp, "vec-sub!",
-                             CLEAN_RETURN_2(yexp, xexp, _alc_e));
-  int err = 0;
-  if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {
-    double *ycells = VEC_F64_CELLS(yexp);
-    double *xcells = VEC_F64_CELLS(xexp);
-    VEC_SIMD
-    for (int64_t i = 0; i < ny; i++)
-      ycells[i] -= xcells[i];
-  } else {
-    for (int64_t i = 0; i < ny; i++) {
-      double yv = vec_read_double(yexp, i, &err);
-      double xv = vec_read_double(xexp, i, &err);
-      if (err)
-        break;
-      vec_write_double(yexp, i, yv - xv);
-    }
-  }
-  if (err)
-    CLEAN_RETURN_2(yexp, xexp, error(ERROR_NUMBER_EXPECTED, e, env,
-                                     "vec-sub!: non-numeric element"));
-  exp_t *ret = refexp(yexp);
-  CLEAN_RETURN_2(yexp, xexp, ret);
-}
+VEC_BINOP_INPLACE(vecsubcmd, "vec-sub!", -=, -)
 
 const char doc_vecsum[] =
     "(vec-sum v) — sum of all elements, as a float. Empty vec -> 0.";
