@@ -947,7 +947,7 @@ int64_t gettimeusec() {
 }
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...) {
+exp_t *error(int errnum, exp_t *id, env_t *env, const char *err_message, ...) {
   exp_t *ret;
   va_list ap;
   va_start(ap, err_message);
@@ -4229,9 +4229,11 @@ const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
 /* Error texts shared by the AST and VM tiers so the two cannot drift (the same
    operator must report identically in interpreted and compiled code). Visible to
    the later-#included builtins_stdlib.h (modcmd). */
-/* non-const to match error()'s char* fmt param (as plain string literals are). */
-static char ERR_MODULO_BY_ZERO[] = "Illegal modulo by 0";
-static char ERR_COMPARE_INCOMPAT[] = "compare: incompatible types";
+/* Only mod-by-zero and compare-incompatible are unified here (they had drifted
+   between the AST and VM tiers); other cross-tier messages — div-by-zero,
+   integer overflow — still use per-site literals and could be folded in later. */
+static const char ERR_MODULO_BY_ZERO[] = "Illegal modulo by 0";
+static const char ERR_COMPARE_INCOMPAT[] = "compare: incompatible types";
 
 /* Pairwise compare helper. Returns 1 on success with d set to the sign
    of (a - b); returns 0 on type mismatch (caller raises error). */

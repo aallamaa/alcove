@@ -833,7 +833,7 @@ int64_t get_keyval_dict_timestamp(dict_t *d, char *key);
 int del_keyval_dict(dict_t *d, char *key);
 
 /* lisp */
-exp_t *error(int errnum, exp_t *id, env_t *env, char *err_message, ...);
+exp_t *error(int errnum, exp_t *id, env_t *env, const char *err_message, ...);
 static exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
 #define MAKE_TYPED(name, t, p) \
   exp_t *(name) = make_nil(); \
