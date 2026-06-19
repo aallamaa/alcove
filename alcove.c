@@ -905,21 +905,6 @@ lispProc lispProcList[] = {
     }                                                                          \
   }
 
-#define EVAL_ARG_4(v1, v2, v3, v4)                                             \
-  EVAL_ARG_3(v1, v2, v3)                                                       \
-  exp_t *v4 = NULL;                                                            \
-  if (e->next && e->next->next && e->next->next->next &&                       \
-      e->next->next->next->next) {                                             \
-    v4 = EVAL(e->next->next->next->next->content, env);                        \
-    if (iserror(v4)) {                                                         \
-      unrefexp(v1);                                                            \
-      unrefexp(v2);                                                            \
-      unrefexp(v3);                                                            \
-      unrefexp(e);                                                             \
-      return v4;                                                               \
-    }                                                                          \
-  }
-
 #define CLEAN_RETURN_1(v1, ret)                                                \
   do {                                                                         \
     exp_t *_alc_ret = (ret);                                                   \
@@ -2163,12 +2148,9 @@ static char *ns_qualify(const char *bare, env_t *env) {
    form preceded by blank/comment lines reports correctly. */
 static ALCOVE_TLS int g_form_line = 1;
 static ALCOVE_TLS int g_form_line_arm = 0;
-/* Column (1-based) and absolute byte offset of the current top-level form's
-   first significant byte — stamped together with g_form_line. The column drives
-   the caret renderer (Alcove); the offset is what the Adder offset→line map is
-   keyed on (the form's position in the GENERATED s-expr text). */
+/* Column (1-based) of the current top-level form's first significant byte —
+   stamped together with g_form_line; drives the caret renderer (Alcove). */
 static ALCOVE_TLS int g_form_col = 1;
-static ALCOVE_TLS long g_form_off = 0;
 
 /* getc/ungetc wrappers that keep g_reader_line in sync. RGETC bumps the
    line on a consumed newline; RUNGETC decrements when a newline is pushed

@@ -8,7 +8,6 @@
 #define ISNTERMMACRO 16
 #define ISCONSTITUENT 32
 #define ISDIGIT 64
-#define ISHEXA 64
 unsigned char chrmap[]={ 
   0 /* NUL Null character */,
   0 /* SOH Start of Header */,

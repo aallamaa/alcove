@@ -757,12 +757,9 @@ extern ALCOVE_TLS shard_t *current_shard;
 int shard_runtime_init(shard_t *sh);
 void shard_runtime_destroy(shard_t *sh);
 int shard_main(shard_t *sh, int port);
-/* Hot loops (make_env / destroy_env) cache `current_shard` once and
-   inline the bounds check `env >= sh->arena && env < sh->arena_end` —
-   the per-iteration TLS reload was a measurable hit on env-heavy
-   benchmarks. Cold-path callers can use this macro. */
-#define IS_ARENA_ENV(e) \
-  ((e) >= current_shard->arena && (e) < current_shard->arena_end)
+/* Hot loops (make_env / destroy_env) cache `current_shard` once and inline the
+   bounds check `env >= sh->arena && env < sh->arena_end` — the per-iteration TLS
+   reload was a measurable hit on env-heavy benchmarks. */
 
 typedef struct lispProc {
   char *name;
@@ -1211,8 +1208,6 @@ void tokenappend(token_t *token, char *src, int len);
 #define false 0
 
 /* Parser */
-
-#define PARSER_KEEPWHITESPACE 1
 #define PARSER_TERMMACROMODE 4
 
 

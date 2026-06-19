@@ -140,16 +140,6 @@ static uint32_t arm64_subs_imm(int rd, int rn, int imm) {
   return 0xF1000000u | ((uint32_t)(imm & 0xfff) << 10) | ((uint32_t)rn << 5) |
          (uint32_t)rd;
 }
-/* ADDS Xd, Xn, Xm (register, no shift; sets NZCV). */
-static uint32_t arm64_adds_reg(int rd, int rn, int rm) {
-  return 0xAB000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
-         (uint32_t)rd;
-}
-/* ADDS Xd, XZR, Xm, LSL #sh — re-tag (v<<sh) that sets V on signed overflow. */
-static uint32_t arm64_adds_lsl_zr(int rd, int rm, int sh) {
-  return 0xAB000000u | ((uint32_t)rm << 16) | ((uint32_t)(sh & 0x3f) << 10) |
-         (31u << 5) | (uint32_t)rd;
-}
 /* SMULH Xd, Xn, Xm — signed high 64 bits of the 128-bit product. */
 static uint32_t arm64_smulh(int rd, int rn, int rm) {
   return 0x9B407C00u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |

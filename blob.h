@@ -144,6 +144,9 @@ exp_t *base64encodecmd(exp_t *e, env_t *env) {
   if (!blob_or_string_bytes(v, &src, &n))
     CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, NULL, env,
                             "base64-encode: arg must be a blob or string"));
+  if (n > SIZE_MAX / 2) /* ((n+2)/3)*4+1 must not wrap (defensive; n is in-memory) */
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "base64-encode: input too large"));
   size_t outn = ((n + 2) / 3) * 4;
   char *out = memalloc(outn + 1, 1);
   size_t o = 0;
@@ -220,6 +223,9 @@ exp_t *hexencodecmd(exp_t *e, env_t *env) {
   if (!blob_or_string_bytes(v, &src, &n))
     CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, NULL, env,
                             "hex-encode: arg must be a blob or string"));
+  if (n > (SIZE_MAX - 1) / 2) /* n*2+1 must not wrap (defensive; n is in-memory) */
+    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                            "hex-encode: input too large"));
   char *out = memalloc(n * 2 + 1, 1);
   static const char hx[] = "0123456789abcdef";
   for (size_t i = 0; i < n; i++) {

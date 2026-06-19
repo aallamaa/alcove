@@ -3432,6 +3432,12 @@ static exp_t *alc_string_pad(exp_t *e, env_t *env, int left,
     CLEAN_RETURN_3(s, nexp, padexp, ret);
   }
   int64_t add = want - have;
+  /* width is user-supplied; bound the fill so add*padlen can't overflow the
+     size_t alloc (padlen<=4). Mirrors string-repeat's "result too large" cap. */
+  if (add > (int64_t)(64 * 1024 * 1024))
+    CLEAN_RETURN_3(s, nexp, padexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "%s: result too large", name));
   size_t sl = strlen(ss);
   char *out = memalloc(sl + (size_t)add * (size_t)padlen + 1, 1);
   size_t o = 0;

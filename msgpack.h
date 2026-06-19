@@ -298,7 +298,7 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
-    if (*pos + n > len)
+    if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit attacker data */
       return NULL;
     exp_t *s = make_string((char *)(b + *pos), (int)n);
     *pos += n;
@@ -311,7 +311,7 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
-    if (*pos + n > len)
+    if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit attacker data */
       return NULL;
     exp_t *bl = make_blob((char *)(b + *pos), n);
     *pos += n;
