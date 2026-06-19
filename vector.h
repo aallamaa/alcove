@@ -1099,6 +1099,18 @@ exp_t *vecsoftmaxcmd(exp_t *e, env_t *env) {
    F64 vector. F64 inputs hit a raw-double path (the inner loop is an axpy →
    SIMD); other kinds go through vec_read_double. */
 
+/* Evaluate the optional 4th argument of the 4-ary vector ops (bias / scale /
+   extra operand), or NIL_EXP if absent. Owned result (unref it); on an eval
+   error the error exp is returned (iserror true). Centralizes the otherwise
+   open-coded `e->next->next->next->next` walk used by mat-vec!, mat-vec-t!,
+   vec-ger!, and vec<-blob. */
+static exp_t *eval_opt_arg4(exp_t *e, env_t *env) {
+  if (e->next && e->next->next && e->next->next->next &&
+      e->next->next->next->next)
+    return EVAL(e->next->next->next->next->content, env);
+  return NIL_EXP;
+}
+
 const char doc_matvec[] =
     "(mat-vec A x) — matrix·vector. A is a flat row-major m×n matrix, x has "
     "length n; n = (len x), m = (len A)/n. Returns a fresh length-m F64 vector "
@@ -1160,10 +1172,7 @@ const char doc_matvecbang[] =
     "per-row vec-dot loop; ~8x faster). Returns out.";
 exp_t *matvecbangcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(outexp, aexp, xexp);
-  exp_t *bexp = NIL_EXP;
-  if (e->next && e->next->next && e->next->next->next &&
-      e->next->next->next->next)
-    bexp = EVAL(e->next->next->next->next->content, env);
+  exp_t *bexp = eval_opt_arg4(e, env);
   if (iserror(bexp))
     CLEAN_RETURN_3(outexp, aexp, xexp, bexp);
   int has_bias = (bexp != NIL_EXP);
@@ -1225,10 +1234,7 @@ const char doc_matvectbang[] =
     "input-gradient primitive for a dense layer's backward pass. Returns out.";
 exp_t *matvectbangcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(outexp, aexp, vexp);
-  exp_t *bexp = NIL_EXP;
-  if (e->next && e->next->next && e->next->next->next &&
-      e->next->next->next->next)
-    bexp = EVAL(e->next->next->next->next->content, env);
+  exp_t *bexp = eval_opt_arg4(e, env);
   if (iserror(bexp))
     CLEAN_RETURN_3(outexp, aexp, vexp, bexp);
   int has_bias = (bexp != NIL_EXP);
@@ -1292,10 +1298,7 @@ const char doc_vecger[] =
     "fused weight-update / outer-product primitive (BLAS ger). Returns A.";
 exp_t *vecgercmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(aexp, alphaexp, uexp);
-  exp_t *vexp = NIL_EXP;
-  if (e->next && e->next->next && e->next->next->next &&
-      e->next->next->next->next)
-    vexp = EVAL(e->next->next->next->next->content, env);
+  exp_t *vexp = eval_opt_arg4(e, env);
   if (iserror(vexp))
     CLEAN_RETURN_3(aexp, alphaexp, uexp, vexp);
   if (!isvector(aexp) || !(isnumber(alphaexp) || isfloat(alphaexp)) ||
@@ -1351,10 +1354,7 @@ const char doc_vecfromblob[] =
     "tensors. Returns v.";
 exp_t *vecfromblobcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(vexp, bexp, offexp);
-  exp_t *sexp = NIL_EXP;
-  if (e->next && e->next->next && e->next->next->next &&
-      e->next->next->next->next)
-    sexp = EVAL(e->next->next->next->next->content, env);
+  exp_t *sexp = eval_opt_arg4(e, env);
   if (iserror(sexp))
     CLEAN_RETURN_3(vexp, bexp, offexp, sexp);
   int has_scale = (sexp != NIL_EXP);
