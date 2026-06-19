@@ -12,21 +12,16 @@
  * to a STABLE, prose-independent symbol so errors are machine-dispatchable. */
 static const char *error_code_name(int errnum) {
   switch (errnum) {
-  case ERROR_ILLEGAL_VALUE:        return "illegal-value";
-  case ERROR_DIV_BY0:              return "div-by-zero";
-  case ERROR_MISSING_PARAMETER:    return "missing-parameter";
-  case ERROR_UNBOUND_VARIABLE:     return "unbound-variable";
-  case ERROR_NUMBER_EXPECTED:      return "number-expected";
-  case ERROR_INDEX_OUT_OF_RANGE:   return "index-out-of-range";
-  case EXP_ERROR_MISSING_NAME:     return "missing-name";
-  case EXP_ERROR_BODY_NOT_LIST:    return "body-not-list";
-  case EXP_ERROR_PARAM_NOT_LIST:   return "param-not-list";
-  case EXP_ERROR_INVALID_KEY_UPDATE: return "invalid-key-update";
-  case EXP_ERROR_PARSING_MACROCHAR:
-  case EXP_ERROR_PARSING_ILLEGAL_CHAR:
-  case EXP_ERROR_PARSING_EOF:
-  case EXP_ERROR_PARSING_ESCAPE:   return "parse-error";
-  default:                         return "error";
+/* one `case CODE: return "name";` per ALC_ERRORS row (alcove.h). The 4 PARSING_*
+   rows each return "parse-error"; ERROR_CONT_ESCAPE isn't in the list, so it (and
+   any unknown code) hits the default. */
+#define X(name, anchor, codename)                                              \
+  case name:                                                                   \
+    return codename;
+    ALC_ERRORS(X)
+#undef X
+  default:
+    return "error";
   }
 }
 

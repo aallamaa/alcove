@@ -23,46 +23,49 @@
 #include "mpsc.h"
 /* Structure definition */
 
+/* Single source of truth for the value type tags AND their display names
+   (inspect_type_name in builtins_stdlib.h expands the same list, so a new type
+   gets a name automatically — no more "?" drift). Columns: MEMBER, value-anchor
+   (only EXP_SYMBOL is pinned, to 1), "inspect name". ORDER IS LOAD-BEARING:
+   isatom / the self-evaluating container range depend on it — append, never
+   reorder. EXP_MAXSIZE (the sentinel) is appended to the enum by hand. */
+#define ALC_EXP_TYPES(X)                                                       \
+  /* ---- atoms (everything down to EXP_ERROR) ---- */                         \
+  X(EXP_SYMBOL, = 1, "symbol")                                                 \
+  X(EXP_NUMBER, , "number")                                                    \
+  X(EXP_FLOAT, , "float")                                                      \
+  X(EXP_STRING, , "string")                                                    \
+  X(EXP_CHAR, , "char")                                                        \
+  X(EXP_BOOLEAN, , "boolean")                                                  \
+  X(EXP_VECTOR, , "vector")                                                    \
+  X(EXP_ERROR, , "error")                                                      \
+  /* ---- non-atoms ---- */                                                    \
+  X(EXP_PAIR, , "pair")                                                        \
+  X(EXP_LAMBDA, , "lambda")                                                    \
+  X(EXP_INTERNAL, , "builtin")                                                 \
+  X(EXP_MACRO, , "macro")                                                      \
+  X(EXO_MACROINTERNAL, , "macro-builtin")                                      \
+  X(EXP_FFI, , "ffi") /* libffi-backed C-function callable; ptr → alc_ffi_t */ \
+  /* ---- "circular" tags: point to a previously-allocated exp ---- */         \
+  X(EXP_TREE, , "tree")                                                        \
+  X(EXP_PAIR_CIRCULAR, , "pair-circular")                                      \
+  /* ---- Clojure-flavored mutable containers (appended for db.dump stability,  \
+     self-evaluating; see isatom) ---- */                                      \
+  X(EXP_BLOB, , "blob") /* binary-safe bytes; ptr → alc_blob_t (flex-array) */ \
+  X(EXP_DICT, , "dict") /* hash-map; ptr → dict_t* */                          \
+  X(EXP_LIST, , "deque") /* doubly-linked deque; ptr → alc_list_t */           \
+  X(EXP_SET, , "set")   /* hash set; ptr → dict_t* canonical keys */           \
+  X(EXP_HAMT, , "hamt") /* persistent map; ptr → hamt_t* */                    \
+  /* ---- exact non-integer numerics: inside the self-eval BLOB.. range and     \
+     BEFORE EXP_CONT so isatom stays one contiguous bound ---- */              \
+  X(EXP_RATIONAL, , "rational") /* int64 num/den (den>0, reduced) */           \
+  X(EXP_DECIMAL, , "decimal")   /* bounded base-10: coeff + scale */           \
+  X(EXP_CONT, , "continuation") /* call/cc escape token; id in meta */
 enum {
-  EXP_SYMBOL = 1,
-  EXP_NUMBER,
-  EXP_FLOAT,
-  EXP_STRING,
-  EXP_CHAR,
-  EXP_BOOLEAN,
-  EXP_VECTOR,
-  EXP_ERROR,
-  /* ALL ATOMS ARE ABOVE THIS COMMENT */
-  /*EXP_QUOTE,*/
-  EXP_PAIR,
-  EXP_LAMBDA,
-  EXP_INTERNAL,
-  EXP_MACRO,
-  EXO_MACROINTERNAL,
-  EXP_FFI, /* libffi-backed C-function callable; ptr → alc_ffi_t */
-  /* ALL EXP BEYOND THIS COMMENT ARE "CIRCULAR" MEANING THEY POINT TO A
-     PREVIOUSLY MEM ALLOCATED EXP */
-  EXP_TREE,
-  EXP_PAIR_CIRCULAR,
-  /* Clojure-flavored mutable containers — appended (not inserted) so existing
-     enum values stay stable for db.dump backward compatibility. Self-evaluating
-     in evaluate(); see isatom() below. */
-  EXP_BLOB, /* binary-safe bytes; ptr → alc_blob_t (flex-array) */
-  EXP_DICT, /* hash-map; ptr → dict_t* (alcove's own dict) */
-  EXP_LIST, /* doubly-linked deque; ptr → alc_list_t (O(1) head & tail) */
-  EXP_SET,  /* hash set; ptr → dict_t* with canonical keys and t values */
-  EXP_HAMT, /* persistent/immutable map; ptr → hamt_t* (structural sharing) */
-  /* Exact non-integer numeric atoms (see numeric.h). Placed inside the
-     self-evaluating BLOB..(here) range and BEFORE EXP_CONT so isatom stays a
-     single contiguous bound; persisted container ids (BLOB..HAMT) are
-     unchanged. ptr → alc_rat_t / alc_dec_t, freed like EXP_BLOB. */
-  EXP_RATIONAL, /* int64 num / int64 den (den>0, gcd-reduced) */
-  EXP_DECIMAL,  /* bounded base-10: int coefficient + scale */
-  EXP_CONT, /* escape continuation (call/cc); id in `meta`. Callable, NOT a
-               container — kept after the isatom container range below. */
-
-  /* should always be the last */
-  EXP_MAXSIZE
+#define X(name, anchor, dispname) name anchor,
+  ALC_EXP_TYPES(X)
+#undef X
+  EXP_MAXSIZE /* should always be the last */
 } exptype_t;
 
 /* ---------------- Pointer tagging ----------------
@@ -172,21 +175,33 @@ enum {
 #define ALCOVE_COLD
 #endif
 
+/* Single source of truth for the error codes AND their machine-readable names
+   (error_code_name in builtins_log.h expands the same list into its switch, so a
+   new code can't be added to the enum without getting a stable name). Columns:
+   MEMBER, value-anchor (empty = sequential; the =1 / =256 gaps are explicit),
+   "code-name". The 4 PARSING_* codes deliberately share "parse-error".
+   ERROR_CONT_ESCAPE is NOT in this list — it is not a real error (a call/cc
+   escape token), so it has no code-name and is appended to the enum by hand,
+   falling through to error_code_name's "error" default. */
+#define ALC_ERRORS(X)                                                          \
+  X(EXP_ERROR_PARSING_MACROCHAR, = 1, "parse-error")                           \
+  X(EXP_ERROR_PARSING_ILLEGAL_CHAR, , "parse-error")                           \
+  X(EXP_ERROR_PARSING_EOF, , "parse-error")                                    \
+  X(EXP_ERROR_PARSING_ESCAPE, , "parse-error")                                 \
+  X(EXP_ERROR_INVALID_KEY_UPDATE, = 256, "invalid-key-update")                 \
+  X(EXP_ERROR_BODY_NOT_LIST, , "body-not-list")                                \
+  X(EXP_ERROR_PARAM_NOT_LIST, , "param-not-list")                              \
+  X(EXP_ERROR_MISSING_NAME, , "missing-name")                                  \
+  X(ERROR_ILLEGAL_VALUE, , "illegal-value")                                    \
+  X(ERROR_DIV_BY0, , "div-by-zero")                                            \
+  X(ERROR_MISSING_PARAMETER, , "missing-parameter")                            \
+  X(ERROR_UNBOUND_VARIABLE, , "unbound-variable")                              \
+  X(ERROR_NUMBER_EXPECTED, , "number-expected")                                \
+  X(ERROR_INDEX_OUT_OF_RANGE, , "index-out-of-range")
 enum {
-  EXP_ERROR_PARSING_MACROCHAR = 1,
-  EXP_ERROR_PARSING_ILLEGAL_CHAR,
-  EXP_ERROR_PARSING_EOF,
-  EXP_ERROR_PARSING_ESCAPE,
-  EXP_ERROR_INVALID_KEY_UPDATE = 256,
-  EXP_ERROR_BODY_NOT_LIST,
-  EXP_ERROR_PARAM_NOT_LIST,
-  EXP_ERROR_MISSING_NAME,
-  ERROR_ILLEGAL_VALUE,
-  ERROR_DIV_BY0,
-  ERROR_MISSING_PARAMETER,
-  ERROR_UNBOUND_VARIABLE,
-  ERROR_NUMBER_EXPECTED,
-  ERROR_INDEX_OUT_OF_RANGE,
+#define X(name, anchor, codename) name anchor,
+  ALC_ERRORS(X)
+#undef X
   ERROR_CONT_ESCAPE, /* not a real error: a call/cc escape token in flight,
                         carrying its continuation id in `meta` and the payload
                         value in `next`; caught by the matching call/cc frame */
@@ -376,109 +391,97 @@ static inline char *exp_text(const exp_t *e) {
    comparisons, if, user calls, param/global refs) get compiled at
    def/fn time. invoke() runs the dispatch loop over the opcode array
    instead of walking the AST. Unsupported bodies stay as AST. */
+/* Single source of truth for the bytecode opcodes AND their disassembler names:
+   bc_opname (alcove.c) expands this list, so a new opcode can't be added without
+   getting a name (a missing one printed "??"). bc_oplen / bc_disasm_one stay
+   hand-written — they encode per-op operand LENGTHS and PRINT FORMATS that don't
+   fit a uniform column, and bc_oplen deliberately returns 0 for PUSH_HANDLER.
+   Opcodes are sequential from OP_HALT=0; OP_MAX (the count sentinel) is appended
+   to the enum by hand. Operand layout documented per row. ORDER preserved. */
+#define OPCODE_LIST(X)                                                         \
+  X(HALT)                                                                      \
+  X(RET)                                                                       \
+  X(POP)                                                                       \
+  X(DUP) /* dup top-of-stack (fresh ref); compile_and/or/case keep the tested  \
+            value across a popping branch */                                   \
+  X(EVAL_AST) /* u8 idx → push EVAL(consts[idx], env). Escape hatch: a         \
+                 non-tail-aware builtin call with no native opcode is stored as \
+                 its raw form and tree-walked, so the enclosing lambda still   \
+                 compiles (and keeps its tail call). */                        \
+  X(LOAD_FIX)    /* int16 imm       → push MAKE_FIX(imm) */                    \
+  X(LOAD_CONST)  /* u8 idx          → push refexp(consts[idx]) */              \
+  X(LOAD_SLOT)   /* u8 idx          → push refexp(inline_vals[idx]) */         \
+  X(LOAD_GLOBAL) /* u8 idx (symbol) → lookup consts[idx] in env, push */       \
+  X(STORE_SLOT)  /* u8 idx          → pop → inline_vals[idx] (unref old) */    \
+  X(BIND_SLOT)   /* u8 idx          → pop → inline_vals[idx], bump n_inline */ \
+  X(BIND_SLOT_NAMED) /* u8 idx, u8 name_const → like BIND_SLOT but also sets   \
+                        inline_keys[idx]=exp_text(consts[name_const]) so the    \
+                        let/with/for local is resolvable BY NAME (an EVAL_AST   \
+                        sub-form needs that; plain BIND_SLOT leaves a NULL key  \
+                        invisible to symbolic lookup). */                      \
+  X(UNBIND_SLOT) /* u8 idx          → unref + NULL inline_vals[idx] (and key) */\
+  X(ADD)                                                                       \
+  X(SUB)                                                                       \
+  X(MUL)                                                                       \
+  X(DIV)                                                                       \
+  X(MOD)                                                                       \
+  X(LT)                                                                        \
+  X(GT)                                                                        \
+  X(LE)                                                                        \
+  X(GE)                                                                        \
+  X(IS)                                                                        \
+  X(ISO)                                                                       \
+  X(NOT)                                                                       \
+  X(JUMP) /* int16 off relative to end of operand */                          \
+  X(BR_IF_FALSE)                                                               \
+  X(BR_IF_TRUE)                                                                \
+  X(CALL)        /* u8 nargs        → [fn, a0..aN-1] → result */               \
+  X(CALL_GLOBAL) /* u8 const_idx, u8 nargs → fused LOAD_GLOBAL+CALL */         \
+  X(TAIL_SELF)   /* u8 nargs        → rebind inline slots, PC=0 */             \
+  X(TAIL_CALL)   /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to fn */ \
+  X(CONS) /* pop b, pop a → push (cons a b) */                                 \
+  X(CAR)  /* pop pair     → push car */                                        \
+  X(CDR)  /* pop pair     → push cdr */                                        \
+  X(LIST) /* u8 n         → pop n values → push list */                        \
+  /* Fused "local ± small const" / "local < const" superinstructions: collapse \
+     LOAD_SLOT+LOAD_FIX+OP into one dispatch (peephole for (- n 1), (< n 2)). */\
+  X(SLOT_ADD_FIX) /* u8 slot, i16 imm → push inline_vals[slot] + imm */        \
+  X(SLOT_SUB_FIX) /* u8 slot, i16 imm → push inline_vals[slot] - imm */        \
+  X(SLOT_LT_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] <  imm) */     \
+  X(SLOT_LE_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */     \
+  X(SLOT_GT_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */     \
+  X(SLOT_GE_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */     \
+  X(SLOT_IS_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] is imm): a     \
+                     fixnum-immediate `is` is a tagged-bit compare (two fixnums \
+                     equal iff identical bits; a non-fixnum slot never bit-     \
+                     equals a fixnum, so yields nil). */                       \
+  /* Slot-vs-slot compare — fuses LOAD_SLOT+LOAD_SLOT+<cmp> (compile_for). */  \
+  X(SLOT_LE_SLOT) /* u8 slot_a, u8 slot_b → push (slot_a <= slot_b) */         \
+  /* Vector ops — direct opcodes so vec-heavy loops stay in the VM (else the   \
+     compiler bails to AST and deep recursion overflows the C stack). */       \
+  X(VEC_REF)  /* pop i, pop v → push v[i] */                                   \
+  X(VEC_SET)  /* pop val, pop i, pop v → v[i]=val, push val */                 \
+  X(VEC_LEN)  /* pop v        → push v->len (fixnum) */                        \
+  X(VEC_NEW)  /* pop init, pop n → push (vec n init) */                        \
+  X(SQRT_INT) /* pop n        → push (sqrt-int n) */                           \
+  X(ABS)      /* pop a        → push (abs a) — fixnum/float, FIXMIN→float */    \
+  X(NMAX)     /* pop b, pop a → push numeric max (value-preserving) */         \
+  X(NMIN)     /* pop b, pop a → push numeric min (value-preserving) */         \
+  X(LENGTH)   /* pop list     → push (length list) — walk cons chain */        \
+  X(PUSH_HANDLER) /* u8 handler_idx, u8 finally_idx → push a try handler onto   \
+                     the heap handler stack (idx into the const pool; sentinel  \
+                     0xff = none). Emitted by compile_try ONLY for a tail-      \
+                     position try, whose body then trampolines; handler/finally \
+                     run at error-time / OP_RET-time (see vm_run). */          \
+  X(SETQ_DYN)   /* u8 idx (symbol) → pop v; setq_store_symbol — nearest binding \
+                   else top-level; push v back (setq returns the value) */     \
+  X(STORE_FREE) /* u8 idx (symbol) → pop v; assign_store_symbol — `=`/`setf` to \
+                   a non-slot (free/global): nearest binding else CURRENT env   \
+                   (differs from SETQ_DYN, matching updatebang); push v back */
 typedef enum {
-  OP_HALT = 0,
-  OP_RET,
-  OP_POP,
-  OP_DUP, /* duplicate top-of-stack (fresh ref). Used by compile_and/or/case
-             to keep the tested value across a popping conditional branch. */
-  OP_EVAL_AST, /* u8 idx → push EVAL(consts[idx], env). Escape hatch: a
-                  non-tail-aware builtin call with no native opcode is stored as
-                  its raw form and run by the tree-walker, so the *enclosing*
-                  lambda still compiles (and keeps its tail call). */
-
-  OP_LOAD_FIX,    /* int16 imm       → push MAKE_FIX(imm) */
-  OP_LOAD_CONST,  /* u8 idx          → push refexp(consts[idx]) */
-  OP_LOAD_SLOT,   /* u8 idx          → push refexp(inline_vals[idx]) */
-  OP_LOAD_GLOBAL, /* u8 idx (symbol) → lookup consts[idx] in env, push */
-  OP_STORE_SLOT,  /* u8 idx          → pop → inline_vals[idx] (unref old) */
-  OP_BIND_SLOT,   /* u8 idx          → pop → inline_vals[idx], bump n_inline */
-  OP_BIND_SLOT_NAMED, /* u8 idx, u8 name_const → like BIND_SLOT but also sets
-                         inline_keys[idx] = exp_text(consts[name_const]) so the
-                         let/with/for-counter local is resolvable BY NAME (an
-                         OP_EVAL_AST sub-form needs that — plain BIND_SLOT
-                         leaves a NULL key, invisible to symbolic lookup). */
-  OP_UNBIND_SLOT, /* u8 idx          → unref + NULL inline_vals[idx] (and key)
-                   */
-
-  OP_ADD,
-  OP_SUB,
-  OP_MUL,
-  OP_DIV,
-  OP_MOD,
-  OP_LT,
-  OP_GT,
-  OP_LE,
-  OP_GE,
-  OP_IS,
-  OP_ISO,
-  OP_NOT,
-
-  OP_JUMP, /* int16 off relative to end of operand */
-  OP_BR_IF_FALSE,
-  OP_BR_IF_TRUE,
-
-  OP_CALL,        /* u8 nargs        → [fn, a0..aN-1] → result */
-  OP_CALL_GLOBAL, /* u8 const_idx, u8 nargs → fused LOAD_GLOBAL+CALL */
-  OP_TAIL_SELF,   /* u8 nargs        → rebind inline slots, PC=0 */
-  OP_TAIL_CALL,   /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to new fn
-                   */
-
-  OP_CONS, /* pop b, pop a    → push (cons a b) */
-  OP_CAR,  /* pop pair        → push car */
-  OP_CDR,  /* pop pair        → push cdr */
-  OP_LIST, /* u8 n            → pop n values → push list */
-
-  /* Fused "local ± small constant" / "local < constant" superinstructions.
-     Collapse LOAD_SLOT + LOAD_FIX + OP into one dispatch. Emitted by
-     the compiler's peephole for (- n 1), (< n 2), etc. — the hot-path
-     shapes on fib/fact/countdown. */
-  OP_SLOT_ADD_FIX, /* u8 slot, i16 imm → push inline_vals[slot] + imm */
-  OP_SLOT_SUB_FIX, /* u8 slot, i16 imm → push inline_vals[slot] - imm */
-  OP_SLOT_LT_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] <  imm) */
-  OP_SLOT_LE_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */
-  OP_SLOT_GT_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */
-  OP_SLOT_GE_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */
-  OP_SLOT_IS_FIX,  /* u8 slot, i16 imm → push (inline_vals[slot] is imm).
-                      `is` (isequal) with a fixnum immediate is exactly a
-                      tagged-pointer bit compare: two fixnums are equal iff
-                      identical bits, and a non-fixnum slot value (float /
-                      char / heap ptr) can never bit-equal a fixnum, so it
-                      correctly yields nil. */
-
-  /* Slot-vs-slot comparison — fuses LOAD_SLOT+LOAD_SLOT+<cmp> into one
-     dispatch. Emitted by compile_for (hot path). */
-  OP_SLOT_LE_SLOT, /* u8 slot_a, u8 slot_b → push (slot_a <= slot_b) */
-
-  /* Vector ops — direct opcodes so vec-heavy loops stay in the bytecode
-     VM. Otherwise the compiler bails to AST mode for any unknown
-     internal, and deeply-nested AST recursion overflows the C stack. */
-  OP_VEC_REF,  /* pop i, pop v    → push v[i] */
-  OP_VEC_SET,  /* pop val, pop i, pop v → mutate v[i] = val, push val */
-  OP_VEC_LEN,  /* pop v           → push v->len (as fixnum) */
-  OP_VEC_NEW,  /* pop init, pop n → push (vec n init) */
-  OP_SQRT_INT, /* pop n           → push (sqrt-int n) */
-  OP_ABS,      /* pop a           → push (abs a) — fixnum/float, FIXMIN→float */
-  OP_NMAX,     /* pop b, pop a    → push numeric max (value-preserving) */
-  OP_NMIN,     /* pop b, pop a    → push numeric min (value-preserving) */
-  OP_LENGTH,   /* pop list        → push (length list) — walk cons chain */
-  OP_PUSH_HANDLER, /* u8 handler_idx, u8 finally_idx → push a try handler entry
-                      onto the heap handler stack. handler_idx/finally_idx index
-                      the const pool; the sentinel index 0xff means "none" (nil
-                      handler = no-catch; absent finally). Emitted by
-                      compile_try ONLY for a try in tail position, whose body is
-                      then compiled in tail position so it trampolines. The
-                      handler/finally run at error-time / OP_RET-time (see
-                      vm_run). */
-  OP_SETQ_DYN,     /* u8 idx (symbol) → pop v; setq_store_symbol(consts[idx],
-                      env, v) — nearest existing binding else top-level;
-                      push v back (setq returns the assigned value) */
-  OP_STORE_FREE,   /* u8 idx (symbol) → pop v; assign_store_symbol(consts[idx],
-                      env, v) — `=`/`setf` to a non-slot (captured free var or
-                      global): nearest existing binding else CURRENT env (this
-                      is how it differs from SETQ_DYN, matching updatebang);
-                      push v back (`=` returns the assigned value) */
-
+#define X(n) OP_##n,
+  OPCODE_LIST(X)
+#undef X
   OP_MAX
 } alc_op;
 

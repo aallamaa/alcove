@@ -2576,54 +2576,13 @@ exp_t *timecmd(exp_t *e, env_t *env) {
 /* Map common type tags to their string names for inspect output. */
 static const char *inspect_type_name(int t) {
   switch (t) {
-  case EXP_SYMBOL:
-    return "symbol";
-  case EXP_NUMBER:
-    return "number";
-  case EXP_FLOAT:
-    return "float";
-  case EXP_STRING:
-    return "string";
-  case EXP_CHAR:
-    return "char";
-  case EXP_BOOLEAN:
-    return "boolean";
-  case EXP_VECTOR:
-    return "vector";
-  case EXP_ERROR:
-    return "error";
-  case EXP_PAIR:
-    return "pair";
-  case EXP_LAMBDA:
-    return "lambda";
-  case EXP_INTERNAL:
-    return "builtin";
-  case EXP_MACRO:
-    return "macro";
-  case EXP_BLOB:
-    return "blob";
-  case EXP_DICT:
-    return "dict";
-  case EXP_LIST:
-    return "deque";
-  case EXP_SET:
-    return "set";
-  case EXO_MACROINTERNAL:
-    return "macro-builtin";
-  case EXP_FFI:
-    return "ffi";
-  case EXP_TREE:
-    return "tree";
-  case EXP_PAIR_CIRCULAR:
-    return "pair-circular";
-  case EXP_HAMT:
-    return "hamt";
-  case EXP_RATIONAL:
-    return "rational";
-  case EXP_DECIMAL:
-    return "decimal";
-  case EXP_CONT:
-    return "continuation";
+/* one case per ALC_EXP_TYPES row (alcove.h); EXP_MAXSIZE and any unknown tag
+   hit the default. */
+#define X(name, anchor, dispname)                                             \
+  case name:                                                                   \
+    return dispname;
+    ALC_EXP_TYPES(X)
+#undef X
   default:
     return "?";
   }
