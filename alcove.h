@@ -126,11 +126,26 @@ enum {
 /* Mono build doesn't need TLS at all — the macro expands away. */
 #define ALCOVE_TLS
 #else
-#define REFCOUNT_INC(p) __sync_add_and_fetch((p), 1)
-#define REFCOUNT_DEC(p) __sync_sub_and_fetch((p), 1)
-/* Multi-thread build: __sync_add_and_fetch is a full barrier, so any
-   gcache reader on another thread that loads the new gen is guaranteed
-   to see the dict write that follows the bump. */
+/* Refcount inc is RELAXED: a thread that increments already holds a reference,
+   so a happens-before to the object's construction exists via that reference —
+   no barrier needed (the standard Arc/shared_ptr pattern). Dec is RELEASE so all
+   of this thread's writes-through-the-object are ordered before the count drop;
+   on the 1->0 transition the macro issues an ACQUIRE fence so the freeing thread
+   sees every other thread's prior writes before it tears the object down. This
+   is strictly cheaper than the old full-barrier __sync on every dec (arm64:
+   ldxr/stxr without the dmb), and behaviorally identical to it. */
+#define REFCOUNT_INC(p) __atomic_add_fetch((p), 1, __ATOMIC_RELAXED)
+#define REFCOUNT_DEC(p)                                                        \
+  __extension__({                                                             \
+    int _rc_new = __atomic_sub_fetch((p), 1, __ATOMIC_RELEASE);               \
+    if (_rc_new <= 0)                                                         \
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);                                \
+    _rc_new;                                                                  \
+  })
+/* GEN_BUMP stays a FULL barrier (not relaxed): the bump must happen-before the
+   dict mutation that follows it, so a gcache reader on another thread that loads
+   the new gen is guaranteed to also see that write. Relaxing it would be a real
+   (subtle) bug — leave it as __sync. */
 #define GEN_BUMP() __sync_add_and_fetch(&alcove_global_gen, 1)
 /* TLS storage class for hot per-thread variables (exp_freelist, the
    bump pointers, current_shard, ...). The "initial-exec" model emits

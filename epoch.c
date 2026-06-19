@@ -10,7 +10,12 @@ _Atomic uint64_t epoch_global = 1; /* 0 reserved for "unregistered" */
 _Atomic int epoch_nthreads = 0;
 
 static inline void epoch_update_quiescent(int idx) {
-  uint64_t g = atomic_load_explicit(&epoch_global, memory_order_acquire);
+  /* RELAXED load: epoch_global is a monotonic counter with no data-visibility
+     duty — the real publication edge is the RELEASE store of `quiescent` below,
+     paired with the ACQUIRE load in epoch_min_quiescent. A stale-small read here
+     only makes gc MORE conservative (advertises a lower quiescent → frees less),
+     never less safe. */
+  uint64_t g = atomic_load_explicit(&epoch_global, memory_order_relaxed);
   atomic_store_explicit(&epoch_threads[idx].quiescent, g, memory_order_release);
 }
 
@@ -65,8 +70,12 @@ void epoch_retire(void *ptr, epoch_freer_t freer) {
      that hasn't yet observed >= retire_epoch + 1 still hold a "view"
      from before the retire, so the strict-less-than gc condition keeps
      them safe. */
-  uint64_t r = atomic_fetch_add_explicit(&epoch_global, 1,
-                                         memory_order_acq_rel);
+  /* RELAXED: this only needs to stamp the node with a coherent monotonic epoch.
+     The G(T) <= retire_epoch invariant that keeps a still-referencing reader's
+     pointer alive is carried by the lock-free slot CAS (lfkv.c) + the quiescent
+     store/load pair, NOT by an ordering edge through epoch_global — so atomicity
+     (coherence) is all this counter bump owes. */
+  uint64_t r = atomic_fetch_add_explicit(&epoch_global, 1, memory_order_relaxed);
   epoch_retire_t *node = malloc(sizeof *node);
   if (!node) {
     /* OOM: best-effort immediate free. Risk: peer reader may still hold
