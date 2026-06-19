@@ -342,10 +342,28 @@ static const char *head_tok(const node *x) {
   if (x->is_list && x->n > 0 && !x->kid[0]->is_list) return x->kid[0]->tok;
   return NULL;
 }
-/* (= a b) -> render as the Adder-preferred infix `a = b`. */
+/* (= a b) -> render as the Adder-preferred infix `a = b` (statement level). */
 static int is_infix_assign(const node *x) {
   return x->is_list && !x->call && x->n == 3 && !x->kid[0]->is_list &&
          x->kid[0]->tok && !strcmp(x->kid[0]->tok, "=");
+}
+/* NOTE on operator infix `(n < 0)` / `(n is 0)`: it reads better, but adr.h does
+   NOT lower it (unlike `a = b`), so it stays a RUNTIME infix dispatch and the
+   compiler can't fuse it into the SLOT_<cmp>_FIX superinstruction the JIT loop
+   matcher needs — it deoptimizes hot loops (verified: +117 jit-loop test fails).
+   So it's deliberately NOT applied here. A future `--infix` opt-in could enable
+   it for code where readability outweighs loop perf. */
+static int g_infix_ops = 0; /* off: operator infix would deopt hot loops */
+static int is_infix_op(const char *s) {
+  if (!g_infix_ops || !s) return 0;
+  static const char *ops[] = {"<",">","<=",">=","is","iso","+","-","*","/","mod",0};
+  for (int k = 0; ops[k]; k++) if (!strcmp(s, ops[k])) return 1;
+  return 0;
+}
+static int g_quoted = 0; /* set while emitting inside a quote/quasiquote */
+static int is_infix_op_form(const node *x) {
+  return !g_quoted && x->is_list && !x->call && x->open == '(' && x->n == 3 &&
+         !x->kid[0]->is_list && is_infix_op(x->kid[0]->tok);
 }
 
 static void emit_inline(const node *x, buf *o);
@@ -357,7 +375,15 @@ static void emit_seq(node **kid, int from, int n, buf *o) {
    source used it (x->call); `(= a b)` becomes infix `a = b`. */
 static void emit_inline(const node *x, buf *o) {
   if (!x->is_list) { buf_puts(o, x->tok); return; }
-  if (x->open == '\'') { buf_puts(o, x->tok); emit_inline(x->kid[0], o); return; }
+  if (x->open == '\'') { /* quote/quasiquote/unquote — its body is literal data */
+    int save = g_quoted; g_quoted = 1;
+    buf_puts(o, x->tok); emit_inline(x->kid[0], o); g_quoted = save; return;
+  }
+  if (is_infix_op_form(x)) { /* (op a b) -> (a op b) */
+    buf_putc(o, '('); emit_inline(x->kid[1], o);
+    buf_putc(o, ' '); buf_puts(o, x->kid[0]->tok); buf_putc(o, ' ');
+    emit_inline(x->kid[2], o); buf_putc(o, ')'); return;
+  }
   if (x->vec) { buf_puts(o, "#["); emit_seq(x->kid, 0, x->n, o); buf_putc(o, ']'); return; }
   if (x->set) { buf_puts(o, "#{"); emit_seq(x->kid, 0, x->n, o); buf_putc(o, '}'); return; }
   if (x->map) { buf_putc(o, '{'); emit_seq(x->kid, 0, x->n, o); buf_putc(o, '}'); return; }
