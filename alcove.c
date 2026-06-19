@@ -8404,6 +8404,43 @@ static int compile_try(compiler_t *c, exp_t *form, int tail) {
   return 1;
 }
 
+/* Special-form ids for compile_expr's head dispatch. The strcmp ladder it used
+   to be is now a sorted-table lookup + switch: one bsearch (log n) instead of up
+   to ~30 sequential strcmps for every call head, and the table is the single
+   source of the recognized-form name set. SF_NONE → not a compiled special form
+   (fall through to op_for_head / the reserved_symbol tier, exactly as a
+   non-matching ladder arm did). Multiple spellings can map to one id
+   (=/setf → SF_ASSIGN, max/min → SF_MAXMIN). */
+enum sform_id {
+  SF_NONE = 0, SF_IF, SF_TRY, SF_LET, SF_LETSTAR, SF_WITH, SF_WHEN, SF_UNLESS,
+  SF_AND, SF_OR, SF_COND, SF_CASE, SF_FOR, SF_ASSIGN, SF_SETQ, SF_DO, SF_CONS,
+  SF_CAR, SF_CDR, SF_LIST, SF_VEC_REF, SF_VEC_SET, SF_VEC_LEN, SF_VEC,
+  SF_SQRT_INT, SF_LENGTH, SF_ABS, SF_MAXMIN, SF_QUOTE
+};
+/* MUST stay sorted by name (bsearch). */
+static const struct {
+  const char *name;
+  int id;
+} sform_table[] = {
+    {"=", SF_ASSIGN},        {"abs", SF_ABS},      {"and", SF_AND},
+    {"car", SF_CAR},         {"case", SF_CASE},    {"cdr", SF_CDR},
+    {"cond", SF_COND},       {"cons", SF_CONS},    {"do", SF_DO},
+    {"for", SF_FOR},         {"if", SF_IF},        {"length", SF_LENGTH},
+    {"let", SF_LET},         {"let*", SF_LETSTAR}, {"list", SF_LIST},
+    {"max", SF_MAXMIN},      {"min", SF_MAXMIN},   {"or", SF_OR},
+    {"quote", SF_QUOTE},     {"setf", SF_ASSIGN},  {"setq", SF_SETQ},
+    {"sqrt-int", SF_SQRT_INT}, {"try", SF_TRY},    {"unless", SF_UNLESS},
+    {"vec", SF_VEC},         {"vec-len", SF_VEC_LEN}, {"vec-ref", SF_VEC_REF},
+    {"vec-set!", SF_VEC_SET}, {"when", SF_WHEN},   {"with", SF_WITH}};
+static int sform_cmp(const void *k, const void *e) {
+  return strcmp((const char *)k, ((const typeof(sform_table[0]) *)e)->name);
+}
+static int sform_lookup(const char *s) {
+  const void *hit = bsearch(s, sform_table, sizeof sform_table / sizeof sform_table[0],
+                            sizeof sform_table[0], sform_cmp);
+  return hit ? ((const typeof(sform_table[0]) *)hit)->id : SF_NONE;
+}
+
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (c->failed)
     return;
@@ -8489,11 +8526,13 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   }
   if (issymbol(head)) {
     const char *s = exp_text(head);
-    if (!strcmp(s, "if")) {
+    switch (sform_lookup(s)) {
+    case SF_IF: {
       compile_if(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "try")) {
+    case SF_TRY: {
       /* Only tail-position try uses the handler-stack VM path. A non-tail try
          (compile_try returns 0) falls through to the reserved-symbol
          OP_EVAL_AST path below — just THAT sub-form defers to trycmd while the
@@ -8501,52 +8540,64 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
          as before this change. So non-tail try keeps today's exact behavior. */
       if (compile_try(c, e, tail))
         return;
+      break;
     }
-    if (!strcmp(s, "let")) {
+    case SF_LET: {
       compile_let(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "let*")) {
+    case SF_LETSTAR: {
       compile_letstar(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "with")) {
+    case SF_WITH: {
       compile_with(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "when")) {
+    case SF_WHEN: {
       compile_when_unless(c, e, tail, 0);
       return;
+      break;
     }
-    if (!strcmp(s, "unless")) {
+    case SF_UNLESS: {
       compile_when_unless(c, e, tail, 1);
       return;
+      break;
     }
-    if (!strcmp(s, "and")) {
+    case SF_AND: {
       compile_and_or(c, e, tail, 0);
       return;
+      break;
     }
-    if (!strcmp(s, "or")) {
+    case SF_OR: {
       compile_and_or(c, e, tail, 1);
       return;
+      break;
     }
-    if (!strcmp(s, "cond")) {
+    case SF_COND: {
       compile_cond(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "case")) {
+    case SF_CASE: {
       compile_case(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "for")) {
+    case SF_FOR: {
       compile_for(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "=") || !strcmp(s, "setf")) {
+    case SF_ASSIGN: {
       compile_assign(c, e, tail);
       return;
+      break;
     }
-    if (!strcmp(s, "setq")) {
+    case SF_SETQ: {
       exp_t *args = cdr(e);
       if (!args) { /* (setq) -> nil; let the tree-walker handle it */
         c->failed = 1;
@@ -8578,8 +8629,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
           emit_u8(c, OP_POP);
       }
       return;
+      break;
     }
-    if (!strcmp(s, "do")) {
+    case SF_DO: {
       /* Sequential eval, return last value. Same shape as the body
          walk in compile_lambda — emit each expr, POP between, last
          one keeps tail position. (do) with no exprs evaluates to nil. */
@@ -8599,8 +8651,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         saw_any = 1;
       }
       return;
+      break;
     }
-    if (!strcmp(s, "cons")) {
+    case SF_CONS: {
       exp_t *a = cadr(e), *b = caddr(e);
       if (!a || !b) {
         c->failed = 1;
@@ -8614,8 +8667,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_CONS);
       return;
+      break;
     }
-    if (!strcmp(s, "car")) {
+    case SF_CAR: {
       exp_t *a = cadr(e);
       if (!a) {
         c->failed = 1;
@@ -8626,8 +8680,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_CAR);
       return;
+      break;
     }
-    if (!strcmp(s, "cdr")) {
+    case SF_CDR: {
       exp_t *a = cadr(e);
       if (!a) {
         c->failed = 1;
@@ -8638,8 +8693,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_CDR);
       return;
+      break;
     }
-    if (!strcmp(s, "list")) {
+    case SF_LIST: {
       int n = 0;
       exp_t *a;
       for (a = e->next; a; a = a->next) {
@@ -8655,8 +8711,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
       emit_u8(c, OP_LIST);
       emit_u8(c, (uint8_t)n);
       return;
+      break;
     }
-    if (!strcmp(s, "vec-ref")) {
+    case SF_VEC_REF: {
       exp_t *v = cadr(e), *i = caddr(e);
       if (!v || !i) {
         c->failed = 1;
@@ -8670,8 +8727,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_VEC_REF);
       return;
+      break;
     }
-    if (!strcmp(s, "vec-set!")) {
+    case SF_VEC_SET: {
       exp_t *v = cadr(e), *i = caddr(e), *x = cadddr(e);
       if (!v || !i || !x) {
         c->failed = 1;
@@ -8688,8 +8746,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_VEC_SET);
       return;
+      break;
     }
-    if (!strcmp(s, "vec-len")) {
+    case SF_VEC_LEN: {
       exp_t *v = cadr(e);
       if (!v) {
         c->failed = 1;
@@ -8700,8 +8759,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_VEC_LEN);
       return;
+      break;
     }
-    if (!strcmp(s, "vec")) {
+    case SF_VEC: {
       exp_t *n = cadr(e), *init = caddr(e);
       if (!n) {
         c->failed = 1;
@@ -8719,8 +8779,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_VEC_NEW);
       return;
+      break;
     }
-    if (!strcmp(s, "sqrt-int")) {
+    case SF_SQRT_INT: {
       exp_t *a = cadr(e);
       if (!a) {
         c->failed = 1;
@@ -8731,8 +8792,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_SQRT_INT);
       return;
+      break;
     }
-    if (!strcmp(s, "length")) {
+    case SF_LENGTH: {
       exp_t *a = cadr(e);
       if (!a) {
         c->failed = 1;
@@ -8743,12 +8805,13 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         return;
       emit_u8(c, OP_LENGTH);
       return;
+      break;
     }
     /* abs (unary) / max,min (binary) get native opcodes instead of the
        OP_EVAL_AST tree-walk — the common arity. Wrong/variadic arity falls
        through to OP_EVAL_AST below (where abscmd/maxcmd/mincmd handle it,
        including variadic max/min over >2 args). */
-    if (!strcmp(s, "abs")) {
+    case SF_ABS: {
       exp_t *a = cadr(e);
       if (a && !cddr(e)) {
         compile_expr(c, a, 0);
@@ -8757,8 +8820,9 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         emit_u8(c, OP_ABS);
         return;
       }
+      break;
     }
-    if (!strcmp(s, "max") || !strcmp(s, "min")) {
+    case SF_MAXMIN: {
       exp_t *a = cadr(e), *b = caddr(e);
       if (a && b && !cdddr(e)) {
         compile_expr(c, a, 0);
@@ -8770,13 +8834,18 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
         emit_u8(c, !strcmp(s, "max") ? OP_NMAX : OP_NMIN);
         return;
       }
+      break;
     }
-    if (!strcmp(s, "quote")) {
+    case SF_QUOTE: {
       exp_t *q = cadr(e);
       int k = add_const(c, q ? q : nil_singleton);
       emit_u8(c, OP_LOAD_CONST);
       emit_u8(c, (uint8_t)k);
       return;
+      break;
+    }
+    default:
+      break;
     }
     int op = op_for_head(s);
     if (op >= 0) {
