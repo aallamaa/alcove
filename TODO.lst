@@ -16,19 +16,17 @@
        New jit_fuzz.py gen_eq_countdown generator + test.alc assert-jits
        gates (jc-eqcd/jc-equp) + behavior asserts.
 
-       ARM64 STATUS: MIRRORED-BUT-UNVALIDATED. jit_arm64.h's
-       try_jit_simple_tail_loop_eq is a pure structural mirror of the
-       validated try_jit_simple_tail_loop (same load/tbz/cmp/b.cond/step/
-       str/back-edge codegen; only the walk order swapped and cond pinned to
-       EQ=0 — no new hand-assembly). It cross-COMPILES clean
-       (aarch64-linux-gnu-gcc, syntax-only + -c to .o, no errors/warnings)
-       but was NOT RUN — this is an x86-64 host. BEFORE MERGING the arm64
-       path: on a Mac run `make test-all` (the new is-base asserts must pass
-       under jit/jit-mono) AND `make jit-fuzz` (eq-countdown category must
-       stay 100% jit'd, byte-identical jit==VM). If anything fails, the
-       fallback is trivial: drop the arm64 dispatch arm
-       (`} else if (try_jit_simple_tail_loop_eq(bc, insns, &n)) {`) and the
-       shape stays on the VM path (correct, just slow) on arm64 only.
+       ARM64 STATUS: VALIDATED under qemu-aarch64 (2026-06-19). Was
+       MIRRORED-BUT-UNVALIDATED (cross-compiled only, never run on a real ARM
+       host). Now run end-to-end under qemu-aarch64 10.0 + aarch64-linux-gnu-gcc:
+       (jit? jc-eqcd) and (jit? jc-equp) are both t (the eq-base matcher fires on
+       arm64), jc-eqcd(1e6)=0 / jc-equp(0)=100 correct, and test.alc's assert-jits
+       gates "jit loop: is-base countdown/count-up" + the result asserts all PASS
+       on aarch64. jit_arm64.h's try_jit_simple_tail_loop_eq is a pure structural
+       mirror of the validated try_jit_simple_tail_loop (same load/tbz/cmp/b.cond/
+       step/str/back-edge codegen; walk order swapped, cond pinned to EQ=0). The
+       fallback if ever needed stays trivial: drop the arm64 dispatch arm
+       (`} else if (try_jit_simple_tail_loop_eq(bc, insns, &n)) {`).
 
 [DONE] JIT hardening + loop-coverage expansion (2026-06-01, macOS arm64 /
        Darwin 25, both backends; amd64 cross-checked under x86_64 Rosetta).
