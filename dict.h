@@ -17,6 +17,17 @@ unsigned int bernstein_hash(unsigned char *key, int len) {
   return hash;
 }
 
+/* NUL-terminated variant: hashes until the terminator, fusing the strlen scan
+   into the hash walk (identical result to bernstein_hash(key, strlen(key))).
+   For C-string keys only — binary keys with embedded NULs must use the
+   length-taking bernstein_hash. */
+unsigned int bernstein_hash_z(const char *key) {
+  unsigned int hash = bernstein_seed;
+  for (const unsigned char *p = (const unsigned char *)key; *p; p++)
+    hash = (hash + (hash << 5)) ^ *p;
+  return hash;
+}
+
 /* Bernstein Hash Function not key sensitive*/
 unsigned int bernstein_uhash(unsigned char *key, int len) {
   unsigned int hash = bernstein_seed;
@@ -179,7 +190,7 @@ static void dict_rehash(dict_t *d, unsigned int new_size) {
     keyval_t *k = d->ht[0].table[j];
     while (k) {
       keyval_t *next = k->next;
-      unsigned int h = bernstein_hash((unsigned char *)k->key, strlen(k->key));
+      unsigned int h = bernstein_hash_z(k->key);
       unsigned int slot = h & new_mask;
       k->next = new_table[slot];
       new_table[slot] = k;
@@ -193,7 +204,7 @@ static void dict_rehash(dict_t *d, unsigned int new_size) {
 }
 
 keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val) {
-  unsigned int h = bernstein_hash((unsigned char *)key, strlen(key));
+  unsigned int h = bernstein_hash_z(key);
   keyval_t *k = NULL;
   if (d->ht[0].size) {
     if ((k = d->ht[0].table[h & (d->ht[0].sizemask)])) {
@@ -258,7 +269,7 @@ int64_t get_keyval_dict_timestamp(dict_t *d, char *key) {
 
 /* Returns 1 if a matching entry was removed, 0 otherwise. */
 int del_keyval_dict(dict_t *d, char *key) {
-  unsigned int h = bernstein_hash((unsigned char *)key, strlen(key));
+  unsigned int h = bernstein_hash_z(key);
   keyval_t *p = NULL;
   keyval_t *k;
   if (d->ht[0].size) {

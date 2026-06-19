@@ -265,8 +265,7 @@ exp_t *shellcmd(exp_t *e, env_t *env) {
                                    : -1;
   exp_t *ret = make_dict_exp();
   dict_t *d = (dict_t *)ret->ptr;
-  exp_t *out = make_string(buf, (int)len);
-  free(buf);
+  exp_t *out = make_string_take(buf, (int)len);
   set_get_keyval_dict(d, "out", out);
   unrefexp(out);
   set_get_keyval_dict(d, "exit", MAKE_FIX((int64_t)code));
@@ -300,8 +299,7 @@ exp_t *readstdincmd(exp_t *e, env_t *env) {
     free(buf);
     CLEAN_RETURN_1(nexp, refexp(NIL_EXP));
   }
-  exp_t *ret = make_string(buf, (int)got);
-  free(buf);
+  exp_t *ret = make_string_take(buf, (int)got);
   CLEAN_RETURN_1(nexp, ret);
 }
 

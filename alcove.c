@@ -1881,6 +1881,28 @@ inline exp_t *make_string(char *str, int length) {
   return make_inline_txt(str, length, EXP_STRING);
 }
 
+/* Like make_string, but ADOPTS a heap buffer instead of copying it: the long
+   case takes ownership of `buf` (no second alloc + copy), the short case copies
+   inline and frees `buf`. Either way the caller must NOT free `buf` afterwards.
+   `buf` must be a malloc/realloc'd buffer of at least length+1 bytes (room for
+   the NUL); strings are NUL-terminated C text (length is strlen-based). Use at
+   the ~dozen sites that built a buffer via str_buf_put/memalloc only to hand it
+   to make_string and free it. */
+static exp_t *make_string_take(char *buf, int length) {
+  if (length < 0)
+    graceful_shutdown("Fatal error: text length overflow (size_t > INT_MAX)");
+  if (length <= INLINE_TXT_CAP) {
+    exp_t *cur = make_string(buf, length); /* inline copy */
+    free(buf);
+    return cur;
+  }
+  exp_t *cur = make_nil();
+  cur->type = EXP_STRING;
+  buf[length] = '\0'; /* in-capacity (buf has >= length+1); ensure termination */
+  cur->ptr = buf;     /* adopt — no copy */
+  return cur;
+}
+
 inline exp_t *make_symbol(char *str, int length) {
   return make_inline_txt(str, length, EXP_SYMBOL);
 }
@@ -5220,8 +5242,7 @@ exp_t *strcmd(exp_t *e, env_t *env) {
     exp_to_string_buf(v, &buf, &len, &cap);
     unrefexp(v);
   }
-  exp_t *ret = make_string(buf, (int)len);
-  free(buf);
+  exp_t *ret = make_string_take(buf, (int)len);
   unrefexp(e);
   return ret;
 }
@@ -5338,8 +5359,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
     }
   }
   buf[len] = 0;
-  exp_t *ret = make_string(buf, (int)len);
-  free(buf);
+  exp_t *ret = make_string_take(buf, (int)len);
   unrefexp(fmtarg);
   unrefexp(e);
   return ret;
@@ -5368,8 +5388,7 @@ exp_t *stringappendcmd(exp_t *e, env_t *env) {
     { const char *_t = exp_text(v); str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t)); }
     unrefexp(v);
   }
-  exp_t *ret = make_string(buf, (int)len);
-  free(buf);
+  exp_t *ret = make_string_take(buf, (int)len);
   unrefexp(e);
   return ret;
 }
@@ -5391,8 +5410,7 @@ static exp_t *make_filled_string(int64_t n, uint32_t cp) {
   for (int64_t j = 0; j < n; j++)
     memcpy(buf + (size_t)j * (size_t)k, enc, (size_t)k);
   buf[total] = '\0';
-  exp_t *s = make_string(buf, (int)total);
-  free(buf);
+  exp_t *s = make_string_take(buf, (int)total);
   return s;
 }
 
@@ -5615,8 +5633,7 @@ exp_t *stringjoincmd(exp_t *e, env_t *env) {
                 strlen(exp_text(car(p))));
     p = cdr(p);
   }
-  exp_t *ret = make_string(buf, (int)len);
-  free(buf);
+  exp_t *ret = make_string_take(buf, (int)len);
   CLEAN_RETURN_2(xs, sep, ret);
 }
 
@@ -5648,8 +5665,7 @@ exp_t *stringtrimcmd(exp_t *e, env_t *env) {
     char *buf = memalloc(n + 1, 1);                                            \
     for (size_t i = 0; i < n; i++)                                             \
       buf[i] = (char)fn((unsigned char)((char *)exp_text(s))[i]);                   \
-    exp_t *ret = make_string(buf, (int)n);                                     \
-    free(buf);                                                                 \
+    exp_t *ret = make_string_take(buf, (int)n);                                \
     CLEAN_RETURN_1(s, ret);                                                    \
   }
 
@@ -5679,8 +5695,7 @@ static exp_t *slurp_file_as_string(const char *path) {
     return NIL_EXP;
   }
   fclose(fp);
-  exp_t *ret = make_string(buf, (int)sz);
-  free(buf);
+  exp_t *ret = make_string_take(buf, (int)sz);
   return ret;
 }
 

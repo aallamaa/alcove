@@ -1622,8 +1622,7 @@ exp_t *stringreplacecmd(exp_t *e, env_t *env) {
       }
       str_buf_put(&buf, &len, &cap, p, strlen(p));
     }
-    exp_t *ret = make_string(buf, (int)len);
-    free(buf);
+    exp_t *ret = make_string_take(buf, (int)len);
     unrefexp(s);
     unrefexp(old);
     unrefexp(nw);
@@ -3370,8 +3369,7 @@ exp_t *stringrepeatcmd(exp_t *e, env_t *env) {
   char *out = memalloc(sl * (size_t)n + 1, 1);
   for (int64_t i = 0; i < n; i++)
     memcpy(out + (size_t)i * sl, ss, sl);
-  exp_t *ret = make_string(out, (int)(sl * (size_t)n));
-  free(out);
+  exp_t *ret = make_string_take(out, (int)(sl * (size_t)n));
   CLEAN_RETURN_2(s, nexp, ret);
 }
 
@@ -3432,8 +3430,7 @@ static exp_t *alc_string_pad(exp_t *e, env_t *env, int left,
   if (!left)
     for (int64_t i = 0; i < add; i++, o += (size_t)padlen)
       memcpy(out + o, padb, (size_t)padlen);
-  exp_t *ret = make_string(out, (int)o);
-  free(out);
+  exp_t *ret = make_string_take(out, (int)o);
   CLEAN_RETURN_3(s, nexp, padexp, ret);
 }
 

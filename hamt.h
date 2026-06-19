@@ -38,7 +38,7 @@ static uint32_t hamt_hashkey(exp_t *k) {
   }
   if (isstring(k) || issymbol(k)) {
     const char *s = exp_text(k);
-    return bernstein_hash((unsigned char *)s, strlen(s));
+    return bernstein_hash_z(s);
   }
   if (isblob(k)) {
     return bernstein_hash((unsigned char *)blob_bytes(k), blob_len(k));
