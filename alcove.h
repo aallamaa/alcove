@@ -593,13 +593,20 @@ extern uint64_t alcove_global_gen;
 
 void bytecode_free(bytecode_t *bc);
 void disasm_bytecode(bytecode_t *bc); /* opcode-by-opcode dump for debugging */
-/* Optional type-annotation codes (JIT speculation hints). 0 = unannotated. */
+/* Optional type-annotation codes (JIT speculation hints). 0 = unannotated.
+   Single source of truth: this X-macro list generates the enum below AND the
+   code→keyword / keyword→code maps in alcove.c, so a new hint can't be added to
+   one and forgotten in another. (code, keyword) per row. */
+#define ALC_TYPE_HINTS(X)                                                      \
+  X(TYPE_HINT_INT, ":int")         /* tagged fixnum */                         \
+  X(TYPE_HINT_F64, ":f64")         /* double */                                \
+  X(TYPE_HINT_VEC_F64, ":vec-f64")                                             \
+  X(TYPE_HINT_VEC_I64, ":vec-i64")
 enum {
   TYPE_HINT_NONE = 0,
-  TYPE_HINT_INT,     /* :int    — tagged fixnum */
-  TYPE_HINT_F64,     /* :f64    — double */
-  TYPE_HINT_VEC_F64, /* :vec-f64 */
-  TYPE_HINT_VEC_I64  /* :vec-i64 */
+#define X(code, kw) code,
+  ALC_TYPE_HINTS(X)
+#undef X
 };
 /* param_hints (ENV_INLINE_SLOTS TYPE_HINT_* codes, or NULL) + ret_hint are the
    def-time type annotations, recorded into the bytecode for the JIT. */

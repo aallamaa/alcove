@@ -477,7 +477,14 @@ static int bc_oplen(uint8_t op) {
   case OP_SLOT_IS_FIX:
     return 4;
   default:
-    return 0; /* unknown / variable — matcher bails */
+    /* unknown / variable — matcher bails. OP_PUSH_HANDLER (a 3-byte op) is
+       DELIBERATELY here, not given its real length: returning 0 makes the JIT
+       shape matcher bail on any body containing a (try ...), which must run
+       interpreted (the handler stack trampolines and is not JIT-modeled). Do
+       NOT add a `case OP_PUSH_HANDLER: return 3;` — that would make try-bodies
+       JIT-eligible. The bc_opname/bc_disasm_one twins DO name+size it (3) for
+       correct disassembly; this oracle intentionally diverges for that one op. */
+    return 0;
   }
 }
 

@@ -35,7 +35,7 @@ exp_t *modcmd(exp_t *e, env_t *env) {
       double da = TO_DOUBLE(a);
       double db = TO_DOUBLE(b);
       if (db == 0.0)
-        ret = error(ERROR_DIV_BY0, e, env, "mod by 0");
+        ret = error(ERROR_DIV_BY0, e, env, ERR_MODULO_BY_ZERO);
       else
         ret = make_floatf(fmod(da, db));
     } else {
@@ -2649,6 +2649,14 @@ static const char *inspect_type_name(int t) {
     return "tree";
   case EXP_PAIR_CIRCULAR:
     return "pair-circular";
+  case EXP_HAMT:
+    return "hamt";
+  case EXP_RATIONAL:
+    return "rational";
+  case EXP_DECIMAL:
+    return "decimal";
+  case EXP_CONT:
+    return "continuation";
   default:
     return "?";
   }

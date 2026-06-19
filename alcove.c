@@ -2675,30 +2675,24 @@ static const char *reserved_param_name(exp_t *params) {
    The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64, :vec-i64.
    The TYPE_HINT_* enum lives in alcove.h (used by bytecode_t / compile_lambda). */
 /* Name of a TYPE_HINT_* code, for disasm / introspection. */
-static const char *type_hint_name(int code) {
+static const char *type_hint_name(int code) { /* expanded from ALC_TYPE_HINTS */
   switch (code) {
-  case TYPE_HINT_INT:
-    return ":int";
-  case TYPE_HINT_F64:
-    return ":f64";
-  case TYPE_HINT_VEC_F64:
-    return ":vec-f64";
-  case TYPE_HINT_VEC_I64:
-    return ":vec-i64";
+#define X(c, kw)                                                               \
+  case c:                                                                      \
+    return kw;
+    ALC_TYPE_HINTS(X)
+#undef X
   default:
     return ":any";
   }
 }
 /* Map a type-hint keyword's text to its code, or -1 if not a known type. */
-static int type_hint_code(const char *kw) {
-  if (!strcmp(kw, ":int"))
-    return TYPE_HINT_INT;
-  if (!strcmp(kw, ":f64"))
-    return TYPE_HINT_F64;
-  if (!strcmp(kw, ":vec-f64"))
-    return TYPE_HINT_VEC_F64;
-  if (!strcmp(kw, ":vec-i64"))
-    return TYPE_HINT_VEC_I64;
+static int type_hint_code(const char *kw) { /* expanded from ALC_TYPE_HINTS */
+#define X(c, ks)                                                               \
+  if (!strcmp(kw, ks))                                                         \
+    return c;
+  ALC_TYPE_HINTS(X)
+#undef X
   return -1;
 }
 /* A keyword is an EXP_SYMBOL whose text starts with ':'. */
@@ -4210,6 +4204,13 @@ const char doc_lt[] =
 const char doc_gt[] = "(> a b ...) — strictly greater than (chained).";
 const char doc_le[] = "(<= a b ...) — less than or equal (chained).";
 const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
+/* Error texts shared by the AST and VM tiers so the two cannot drift (the same
+   operator must report identically in interpreted and compiled code). Visible to
+   the later-#included builtins_stdlib.h (modcmd). */
+/* non-const to match error()'s char* fmt param (as plain string literals are). */
+static char ERR_MODULO_BY_ZERO[] = "Illegal modulo by 0";
+static char ERR_COMPARE_INCOMPAT[] = "compare: incompatible types";
+
 /* Pairwise compare helper. Returns 1 on success with d set to the sign
    of (a - b); returns 0 on type mismatch (caller raises error). */
 static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
@@ -4303,8 +4304,7 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
         unrefexp(prev);
         unrefexp(v);
         unrefexp(e);
-        return error(ERROR_ILLEGAL_VALUE, NULL, env,
-                     "compare: incompatible types");
+        return error(ERROR_ILLEGAL_VALUE, NULL, env, ERR_COMPARE_INCOMPAT);
       }
       int ok;
       switch (op_kind) {
@@ -7306,6 +7306,8 @@ static const char *bc_opname(uint8_t op) {
     return "MIN";
   case OP_LENGTH:
     return "LENGTH";
+  case OP_PUSH_HANDLER:
+    return "PUSH_HANDLER";
   default:
     return "??";
   }
@@ -7378,6 +7380,10 @@ static int bc_disasm_one(const uint8_t *code, int pc) {
     return 3;
   case OP_BIND_SLOT_NAMED:
     printf("  %04d  %s slot=%d name_const=%d\n", pc, bc_opname(op),
+           (int)code[pc + 1], (int)code[pc + 2]);
+    return 3;
+  case OP_PUSH_HANDLER:
+    printf("  %04d  %s handler_idx=%d finally_idx=%d\n", pc, bc_opname(op),
            (int)code[pc + 1], (int)code[pc + 2]);
     return 3;
   case OP_SLOT_ADD_FIX:
@@ -9973,7 +9979,7 @@ l_mod: {
   if (isnumber(a) && isnumber(b)) {
     int64_t bb = FIX_VAL(b);
     if (bb == 0)
-      RUNTIME_ERR("Illegal modulo by 0");
+      RUNTIME_ERR(ERR_MODULO_BY_ZERO);
     int64_t va = FIX_VAL(a);
     PUSH(MAKE_FIX(va - (va / bb) * bb));
   } else {
@@ -9981,7 +9987,7 @@ l_mod: {
     COERCE_TO_DOUBLE(a, da, "Illegal value in mod");
     COERCE_TO_DOUBLE(b, db, "Illegal value in mod");
     if (db == 0.0)
-      RUNTIME_ERR("Illegal modulo by 0");
+      RUNTIME_ERR(ERR_MODULO_BY_ZERO);
     PUSH(make_floatf(fmod(da, db)));
   }
   NEXT;
@@ -10011,7 +10017,7 @@ l_mod: {
       if (!alc_pair_cmp(a, b, &d)) {                                           \
         unrefexp(a);                                                           \
         unrefexp(b);                                                           \
-        RUNTIME_ERR("Illegal value in compare");                               \
+        RUNTIME_ERR(ERR_COMPARE_INCOMPAT);                               \
       }                                                                        \
       r = d flcmp 0;                                                           \
       unrefexp(a);                                                             \

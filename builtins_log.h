@@ -58,12 +58,26 @@ exp_t *errorcodecmd(exp_t *e, env_t *env) {
 
 /* ===== B. leveled logfmt logging ========================================== */
 
-enum { LOG_DEBUG = 0, LOG_INFO = 1, LOG_WARN = 2, LOG_ERROR = 3 };
-static const char *const g_log_level_names[] = {"debug", "info", "warn", "error"};
+/* Single source of truth: the level enum, the name table, and LOG_LEVEL_COUNT
+   (so the parse loop's bound is derived, not a magic 4) all expand from one
+   list — a level inserted in the middle can't desync the array. */
+#define ALC_LOG_LEVELS(X) X(LOG_DEBUG, "debug") X(LOG_INFO, "info")            \
+                          X(LOG_WARN, "warn") X(LOG_ERROR, "error")
+enum {
+#define X(code, name) code,
+  ALC_LOG_LEVELS(X)
+#undef X
+  LOG_LEVEL_COUNT
+};
+static const char *const g_log_level_names[] = {
+#define X(code, name) name,
+  ALC_LOG_LEVELS(X)
+#undef X
+};
 /* Threshold: messages below it are dropped. Atomic — set/read across reactors. */
 static _Atomic int g_log_level = LOG_INFO;
 
-/* Parse a :keyword / symbol level name to 0-3, or -1 if unknown. */
+/* Parse a :keyword / symbol level name to its code, or -1 if unknown. */
 static int log_level_of(exp_t *v) {
   if (!v || !is_ptr(v) || !issymbol(v))
     return -1;
@@ -72,7 +86,7 @@ static int log_level_of(exp_t *v) {
     return -1;
   if (*s == ':')
     s++; /* keyword form :warn */
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < LOG_LEVEL_COUNT; i++)
     if (strcmp(s, g_log_level_names[i]) == 0)
       return i;
   return -1;
