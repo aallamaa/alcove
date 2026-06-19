@@ -202,12 +202,7 @@ exp_t *listdircmd(exp_t *e, env_t *env) {
   qsort(names, n, sizeof(char *), os_namecmp);
   exp_t *head = NULL, *tail = NULL;
   for (size_t i = 0; i < n; i++) {
-    exp_t *node = make_node(make_string(names[i], (int)strlen(names[i])));
-    if (tail) {
-      tail->next = node;
-      tail = node;
-    } else
-      head = tail = node;
+    list_append_owned(&head, &tail, make_string(names[i], (int)strlen(names[i])));
     free(names[i]);
   }
   free(names);

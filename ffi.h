@@ -858,14 +858,7 @@ exp_t *ffiunpackcmd(exp_t *e, env_t *env) {
       v = NIL_EXP;
       break;
     }
-    exp_t *node = make_node(v);
-    if (!head) {
-      head = node;
-      tail = node;
-    } else {
-      tail->next = node;
-      tail = node;
-    }
+    list_append_owned(&head, &tail, v);
   }
   ret = head ? head : NIL_EXP;
 cleanup:

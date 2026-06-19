@@ -122,12 +122,7 @@ exp_t *rematchcmd(exp_t *e, env_t *env) {
     else
       el = make_string((char *)str + m[g].rm_so,
                        (int)(m[g].rm_eo - m[g].rm_so));
-    exp_t *node = make_node(el);
-    if (tail) {
-      tail->next = node;
-      tail = node;
-    } else
-      head = tail = node;
+    list_append_owned(&head, &tail, el);
   }
   RE_CLEANUP(pat, s);
   return head;
@@ -196,14 +191,9 @@ exp_t *refindallcmd(exp_t *e, env_t *env) {
     regmatch_t m[1];
     if (regexec(re, str + off, 1, m, off ? REG_NOTBOL : 0) != 0)
       break;
-    exp_t *node = make_node(
-        make_string((char *)str + off + m[0].rm_so,
-                    (int)(m[0].rm_eo - m[0].rm_so)));
-    if (tail) {
-      tail->next = node;
-      tail = node;
-    } else
-      head = tail = node;
+    list_append_owned(&head, &tail,
+                      make_string((char *)str + off + m[0].rm_so,
+                                  (int)(m[0].rm_eo - m[0].rm_so)));
     off += (size_t)m[0].rm_eo;
     if (m[0].rm_eo == m[0].rm_so)
       off++; /* empty match — advance to avoid looping forever */
@@ -305,13 +295,8 @@ exp_t *resplitcmd(exp_t *e, env_t *env) {
                    "re-split: pattern matches the empty string");
     }
     size_t segend = hit ? off + (size_t)m[0].rm_so : slen;
-    exp_t *node = make_node(make_string((char *)str + off,
-                                        (int)(segend - off)));
-    if (tail) {
-      tail->next = node;
-      tail = node;
-    } else
-      head = tail = node;
+    list_append_owned(&head, &tail,
+                      make_string((char *)str + off, (int)(segend - off)));
     if (!hit)
       break;
     off += (size_t)m[0].rm_eo;

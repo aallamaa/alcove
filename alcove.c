@@ -5025,6 +5025,24 @@ static void str_buf_put(char **buf, size_t *len, size_t *cap, const char *s,
   (*buf)[*len] = 0;
 }
 
+/* Grow a raw byte buffer so it can hold len+n bytes (doubling from 64). Returns
+   the possibly-moved buffer, or NULL on OOM WITHOUT freeing the old one (the
+   caller still owns it). *cap is updated only on growth. Shared by the json /
+   msgpack codecs — distinct from str_buf_put, which oom_raise()s instead of
+   returning failure, because those codecs propagate OOM as a decode error. */
+static void *buf_reserve(void *b, size_t len, size_t n, size_t *cap) {
+  if (len + n <= *cap)
+    return b;
+  size_t nc = *cap ? *cap : 64;
+  while (nc < len + n)
+    nc *= 2;
+  void *nb = realloc(b, nc);
+  if (!nb)
+    return NULL;
+  *cap = nc;
+  return nb;
+}
+
 static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
   char tmp[128];
   if (!v || v == NIL_EXP) {

@@ -15,17 +15,11 @@ typedef struct {
   uint8_t *b;
   size_t len, cap;
 } mp_buf;
-static int mp_reserve(mp_buf *m, size_t n) {
-  if (m->len + n <= m->cap)
-    return 1;
-  size_t nc = m->cap ? m->cap : 64;
-  while (nc < m->len + n)
-    nc *= 2;
-  uint8_t *nb = (uint8_t *)realloc(m->b, nc);
+static int mp_reserve(mp_buf *m, size_t n) { /* see buf_reserve (alcove.c) */
+  void *nb = buf_reserve(m->b, m->len, n, &m->cap);
   if (!nb)
     return 0;
-  m->b = nb;
-  m->cap = nc;
+  m->b = (uint8_t *)nb;
   return 1;
 }
 static int mp_put1(mp_buf *m, uint8_t b) {
@@ -181,14 +175,7 @@ static exp_t *mp_decode_array(const uint8_t *b, size_t len, size_t *pos,
         unrefexp(head);
       return NULL;
     }
-    exp_t *node = make_node(el);
-    if (!head) {
-      head = node;
-      tail = node;
-    } else {
-      tail->next = node;
-      tail = node;
-    }
+    list_append_owned(&head, &tail, el);
   }
   return head ? head : refexp(NIL_EXP);
 }

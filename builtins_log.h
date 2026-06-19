@@ -308,10 +308,8 @@ const char doc_counter_bang[] =
     "at 0 if new; returns the new value. Thread-safe. See (metrics).";
 exp_t *counterbangcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(nm, dv);
-  if (!nm || !isstring(nm))
-    CLEAN_RETURN_2(nm, dv,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "counter!: NAME must be a string"));
+  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_2(nm, dv, _alc_e), ERROR_ILLEGAL_VALUE,
+               e, env, "counter!: NAME must be a string");
   int64_t d = 1;
   if (dv) {
     if (!isnumber(dv))
@@ -332,9 +330,8 @@ const char doc_gauge_bang[] =
     "returns v. Thread-safe. See (metrics).";
 exp_t *gaugebangcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(nm, vv);
-  if (!nm || !isstring(nm))
-    CLEAN_RETURN_2(nm, vv, error(ERROR_ILLEGAL_VALUE, e, env,
-                                 "gauge!: NAME must be a string"));
+  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_2(nm, vv, _alc_e), ERROR_ILLEGAL_VALUE,
+               e, env, "gauge!: NAME must be a string");
   if (!vv || !isnumber(vv))
     CLEAN_RETURN_2(nm, vv, error(ERROR_NUMBER_EXPECTED, e, env,
                                  "gauge!: v must be an integer"));
@@ -351,9 +348,8 @@ const char doc_metric[] =
     "doesn't exist.";
 exp_t *metriccmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(nm);
-  if (!nm || !isstring(nm))
-    CLEAN_RETURN_1(nm, error(ERROR_ILLEGAL_VALUE, e, env,
-                             "metric: NAME must be a string"));
+  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_1(nm, _alc_e), ERROR_ILLEGAL_VALUE, e,
+               env, "metric: NAME must be a string");
   const char *name = exp_text(nm);
   int n = atomic_load_explicit(&g_metrics_n, memory_order_acquire);
   exp_t *ret = NIL_EXP;

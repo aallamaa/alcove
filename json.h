@@ -21,17 +21,11 @@ typedef struct {
   char *b;
   size_t len, cap;
 } js_buf;
-static int js_reserve(js_buf *m, size_t n) {
-  if (m->len + n <= m->cap)
-    return 1;
-  size_t nc = m->cap ? m->cap : 64;
-  while (nc < m->len + n)
-    nc *= 2;
-  char *nb = (char *)realloc(m->b, nc);
+static int js_reserve(js_buf *m, size_t n) { /* see buf_reserve (alcove.c) */
+  void *nb = buf_reserve(m->b, m->len, n, &m->cap);
   if (!nb)
     return 0;
-  m->b = nb;
-  m->cap = nc;
+  m->b = (char *)nb;
   return 1;
 }
 static int js_put1(js_buf *m, char c) {
@@ -197,20 +191,10 @@ static void js_skip_ws(const char *b, size_t len, size_t *pos) {
 }
 
 /* Append a Unicode codepoint as UTF-8. */
-static int js_put_utf8(js_buf *m, uint32_t cp) {
-  if (cp < 0x80)
-    return js_put1(m, (char)cp);
-  if (cp < 0x800)
-    return js_put1(m, (char)(0xc0 | (cp >> 6))) &&
-           js_put1(m, (char)(0x80 | (cp & 0x3f)));
-  if (cp < 0x10000)
-    return js_put1(m, (char)(0xe0 | (cp >> 12))) &&
-           js_put1(m, (char)(0x80 | ((cp >> 6) & 0x3f))) &&
-           js_put1(m, (char)(0x80 | (cp & 0x3f)));
-  return js_put1(m, (char)(0xf0 | (cp >> 18))) &&
-         js_put1(m, (char)(0x80 | ((cp >> 12) & 0x3f))) &&
-         js_put1(m, (char)(0x80 | ((cp >> 6) & 0x3f))) &&
-         js_put1(m, (char)(0x80 | (cp & 0x3f)));
+static int js_put_utf8(js_buf *m, uint32_t cp) { /* cp is a full scalar here */
+  char u[4];
+  int k = utf8_encode(cp, u); /* shared encoder (utf8.h) */
+  return js_putn(m, u, (size_t)k);
 }
 
 static int js_hex4(const char *b, size_t len, size_t pos, uint32_t *out) {
@@ -218,16 +202,10 @@ static int js_hex4(const char *b, size_t len, size_t pos, uint32_t *out) {
     return 0;
   uint32_t v = 0;
   for (int i = 0; i < 4; i++) {
-    char c = b[pos + i];
-    v <<= 4;
-    if (c >= '0' && c <= '9')
-      v |= (uint32_t)(c - '0');
-    else if (c >= 'a' && c <= 'f')
-      v |= (uint32_t)(c - 'a' + 10);
-    else if (c >= 'A' && c <= 'F')
-      v |= (uint32_t)(c - 'A' + 10);
-    else
+    int d = chr2hex[(unsigned char)b[pos + i]]; /* shared byte->nibble (char.h) */
+    if (d < 0)
       return 0;
+    v = (v << 4) | (uint32_t)d;
   }
   *out = v;
   return 1;
@@ -313,13 +291,7 @@ static exp_t *js_decode_array(const char *b, size_t len, size_t *pos,
         unrefexp(head);
       return NULL;
     }
-    exp_t *node = make_node(el);
-    if (!head)
-      head = tail = node;
-    else {
-      tail->next = node;
-      tail = node;
-    }
+    list_append_owned(&head, &tail, el);
     js_skip_ws(b, len, pos);
     if (*pos >= len)
       goto bad;

@@ -252,10 +252,7 @@ exp_t *hexdecodecmd(exp_t *e, env_t *env) {
   char *out = memalloc(n / 2 + 1, 1);
   for (size_t i = 0; i < n; i++) {
     char c = src[i];
-    int d = (c >= '0' && c <= '9')   ? c - '0'
-            : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-            : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                                     : -1;
+    int d = chr2hex[(unsigned char)c]; /* shared byte->nibble table (char.h) */
     if (d < 0) {
       free(out);
       CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,
