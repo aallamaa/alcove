@@ -41,7 +41,9 @@ static int js_putn(js_buf *m, const char *p, size_t n) {
   m->len += n;
   return 1;
 }
-static int js_puts(js_buf *m, const char *s) { return js_putn(m, s, strlen(s)); }
+static int js_puts(js_buf *m, const char *s) {
+  return js_putn(m, s, strlen(s));
+}
 
 /* String body, escaped per RFC 8259: ", \, and control bytes; everything
    else (incl. multi-byte UTF-8) passes through verbatim. */
@@ -52,13 +54,27 @@ static int js_put_string(js_buf *m, const char *s) {
     unsigned char c = *p;
     int ok;
     switch (c) {
-    case '"':  ok = js_putn(m, "\\\"", 2); break;
-    case '\\': ok = js_putn(m, "\\\\", 2); break;
-    case '\b': ok = js_putn(m, "\\b", 2); break;
-    case '\f': ok = js_putn(m, "\\f", 2); break;
-    case '\n': ok = js_putn(m, "\\n", 2); break;
-    case '\r': ok = js_putn(m, "\\r", 2); break;
-    case '\t': ok = js_putn(m, "\\t", 2); break;
+    case '"':
+      ok = js_putn(m, "\\\"", 2);
+      break;
+    case '\\':
+      ok = js_putn(m, "\\\\", 2);
+      break;
+    case '\b':
+      ok = js_putn(m, "\\b", 2);
+      break;
+    case '\f':
+      ok = js_putn(m, "\\f", 2);
+      break;
+    case '\n':
+      ok = js_putn(m, "\\n", 2);
+      break;
+    case '\r':
+      ok = js_putn(m, "\\r", 2);
+      break;
+    case '\t':
+      ok = js_putn(m, "\\t", 2);
+      break;
     default:
       if (c < 0x20) {
         char esc[8];
@@ -202,7 +218,8 @@ static int js_hex4(const char *b, size_t len, size_t pos, uint32_t *out) {
     return 0;
   uint32_t v = 0;
   for (int i = 0; i < 4; i++) {
-    int d = chr2hex[(unsigned char)b[pos + i]]; /* shared byte->nibble (char.h) */
+    int d =
+        chr2hex[(unsigned char)b[pos + i]]; /* shared byte->nibble (char.h) */
     if (d < 0)
       return 0;
     v = (v << 4) | (uint32_t)d;
@@ -233,14 +250,30 @@ static exp_t *js_decode_string(const char *b, size_t len, size_t *pos) {
     char esc = b[(*pos)++];
     int ok = 1;
     switch (esc) {
-    case '"':  ok = js_put1(&m, '"'); break;
-    case '\\': ok = js_put1(&m, '\\'); break;
-    case '/':  ok = js_put1(&m, '/'); break;
-    case 'b':  ok = js_put1(&m, '\b'); break;
-    case 'f':  ok = js_put1(&m, '\f'); break;
-    case 'n':  ok = js_put1(&m, '\n'); break;
-    case 'r':  ok = js_put1(&m, '\r'); break;
-    case 't':  ok = js_put1(&m, '\t'); break;
+    case '"':
+      ok = js_put1(&m, '"');
+      break;
+    case '\\':
+      ok = js_put1(&m, '\\');
+      break;
+    case '/':
+      ok = js_put1(&m, '/');
+      break;
+    case 'b':
+      ok = js_put1(&m, '\b');
+      break;
+    case 'f':
+      ok = js_put1(&m, '\f');
+      break;
+    case 'n':
+      ok = js_put1(&m, '\n');
+      break;
+    case 'r':
+      ok = js_put1(&m, '\r');
+      break;
+    case 't':
+      ok = js_put1(&m, '\t');
+      break;
     case 'u': {
       uint32_t cp;
       if (!js_hex4(b, len, *pos, &cp))

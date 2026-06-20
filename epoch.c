@@ -12,9 +12,9 @@ _Atomic int epoch_nthreads = 0;
 static inline void epoch_update_quiescent(int idx) {
   /* RELAXED load: epoch_global is a monotonic counter with no data-visibility
      duty — the real publication edge is the RELEASE store of `quiescent` below,
-     paired with the ACQUIRE load in epoch_min_quiescent. A stale-small read here
-     only makes gc MORE conservative (advertises a lower quiescent → frees less),
-     never less safe. */
+     paired with the ACQUIRE load in epoch_min_quiescent. A stale-small read
+     here only makes gc MORE conservative (advertises a lower quiescent → frees
+     less), never less safe. */
   uint64_t g = atomic_load_explicit(&epoch_global, memory_order_relaxed);
   atomic_store_explicit(&epoch_threads[idx].quiescent, g, memory_order_release);
 }
@@ -22,7 +22,8 @@ static inline void epoch_update_quiescent(int idx) {
 ALCOVE_TLS int epoch_my_idx = -1;
 
 int epoch_register(void) {
-  if (epoch_my_idx >= 0) return epoch_my_idx;
+  if (epoch_my_idx >= 0)
+    return epoch_my_idx;
   int idx = atomic_fetch_add_explicit(&epoch_nthreads, 1, memory_order_relaxed);
   if (idx >= EPOCH_MAX_THREADS) {
     /* Roll back the bump so other registrants can still try. */
@@ -40,26 +41,31 @@ int epoch_register(void) {
 
 static uint64_t epoch_min_quiescent(void) {
   int n = atomic_load_explicit(&epoch_nthreads, memory_order_acquire);
-  if (n <= 0) return UINT64_MAX;
+  if (n <= 0)
+    return UINT64_MAX;
   uint64_t mn = UINT64_MAX;
   for (int i = 0; i < n; i++) {
-    uint64_t q = atomic_load_explicit(&epoch_threads[i].quiescent,
-                                      memory_order_acquire);
-    if (q == 0) continue; /* slot reserved but thread quiescent-unset */
-    if (q < mn) mn = q;
+    uint64_t q =
+        atomic_load_explicit(&epoch_threads[i].quiescent, memory_order_acquire);
+    if (q == 0)
+      continue; /* slot reserved but thread quiescent-unset */
+    if (q < mn)
+      mn = q;
   }
   return mn;
 }
 
 void epoch_tick(void) {
-  if (epoch_my_idx < 0) return;
+  if (epoch_my_idx < 0)
+    return;
   epoch_update_quiescent(epoch_my_idx);
   if (epoch_threads[epoch_my_idx].retire_count >= EPOCH_GC_THRESHOLD)
     epoch_gc();
 }
 
 void epoch_retire(void *ptr, epoch_freer_t freer) {
-  if (!ptr) return;
+  if (!ptr)
+    return;
   if (epoch_my_idx < 0) {
     /* Caller forgot to register. Best we can do is free immediately —
        which is unsafe under concurrency, but at least we don't leak. */
@@ -73,9 +79,10 @@ void epoch_retire(void *ptr, epoch_freer_t freer) {
   /* RELAXED: this only needs to stamp the node with a coherent monotonic epoch.
      The G(T) <= retire_epoch invariant that keeps a still-referencing reader's
      pointer alive is carried by the lock-free slot CAS (lfkv.c) + the quiescent
-     store/load pair, NOT by an ordering edge through epoch_global — so atomicity
-     (coherence) is all this counter bump owes. */
-  uint64_t r = atomic_fetch_add_explicit(&epoch_global, 1, memory_order_relaxed);
+     store/load pair, NOT by an ordering edge through epoch_global — so
+     atomicity (coherence) is all this counter bump owes. */
+  uint64_t r =
+      atomic_fetch_add_explicit(&epoch_global, 1, memory_order_relaxed);
   epoch_retire_t *node = malloc(sizeof *node);
   if (!node) {
     /* OOM: best-effort immediate free. Risk: peer reader may still hold
@@ -93,9 +100,11 @@ void epoch_retire(void *ptr, epoch_freer_t freer) {
 }
 
 void epoch_gc(void) {
-  if (epoch_my_idx < 0) return;
+  if (epoch_my_idx < 0)
+    return;
   uint64_t safe = epoch_min_quiescent();
-  if (safe == UINT64_MAX) return;
+  if (safe == UINT64_MAX)
+    return;
   epoch_retire_t **pp = &epoch_threads[epoch_my_idx].retire_head;
   while (*pp) {
     epoch_retire_t *cur = *pp;
@@ -111,7 +120,8 @@ void epoch_gc(void) {
 }
 
 void epoch_drain_all(void) {
-  if (epoch_my_idx < 0) return;
+  if (epoch_my_idx < 0)
+    return;
   epoch_retire_t *cur = epoch_threads[epoch_my_idx].retire_head;
   while (cur) {
     epoch_retire_t *next = cur->next;

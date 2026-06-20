@@ -49,14 +49,14 @@
   /* ---- "circular" tags: point to a previously-allocated exp ---- */         \
   X(EXP_TREE, , "tree")                                                        \
   X(EXP_PAIR_CIRCULAR, , "pair-circular")                                      \
-  /* ---- Clojure-flavored mutable containers (appended for db.dump stability,  \
+  /* ---- Clojure-flavored mutable containers (appended for db.dump stability, \
      self-evaluating; see isatom) ---- */                                      \
   X(EXP_BLOB, , "blob") /* binary-safe bytes; ptr → alc_blob_t (flex-array) */ \
   X(EXP_DICT, , "dict") /* hash-map; ptr → dict_t* */                          \
   X(EXP_LIST, , "deque") /* doubly-linked deque; ptr → alc_list_t */           \
-  X(EXP_SET, , "set")   /* hash set; ptr → dict_t* canonical keys */           \
-  X(EXP_HAMT, , "hamt") /* persistent map; ptr → hamt_t* */                    \
-  /* ---- exact non-integer numerics: inside the self-eval BLOB.. range and     \
+  X(EXP_SET, , "set")    /* hash set; ptr → dict_t* canonical keys */          \
+  X(EXP_HAMT, , "hamt")  /* persistent map; ptr → hamt_t* */                   \
+  /* ---- exact non-integer numerics: inside the self-eval BLOB.. range and    \
      BEFORE EXP_CONT so isatom stays one contiguous bound ---- */              \
   X(EXP_RATIONAL, , "rational") /* int64 num/den (den>0, reduced) */           \
   X(EXP_DECIMAL, , "decimal")   /* bounded base-10: coeff + scale */           \
@@ -65,7 +65,7 @@ enum {
 #define X(name, anchor, dispname) name anchor,
   ALC_EXP_TYPES(X)
 #undef X
-  EXP_MAXSIZE /* should always be the last */
+      EXP_MAXSIZE /* should always be the last */
 } exptype_t;
 
 /* ---------------- Pointer tagging ----------------
@@ -131,24 +131,24 @@ enum {
 #else
 /* Refcount inc is RELAXED: a thread that increments already holds a reference,
    so a happens-before to the object's construction exists via that reference —
-   no barrier needed (the standard Arc/shared_ptr pattern). Dec is RELEASE so all
-   of this thread's writes-through-the-object are ordered before the count drop;
-   on the 1->0 transition the macro issues an ACQUIRE fence so the freeing thread
-   sees every other thread's prior writes before it tears the object down. This
-   is strictly cheaper than the old full-barrier __sync on every dec (arm64:
-   ldxr/stxr without the dmb), and behaviorally identical to it. */
+   no barrier needed (the standard Arc/shared_ptr pattern). Dec is RELEASE so
+   all of this thread's writes-through-the-object are ordered before the count
+   drop; on the 1->0 transition the macro issues an ACQUIRE fence so the freeing
+   thread sees every other thread's prior writes before it tears the object
+   down. This is strictly cheaper than the old full-barrier __sync on every dec
+   (arm64: ldxr/stxr without the dmb), and behaviorally identical to it. */
 #define REFCOUNT_INC(p) __atomic_add_fetch((p), 1, __ATOMIC_RELAXED)
 #define REFCOUNT_DEC(p)                                                        \
-  __extension__({                                                             \
-    int _rc_new = __atomic_sub_fetch((p), 1, __ATOMIC_RELEASE);               \
-    if (_rc_new <= 0)                                                         \
-      __atomic_thread_fence(__ATOMIC_ACQUIRE);                                \
-    _rc_new;                                                                  \
+  __extension__({                                                              \
+    int _rc_new = __atomic_sub_fetch((p), 1, __ATOMIC_RELEASE);                \
+    if (_rc_new <= 0)                                                          \
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);                                 \
+    _rc_new;                                                                   \
   })
 /* GEN_BUMP stays a FULL barrier (not relaxed): the bump must happen-before the
-   dict mutation that follows it, so a gcache reader on another thread that loads
-   the new gen is guaranteed to also see that write. Relaxing it would be a real
-   (subtle) bug — leave it as __sync. */
+   dict mutation that follows it, so a gcache reader on another thread that
+   loads the new gen is guaranteed to also see that write. Relaxing it would be
+   a real (subtle) bug — leave it as __sync. */
 #define GEN_BUMP() __sync_add_and_fetch(&alcove_global_gen, 1)
 /* TLS storage class for hot per-thread variables (exp_freelist, the
    bump pointers, current_shard, ...). The "initial-exec" model emits
@@ -176,13 +176,13 @@ enum {
 #endif
 
 /* Single source of truth for the error codes AND their machine-readable names
-   (error_code_name in builtins_log.h expands the same list into its switch, so a
-   new code can't be added to the enum without getting a stable name). Columns:
-   MEMBER, value-anchor (empty = sequential; the =1 / =256 gaps are explicit),
-   "code-name". The 4 PARSING_* codes deliberately share "parse-error".
-   ERROR_CONT_ESCAPE is NOT in this list — it is not a real error (a call/cc
-   escape token), so it has no code-name and is appended to the enum by hand,
-   falling through to error_code_name's "error" default. */
+   (error_code_name in builtins_log.h expands the same list into its switch, so
+   a new code can't be added to the enum without getting a stable name).
+   Columns: MEMBER, value-anchor (empty = sequential; the =1 / =256 gaps are
+   explicit), "code-name". The 4 PARSING_* codes deliberately share
+   "parse-error". ERROR_CONT_ESCAPE is NOT in this list — it is not a real error
+   (a call/cc escape token), so it has no code-name and is appended to the enum
+   by hand, falling through to error_code_name's "error" default. */
 #define ALC_ERRORS(X)                                                          \
   X(EXP_ERROR_PARSING_MACROCHAR, = 1, "parse-error")                           \
   X(EXP_ERROR_PARSING_ILLEGAL_CHAR, , "parse-error")                           \
@@ -202,9 +202,10 @@ enum {
 #define X(name, anchor, codename) name anchor,
   ALC_ERRORS(X)
 #undef X
-  ERROR_CONT_ESCAPE, /* not a real error: a call/cc escape token in flight,
-                        carrying its continuation id in `meta` and the payload
-                        value in `next`; caught by the matching call/cc frame */
+      ERROR_CONT_ESCAPE, /* not a real error: a call/cc escape token in flight,
+                            carrying its continuation id in `meta` and the
+                            payload value in `next`; caught by the matching
+                            call/cc frame */
 } exp_error_t;
 
 /* Type predicates — all tag-aware. is_ptr() guards every heap deref so a
@@ -238,13 +239,15 @@ enum {
    range is contiguous (BLOB..LIST) so the bounds check stays a single
    comparison pair instead of three OR'd equalities. */
 #define isatom(e)                                                              \
-  (is_imm(e) || (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                      \
-                               ((e)->type >= EXP_BLOB &&                       \
-                                (e)->type <= EXP_DECIMAL) ||                   \
-                               (e)->type >= EXP_MAXSIZE)))
+  (is_imm(e) ||                                                                \
+   (is_ptr(e) && ((e)->type <= EXP_VECTOR ||                                   \
+                  ((e)->type >= EXP_BLOB && (e)->type <= EXP_DECIMAL) ||       \
+                  (e)->type >= EXP_MAXSIZE)))
 
 /* Helper for fast-path refcounting */
-#define is_immortal(e) (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton || (e) == gen_done_singleton)
+#define is_immortal(e)                                                         \
+  (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton ||              \
+   (e) == gen_done_singleton)
 
 #define car(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->content : NULL)
 #define cdr(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->next : NULL)
@@ -265,12 +268,14 @@ typedef struct exp_t *lispCmd(struct exp_t *e, struct env_t *env);
    registers BOTH a normal lispCmd (for the AST / apply / map paths) and an
    optional lispCmdV; the compiled fast path calls the lispCmdV when present.
    TWO obligations on the implementor:
-     1. VALIDATE nargs — the VM passes the raw call arity (a wrong-arity compiled
-        call reaches you as-is); index argv only after checking nargs.
+     1. VALIDATE nargs — the VM passes the raw call arity (a wrong-arity
+   compiled call reaches you as-is); index argv only after checking nargs.
      2. CONSUME every argv ref exactly once (unrefexp), on every path.
-   The lispCmdV and the lispCmd MUST be behaviorally + ownership equivalent — the
-   AST path runs one, the compiled path the other; nothing enforces parity. */
-typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv, struct env_t *env);
+   The lispCmdV and the lispCmd MUST be behaviorally + ownership equivalent —
+   the AST path runs one, the compiled path the other; nothing enforces parity.
+ */
+typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv,
+                               struct env_t *env);
 
 #define FLAG_TAILREC 1
 /* Internal cmd is tail-aware: evaluate will expose in_tail_position to
@@ -332,11 +337,11 @@ typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv, struct env_t *env
    promotion to GEN (see vec_promote_to_gen). Single-shard only: a vec
    that gets FLAG_SHARED must NOT be promoted or reallocated, since
    readers on another shard would observe torn metadata. */
-#define VEC_KIND_GEN  (0u << 4)
-#define VEC_KIND_I64  (1u << 4)
-#define VEC_KIND_F64  (2u << 4)
+#define VEC_KIND_GEN (0u << 4)
+#define VEC_KIND_I64 (1u << 4)
+#define VEC_KIND_F64 (2u << 4)
 #define VEC_KIND_MASK (3u << 4)
-#define vec_kind(e)   ((unsigned)((e)->flags & VEC_KIND_MASK))
+#define vec_kind(e) ((unsigned)((e)->flags & VEC_KIND_MASK))
 
 struct bytecode_t;
 
@@ -346,36 +351,39 @@ typedef struct exp_t {
   int nref;                 /* 4 bytes */
   union {                   /* 8 bytes */
     struct exp_t *content;
-    struct bytecode_t *bc;  /* set on compiled lambdas */
+    struct bytecode_t *bc; /* set on compiled lambdas */
     void *ptr;
     int64_t s64;
     expfloat f;
     lispCmd *fnc;
-    char istr[8];           /* FLAG_INLINE_TXT: inline symbol/string bytes,
-                               overlapping `ptr`. Read via exp_text(), never
-                               via `->ptr` directly, when the flag is set.
-                               Lives here (not the meta union) so the symbol
-                               resolution cache in `meta` stays usable. */
+    char istr[8]; /* FLAG_INLINE_TXT: inline symbol/string bytes,
+                     overlapping `ptr`. Read via exp_text(), never
+                     via `->ptr` directly, when the flag is set.
+                     Lives here (not the meta union) so the symbol
+                     resolution cache in `meta` stays usable. */
   };
-  union {                /* 8 bytes — overloaded by node role:
-                              - on the lambda/macro head: strdup'd name
-                                in `meta` (free'd in unrefexp)
-                              - on the body wrapper (e->next of a
-                                lambda/macro): captured env_t* in `meta`
-                                for closures (released via destroy_env)
-                              - on cached-symbol exp_t's: keyval_t*
-                                back-pointer in `meta`
-                              - on EXP_VECTOR: `vec_win` holds the live
-                                window {start, end} into the storage
-                                pointed at by `ptr`. `len = end - start`.
-                                Reading `meta` on a vec yields garbage —
-                                gate every `->meta` access on type. */
+  union { /* 8 bytes — overloaded by node role:
+               - on the lambda/macro head: strdup'd name
+                 in `meta` (free'd in unrefexp)
+               - on the body wrapper (e->next of a
+                 lambda/macro): captured env_t* in `meta`
+                 for closures (released via destroy_env)
+               - on cached-symbol exp_t's: keyval_t*
+                 back-pointer in `meta`
+               - on EXP_VECTOR: `vec_win` holds the live
+                 window {start, end} into the storage
+                 pointed at by `ptr`. `len = end - start`.
+                 Reading `meta` on a vec yields garbage —
+                 gate every `->meta` access on type. */
     struct keyval_t *meta;
-    struct { int32_t start, end; } vec_win;
+    struct {
+      int32_t start, end;
+    } vec_win;
   };
-  struct exp_t *next;    /* 8 bytes */
-} exp_t;                 /* 32 bytes */
-_Static_assert(sizeof(exp_t) == 32, "exp_t layout changed — audit JIT and refcount paths");
+  struct exp_t *next; /* 8 bytes */
+} exp_t;              /* 32 bytes */
+_Static_assert(sizeof(exp_t) == 32,
+               "exp_t layout changed — audit JIT and refcount paths");
 
 /* Text of an EXP_SYMBOL / EXP_STRING / EXP_ERROR, transparent to inlining.
    Use this everywhere a symbol or string name is read as a C string. For
@@ -392,97 +400,107 @@ static inline char *exp_text(const exp_t *e) {
    def/fn time. invoke() runs the dispatch loop over the opcode array
    instead of walking the AST. Unsupported bodies stay as AST. */
 /* Single source of truth for the bytecode opcodes AND their disassembler names:
-   bc_opname (alcove.c) expands this list, so a new opcode can't be added without
-   getting a name (a missing one printed "??"). bc_oplen / bc_disasm_one stay
-   hand-written — they encode per-op operand LENGTHS and PRINT FORMATS that don't
-   fit a uniform column, and bc_oplen deliberately returns 0 for PUSH_HANDLER.
-   Opcodes are sequential from OP_HALT=0; OP_MAX (the count sentinel) is appended
-   to the enum by hand. Operand layout documented per row. ORDER preserved. */
-#define OPCODE_LIST(X)                                                         \
-  X(HALT)                                                                      \
-  X(RET)                                                                       \
-  X(POP)                                                                       \
-  X(DUP) /* dup top-of-stack (fresh ref); compile_and/or/case keep the tested  \
-            value across a popping branch */                                   \
-  X(EVAL_AST) /* u8 idx → push EVAL(consts[idx], env). Escape hatch: a         \
-                 non-tail-aware builtin call with no native opcode is stored as \
-                 its raw form and tree-walked, so the enclosing lambda still   \
-                 compiles (and keeps its tail call). */                        \
-  X(LOAD_FIX)    /* int16 imm       → push MAKE_FIX(imm) */                    \
-  X(LOAD_CONST)  /* u8 idx          → push refexp(consts[idx]) */              \
-  X(LOAD_SLOT)   /* u8 idx          → push refexp(inline_vals[idx]) */         \
-  X(LOAD_GLOBAL) /* u8 idx (symbol) → lookup consts[idx] in env, push */       \
-  X(STORE_SLOT)  /* u8 idx          → pop → inline_vals[idx] (unref old) */    \
-  X(BIND_SLOT)   /* u8 idx          → pop → inline_vals[idx], bump n_inline */ \
+   bc_opname (alcove.c) expands this list, so a new opcode can't be added
+   without getting a name (a missing one printed "??"). bc_oplen / bc_disasm_one
+   stay hand-written — they encode per-op operand LENGTHS and PRINT FORMATS that
+   don't fit a uniform column, and bc_oplen deliberately returns 0 for
+   PUSH_HANDLER. Opcodes are sequential from OP_HALT=0; OP_MAX (the count
+   sentinel) is appended to the enum by hand. Operand layout documented per row.
+   ORDER preserved. */
+/* The per-opcode operand-layout comments contain UTF-8 (→ —), which
+   clang-format mis-columns, so it oscillates the `\` continuations; the
+   alignment here is hand-maintained. */
+// clang-format off
+#define OPCODE_LIST(X)                                                           \
+  X(HALT)                                                                        \
+  X(RET)                                                                         \
+  X(POP)                                                                         \
+  X(DUP) /* dup top-of-stack (fresh ref); compile_and/or/case keep the tested    \
+            value across a popping branch */                                     \
+  X(EVAL_AST)    /* u8 idx → push EVAL(consts[idx], env). Escape hatch: a      \
+                    non-tail-aware builtin call with no native opcode is stored  \
+                    as    its raw form and tree-walked, so the enclosing lambda                        \
+                    still    compiles (and keeps its tail call). */                                       \
+  X(LOAD_FIX)    /* int16 imm       → push MAKE_FIX(imm) */                      \
+  X(LOAD_CONST)  /* u8 idx          → push refexp(consts[idx]) */                \
+  X(LOAD_SLOT)   /* u8 idx          → push refexp(inline_vals[idx]) */           \
+  X(LOAD_GLOBAL) /* u8 idx (symbol) → lookup consts[idx] in env, push */         \
+  X(STORE_SLOT)  /* u8 idx          → pop → inline_vals[idx] (unref old) */      \
+  X(BIND_SLOT)   /* u8 idx          → pop → inline_vals[idx], bump n_inline */   \
   X(BIND_SLOT_NAMED) /* u8 idx, u8 name_const → like BIND_SLOT but also sets   \
-                        inline_keys[idx]=exp_text(consts[name_const]) so the    \
-                        let/with/for local is resolvable BY NAME (an EVAL_AST   \
-                        sub-form needs that; plain BIND_SLOT leaves a NULL key  \
-                        invisible to symbolic lookup). */                      \
-  X(UNBIND_SLOT) /* u8 idx          → unref + NULL inline_vals[idx] (and key) */\
-  X(ADD)                                                                       \
-  X(SUB)                                                                       \
-  X(MUL)                                                                       \
-  X(DIV)                                                                       \
-  X(MOD)                                                                       \
-  X(LT)                                                                        \
-  X(GT)                                                                        \
-  X(LE)                                                                        \
-  X(GE)                                                                        \
-  X(IS)                                                                        \
-  X(ISO)                                                                       \
-  X(NOT)                                                                       \
-  X(JUMP) /* int16 off relative to end of operand */                          \
-  X(BR_IF_FALSE)                                                               \
-  X(BR_IF_TRUE)                                                                \
-  X(CALL)        /* u8 nargs        → [fn, a0..aN-1] → result */               \
-  X(CALL_GLOBAL) /* u8 const_idx, u8 nargs → fused LOAD_GLOBAL+CALL */         \
-  X(TAIL_SELF)   /* u8 nargs        → rebind inline slots, PC=0 */             \
-  X(TAIL_CALL)   /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to fn */ \
-  X(CONS) /* pop b, pop a → push (cons a b) */                                 \
-  X(CAR)  /* pop pair     → push car */                                        \
-  X(CDR)  /* pop pair     → push cdr */                                        \
-  X(LIST) /* u8 n         → pop n values → push list */                        \
-  /* Fused "local ± small const" / "local < const" superinstructions: collapse \
-     LOAD_SLOT+LOAD_FIX+OP into one dispatch (peephole for (- n 1), (< n 2)). */\
-  X(SLOT_ADD_FIX) /* u8 slot, i16 imm → push inline_vals[slot] + imm */        \
-  X(SLOT_SUB_FIX) /* u8 slot, i16 imm → push inline_vals[slot] - imm */        \
-  X(SLOT_LT_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] <  imm) */     \
-  X(SLOT_LE_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */     \
-  X(SLOT_GT_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */     \
-  X(SLOT_GE_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */     \
+                        inline_keys[idx]=exp_text(consts[name_const]) so the     \
+                        let/with/for local is resolvable BY NAME (an EVAL_AST    \
+                        sub-form needs that; plain BIND_SLOT leaves a NULL key   \
+                        invisible to symbolic lookup). */                        \
+  X(UNBIND_SLOT) /* u8 idx          → unref + NULL inline_vals[idx] (and key)  \
+                  */                                                             \
+  X(ADD)                                                                         \
+  X(SUB)                                                                         \
+  X(MUL)                                                                         \
+  X(DIV)                                                                         \
+  X(MOD)                                                                         \
+  X(LT)                                                                          \
+  X(GT)                                                                          \
+  X(LE)                                                                          \
+  X(GE)                                                                          \
+  X(IS)                                                                          \
+  X(ISO)                                                                         \
+  X(NOT)                                                                         \
+  X(JUMP) /* int16 off relative to end of operand */                             \
+  X(BR_IF_FALSE)                                                                 \
+  X(BR_IF_TRUE)                                                                  \
+  X(CALL)        /* u8 nargs        → [fn, a0..aN-1] → result */                 \
+  X(CALL_GLOBAL) /* u8 const_idx, u8 nargs → fused LOAD_GLOBAL+CALL */           \
+  X(TAIL_SELF)   /* u8 nargs        → rebind inline slots, PC=0 */               \
+  X(TAIL_CALL)   /* u8 nargs        → [fn, a0..aN-1]; reuse env, jump to fn */   \
+  X(CONS)        /* pop b, pop a → push (cons a b) */                            \
+  X(CAR)         /* pop pair     → push car */                                   \
+  X(CDR)         /* pop pair     → push cdr */                                   \
+  X(LIST)        /* u8 n         → pop n values → push list */                   \
+  /* Fused "local ± small const" / "local < const" superinstructions: collapse  \
+     LOAD_SLOT+LOAD_FIX+OP into one dispatch (peephole for (- n 1), (< n 2)).    \
+   */                                                                            \
+  X(SLOT_ADD_FIX) /* u8 slot, i16 imm → push inline_vals[slot] + imm */          \
+  X(SLOT_SUB_FIX) /* u8 slot, i16 imm → push inline_vals[slot] - imm */          \
+  X(SLOT_LT_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] <  imm) */       \
+  X(SLOT_LE_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] <= imm) */       \
+  X(SLOT_GT_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] >  imm) */       \
+  X(SLOT_GE_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] >= imm) */       \
   X(SLOT_IS_FIX)  /* u8 slot, i16 imm → push (inline_vals[slot] is imm): a     \
-                     fixnum-immediate `is` is a tagged-bit compare (two fixnums \
-                     equal iff identical bits; a non-fixnum slot never bit-     \
-                     equals a fixnum, so yields nil). */                       \
-  /* Slot-vs-slot compare — fuses LOAD_SLOT+LOAD_SLOT+<cmp> (compile_for). */  \
-  X(SLOT_LE_SLOT) /* u8 slot_a, u8 slot_b → push (slot_a <= slot_b) */         \
+                     fixnum-immediate `is` is a tagged-bit compare (two fixnums  \
+                     equal iff identical bits; a non-fixnum slot never bit-      \
+                     equals a fixnum, so yields nil). */                         \
+  /* Slot-vs-slot compare — fuses LOAD_SLOT+LOAD_SLOT+<cmp> (compile_for). */    \
+  X(SLOT_LE_SLOT) /* u8 slot_a, u8 slot_b → push (slot_a <= slot_b) */           \
   /* Vector ops — direct opcodes so vec-heavy loops stay in the VM (else the   \
-     compiler bails to AST and deep recursion overflows the C stack). */       \
-  X(VEC_REF)  /* pop i, pop v → push v[i] */                                   \
-  X(VEC_SET)  /* pop val, pop i, pop v → v[i]=val, push val */                 \
-  X(VEC_LEN)  /* pop v        → push v->len (fixnum) */                        \
-  X(VEC_NEW)  /* pop init, pop n → push (vec n init) */                        \
-  X(SQRT_INT) /* pop n        → push (sqrt-int n) */                           \
-  X(ABS)      /* pop a        → push (abs a) — fixnum/float, FIXMIN→float */    \
-  X(NMAX)     /* pop b, pop a → push numeric max (value-preserving) */         \
-  X(NMIN)     /* pop b, pop a → push numeric min (value-preserving) */         \
-  X(LENGTH)   /* pop list     → push (length list) — walk cons chain */        \
-  X(PUSH_HANDLER) /* u8 handler_idx, u8 finally_idx → push a try handler onto   \
-                     the heap handler stack (idx into the const pool; sentinel  \
-                     0xff = none). Emitted by compile_try ONLY for a tail-      \
-                     position try, whose body then trampolines; handler/finally \
-                     run at error-time / OP_RET-time (see vm_run). */          \
-  X(SETQ_DYN)   /* u8 idx (symbol) → pop v; setq_store_symbol — nearest binding \
-                   else top-level; push v back (setq returns the value) */     \
-  X(STORE_FREE) /* u8 idx (symbol) → pop v; assign_store_symbol — `=`/`setf` to \
-                   a non-slot (free/global): nearest binding else CURRENT env   \
-                   (differs from SETQ_DYN, matching updatebang); push v back */
+     compiler bails to AST and deep recursion overflows the C stack). */         \
+  X(VEC_REF)  /* pop i, pop v → push v[i] */                                     \
+  X(VEC_SET)  /* pop val, pop i, pop v → v[i]=val, push val */                   \
+  X(VEC_LEN)  /* pop v        → push v->len (fixnum) */                          \
+  X(VEC_NEW)  /* pop init, pop n → push (vec n init) */                          \
+  X(SQRT_INT) /* pop n        → push (sqrt-int n) */                             \
+  X(ABS)      /* pop a        → push (abs a) — fixnum/float, FIXMIN→float */     \
+  X(NMAX)     /* pop b, pop a → push numeric max (value-preserving) */           \
+  X(NMIN)     /* pop b, pop a → push numeric min (value-preserving) */           \
+  X(LENGTH)   /* pop list     → push (length list) — walk cons chain */          \
+  X(PUSH_HANDLER) /* u8 handler_idx, u8 finally_idx → push a try handler onto  \
+                     the heap handler stack (idx into the const pool; sentinel   \
+                     0xff = none). Emitted by compile_try ONLY for a tail-       \
+                     position try, whose body then trampolines;                  \
+                     handler/finally run at error-time / OP_RET-time (see                                            \
+                     vm_run). */                                                 \
+  X(SETQ_DYN) /* u8 idx (symbol) → pop v; setq_store_symbol — nearest binding  \
+                 else top-level; push v back (setq returns the value) */         \
+  X(STORE_FREE) /* u8 idx (symbol) → pop v; assign_store_symbol — `=`/`setf` \
+                   to a non-slot (free/global): nearest binding else CURRENT                          \
+                   env (differs from SETQ_DYN, matching updatebang); push v                            \
+                   back */
+// clang-format on
 typedef enum {
 #define X(n) OP_##n,
   OPCODE_LIST(X)
 #undef X
-  OP_MAX
+      OP_MAX
 } alc_op;
 
 /* Mutable random-access array. Held by exp_t->ptr when type==EXP_VECTOR.
@@ -509,15 +527,13 @@ typedef struct {
 /* Cell accessors. e is the exp_t*, i is 0-based logical index (within the
    window [0, vec_len(e))). All three kinds share the same byte layout
    (8B/cell at offset sizeof(alc_vec_t)). */
-#define vec_len(e)    ((int64_t)((e)->vec_win.end - (e)->vec_win.start))
-#define vec_cap(e)    ((int64_t)((alc_vec_t *)(e)->ptr)->cap)
-#define vec_base(e)   ((char *)(e)->ptr + sizeof(alc_vec_t))
-#define vec_gen_at(e, i) \
+#define vec_len(e) ((int64_t)((e)->vec_win.end - (e)->vec_win.start))
+#define vec_cap(e) ((int64_t)((alc_vec_t *)(e)->ptr)->cap)
+#define vec_base(e) ((char *)(e)->ptr + sizeof(alc_vec_t))
+#define vec_gen_at(e, i)                                                       \
   (((struct exp_t **)vec_base(e))[(e)->vec_win.start + (i)])
-#define vec_i64_at(e, i) \
-  (((int64_t *)vec_base(e))[(e)->vec_win.start + (i)])
-#define vec_f64_at(e, i) \
-  (((double *)vec_base(e))[(e)->vec_win.start + (i)])
+#define vec_i64_at(e, i) (((int64_t *)vec_base(e))[(e)->vec_win.start + (i)])
+#define vec_f64_at(e, i) (((double *)vec_base(e))[(e)->vec_win.start + (i)])
 /* Raw double* to the first cell of a VEC_KIND_F64 window. Equivalent to
    &vec_f64_at(v,0); prefer this for pointer-arithmetic bulk ops where
    `cells[i]` reads/writes are clearer than repeated vec_f64_at calls. */
@@ -539,10 +555,11 @@ typedef struct gcache_entry {
   uint64_t gen;
 } gcache_entry;
 
-/* One entry of a bytecode's pc→source-location table: "from this code offset on,
-   the source line/col is this." Built at compile time, read ONLY on the error
-   path (cold) to point a runtime error at the precise failing form — never
-   touched by the VM dispatch loop, so it adds zero per-instruction cost. */
+/* One entry of a bytecode's pc→source-location table: "from this code offset
+   on, the source line/col is this." Built at compile time, read ONLY on the
+   error path (cold) to point a runtime error at the precise failing form —
+   never touched by the VM dispatch loop, so it adds zero per-instruction cost.
+ */
 typedef struct bc_loc_t {
   int pc;   /* code offset where this form's emitted ops begin */
   int line; /* 1-based source line (raw reader line; mapped at display time) */
@@ -616,8 +633,8 @@ void disasm_bytecode(bytecode_t *bc); /* opcode-by-opcode dump for debugging */
    code→keyword / keyword→code maps in alcove.c, so a new hint can't be added to
    one and forgotten in another. (code, keyword) per row. */
 #define ALC_TYPE_HINTS(X)                                                      \
-  X(TYPE_HINT_INT, ":int")         /* tagged fixnum */                         \
-  X(TYPE_HINT_F64, ":f64")         /* double */                                \
+  X(TYPE_HINT_INT, ":int") /* tagged fixnum */                                 \
+  X(TYPE_HINT_F64, ":f64") /* double */                                        \
   X(TYPE_HINT_VEC_F64, ":vec-f64")                                             \
   X(TYPE_HINT_VEC_I64, ":vec-i64")
 enum {
@@ -629,7 +646,7 @@ enum {
 /* param_hints (ENV_INLINE_SLOTS TYPE_HINT_* codes, or NULL) + ret_hint are the
    def-time type annotations, recorded into the bytecode for the JIT. */
 int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
-                   uint8_t ret_hint); /* 1 on success, 0 on fallback */
+                   uint8_t ret_hint);        /* 1 on success, 0 on fallback */
 exp_t *vm_run(exp_t *fn, struct env_t *env); /* runs bytecode; returns owned */
 #ifdef ALCOVE_JIT
 int jit_compile(bytecode_t *bc); /* 1 if JIT'd, 0 otherwise */
@@ -637,10 +654,10 @@ int jit_compile(bytecode_t *bc); /* 1 if JIT'd, 0 otherwise */
 
 typedef struct exp_tfunc {
   unsigned short int flags;
-  /* clone / clone_flag: RESERVED. The accessor macros __CLONE__ / __CLONE_FLAG__
-     exist, but the engine does not currently invoke either (no deep-copy path
-     calls them) — they are part of the registration struct for forward
-     compatibility, so a module may set them without effect today. */
+  /* clone / clone_flag: RESERVED. The accessor macros __CLONE__ /
+     __CLONE_FLAG__ exist, but the engine does not currently invoke either (no
+     deep-copy path calls them) — they are part of the registration struct for
+     forward compatibility, so a module may set them without effect today. */
   exp_t *(*clone)(exp_t *this);      /* clone exp_t */
   exp_t *(*clone_flag)(exp_t *this); /* clone exp_t and flag as persistent*/
   exp_t *(*load)(exp_t *e,
@@ -783,16 +800,16 @@ int shard_runtime_init(shard_t *sh);
 void shard_runtime_destroy(shard_t *sh);
 int shard_main(shard_t *sh, int port);
 /* Hot loops (make_env / destroy_env) cache `current_shard` once and inline the
-   bounds check `env >= sh->arena && env < sh->arena_end` — the per-iteration TLS
-   reload was a measurable hit on env-heavy benchmarks. */
+   bounds check `env >= sh->arena && env < sh->arena_end` — the per-iteration
+   TLS reload was a measurable hit on env-heavy benchmarks. */
 
 typedef struct lispProc {
   char *name;
-  int arity;          /* reserved — not yet enforced. -1 = variadic. */
-  int flags;          /* FLAG_TAIL_AWARE / FLAG_APPLICATIVE / FLAG_UNSAFE; see alcove.h.
-                         FLAG_UNSAFE marks the security tier the old `level` field
-                         reserved — gated under --safe (see invoke_internal). */
-  const char *doc;    /* one-line help string; NULL = undocumented. */
+  int arity; /* reserved — not yet enforced. -1 = variadic. */
+  int flags; /* FLAG_TAIL_AWARE / FLAG_APPLICATIVE / FLAG_UNSAFE; see alcove.h.
+                FLAG_UNSAFE marks the security tier the old `level` field
+                reserved — gated under --safe (see invoke_internal). */
+  const char *doc; /* one-line help string; NULL = undocumented. */
   lispCmd *cmd;
 } lispProc;
 
@@ -843,7 +860,8 @@ dict_t *create_dict();
 int destroy_dict(dict_t *d);
 int dump_dict(dict_t *d, FILE *stream);
 unsigned int bernstein_hash(unsigned char *key, int len);
-unsigned int bernstein_hash_z(const char *key); /* fused strlen+hash, C-strings */
+unsigned int
+bernstein_hash_z(const char *key); /* fused strlen+hash, C-strings */
 unsigned int bernstein_uhash(unsigned char *key, int len);
 keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val);
 exp_t *set_keyval_dict_timestamp(dict_t *d, char *key, int64_t timestamp);
@@ -852,15 +870,16 @@ int del_keyval_dict(dict_t *d, char *key);
 
 /* lisp */
 exp_t *error(int errnum, exp_t *id, env_t *env, const char *err_message, ...);
-static exp_t *make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
-#define MAKE_TYPED(name, t, p) \
-  exp_t *(name) = make_nil(); \
-  (name)->type = (t); \
+static exp_t *
+make_nil(); /* fresh heap pair (content=next=NULL) — for builders */
+#define MAKE_TYPED(name, t, p)                                                 \
+  exp_t *(name) = make_nil();                                                  \
+  (name)->type = (t);                                                          \
   (name)->ptr = (void *)(p)
 
-#define INIT_TYPED(name, t, p) \
-  (name) = make_nil(); \
-  (name)->type = (t); \
+#define INIT_TYPED(name, t, p)                                                 \
+  (name) = make_nil();                                                         \
+  (name)->type = (t);                                                          \
   (name)->ptr = (void *)(p)
 exp_t *make_char(uint32_t c);
 exp_t *make_node(exp_t *node);
@@ -881,11 +900,11 @@ exp_t *make_internal(lispCmd *cmd, int flags);
    FLAG_APPLICATIVE fast path (but still must consume e). See
    examples/embed/nativemod.c. */
 int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware);
-/* Attach a "values" fast-path implementation (lispCmdV) to an already-registered
-   non-tail-aware builtin. The compiled fast path then calls `fnv` directly with
-   the evaluated args (no synthesized call form). The normal lispCmd stays as the
-   fallback for the AST / apply / map paths. Returns 0 on success, -1 if `name`
-   isn't a registered internal. */
+/* Attach a "values" fast-path implementation (lispCmdV) to an
+   already-registered non-tail-aware builtin. The compiled fast path then calls
+   `fnv` directly with the evaluated args (no synthesized call form). The normal
+   lispCmd stays as the fallback for the AST / apply / map paths. Returns 0 on
+   success, -1 if `name` isn't a registered internal. */
 int alcove_set_cmd_values(const char *name, lispCmdV *fnv);
 /* Helpers for embedders implementing builtins outside the alcove TU
    (e.g. JS-side builtins in the WASM build). Evaluate the Nth (0-indexed)
@@ -897,9 +916,9 @@ int alcove_set_cmd_values(const char *name, lispCmdV *fnv);
    reuses the 1st buffer (so copy the string if you need it past 4 calls or one
    builtin). For full-fidelity / long strings, EVAL the arg yourself and read
    exp_text(). */
-int         alcove_arg_int(exp_t *e, env_t *env, int n);
+int alcove_arg_int(exp_t *e, env_t *env, int n);
 const char *alcove_arg_string(exp_t *e, env_t *env, int n);
-exp_t      *alcove_make_int(int v);
+exp_t *alcove_make_int(int v);
 /* C embedding entry points (see the alcove_init comment in alcove.c and
    examples/embed/). alcove_init() brings the engine up and returns the global
    env (IDEMPOTENT — a second call returns the same env). alcove_eval_string()
@@ -924,17 +943,18 @@ exp_t *alcove_eval_string(const char *src);
    module's C struct, freed by the type's destroy hook at refcount zero).
    alcove_foreign_ptr / alcove_is_foreign read it back. */
 unsigned short alcove_register_type(const char *name, const exp_tfunc *ops);
-exp_t        *alcove_make_foreign(unsigned short type_id, void *ptr);
-void         *alcove_foreign_ptr(const exp_t *e);
-int           alcove_is_foreign(const exp_t *e, unsigned short type_id);
+exp_t *alcove_make_foreign(unsigned short type_id, void *ptr);
+void *alcove_foreign_ptr(const exp_t *e);
+int alcove_is_foreign(const exp_t *e, unsigned short type_id);
 exp_t *make_tree(exp_t *root, exp_t *node1);
 
-/* Value constructors for embedders/modules. OWNERSHIP: make_string / make_symbol
-   / make_floatf return a fresh HEAP value (nref=1) you must unrefexp when done
-   (or hand to a sink — e.g. set_get_keyval_dict / a builtin return — that takes
-   it). make_integeri / make_char / alcove_make_int return a TAGGED IMMEDIATE
-   (no heap, never refcounted — do NOT unref). nil/t (NIL_EXP/TRUE_EXP) are
-   immortal singletons (no unref). See examples/embed/README.md. */
+/* Value constructors for embedders/modules. OWNERSHIP: make_string /
+   make_symbol / make_floatf return a fresh HEAP value (nref=1) you must
+   unrefexp when done (or hand to a sink — e.g. set_get_keyval_dict / a builtin
+   return — that takes it). make_integeri / make_char / alcove_make_int return a
+   TAGGED IMMEDIATE (no heap, never refcounted — do NOT unref). nil/t
+   (NIL_EXP/TRUE_EXP) are immortal singletons (no unref). See
+   examples/embed/README.md. */
 exp_t *make_string(char *str, int length);
 exp_t *make_symbol(char *str, int length);
 
@@ -943,7 +963,7 @@ exp_t *make_symbol(char *str, int length);
 extern exp_t *nil_singleton;
 extern exp_t *true_singleton;
 extern exp_t *gen_done_singleton; /* generator exhaustion sentinel */
-#define NIL_EXP  (nil_singleton)
+#define NIL_EXP (nil_singleton)
 #define TRUE_EXP (true_singleton)
 #define GEN_DONE (gen_done_singleton)
 #define isgen_done(e) ((e) == gen_done_singleton)
@@ -1176,12 +1196,14 @@ typedef struct {
    coef is a signed 128-bit integer bounded to <= 28 significant digits
    (rust_decimal class); scale is the count of fractional digits (0..28). The
    stored form is normalized (trailing fractional zeros trimmed; coef==0 has
-   scale 0), so structural equality is value equality. Operations in numeric.h. */
+   scale 0), so structural equality is value equality. Operations in numeric.h.
+ */
 typedef struct {
   __int128 coef;
   int32_t scale;
 } alc_dec_t;
-int dec_to_str(alc_dec_t *d, char *buf); /* defined in numeric.h; used by print.h */
+int dec_to_str(alc_dec_t *d,
+               char *buf); /* defined in numeric.h; used by print.h */
 
 typedef struct alc_listnode {
   struct exp_t *val; /* owned ref */
@@ -1236,7 +1258,6 @@ void tokenappend(token_t *token, char *src, int len);
 /* Parser */
 #define PARSER_TERMMACROMODE 4
 
-
 /* --- Extracted from alcove.c --- */
 struct compiler_env;
 typedef struct compiler_t {
@@ -1250,9 +1271,10 @@ typedef struct compiler_t {
      = let/with-bound names. Scope-managed as a stack. */
   char *slot_names[ENV_INLINE_SLOTS];
   int nparams;
-  const uint8_t *param_hints; /* borrowed: per-param TYPE_HINT_* (or NULL). Lets
-                                 compile_expr treat a hinted param as a known
-                                 non-callable value for infix->prefix rewriting. */
+  const uint8_t
+      *param_hints;      /* borrowed: per-param TYPE_HINT_* (or NULL). Lets
+                            compile_expr treat a hinted param as a known
+                            non-callable value for infix->prefix rewriting. */
   int nslots;            /* current total: nparams + active let/with bindings */
   int nlet_depth;        /* let/with/for nesting depth of the cursor */
   int capture_unsafe;    /* 1 if the lambda body may create an env-capturing

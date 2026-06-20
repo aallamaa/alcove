@@ -165,7 +165,7 @@ static int alc_numlt(exp_t *a, exp_t *b, int *err) {
   exp_t *name(exp_t *e, env_t *env) {                                          \
     exp_t *cur = e->next;                                                      \
     if (!cur) {                                                                \
-      exp_t *er = error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)");    \
+      exp_t *er = error(ERROR_MISSING_PARAMETER, e, env, "(" #name " ...)");   \
       unrefexp(e); /* error() refs e; drop ours after (else UAF) */            \
       return er;                                                               \
     }                                                                          \
@@ -258,9 +258,9 @@ exp_t *lengthcmd(exp_t *e, env_t *env) {
    copy); a vector, string (per codepoint), or deque is materialized into a
    fresh list. Returns NULL if `coll` isn't a sequence. Associative collections
    (set → members, dict/HAMT → (key value) entries) are handled by
-   coll_assoc_to_list, defined after set.h/hamt.h since it needs their iterators.
-   This is what makes seq/first/rest/map/filter/reduce/nth work uniformly across
-   list, vector, string, deque, set, dict, and HAMT. */
+   coll_assoc_to_list, defined after set.h/hamt.h since it needs their
+   iterators. This is what makes seq/first/rest/map/filter/reduce/nth work
+   uniformly across list, vector, string, deque, set, dict, and HAMT. */
 static exp_t *coll_assoc_to_list(exp_t *coll); /* defined post-set.h/hamt.h */
 static exp_t *coll_to_list(exp_t *coll) {
   if (!coll || coll == NIL_EXP || ispair(coll))
@@ -336,9 +336,8 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
   if (idxv && collv) {
     exp_t *seq = coll_to_list(collv);
     if (!seq)
-      CLEAN_RETURN_2(a, b,
-                     error(ERROR_ILLEGAL_VALUE, NULL, env,
-                           "nth: not a sequence"));
+      CLEAN_RETURN_2(
+          a, b, error(ERROR_ILLEGAL_VALUE, NULL, env, "nth: not a sequence"));
     int64_t idx = FIX_VAL(idxv);
     exp_t *cur = seq;
     while (idx > 0 && ispair(cur) && cur->next) {
@@ -352,11 +351,12 @@ exp_t *nthcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(a, b, ret);
 }
 
-/* Apply a reserved builtin to already-evaluated VALUE args by name, quoting each
-   so the builtin's own EVAL passes them through unchanged. Returns the builtin's
-   result (owned), or an error if `name` isn't a builtin. Used by conj/into to
-   reuse the tested per-type add ops instead of re-implementing container
-   internals. The synthesized form is consumed by the builtin (consume-e). */
+/* Apply a reserved builtin to already-evaluated VALUE args by name, quoting
+   each so the builtin's own EVAL passes them through unchanged. Returns the
+   builtin's result (owned), or an error if `name` isn't a builtin. Used by
+   conj/into to reuse the tested per-type add ops instead of re-implementing
+   container internals. The synthesized form is consumed by the builtin
+   (consume-e). */
 static exp_t *apply_builtin(const char *name, env_t *env, int n, exp_t **args) {
   keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)name, NULL);
   if (!kv || !isinternal((exp_t *)kv->val))
@@ -376,8 +376,9 @@ static exp_t *apply_builtin(const char *name, env_t *env, int n, exp_t **args) {
    comes back (an extra ref), so the caller must unref the return either way. */
 static exp_t *conj_one(exp_t *coll, exp_t *x, env_t *env) {
   if (isvector(coll) || isset(coll) || islist(coll)) {
-    const char *op =
-        isvector(coll) ? "vec-push!" : isset(coll) ? "set-add!" : "push-right!";
+    const char *op = isvector(coll) ? "vec-push!"
+                     : isset(coll)  ? "set-add!"
+                                    : "push-right!";
     exp_t *args[2] = {coll, x};
     exp_t *r = apply_builtin(op, env, 2, args); /* mutates coll */
     if (iserror(r))
@@ -413,8 +414,8 @@ const char doc_conj[] =
     "collection (list prepends). For dict/hamt each x is a (key value) list.";
 exp_t *conjcmd(exp_t *e, env_t *env) {
   if (!e->next)
-    CLEAN_RETURN_1(NIL_EXP, error(ERROR_MISSING_PARAMETER, e, env,
-                                  "(conj coll x ...)"));
+    CLEAN_RETURN_1(NIL_EXP,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(conj coll x ...)"));
   exp_t *coll = EVAL(e->next->content, env);
   if (iserror(coll)) {
     unrefexp(e);
@@ -442,7 +443,8 @@ exp_t *conjcmd(exp_t *e, env_t *env) {
 
 const char doc_into[] =
     "(into dest src) — conj every element of (seq src) into dest, left to "
-    "right. (into [] s) / (into #{} s) / (into {} entries) convert collections.";
+    "right. (into [] s) / (into #{} s) / (into {} entries) convert "
+    "collections.";
 exp_t *intocmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(dest, src);
   if (!dest || !e->next->next)
@@ -450,9 +452,9 @@ exp_t *intocmd(exp_t *e, env_t *env) {
                    error(ERROR_MISSING_PARAMETER, e, env, "(into dest src)"));
   exp_t *seq = coll_to_list(src);
   if (!seq)
-    CLEAN_RETURN_2(dest, src,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "into: src is not a sequence"));
+    CLEAN_RETURN_2(
+        dest, src,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "into: src is not a sequence"));
   exp_t *coll = refexp(dest);
   for (exp_t *c = seq; ispair(c) && c->content; c = c->next) {
     exp_t *nc = conj_one(coll, c->content, env);
@@ -515,7 +517,8 @@ const char doc_typeof[] =
     "bool/nil/list/vector/set/dict/hamt/deque/fn; or a defstruct's type name.";
 exp_t *typeofcmd(exp_t *e, env_t *env) {
   /* Evaluate by hand (not EVAL_ARG_1): an error value is a thing whose type we
-     report as 'error, not something to re-raise — (type-of (try ...)) → 'error. */
+     report as 'error, not something to re-raise — (type-of (try ...)) → 'error.
+   */
   exp_t *a = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
   if (iserror(a))
     CLEAN_RETURN_1(a, make_symbol("error", 5));
@@ -538,13 +541,15 @@ const char doc_defstruct[] =
 exp_t *defstructcmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm)) {
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(defstruct name field...)");
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, e, env, "(defstruct name field...)");
     unrefexp(e);
     return err;
   }
   /* Each field must be a PLAIN symbol. A keyword (:x) or other token would be
      emitted verbatim into the generated (def NAME (fields...) ...) param list,
-     where :x reads as a JIT type-hint and the whole expansion fails opaquely. */
+     where :x reads as a JIT type-hint and the whole expansion fails opaquely.
+   */
   for (exp_t *f = cddr(e); f && f->content; f = f->next)
     if (!issymbol(f->content) ||
         ((const char *)exp_text(f->content))[0] == ':') {
@@ -613,7 +618,9 @@ exp_t *defstructcmd(exp_t *e, env_t *env) {
    NAME__m, and applies the found method to the args. defmethod adds an entry.
    Implemented by constructing the expansion forms (they embed the arbitrary
    dispatch fn / method body, so build-by-string won't do) and evaluating. */
-static exp_t *sx_sym(const char *s) { return make_symbol((char *)s, (int)strlen(s)); }
+static exp_t *sx_sym(const char *s) {
+  return make_symbol((char *)s, (int)strlen(s));
+}
 static exp_t *sx_lst(int n, ...) { /* build a proper list from n owned exps */
   va_list ap;
   va_start(ap, n);
@@ -636,7 +643,8 @@ const char doc_defmulti[] =
 exp_t *defmulticmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e), *disp = caddr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm) || !disp) {
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "(defmulti name dispatch-fn)");
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, e, env, "(defmulti name dispatch-fn)");
     unrefexp(e);
     return err;
   }
@@ -646,7 +654,8 @@ exp_t *defmulticmd(exp_t *e, env_t *env) {
   /* (do (= NAME__m (hash-map))           ; = binds a VALUE; def would read the
          (def NAME (. args)               ;   (hash-map) as a param list
               (apply (get NAME__m (apply DISP args)) args))) */
-  exp_t *d1 = sx_lst(3, sx_sym("="), sx_sym(mname), sx_lst(1, sx_sym("hash-map")));
+  exp_t *d1 =
+      sx_lst(3, sx_sym("="), sx_sym(mname), sx_lst(1, sx_sym("hash-map")));
   exp_t *dispcall = sx_lst(3, sx_sym("apply"), refexp(disp), sx_sym("args"));
   exp_t *getcall = sx_lst(3, sx_sym("get"), sx_sym(mname), dispcall);
   exp_t *body = sx_lst(3, sx_sym("apply"), getcall, sx_sym("args"));
@@ -688,8 +697,10 @@ exp_t *defmethodcmd(exp_t *e, env_t *env) {
     tl = tl->next = make_node(refexp(b->content));
   /* (assoc! NAME__m dval fnform) — dval is used as-is: the user writes a quoted
      symbol ('circle), keyword (:hi), or literal, which assoc! evaluates to the
-     dispatch key. (Re-quoting would store the (quote circle) FORM as the key.) */
-  exp_t *form = sx_lst(4, sx_sym("assoc!"), sx_sym(mname), refexp(dval), fnform);
+     dispatch key. (Re-quoting would store the (quote circle) FORM as the key.)
+   */
+  exp_t *form =
+      sx_lst(4, sx_sym("assoc!"), sx_sym(mname), refexp(dval), fnform);
   exp_t *r = evaluate(form, env);
   unrefexp(e);
   return r; /* the method fn (assoc! returns the value), or an error */
@@ -764,7 +775,8 @@ exp_t *appendcmd(exp_t *e, env_t *env) {
   return head ? head : NIL_EXP;
 }
 
-/* proper-list test used by (list?) below — defined before the PRED_CMD block. */
+/* proper-list test used by (list?) below — defined before the PRED_CMD block.
+ */
 static int is_proper_list(exp_t *a) {
   exp_t *cur = a;
   while (ispair(cur) && cur->content)
@@ -803,9 +815,10 @@ const char doc_dictp[] = "(dict? x) — t if x is a hash-map.";
 const char doc_dequep[] = "(deque? x) — t if x is a deque.";
 const char doc_setp[] = "(set? x) — t if x is a hash-set.";
 const char doc_charp[] = "(char? x) — t if x is a character.";
-const char doc_yes[] =
-    "(yes x) — t if x is truthy (the complement of `no`). nil/empty are falsey.";
-const char doc_zerop[] = "(zero? x) — t if x is the number 0 (fixnum or float).";
+const char doc_yes[] = "(yes x) — t if x is truthy (the complement of `no`). "
+                       "nil/empty are falsey.";
+const char doc_zerop[] =
+    "(zero? x) — t if x is the number 0 (fixnum or float).";
 PRED_CMD(numberpcmd,
          (isnumber(a) || isfloat(a) || isrational(a) || isdecimal(a)))
 PRED_CMD(charpcmd, ischar(a))
@@ -873,7 +886,8 @@ exp_t *backtracecmd(exp_t *e, env_t *env) {
   unrefexp(e);
   exp_t *head = NULL;
   int n = g_calldepth < ALC_BT_MAX ? g_calldepth : ALC_BT_MAX;
-  for (int i = 0; i < n; i++) { /* outermost..innermost; prepend → innermost-first */
+  for (int i = 0; i < n;
+       i++) { /* outermost..innermost; prepend → innermost-first */
     const char *nm = g_callstack[i] ? g_callstack[i] : "<anonymous>";
     exp_t *node = make_node(make_string((char *)nm, (int)strlen(nm)));
     node->next = head;
@@ -1217,7 +1231,8 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
        — a bare symbol would re-resolve as a variable, a list would be applied
        as a call — so wrap those in (quote v) so the builtin's own arg-eval
        returns them unchanged. (The symbol/pair case is rare in hot loops, so
-       the extra resolve+nodes cost nothing on the numeric/vector fast paths.) */
+       the extra resolve+nodes cost nothing on the numeric/vector fast paths.)
+     */
     exp_t *head = make_node(refexp(fn));
     exp_t *cur = head;
     for (int i = 0; i < nargs; i++) {
@@ -1235,7 +1250,8 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     }
     int was_tail = in_tail_position;
     in_tail_position = 0;
-    exp_t *ret = invoke_internal(fn, head, env); /* --safe gate (apply/map/...) */
+    exp_t *ret =
+        invoke_internal(fn, head, env); /* --safe gate (apply/map/...) */
     in_tail_position = was_tail;
     return ret;
   }
@@ -1369,9 +1385,9 @@ exp_t *rangecmd(exp_t *e, env_t *env) {
      that evaluates to a NULL value is still "supplied" and must hit the
      type check, exactly as the original goto-bad arity test did. */
   if (!e->next || !e->next->next)
-    CLEAN_RETURN_3(arg1, arg2, arg3,
-                   error(ERROR_MISSING_PARAMETER, e, env,
-                         "(range start end [step])"));
+    CLEAN_RETURN_3(
+        arg1, arg2, arg3,
+        error(ERROR_MISSING_PARAMETER, e, env, "(range start end [step])"));
   if (!isnumber(arg1) || !isnumber(arg2) || (arg3 && !isnumber(arg3)))
     CLEAN_RETURN_3(
         arg1, arg2, arg3,
@@ -1658,7 +1674,8 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   }
   exp_t *finally_form =
       e->next->next->next ? e->next->next->next->content : NULL;
-  g_try_depth++; /* an error in the body is about to be caught — no debugger break */
+  g_try_depth++; /* an error in the body is about to be caught — no debugger
+                    break */
   exp_t *result = EVAL(e->next->content, env);
   g_try_depth--;
   exp_t *ret;
@@ -1937,16 +1954,18 @@ const char doc_with_time_limit[] =
     "(with-time-limit MS THUNK) — call (THUNK) with a wall-clock budget of MS "
     "milliseconds; if it runs longer it is aborted with a catchable "
     "\"interrupted: time limit exceeded\" error. Bounds runaway loops / tail "
-    "recursion (e.g. for untrusted or buggy code). Nested limits use the sooner "
+    "recursion (e.g. for untrusted or buggy code). Nested limits use the "
+    "sooner "
     "deadline. Only INTERPRETED (VM/AST) loops are bounded — a JIT'd numeric "
     "loop is a terminating counting shape, and a runaway loop is not a JIT "
     "shape, so it stays interruptible in the VM.";
 exp_t *withtimelimitcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(ms, thunk);
   if (!ms || !isnumber(ms) || FIX_VAL(ms) <= 0)
-    CLEAN_RETURN_2(ms, thunk,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "with-time-limit: MS must be a positive integer (ms)"));
+    CLEAN_RETURN_2(
+        ms, thunk,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "with-time-limit: MS must be a positive integer (ms)"));
   if (!thunk || !islambda(thunk))
     CLEAN_RETURN_2(
         ms, thunk,
@@ -1963,14 +1982,17 @@ exp_t *withtimelimitcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_with_memory_limit[] =
-    "(with-memory-limit BYTES THUNK) — call (THUNK) but abort it with a catchable "
+    "(with-memory-limit BYTES THUNK) — call (THUNK) but abort it with a "
+    "catchable "
     "\"interrupted: memory limit exceeded\" error if it grows this thread's "
     "exp_t arena by more than ~BYTES. Bounds runaway ACCUMULATION (building an "
     "unbounded list/structure) for untrusted/buggy code, checked at loop "
-    "back-edges. Nested limits use the tighter ceiling. SCOPE: bounds exp_t cell "
+    "back-edges. Nested limits use the tighter ceiling. SCOPE: bounds exp_t "
+    "cell "
     "growth (lists/pairs/closures), the common runaway; it does NOT bound a "
     "single huge string/blob/vector allocation, and a genuine malloc failure "
-    "still terminates the process (graceful_shutdown). Granularity is the 256-cell "
+    "still terminates the process (graceful_shutdown). Granularity is the "
+    "256-cell "
     "arena chunk (~a few KiB).";
 exp_t *withmemlimitcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(bytes, thunk);
@@ -1984,11 +2006,13 @@ exp_t *withmemlimitcmd(exp_t *e, env_t *env) {
         bytes, thunk,
         error(ERROR_ILLEGAL_VALUE, e, env,
               "with-memory-limit: second arg must be a thunk (0-arg lambda)"));
-  /* bytes → cells → chunks (round up, +1), relative to the current high-water */
+  /* bytes → cells → chunks (round up, +1), relative to the current high-water
+   */
   int64_t cells = FIX_VAL(bytes) / (int64_t)sizeof(exp_t);
   int64_t want = g_exp_chunks + cells / EXP_BUMP_CHUNK + 1;
   int64_t saved = g_chunk_ceiling;
-  g_chunk_ceiling = (saved && saved < want) ? saved : want; /* nested: tighter */
+  g_chunk_ceiling =
+      (saved && saved < want) ? saved : want; /* nested: tighter */
   exp_t *ret = alc_apply_n(thunk, 0, NULL, env);
   g_chunk_ceiling = saved;
   CLEAN_RETURN_2(bytes, thunk, ret);
@@ -1996,11 +2020,15 @@ exp_t *withmemlimitcmd(exp_t *e, env_t *env) {
 
 const char doc_heap_stats[] =
     "(heap-stats) — property list of this thread's exp_t arena: "
-    "(:live L :free F :allocated A :chunks C). LIVE is the number of exp_t cells "
+    "(:live L :free F :allocated A :chunks C). LIVE is the number of exp_t "
+    "cells "
     "currently in use (not on the free-list). Refcounting reclaims everything "
-    "EXCEPT reference cycles (cyclic lists, callback↔dict), which leak by design "
-    "(no tracing GC). LEAK AUDIT: snapshot (nth (heap-stats) 1) before and after "
-    "a workload that should free all it allocates; a rising live count is a cycle "
+    "EXCEPT reference cycles (cyclic lists, callback↔dict), which leak by "
+    "design "
+    "(no tracing GC). LEAK AUDIT: snapshot (nth (heap-stats) 1) before and "
+    "after "
+    "a workload that should free all it allocates; a rising live count is a "
+    "cycle "
     "leak. Per-thread (reflects the calling reactor's arena).";
 exp_t *heapstatscmd(exp_t *e, env_t *env) {
   (void)env;
@@ -2032,7 +2060,8 @@ const char doc_alloc_fail_after[] =
     "fail, to exercise out-of-memory recovery (the running computation aborts "
     "with a catchable error; the next top-level form runs normally). N<0 "
     "disables. One-shot — clears itself once it fires. Returns the previous "
-    "setting. Unsafe (host-gated): refused under --safe and from RESP callbacks.";
+    "setting. Unsafe (host-gated): refused under --safe and from RESP "
+    "callbacks.";
 exp_t *allocfailaftercmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(nv);
   if (!nv || !isnumber(nv))
@@ -2171,7 +2200,8 @@ int isequal(exp_t *cur1, exp_t *cur2) {
   /* nil has two in-memory shapes: raw C NULL (returned by car/cdr, read for a
      bare `nil` token in a quoted form) and the nil_singleton heap object (the
      `nil`/`'()` literal). Both ARE nil — treat them as equal, else `(is 'nil
-     nil)`, `(iso (cdr (list 1)) nil)`, and `(case nil nil ...)` all wrongly miss. */
+     nil)`, `(iso (cdr (list 1)) nil)`, and `(case nil nil ...)` all wrongly
+     miss. */
   if ((!cur1 || cur1 == nil_singleton) && (!cur2 || cur2 == nil_singleton))
     return 1;
   if (!is_ptr(cur1) || !is_ptr(cur2))
@@ -2211,9 +2241,10 @@ static int hamt_iso(exp_t *a, exp_t *b); /* deep map equality; HAMT section */
 /* Recursion-depth guard: two distinct cyclic collections (e.g. a dict that
    contains itself under different identities) would recurse forever and blow
    the C stack. Depth tracks NESTING (lists/vectors/dicts walk their spine in a
-   loop and only recurse per element), so a few thousand levels is far beyond any
-   real data while staying well under an 8 MB stack — even with ASan's fat frames.
-   Hitting the cap means "give up — treat as not equal" rather than crash. */
+   loop and only recurse per element), so a few thousand levels is far beyond
+   any real data while staying well under an 8 MB stack — even with ASan's fat
+   frames. Hitting the cap means "give up — treat as not equal" rather than
+   crash. */
 #define ISO_MAX_DEPTH 2000
 static ALCOVE_TLS int g_iso_depth = 0;
 
@@ -2578,7 +2609,7 @@ static const char *inspect_type_name(int t) {
   switch (t) {
 /* one case per ALC_EXP_TYPES row (alcove.h); EXP_MAXSIZE and any unknown tag
    hit the default. */
-#define X(name, anchor, dispname)                                             \
+#define X(name, anchor, dispname)                                              \
   case name:                                                                   \
     return dispname;
     ALC_EXP_TYPES(X)
@@ -2832,8 +2863,8 @@ exp_t *webpcmd(exp_t *e, env_t *env) {
    recompile-on-install model). platform/arch return symbols so a script reads
    (is (platform) 'linux); dylib-suffix returns the shared-library extension as
    a string, ready to splice into an FFI path. WASM reports as 'web. */
-const char doc_platform[] =
-    "(platform) — host OS as a symbol: web | darwin | linux | freebsd | unknown.";
+const char doc_platform[] = "(platform) — host OS as a symbol: web | darwin | "
+                            "linux | freebsd | unknown.";
 exp_t *platformcmd(exp_t *e, env_t *env) {
   (void)e;
   (void)env;
@@ -2851,7 +2882,8 @@ exp_t *platformcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_dialect[] =
-    "(dialect) — the surface syntax of THIS binary as a symbol: adder | alcove. "
+    "(dialect) — the surface syntax of THIS binary as a symbol: adder | "
+    "alcove. "
     "Useful in .init.alc / prompt hooks to branch per dialect.";
 exp_t *dialectcmd(exp_t *e, env_t *env) {
   (void)e;
@@ -2879,12 +2911,13 @@ const char doc_replinsert[] =
     "(repl-insert s) — insert string s at the cursor. nil.";
 const char doc_repldelete[] =
     "(repl-delete a b) — delete the byte range [a, b) from the line. nil.";
-const char doc_replreplaceline[] =
-    "(repl-replace-line s) — replace the whole input with s; cursor to end. nil.";
+const char doc_replreplaceline[] = "(repl-replace-line s) — replace the whole "
+                                   "input with s; cursor to end. nil.";
 const char doc_replrefresh[] =
     "(repl-refresh) — force a redisplay of the current line. nil.";
 const char doc_replcompletions[] =
-    "(repl-completions prefix) — list of names (builtins + visible vars) starting "
+    "(repl-completions prefix) — list of names (builtins + visible vars) "
+    "starting "
     "with prefix; for offering completion from a bind-key handler.";
 
 const char doc_arch[] =
@@ -2973,7 +3006,8 @@ exp_t *disasmcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(arg, NULL);
 }
 
-/* ---------- stdlib batch (v0.2): grouping, chunking, string predicates ----- */
+/* ---------- stdlib batch (v0.2): grouping, chunking, string predicates -----
+ */
 
 /* Reverse a freshly-built, exclusively-owned node chain in place (no
    refcount traffic — the nodes just get relinked). */
@@ -2999,8 +3033,9 @@ exp_t *groupbycmd(exp_t *e, env_t *env) {
                    error(ERROR_MISSING_PARAMETER, e, env, "(group-by f xs)"));
   exp_t *xseq = coll_to_list(xs);
   if (!xseq)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                                 "group-by: second arg is not a sequence"));
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "group-by: second arg is not a sequence"));
   exp_t *dexp = make_dict_exp();
   dict_t *d = (dict_t *)dexp->ptr;
   for (exp_t *cur = xseq; ispair(cur) && cur->content; cur = cur->next) {
@@ -3155,7 +3190,9 @@ exp_t *interleavecmd(exp_t *e, env_t *env) {
         unrefexp(vals[j]);
         unrefexp(seqs[j]);
       }
-      free(vals); free(seqs); free(curs);
+      free(vals);
+      free(seqs);
+      free(curs);
       unrefexp(e);
       return err;
     }
@@ -3167,7 +3204,9 @@ exp_t *interleavecmd(exp_t *e, env_t *env) {
       }
       exp_t *bad = vals[i];
       unrefexp(bad);
-      free(vals); free(seqs); free(curs);
+      free(vals);
+      free(seqs);
+      free(curs);
       unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "interleave: every arg must be a sequence");
@@ -3198,7 +3237,9 @@ exp_t *interleavecmd(exp_t *e, env_t *env) {
     unrefexp(vals[i]);
     unrefexp(seqs[i]);
   }
-  free(vals); free(seqs); free(curs);
+  free(vals);
+  free(seqs);
+  free(curs);
   unrefexp(e);
   return head ? head : refexp(NIL_EXP);
 }
@@ -3208,12 +3249,13 @@ static exp_t *alc_extremum_by(exp_t *e, env_t *env, int want_max,
                               const char *name) {
   EVAL_ARG_2(fn, xs);
   if (!fn || !e->next->next)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_MISSING_PARAMETER, e, env,
-                                 "(%s f xs)", name));
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_MISSING_PARAMETER, e, env, "(%s f xs)", name));
   exp_t *xseq = coll_to_list(xs);
   if (!xseq)
-    CLEAN_RETURN_2(fn, xs, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                                 "%s: second arg is not a sequence", name));
+    CLEAN_RETURN_2(fn, xs,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "%s: second arg is not a sequence", name));
   exp_t *best = NULL;
   double bestk = 0;
   for (exp_t *cur = xseq; ispair(cur) && cur->content; cur = cur->next) {
@@ -3272,8 +3314,8 @@ exp_t *endswithcmd(exp_t *e, env_t *env) {
                     NULL, env, "(ends-with? s suffix): both strings");
   const char *ss = (const char *)exp_text(s), *pp = (const char *)exp_text(p);
   size_t sl = strlen(ss), pl = strlen(pp);
-  exp_t *ret = (pl <= sl && memcmp(ss + sl - pl, pp, pl) == 0) ? TRUE_EXP
-                                                               : NIL_EXP;
+  exp_t *ret =
+      (pl <= sl && memcmp(ss + sl - pl, pp, pl) == 0) ? TRUE_EXP : NIL_EXP;
   CLEAN_RETURN_2(s, p, refexp(ret));
 }
 
@@ -3289,8 +3331,9 @@ exp_t *stringrepeatcmd(exp_t *e, env_t *env) {
   size_t sl = strlen(ss);
   int64_t n = FIX_VAL(nexp);
   if (n > 0 && sl > (size_t)(64 * 1024 * 1024) / (size_t)n)
-    CLEAN_RETURN_2(s, nexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                                  "string-repeat: result too large"));
+    CLEAN_RETURN_2(s, nexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "string-repeat: result too large"));
   char *out = memalloc(sl * (size_t)n + 1, 1);
   for (int64_t i = 0; i < n; i++)
     memcpy(out + (size_t)i * sl, ss, sl);
@@ -3300,8 +3343,7 @@ exp_t *stringrepeatcmd(exp_t *e, env_t *env) {
 
 /* shared engine for string-pad-left / string-pad-right. Width counts
    CODEPOINTS (what (length s) returns), so padded columns line up. */
-static exp_t *alc_string_pad(exp_t *e, env_t *env, int left,
-                             const char *name) {
+static exp_t *alc_string_pad(exp_t *e, env_t *env, int left, const char *name) {
   EVAL_ARG_2(s, nexp);
   exp_t *padexp = NIL_EXP;
   if (e->next && e->next->next && e->next->next->next)
@@ -3339,11 +3381,12 @@ static exp_t *alc_string_pad(exp_t *e, env_t *env, int left,
   }
   int64_t add = want - have;
   /* width is user-supplied; bound the fill so add*padlen can't overflow the
-     size_t alloc (padlen<=4). Mirrors string-repeat's "result too large" cap. */
+     size_t alloc (padlen<=4). Mirrors string-repeat's "result too large" cap.
+   */
   if (add > (int64_t)(64 * 1024 * 1024))
-    CLEAN_RETURN_3(s, nexp, padexp,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "%s: result too large", name));
+    CLEAN_RETURN_3(
+        s, nexp, padexp,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "%s: result too large", name));
   size_t sl = strlen(ss);
   char *out = memalloc(sl + (size_t)add * (size_t)padlen + 1, 1);
   size_t o = 0;

@@ -386,7 +386,8 @@ __attribute__((unused)) static uint32_t arm64_fcmp_d_zero(int dn) {
    the 61-bit range — (src<<3)>>3 == src, else the shift dropped high bits.
    (ADDS with a shifted operand can't be used: the barrel shifter computes
    src<<3 mod 2^64 before the add, so 0+X never sets V.) Uses x9 as scratch
-   (caller-saved); reserves a B.NE slot at `ovf_slot` to patch toward deopt_pc. */
+   (caller-saved); reserves a B.NE slot at `ovf_slot` to patch toward deopt_pc.
+ */
 #define ARM64_EMIT_RETAG_RET_CK(src_reg, ovf_slot)                             \
   do {                                                                         \
     out[n++] = arm64_lsl_imm(0, (src_reg), 3); /* x0 = src<<3 */               \
@@ -933,7 +934,7 @@ static int try_jit_float_series_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   int loop_top = n;
   out[n++] = arm64_asr_imm(2, 1, 3); /* x2 = k (untagged) */
   patch_div1 = n;
-  out[n++] = 0;                     /* cbz x2,deopt_framed (k != 0) */
+  out[n++] = 0;                         /* cbz x2,deopt_framed (k != 0) */
   out[n++] = arm64_scvtf_d_x(2, 2);     /* d2 = (double)k (x2 preserved) */
   out[n++] = arm64_fdiv_d(3, 1, 2);     /* d3 = N1/k */
   out[n++] = arm64_add_imm(2, 2, off2); /* x2 = k+OFF2 */
@@ -969,7 +970,8 @@ static int try_jit_float_series_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_ldp_post_sp(29, 30, 32);
   out[n++] = arm64_ret();
 
-  /* deopt_framed: a tag/type/divisor guard failed after the frame was set up. */
+  /* deopt_framed: a tag/type/divisor guard failed after the frame was set up.
+   */
   int deopt_framed_pc = n;
   out[n++] = arm64_ldp_off_sp(19, 20, 16);
   out[n++] = arm64_ldp_post_sp(29, 30, 32);
@@ -1009,7 +1011,8 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   if (!numloop_analyze(bc, &nl))
     return 0;
   if (nl.nislots > 1)
-    return 0; /* float-box guard uses x9/x10; one int home (x1) keeps it simple */
+    return 0; /* float-box guard uses x9/x10; one int home (x1) keeps it simple
+               */
   /* arm64 budget: float homes+temps over d0-d7 + d16-d31 = 24 caller-saved. */
   if (nl.nfslots + nl.max_ftmp > 24 || nl.nislots + nl.max_itmp > 4)
     return 0;
@@ -1017,7 +1020,8 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   int ncode = bc->ncode, np = nl.nparams;
   const int ipool[4] = {1, 2, 3, 4}; /* x1 = counter home; x2-x4 int temps */
   int toff = (int)offsetof(exp_t, type), foff = (int)offsetof(exp_t, f);
-#define DFR(v) ((v) < 8 ? (v) : (v) + 8) /* float vreg → d-reg (skip d8-d15) */
+/* float vreg → d-reg (skip the callee-saved d8-d15) */
+#define DFR(v) ((v) < 8 ? (v) : (v) + 8)
 
   /* Emit into a generous local buffer; copy out only if it fits insns[128]. */
   uint32_t local[2048];
@@ -1026,7 +1030,7 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
 
   int framed = nl.float_result;
   int n = 0;
-  int dj0[64], ndj0 = 0; /* pre-frame deopt (b.cond/cbz/tbz placeholders) */
+  int dj0[64], ndj0 = 0;  /* pre-frame deopt (b.cond/cbz/tbz placeholders) */
   int djf[300], ndjf = 0; /* framed deopt (div-by-0) */
 #define DJ0(t_at) (dj0[ndj0++] = (t_at))
 #define DJF(t_at) (djf[ndjf++] = (t_at))
@@ -1038,7 +1042,7 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
       int hr = ipool[nl.iidx[s]];
       out[n++] = arm64_ldr_imm(hr, 0, off);
       dj0[ndj0++] = n;
-      out[n++] = 0;                       /* tbz hr,#0,deopt0 (not fixnum) */
+      out[n++] = 0;                        /* tbz hr,#0,deopt0 (not fixnum) */
       out[n++] = arm64_asr_imm(hr, hr, 3); /* untag */
     } else {
       int hd = DFR(nl.fidx[s]);
@@ -1047,11 +1051,11 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
       dj0[ndj0++] = n;
       out[n++] = 0; /* cbnz x10,deopt0 (not a pointer) */
       dj0[ndj0++] = n;
-      out[n++] = 0;                        /* cbz x9,deopt0 (null) */
+      out[n++] = 0; /* cbz x9,deopt0 (null) */
       out[n++] = arm64_ldrh_imm(10, 9, toff);
       out[n++] = arm64_cmp_imm(10, EXP_FLOAT);
       dj0[ndj0++] = n;
-      out[n++] = 0;                          /* b.ne deopt0 */
+      out[n++] = 0;                            /* b.ne deopt0 */
       out[n++] = arm64_ldr_d_imm(hd, 9, foff); /* home = box->f */
     }
   }
@@ -1086,9 +1090,11 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
     case OP_LOAD_SLOT: {
       uint8_t s = c[pc + 1];
       if (nl.slot_class[s] == NLC_FLOAT)
-        out[n++] = arm64_fmov_d_d(DFR(nl_freg(st, d, nl.nfslots)), DFR(nl.fidx[s]));
+        out[n++] =
+            arm64_fmov_d_d(DFR(nl_freg(st, d, nl.nfslots)), DFR(nl.fidx[s]));
       else
-        out[n++] = arm64_mov_reg(ipool[nl_ireg(st, d, nl.nislots)], ipool[nl.iidx[s]]);
+        out[n++] =
+            arm64_mov_reg(ipool[nl_ireg(st, d, nl.nislots)], ipool[nl.iidx[s]]);
       break;
     }
     case OP_LOAD_CONST: {
@@ -1118,7 +1124,8 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
       int ra = DFR(nl_freg(st, d - 2, nl.nfslots)),
           rb = DFR(nl_freg(st, d - 1, nl.nfslots));
       if (op == OP_DIV) {
-        out[n++] = arm64_fcmp_d_zero(rb); /* divisor ±0 → deopt (NaN→fdiv=NaN) */
+        out[n++] =
+            arm64_fcmp_d_zero(rb); /* divisor ±0 → deopt (NaN→fdiv=NaN) */
         djf[ndjf++] = n;
         out[n++] = 0; /* b.eq deopt_framed */
       }
@@ -1281,12 +1288,14 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[n++] = arm64_movz(0, 0, 0);
   out[n++] = arm64_ret();
 
-  /* patch entry guards: order in dj0 follows emission (tbz / cbnz / cbz / b.ne) */
+  /* patch entry guards: order in dj0 follows emission (tbz / cbnz / cbz / b.ne)
+   */
   /* Re-emit the entry guard branches now that deopt0_pc is known. We stored the
      instruction slots; reconstruct each by its kind from the opcode position is
-     awkward, so we patch by the known guard pattern: every dj0 slot is a forward
-     branch to deopt0. Distinguish by re-deriving from the saved slot's intended
-     kind isn't tracked — instead we encoded placeholders; fill them per-kind: */
+     awkward, so we patch by the known guard pattern: every dj0 slot is a
+     forward branch to deopt0. Distinguish by re-deriving from the saved slot's
+     intended kind isn't tracked — instead we encoded placeholders; fill them
+     per-kind: */
   /* (handled inline below) */
   for (int i = 0; i < ndjf; i++)
     out[djf[i]] = arm64_b_cond(0 /*EQ*/, deoptf_pc - djf[i]);
@@ -1593,14 +1602,14 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
   int loop_top = n;
   out[n++] = arm64_cmp_imm(1, (int)K1);
   int patch_done = n;
-  out[n++] = 0;                  /* b.<exit_cc> done */
+  out[n++] = 0; /* b.<exit_cc> done */
   /* acc *= n (untagged). Detect int64 overflow of the product via SMULH (high
      bits must be the sign-extension of the low bits); the 2^60..2^63 band is
      caught at the checked re-tag below. */
-  out[n++] = arm64_smulh(9, 2, 1);          /* x9 = high(acc*n) */
-  out[n++] = arm64_mul(2, 2, 1);            /* x2 = low(acc*n)  */
-  out[n++] = arm64_cmp_reg_asr(9, 2, 63);   /* high == sext(low)? */
-  int ovf_mul = n++;                        /* reserve B.NE deopt */
+  out[n++] = arm64_smulh(9, 2, 1);        /* x9 = high(acc*n) */
+  out[n++] = arm64_mul(2, 2, 1);          /* x2 = low(acc*n)  */
+  out[n++] = arm64_cmp_reg_asr(9, 2, 63); /* high == sext(low)? */
+  int ovf_mul = n++;                      /* reserve B.NE deopt */
   if (step_op == OP_SLOT_SUB_FIX)
     out[n++] = arm64_sub_imm(1, 1, k2_abs);
   else
@@ -2805,7 +2814,8 @@ int jit_compile(bytecode_t *bc) {
       insns[n++] = arm64_ldr_imm(0, 0, slot_off);
       int patch_tbz = n;
       insns[n++] = 0; /* tbz x0,#0,deopt */
-      /* ADDS/SUBS so a tagged result outside the 61-bit range sets V -> deopt. */
+      /* ADDS/SUBS so a tagged result outside the 61-bit range sets V -> deopt.
+       */
       insns[n++] = (c[5] == OP_ADD) ? arm64_adds_imm(0, 0, delta)
                                     : arm64_subs_imm(0, 0, delta);
       int patch_ovf = n;

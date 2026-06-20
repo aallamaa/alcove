@@ -705,11 +705,11 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
   exp_t *retvar;
   exp_t *curval = val;
   /* Name the callee in arity errors. e is the call form (name args...); its
-     operator is a symbol for a named call, a fn literal for an anonymous one. */
-  const char *fname =
-      (e && is_ptr(e->content) && issymbol(e->content))
-          ? (const char *)exp_text(e->content)
-          : "function";
+     operator is a symbol for a named call, a fn literal for an anonymous one.
+   */
+  const char *fname = (e && is_ptr(e->content) && issymbol(e->content))
+                          ? (const char *)exp_text(e->content)
+                          : "function";
 
   /* Empty params `()` are represented by nil_singleton — a pair with
      NULL content/next. Without the content check, the loop would enter
@@ -803,8 +803,8 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
         return dv;
       var2env_bind((char *)exp_text(car(curvar->content)), dv, env);
     } else
-      return error(ERROR_MISSING_PARAMETER, e, env,
-                   "too few arguments to %s", fname);
+      return error(ERROR_MISSING_PARAMETER, e, env, "too few arguments to %s",
+                   fname);
     curvar = curvar->next;
   }
   /* Leftover args = too many (a fixed-arity callee with no rest param). The
@@ -812,8 +812,8 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
      with args remaining is a genuine arity error — matches the compiled path
      (vm_invoke_values), which already rejects this. */
   if (curval && curval->content)
-    return error(ERROR_MISSING_PARAMETER, e, env,
-                 "too many arguments to %s", fname);
+    return error(ERROR_MISSING_PARAMETER, e, env, "too many arguments to %s",
+                 fname);
   return NULL;
 }
 /* Build a tail-call trampoline marker. Args are evaluated in env (the

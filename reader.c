@@ -96,7 +96,8 @@ exp_t *make_atom_from_token(token_t *token) {
       const char *dd = nd + 1, *de = dd;
       while (*de >= '0' && *de <= '9')
         de++;
-      if (de > dd && *de == '\0') { /* exactly digits/digits, nothing trailing */
+      if (de > dd &&
+          *de == '\0') { /* exactly digits/digits, nothing trailing */
         errno = 0;
         long long n = strtoll(p, NULL, 10);
         long long d = strtoll(dd, NULL, 10);
@@ -223,7 +224,8 @@ static exp_t *callmacrochar_inner(FILE *stream, unsigned char x) {
   if (x == '(') {
     /* Source line+column of the '(' (already consumed; RGETC advanced one past
        it, so the column sits one back). Stamped into the list head pair's meta
-       below when line-tracking is on — feeds precise error locations + debugger. */
+       below when line-tracking is on — feeds precise error locations +
+       debugger. */
     int form_ln = g_track_lines ? g_reader_line : 0;
     int form_cl = g_track_lines ? (g_reader_col > 1 ? g_reader_col - 1 : 1) : 0;
     vnode = reader(stream, ')', 0);
@@ -445,9 +447,11 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
        leading whitespace / blank lines). Comment paths below RE-ARM so the
        stamp lands on the first real token, not on a leading comment. The
        arm flag is set by the driver before each top-level reader() call. */
-    if (g_form_line_arm && !(x <= 255 && x >= 0 && (ISWHITESPACE & chrmap[x]))) {
+    if (g_form_line_arm &&
+        !(x <= 255 && x >= 0 && (ISWHITESPACE & chrmap[x]))) {
       g_form_line = g_reader_line;
-      /* RGETC already advanced past x, so x itself sits one column/byte back. */
+      /* RGETC already advanced past x, so x itself sits one column/byte back.
+       */
       g_form_col = g_reader_col > 1 ? g_reader_col - 1 : 1;
       g_form_line_arm = 0;
     }
@@ -479,7 +483,8 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
               while ((z = RGETC(stream)) != EOF && z != '\n')
                 ;
             if (clmacro == 0)
-              g_form_line_arm = 1; /* top-level `#` comment — re-arm next form */
+              g_form_line_arm =
+                  1; /* top-level `#` comment — re-arm next form */
             continue;
           }
           if (y == '\\') { // returning char

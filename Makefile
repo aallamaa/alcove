@@ -289,8 +289,8 @@ ASAN_BUILD := -fno-strict-aliasing -g -O1 -fsanitize=address,undefined \
 test-asan:
 	$(CC) -Wall -W $(ASAN_BUILD) $(MARCH) $(JIT_FLAGS) -o alcove_asan alcove.c \
 	  $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
-	$(CC) -Wall -W $(ASAN_BUILD) $(MARCH) $(JIT_FLAGS) -DALCOVE_ALS -o adder_asan \
-	  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(ASAN_BUILD) $(MARCH) $(JIT_FLAGS) -DALCOVE_ALS -DADFMT_NO_MAIN -o adder_asan \
+	  adder.c adfmt.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	@ok=1; \
 	for spec in "alcove_asan test.alc" "adder_asan test.adr"; do \
 	  set -- $$spec; bin=$$1; f=$$2; \
@@ -366,7 +366,7 @@ test-all:
 	for spec in $(ALS_SPECS); do \
 	  aname=$${spec%%:*}; aflags=$${spec#*:}; \
 	  printf '\n=== adder/%s (adder front end) ===\n' "$$aname"; \
-	  if $(CC) -Wall -W $(SAFE_FLAGS) $$aflags -o "$$abin" adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
+	  if $(CC) -Wall -W $(SAFE_FLAGS) $$aflags -DADFMT_NO_MAIN -o "$$abin" adder.c adfmt.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS) >"$$bld" 2>&1; then \
 	    res=$$("$$abin" --noload test.adr 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
 	    case "$$res" in \
 	      *" 0 failed") echo "  OK — $$res (test.adr)";; \
@@ -599,7 +599,7 @@ web:
 	  -sSTACK_SIZE=8388608 \
 	  -o web/alcove-core.js alcove.c -lm
 	$(EMCC) -O2 -Wall -W $(SAFE_FLAGS) \
-	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE \
+	  -DALCOVE_WEB=1 -UALCOVE_JIT -UALCOVE_FFI -UALCOVE_READLINE -DADFMT_NO_MAIN \
 	  -sNO_EXIT_RUNTIME=1 \
 	  -sALLOW_MEMORY_GROWTH=1 \
 	  -sMODULARIZE=1 \
@@ -608,7 +608,7 @@ web:
 	  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,addFunction,UTF8ToString \
 	  -sALLOW_TABLE_GROWTH=1 \
 	  -sSTACK_SIZE=8388608 \
-	  -o web/adder-core.js adder.c -lm
+	  -o web/adder-core.js adder.c adfmt.c -lm
 
 # Code-coverage SIGNAL for the hot path (evaluator / VM / JIT + core fragments).
 # alcove.c is one TU that #includes every fragment, so a single gcov-instrumented
@@ -633,7 +633,7 @@ coverage:
 	@rm -f alcove_cov
 
 clean:
-	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov
+	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov adfmt.o
 	rm -f *.gcno *.gcda *.gcov
 	rm -f web/alcove-core.js web/alcove-core.wasm web/adder-core.js web/adder-core.wasm
 

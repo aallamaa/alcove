@@ -6,8 +6,8 @@
  *
  * Semantics:
  *   slots[i] == NULL                      → never reached, end of probe
- *   slots[i] == S, S->val.load() == NULL  → soft-tombstone (deleted), keep probing
- *   slots[i] == S, S->val.load() != NULL  → live entry
+ *   slots[i] == S, S->val.load() == NULL  → soft-tombstone (deleted), keep
+ * probing slots[i] == S, S->val.load() != NULL  → live entry
  *
  * Slot records are allocated once on first insert for a key and never
  * freed except at lfkv_destroy. This avoids the cost of reallocating
@@ -112,8 +112,8 @@ int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, struct exp_t *val);
  * retired, new ref consumed), 0 on miss (neither ref touched).
  * `expected` and `new` may both be non-NULL; caller is responsible for
  * holding the right number of refs in the failure case. */
-int lfkv_cas(lfkv_t *kv, const char *k, size_t klen,
-             struct exp_t *expected, struct exp_t *new_val);
+int lfkv_cas(lfkv_t *kv, const char *k, size_t klen, struct exp_t *expected,
+             struct exp_t *new_val);
 
 /* Touch-if-current: if the key's current value pointer is still
  * `expected`, update its expiry and return 1 without changing the value
@@ -128,8 +128,8 @@ int lfkv_touch_if_value(lfkv_t *kv, const char *k, size_t klen,
  * caller's epoch window. If the callback wants to keep the value it
  * must refexp itself. Returning non-zero from the callback aborts
  * iteration. Iteration is NOT a consistent snapshot under writers. */
-typedef int (*lfkv_iter_fn)(const char *k, size_t klen,
-                            struct exp_t *val, int64_t expiry_us, void *ctx);
+typedef int (*lfkv_iter_fn)(const char *k, size_t klen, struct exp_t *val,
+                            int64_t expiry_us, void *ctx);
 void lfkv_foreach(lfkv_t *kv, lfkv_iter_fn cb, void *ctx);
 
 /* Sweep: walk slots, CAS-tombstone any with expiry_us > 0 && expiry <= now.

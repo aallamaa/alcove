@@ -12,9 +12,9 @@
  * to a STABLE, prose-independent symbol so errors are machine-dispatchable. */
 static const char *error_code_name(int errnum) {
   switch (errnum) {
-/* one `case CODE: return "name";` per ALC_ERRORS row (alcove.h). The 4 PARSING_*
-   rows each return "parse-error"; ERROR_CONT_ESCAPE isn't in the list, so it (and
-   any unknown code) hits the default. */
+/* one `case CODE: return "name";` per ALC_ERRORS row (alcove.h). The 4
+   PARSING_* rows each return "parse-error"; ERROR_CONT_ESCAPE isn't in the
+   list, so it (and any unknown code) hits the default. */
 #define X(name, anchor, codename)                                              \
   case name:                                                                   \
     return codename;
@@ -35,7 +35,8 @@ const char doc_error_code[] =
 exp_t *errorcodecmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *ret = NIL_EXP;
   if (e->next) {
-    a = EVAL(e->next->content, env); /* non-propagating: inspect, don't re-raise */
+    a = EVAL(e->next->content,
+             env); /* non-propagating: inspect, don't re-raise */
     if (a && iserror(a)) {
       const char *nm = error_code_name((int)a->flags);
       ret = make_symbol((char *)nm, (int)strlen(nm));
@@ -47,29 +48,32 @@ exp_t *errorcodecmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-/* Buffer growth + value rendering reuse alcove.c's str_buf_put / exp_to_string_buf
- * (in scope: this fragment is #included after their definitions). str_buf_put is
- * cap==0-safe, so the temp buffers below can start NULL/0 with no manual seeding. */
+/* Buffer growth + value rendering reuse alcove.c's str_buf_put /
+ * exp_to_string_buf (in scope: this fragment is #included after their
+ * definitions). str_buf_put is cap==0-safe, so the temp buffers below can start
+ * NULL/0 with no manual seeding. */
 
 /* ===== B. leveled logfmt logging ========================================== */
 
 /* Single source of truth: the level enum, the name table, and LOG_LEVEL_COUNT
    (so the parse loop's bound is derived, not a magic 4) all expand from one
    list — a level inserted in the middle can't desync the array. */
-#define ALC_LOG_LEVELS(X) X(LOG_DEBUG, "debug") X(LOG_INFO, "info")            \
-                          X(LOG_WARN, "warn") X(LOG_ERROR, "error")
+#define ALC_LOG_LEVELS(X)                                                      \
+  X(LOG_DEBUG, "debug")                                                        \
+  X(LOG_INFO, "info") X(LOG_WARN, "warn") X(LOG_ERROR, "error")
 enum {
 #define X(code, name) code,
   ALC_LOG_LEVELS(X)
 #undef X
-  LOG_LEVEL_COUNT
+      LOG_LEVEL_COUNT
 };
 static const char *const g_log_level_names[] = {
 #define X(code, name) name,
-  ALC_LOG_LEVELS(X)
+    ALC_LOG_LEVELS(X)
 #undef X
 };
-/* Threshold: messages below it are dropped. Atomic — set/read across reactors. */
+/* Threshold: messages below it are dropped. Atomic — set/read across reactors.
+ */
 static _Atomic int g_log_level = LOG_INFO;
 
 /* Parse a :keyword / symbol level name to its code, or -1 if unknown. */
@@ -145,7 +149,8 @@ static exp_t *log_emit(int level, exp_t *msgnode, env_t *env) {
   if (level < atomic_load_explicit(&g_log_level, memory_order_relaxed))
     return NIL_EXP; /* suppressed — no allocation, no I/O */
 
-  char *b = NULL; size_t n = 0, cap = 0;
+  char *b = NULL;
+  size_t n = 0, cap = 0;
   /* ts=<ISO8601 UTC, ms> */
   int64_t us = gettimeusec();
   time_t sec = (time_t)(us / 1000000);
@@ -158,34 +163,49 @@ static exp_t *log_emit(int level, exp_t *msgnode, env_t *env) {
   str_buf_put(&b, &n, &cap, "ts=", 3);
   str_buf_put(&b, &n, &cap, ts, k);
   str_buf_put(&b, &n, &cap, " level=", 7);
-  str_buf_put(&b, &n, &cap, g_log_level_names[level], strlen(g_log_level_names[level]));
+  str_buf_put(&b, &n, &cap, g_log_level_names[level],
+              strlen(g_log_level_names[level]));
 
   exp_t *cur = msgnode;
   if (cur) { /* MSG */
     exp_t *m = EVAL(cur->content, env);
-    if (m && iserror(m)) { free(b); return m; }
+    if (m && iserror(m)) {
+      free(b);
+      return m;
+    }
     str_buf_put(&b, &n, &cap, " msg=", 5);
     logfmt_value(&b, &n, &cap, m ? m : NIL_EXP);
-    if (m) unrefexp(m);
+    if (m)
+      unrefexp(m);
     cur = cur->next;
   }
   /* alternating key value … */
   while (cur) {
     exp_t *kx = EVAL(cur->content, env);
-    if (kx && iserror(kx)) { free(b); return kx; }
+    if (kx && iserror(kx)) {
+      free(b);
+      return kx;
+    }
     exp_t *vx = NIL_EXP;
     int have_v = 0;
     if (cur->next) {
       vx = EVAL(cur->next->content, env);
-      if (vx && iserror(vx)) { if (kx) unrefexp(kx); free(b); return vx; }
+      if (vx && iserror(vx)) {
+        if (kx)
+          unrefexp(kx);
+        free(b);
+        return vx;
+      }
       have_v = 1;
     }
     str_buf_put(&b, &n, &cap, " ", 1);
     logfmt_key(&b, &n, &cap, kx ? kx : NIL_EXP);
     str_buf_put(&b, &n, &cap, "=", 1);
     logfmt_value(&b, &n, &cap, have_v ? vx : NIL_EXP);
-    if (kx) unrefexp(kx);
-    if (have_v && vx) unrefexp(vx);
+    if (kx)
+      unrefexp(kx);
+    if (have_v && vx)
+      unrefexp(vx);
     cur = cur->next ? cur->next->next : NULL;
   }
   str_buf_put(&b, &n, &cap, "\n", 1);
@@ -199,15 +219,21 @@ static exp_t *log_emit(int level, exp_t *msgnode, env_t *env) {
 const char doc_log_emit[] =
     "(log! LEVEL MSG key val …) — emit a structured logfmt line to stderr when "
     "LEVEL (:debug/:info/:warn/:error) is at or above (log-level): "
-    "`ts=<ISO8601> level=<lvl> msg=<MSG> key=val …`. Below the threshold it does "
+    "`ts=<ISO8601> level=<lvl> msg=<MSG> key=val …`. Below the threshold it "
+    "does "
     "nothing and returns nil; otherwise returns the emitted line. Values with "
-    "spaces/=/\" are quoted. See (log-info), (set-log-level). (Named log! — log "
+    "spaces/=/\" are quoted. See (log-info), (set-log-level). (Named log! — "
+    "log "
     "is the natural logarithm.)";
 exp_t *logemitcmd(exp_t *e, env_t *env) {
   exp_t *lv = e->next ? EVAL(e->next->content, env) : NULL;
-  if (lv && iserror(lv)) { unrefexp(e); return lv; }
+  if (lv && iserror(lv)) {
+    unrefexp(e);
+    return lv;
+  }
   int level = log_level_of(lv);
-  if (lv) unrefexp(lv);
+  if (lv)
+    unrefexp(lv);
   if (level < 0)
     CLEAN_RETURN_1(NIL_EXP,
                    error(ERROR_ILLEGAL_VALUE, e, env,
@@ -220,7 +246,7 @@ exp_t *logemitcmd(exp_t *e, env_t *env) {
 /* (log-LEVEL MSG kvs…) convenience wrappers. */
 #define LOG_WRAP(cmd, lvl)                                                     \
   exp_t *cmd(exp_t *e, env_t *env) {                                           \
-    exp_t *ret = log_emit((lvl), e->next, env);                               \
+    exp_t *ret = log_emit((lvl), e->next, env);                                \
     unrefexp(e);                                                               \
     return ret;                                                                \
   }
@@ -281,12 +307,12 @@ static pthread_mutex_t g_metrics_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 /* Find or create a metric slot by name. The slot pointer is stable (the array
- * never moves), so callers may cache it and atomic-inc directly. This is never a
- * hot path — the RESP auto-metrics cache their pointers once at init and bump via
- * metric_bump; only init and the counter!/gauge! builtins call this — so it just
- * takes the lock and scans once. The release-store of g_metrics_n still publishes
- * a filled, immutable slot to the lock-free readers in (metric)/(metrics).
- * Returns NULL only if the table is full. */
+ * never moves), so callers may cache it and atomic-inc directly. This is never
+ * a hot path — the RESP auto-metrics cache their pointers once at init and bump
+ * via metric_bump; only init and the counter!/gauge! builtins call this — so it
+ * just takes the lock and scans once. The release-store of g_metrics_n still
+ * publishes a filled, immutable slot to the lock-free readers in
+ * (metric)/(metrics). Returns NULL only if the table is full. */
 static metric_t *metric_slot(const char *name) {
   metric_t *slot = NULL;
 #if !ALCOVE_SINGLE_THREADED
@@ -294,7 +320,10 @@ static metric_t *metric_slot(const char *name) {
 #endif
   int n = atomic_load_explicit(&g_metrics_n, memory_order_acquire);
   for (int i = 0; i < n; i++)
-    if (strcmp(g_metrics[i].name, name) == 0) { slot = &g_metrics[i]; break; }
+    if (strcmp(g_metrics[i].name, name) == 0) {
+      slot = &g_metrics[i];
+      break;
+    }
   if (!slot && n < METRIC_MAX) {
     snprintf(g_metrics[n].name, METRIC_NAME_MAX, "%s", name);
     atomic_store_explicit(&g_metrics[n].val, 0, memory_order_relaxed);
@@ -317,19 +346,21 @@ const char doc_counter_bang[] =
     "at 0 if new; returns the new value. Thread-safe. See (metrics).";
 exp_t *counterbangcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(nm, dv);
-  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_2(nm, dv, _alc_e), ERROR_ILLEGAL_VALUE,
-               e, env, "counter!: NAME must be a string");
+  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_2(nm, dv, _alc_e),
+               ERROR_ILLEGAL_VALUE, e, env, "counter!: NAME must be a string");
   int64_t d = 1;
   if (dv) {
     if (!isnumber(dv))
-      CLEAN_RETURN_2(nm, dv, error(ERROR_NUMBER_EXPECTED, e, env,
-                                   "counter!: n must be an integer"));
+      CLEAN_RETURN_2(nm, dv,
+                     error(ERROR_NUMBER_EXPECTED, e, env,
+                           "counter!: n must be an integer"));
     d = FIX_VAL(dv);
   }
   metric_t *s = metric_slot(exp_text(nm));
   if (!s)
-    CLEAN_RETURN_2(nm, dv, error(ERROR_ILLEGAL_VALUE, e, env,
-                                 "counter!: metric table full"));
+    CLEAN_RETURN_2(
+        nm, dv,
+        error(ERROR_ILLEGAL_VALUE, e, env, "counter!: metric table full"));
   int64_t v = atomic_fetch_add_explicit(&s->val, d, memory_order_relaxed) + d;
   CLEAN_RETURN_2(nm, dv, make_integeri(v));
 }
@@ -339,15 +370,17 @@ const char doc_gauge_bang[] =
     "returns v. Thread-safe. See (metrics).";
 exp_t *gaugebangcmd(exp_t *e, env_t *env) {
   EVAL_ARG_2(nm, vv);
-  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_2(nm, vv, _alc_e), ERROR_ILLEGAL_VALUE,
-               e, env, "gauge!: NAME must be a string");
+  REQUIRE_TYPE(nm, isstring, CLEAN_RETURN_2(nm, vv, _alc_e),
+               ERROR_ILLEGAL_VALUE, e, env, "gauge!: NAME must be a string");
   if (!vv || !isnumber(vv))
-    CLEAN_RETURN_2(nm, vv, error(ERROR_NUMBER_EXPECTED, e, env,
-                                 "gauge!: v must be an integer"));
+    CLEAN_RETURN_2(
+        nm, vv,
+        error(ERROR_NUMBER_EXPECTED, e, env, "gauge!: v must be an integer"));
   metric_t *s = metric_slot(exp_text(nm));
   if (!s)
-    CLEAN_RETURN_2(nm, vv, error(ERROR_ILLEGAL_VALUE, e, env,
-                                 "gauge!: metric table full"));
+    CLEAN_RETURN_2(
+        nm, vv,
+        error(ERROR_ILLEGAL_VALUE, e, env, "gauge!: metric table full"));
   atomic_store_explicit(&s->val, FIX_VAL(vv), memory_order_relaxed);
   CLEAN_RETURN_2(nm, vv, make_integeri(FIX_VAL(vv)));
 }
@@ -364,8 +397,8 @@ exp_t *metriccmd(exp_t *e, env_t *env) {
   exp_t *ret = NIL_EXP;
   for (int i = 0; i < n; i++)
     if (strcmp(g_metrics[i].name, name) == 0) {
-      ret = make_integeri(atomic_load_explicit(&g_metrics[i].val,
-                                               memory_order_relaxed));
+      ret = make_integeri(
+          atomic_load_explicit(&g_metrics[i].val, memory_order_relaxed));
       break;
     }
   CLEAN_RETURN_1(nm, ret);
@@ -373,7 +406,8 @@ exp_t *metriccmd(exp_t *e, env_t *env) {
 
 const char doc_metrics[] =
     "(metrics) — snapshot of all metrics as a plist of alternating "
-    "name(string) value(int): (\"resp.commands\" 12 \"my.count\" 3 …). Includes "
+    "name(string) value(int): (\"resp.commands\" 12 \"my.count\" 3 …). "
+    "Includes "
     "the RESP server's auto-counters (resp.connections/commands/errors) when a "
     "server is running.";
 exp_t *metricscmd(exp_t *e, env_t *env) {
@@ -386,7 +420,11 @@ exp_t *metricscmd(exp_t *e, env_t *env) {
     exp_t *vn = make_integeri(
         atomic_load_explicit(&g_metrics[i].val, memory_order_relaxed));
     exp_t *kc = make_node(kn), *vc = make_node(vn);
-    if (tail) { tail->next = kc; } else { head = kc; }
+    if (tail) {
+      tail->next = kc;
+    } else {
+      head = kc;
+    }
     kc->next = vc;
     tail = vc;
   }

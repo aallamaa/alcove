@@ -21,8 +21,7 @@ exp_t *getenvcmd(exp_t *e, env_t *env) {
   if (iserror(defexp))
     CLEAN_RETURN_1(nameexp, defexp);
   REQUIRE_TYPE(nameexp, isstring, CLEAN_RETURN_2(nameexp, defexp, _alc_e),
-               ERROR_ILLEGAL_VALUE, NULL, env,
-               "getenv: name must be a string");
+               ERROR_ILLEGAL_VALUE, NULL, env, "getenv: name must be a string");
   const char *v = getenv((const char *)exp_text(nameexp));
   exp_t *ret = v ? make_string((char *)v, (int)strlen(v)) : refexp(defexp);
   CLEAN_RETURN_2(nameexp, defexp, ret);
@@ -73,8 +72,7 @@ static exp_t *epr_common(exp_t *e, env_t *env, int newline) {
 const char doc_epr[] = "(epr x ...) — like pr, but to stderr (no colour).";
 exp_t *eprcmd(exp_t *e, env_t *env) { return epr_common(e, env, 0); }
 
-const char doc_eprn[] =
-    "(eprn x ...) — like prn, but to stderr (no colour).";
+const char doc_eprn[] = "(eprn x ...) — like prn, but to stderr (no colour).";
 exp_t *eprncmd(exp_t *e, env_t *env) { return epr_common(e, env, 1); }
 
 /* ---------- stdin ---------- */
@@ -117,9 +115,9 @@ exp_t *deletefilecmd(exp_t *e, env_t *env) {
   REQUIRE_TYPE(p, isstring, CLEAN_RETURN_1(p, _alc_e), ERROR_ILLEGAL_VALUE,
                NULL, env, "delete-file: path must be a string");
   if (remove((const char *)exp_text(p)) != 0)
-    CLEAN_RETURN_1(p, error(ERROR_ILLEGAL_VALUE, NULL, env,
-                            "delete-file: %s: %s", exp_text(p),
-                            strerror(errno)));
+    CLEAN_RETURN_1(p,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env, "delete-file: %s: %s",
+                         exp_text(p), strerror(errno)));
   CLEAN_RETURN_1(p, refexp(TRUE_EXP));
 }
 
@@ -199,7 +197,8 @@ exp_t *listdircmd(exp_t *e, env_t *env) {
   qsort(names, n, sizeof(char *), os_namecmp);
   exp_t *head = NULL, *tail = NULL;
   for (size_t i = 0; i < n; i++) {
-    list_append_owned(&head, &tail, make_string(names[i], (int)strlen(names[i])));
+    list_append_owned(&head, &tail,
+                      make_string(names[i], (int)strlen(names[i])));
     free(names[i]);
   }
   free(names);
@@ -241,8 +240,8 @@ exp_t *shellcmd(exp_t *e, env_t *env) {
                NULL, env, "shell: cmd must be a string");
   FILE *fp = popen((const char *)exp_text(c), "r");
   if (!fp)
-    CLEAN_RETURN_1(c, error(ERROR_ILLEGAL_VALUE, NULL, env, "shell: %s",
-                            strerror(errno)));
+    CLEAN_RETURN_1(
+        c, error(ERROR_ILLEGAL_VALUE, NULL, env, "shell: %s", strerror(errno)));
   size_t cap = 256, len = 0;
   char *buf = memalloc(cap, 1);
   size_t got;
@@ -257,7 +256,7 @@ exp_t *shellcmd(exp_t *e, env_t *env) {
     }
   }
   int status = pclose(fp);
-  int code = WIFEXITED(status)    ? WEXITSTATUS(status)
+  int code = WIFEXITED(status)     ? WEXITSTATUS(status)
              : WIFSIGNALED(status) ? 128 + WTERMSIG(status) /* sh convention */
                                    : -1;
   exp_t *ret = make_dict_exp();

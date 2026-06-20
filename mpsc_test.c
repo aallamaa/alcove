@@ -130,7 +130,8 @@ static int test_mpsc(void) {
   /* Per-producer monotonicity: within one producer, FIFO must hold
      since the queue is FIFO and the producer enqueues sequentially. */
   int last_seq[N_PRODUCERS];
-  for (int p = 0; p < N_PRODUCERS; p++) last_seq[p] = -1;
+  for (int p = 0; p < N_PRODUCERS; p++)
+    last_seq[p] = -1;
 
   int drained = 0;
   while (drained < N_TOTAL) {
@@ -159,7 +160,8 @@ static int test_mpsc(void) {
     /* Drain everything currently visible. */
     for (;;) {
       mpsc_node_t *n = mpsc_dequeue(&q);
-      if (!n) break;
+      if (!n)
+        break;
       work_t *w = (work_t *)n;
       if (w->producer_id < 0 || w->producer_id >= N_PRODUCERS) {
         fprintf(stderr, "test2: bad producer_id=%d\n", w->producer_id);
@@ -173,16 +175,17 @@ static int test_mpsc(void) {
       }
       size_t idx = (size_t)w->producer_id * N_PER_PRODUCER + w->seq;
       if (seen[idx]) {
-        fprintf(stderr, "test2: duplicate (p=%d, seq=%d)\n",
-                w->producer_id, w->seq);
+        fprintf(stderr, "test2: duplicate (p=%d, seq=%d)\n", w->producer_id,
+                w->seq);
         free(seen);
         return 1;
       }
       seen[idx] = 1;
       if (w->seq <= last_seq[w->producer_id]) {
-        fprintf(stderr,
-                "test2: out-of-order within producer p=%d (seq=%d <= last=%d)\n",
-                w->producer_id, w->seq, last_seq[w->producer_id]);
+        fprintf(
+            stderr,
+            "test2: out-of-order within producer p=%d (seq=%d <= last=%d)\n",
+            w->producer_id, w->seq, last_seq[w->producer_id]);
         free(seen);
         return 1;
       }
@@ -191,7 +194,8 @@ static int test_mpsc(void) {
     }
   }
 
-  for (int p = 0; p < N_PRODUCERS; p++) pthread_join(threads[p], NULL);
+  for (int p = 0; p < N_PRODUCERS; p++)
+    pthread_join(threads[p], NULL);
 
   /* Final sanity: all pairs seen. */
   for (size_t i = 0; i < (size_t)N_TOTAL; i++) {
@@ -202,7 +206,8 @@ static int test_mpsc(void) {
     }
   }
 
-  for (int p = 0; p < N_PRODUCERS; p++) free(args[p].items);
+  for (int p = 0; p < N_PRODUCERS; p++)
+    free(args[p].items);
   free(seen);
   alc_wake_destroy(&wake);
   printf("test2 MPSC %dp x %d items = %d drained: ok\n", N_PRODUCERS,
@@ -266,9 +271,12 @@ static int test_wake_roundtrip(void) {
 /* ============================================================ Main */
 
 int main(void) {
-  if (test_single_threaded()) return 1;
-  if (test_mpsc()) return 1;
-  if (test_wake_roundtrip()) return 1;
+  if (test_single_threaded())
+    return 1;
+  if (test_mpsc())
+    return 1;
+  if (test_wake_roundtrip())
+    return 1;
   printf("all mpsc tests passed\n");
   return 0;
 }

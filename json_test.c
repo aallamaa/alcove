@@ -97,24 +97,26 @@ static void test_roundtrip(void) {
   roundtrip_decode("  [1, 2]  ", mklist2(MAKE_FIX(1), MAKE_FIX(2)));
   roundtrip_decode("2.5", make_floatf(2.5));
   roundtrip_decode("1e3", make_floatf(1000.0));
-  roundtrip_decode("\"a\\u00e9b\"", make_string("a\xc3\xa9" "b", 4));
+  roundtrip_decode("\"a\\u00e9b\"", make_string("a\xc3\xa9"
+                                                "b",
+                                                4));
   /* astral plane via surrogate pair: U+1F600 → 4-byte UTF-8 */
-  roundtrip_decode("\"\\ud83d\\ude00\"",
-                   make_string("\xf0\x9f\x98\x80", 4));
+  roundtrip_decode("\"\\ud83d\\ude00\"", make_string("\xf0\x9f\x98\x80", 4));
 
   roundtrip_value(MAKE_FIX(0));
   roundtrip_value(MAKE_FIX(-123456789));
   roundtrip_value(make_floatf(3.141592653589793));
   roundtrip_value(make_floatf(-0.0));
-  roundtrip_value(make_string("with \"quotes\" \\ and\nnewline\tetc",
-                              (int)strlen("with \"quotes\" \\ and\nnewline\tetc")));
+  roundtrip_value(
+      make_string("with \"quotes\" \\ and\nnewline\tetc",
+                  (int)strlen("with \"quotes\" \\ and\nnewline\tetc")));
   roundtrip_value(refexp(TRUE_EXP));
   roundtrip_value(mklist2(MAKE_FIX(1), mklist2(MAKE_FIX(2), MAKE_FIX(3))));
 
   /* malformed inputs must fail cleanly */
-  const char *bad[] = {"",      "{",     "[1,",   "tru",    "01",   "-",
-                       "1.",    ".5",    "\"\\x\"", "\"\\u12\"", "[1 2]", "{1:2}",
-                       "nulll", "[]]",   "\"\xc3", "{\"a\"}", NULL};
+  const char *bad[] = {"",      "{",   "[1,",     "tru",       "01",    "-",
+                       "1.",    ".5",  "\"\\x\"", "\"\\u12\"", "[1 2]", "{1:2}",
+                       "nulll", "[]]", "\"\xc3",  "{\"a\"}",   NULL};
   for (int i = 0; bad[i]; i++) {
     size_t pos = 0;
     exp_t *d = js_decode(bad[i], strlen(bad[i]), &pos, 0);

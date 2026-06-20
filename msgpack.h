@@ -181,8 +181,8 @@ static exp_t *mp_decode_array(const uint8_t *b, size_t len, size_t *pos,
 }
 /* Decode `n` key/value pairs into a fresh dict (keys must be msgpack strings).
  */
-static exp_t *mp_decode_map(const uint8_t *b, size_t len, size_t *pos,
-                            size_t n, int depth) {
+static exp_t *mp_decode_map(const uint8_t *b, size_t len, size_t *pos, size_t n,
+                            int depth) {
   exp_t *dexp = make_dict_exp();
   dict_t *d = (dict_t *)dexp->ptr;
   for (size_t i = 0; i < n; i++) {
@@ -242,9 +242,9 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     return refexp(NIL_EXP); /* false → nil */
   case 0xc3:
     return refexp(TRUE_EXP); /* true → t */
-  case 0xcc: /* uint8 */
-  case 0xcd: /* uint16 */
-  case 0xce: /* uint32 */
+  case 0xcc:                 /* uint8 */
+  case 0xcd:                 /* uint16 */
+  case 0xce:                 /* uint32 */
   case 0xcf: /* uint64 (reinterpreted as int64) */ {
     int nb = (c == 0xcc) ? 1 : (c == 0xcd) ? 2 : (c == 0xce) ? 4 : 8;
     MP_NEED((size_t)nb);
@@ -285,7 +285,8 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
-    if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit attacker data */
+    if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit
+                           attacker data */
       return NULL;
     exp_t *s = make_string((char *)(b + *pos), (int)n);
     *pos += n;
@@ -298,7 +299,8 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
-    if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit attacker data */
+    if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit
+                           attacker data */
       return NULL;
     exp_t *bl = make_blob((char *)(b + *pos), n);
     *pos += n;

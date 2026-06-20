@@ -482,7 +482,8 @@ static int bc_oplen(uint8_t op) {
        interpreted (the handler stack trampolines and is not JIT-modeled). Do
        NOT change this to `return 3` — that would make try-bodies JIT-eligible.
        The bc_opname/bc_disasm_one twins DO name+size it (3) for correct
-       disassembly; this length oracle intentionally diverges for this one op. */
+       disassembly; this length oracle intentionally diverges for this one op.
+     */
     return 0;
   default:
     return 0; /* unknown / variable — matcher bails */
@@ -796,11 +797,11 @@ static int match_float_acc_loop(bytecode_t *bc,
      (def f (k acc) (if (<cmp> k LIM)
                         (f (k step= S) (+ acc (- (/ N1 k) (/ N2 (k + OFF2)))))
                         acc))
-   A telescoping reciprocal series (e.g. Leibniz π: (- (/ 4.0 k) (/ 4.0 (+ k 2)))
-   over k += 4). k is an integer counter slot, acc a float accumulator slot, LIM
-   a fixnum const, N1/N2 float consts, OFF2 a small int offset. Shares the
-   counter/accumulator skeleton and the `acc` exit arm with float_acc_loop; the
-   body adds the two divisions + counter-derived divisor. */
+   A telescoping reciprocal series (e.g. Leibniz π: (- (/ 4.0 k) (/ 4.0 (+ k
+   2))) over k += 4). k is an integer counter slot, acc a float accumulator
+   slot, LIM a fixnum const, N1/N2 float consts, OFF2 a small int offset. Shares
+   the counter/accumulator skeleton and the `acc` exit arm with float_acc_loop;
+   the body adds the two divisions + counter-derived divisor. */
 struct match_float_series_loop {
   uint8_t cmp_op, step_op;
   uint8_t cslot, aslot;
@@ -815,8 +816,8 @@ static int match_float_series_loop(bytecode_t *bc,
   if (bc->nparams != 2)
     return 0;
   uint8_t *c = bc->code;
-  int pc = 0, at_c, at_lim, at_step, at_a, at_n1, at_k, at_n2, at_step2, at_tail,
-                 at_a2;
+  int pc = 0, at_c, at_lim, at_step, at_a, at_n1, at_k, at_n2, at_step2,
+      at_tail, at_a2;
   uint8_t cmp_op, step_op, step2_op;
   BC_TAKE(at_c, OP_LOAD_SLOT);
   uint8_t cslot = BC_ARG(at_c, 0);
@@ -839,7 +840,7 @@ static int match_float_series_loop(bytecode_t *bc,
   BC_TAKE(at_k, OP_LOAD_SLOT); /* divisor 1 == k */
   if (BC_ARG(at_k, 0) != cslot)
     return 0;
-  BC_EAT(OP_DIV); /* N1 / k */
+  BC_EAT(OP_DIV);                /* N1 / k */
   BC_TAKE(at_n2, OP_LOAD_CONST); /* N2 */
   uint8_t n2_idx = BC_ARG(at_n2, 0);
   BC_TAKE_ANY(at_step2, step2_op); /* divisor 2 == k + OFF2 (non-mutating) */
@@ -1847,9 +1848,9 @@ static int match_predicate_cons_loop(bytecode_t *bc) {
    Value classes: INT (tagged fixnum → GPR) / FLOAT (unboxed double → xmm/d) /
    BOOL (a comparison result, produced then IMMEDIATELY consumed by BR_IF_*, so
    it never needs a register — the emitter fuses compare+branch). Slot types are
-   inferred (float consts force FLOAT; :f64 param hints seed FLOAT; the tail-self
-   back-edge unifies tail-arg classes into slot classes at a fixed point), then
-   GUARDED at entry — a wrong guess merely deopts to the VM. */
+   inferred (float consts force FLOAT; :f64 param hints seed FLOAT; the
+   tail-self back-edge unifies tail-arg classes into slot classes at a fixed
+   point), then GUARDED at entry — a wrong guess merely deopts to the VM. */
 #define NLC_INT 1
 #define NLC_FLOAT 2
 #define NLC_BOOL 3
@@ -1860,12 +1861,14 @@ typedef struct {
   uint8_t slot_class[ENV_INLINE_SLOTS]; /* NLC_INT / NLC_FLOAT per param slot */
   int nparams;
   int nfslots, nislots;       /* # float / # int slots */
-  int fidx[ENV_INLINE_SLOTS]; /* slot → float-home index (FLOAT slots), else -1 */
+  int fidx[ENV_INLINE_SLOTS]; /* slot → float-home index (FLOAT slots), else -1
+                               */
   int iidx[ENV_INLINE_SLOTS]; /* slot → int-home index (INT slots), else -1 */
   int8_t depth[NL_MAXPC];     /* stack depth before op @pc; -1 = unreached */
-  uint8_t scls[NL_MAXPC][NL_MAXSTK]; /* class of each stack entry before op @pc */
-  int max_ftmp, max_itmp;     /* peak operand-stack entries by class (reg budget) */
-  uint8_t float_result;       /* RET returns a FLOAT (needs frame + make_floatf) */
+  uint8_t scls[NL_MAXPC]
+              [NL_MAXSTK]; /* class of each stack entry before op @pc */
+  int max_ftmp, max_itmp; /* peak operand-stack entries by class (reg budget) */
+  uint8_t float_result;   /* RET returns a FLOAT (needs frame + make_floatf) */
 } numloop_t;
 
 /* Validate + type-infer + register-budget a numeric self-tail loop. All bail
@@ -1923,39 +1926,60 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
       switch (op) {
       case OP_LOAD_SLOT: {
         uint8_t s = c[pc + 1];
-        if (s >= np || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        if (s >= np || nd >= NL_MAXSTK) {
+          ok = 0;
+          goto stop;
+        }
         st[nd++] = nl->slot_class[s];
         break;
       }
       case OP_LOAD_CONST: {
         uint8_t ci = c[pc + 1];
-        if (ci >= bc->nconsts || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        if (ci >= bc->nconsts || nd >= NL_MAXSTK) {
+          ok = 0;
+          goto stop;
+        }
         exp_t *k = bc->consts[ci];
         uint8_t cl = isfloat(k) ? NLC_FLOAT : isnumber(k) ? NLC_INT : 0;
-        if (!cl) { ok = 0; goto stop; }
+        if (!cl) {
+          ok = 0;
+          goto stop;
+        }
         st[nd++] = cl;
         break;
       }
       case OP_LOAD_FIX:
-        if (nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        if (nd >= NL_MAXSTK) {
+          ok = 0;
+          goto stop;
+        }
         st[nd++] = NLC_INT;
         break;
       case OP_ADD:
       case OP_SUB:
       case OP_MUL:
       case OP_DIV: {
-        if (nd < 2) { ok = 0; goto stop; }
+        if (nd < 2) {
+          ok = 0;
+          goto stop;
+        }
         uint8_t b = st[nd - 1], a = st[nd - 2];
         if ((a != NLC_INT && a != NLC_FLOAT) ||
-            (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
+            (b != NLC_INT && b != NLC_FLOAT)) {
+          ok = 0;
+          goto stop;
+        }
         uint8_t r = (a == NLC_FLOAT || b == NLC_FLOAT) ? NLC_FLOAT : NLC_INT;
         /* First increment: only FLOAT arithmetic (int counter uses SLOT_*_FIX).
-           Pure-int +−×÷ → bail (only on the strict pass; phase 1 tolerates it so
-           slot classes can still promote via the tail-self fixed point). */
-        if (r == NLC_INT && strict) { ok = 0; goto stop; }
-        /* MIXED int/float operands (e.g. (* 3 x)): the emitter has no int→double
-           conversion — it would read the int GPR operand as an xmm. Bail; the VM
-           coerces correctly. (Settled only on the strict pass.) */
+           Pure-int +−×÷ → bail (only on the strict pass; phase 1 tolerates it
+           so slot classes can still promote via the tail-self fixed point). */
+        if (r == NLC_INT && strict) {
+          ok = 0;
+          goto stop;
+        }
+        /* MIXED int/float operands (e.g. (* 3 x)): the emitter has no
+           int→double conversion — it would read the int GPR operand as an xmm.
+           Bail; the VM coerces correctly. (Settled only on the strict pass.) */
         if (strict && r == NLC_FLOAT && (a != NLC_FLOAT || b != NLC_FLOAT)) {
           ok = 0;
           goto stop;
@@ -1968,14 +1992,20 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
       case OP_GT:
       case OP_LE:
       case OP_GE: {
-        if (nd < 2) { ok = 0; goto stop; }
+        if (nd < 2) {
+          ok = 0;
+          goto stop;
+        }
         uint8_t b = st[nd - 1], a = st[nd - 2];
         if ((a != NLC_INT && a != NLC_FLOAT) ||
-            (b != NLC_INT && b != NLC_FLOAT)) { ok = 0; goto stop; }
+            (b != NLC_INT && b != NLC_FLOAT)) {
+          ok = 0;
+          goto stop;
+        }
         /* MIXED int/float compare: the emitter picks int-cmp or float-cmp from
            pf_float = (either float) and reads BOTH operands accordingly, so a
-           mixed pair would read an int GPR as xmm (or vice versa). Bail — the VM
-           coerces. (Both-INT and both-FLOAT are fine.) */
+           mixed pair would read an int GPR as xmm (or vice versa). Bail — the
+           VM coerces. (Both-INT and both-FLOAT are fine.) */
         if (strict && ((a == NLC_FLOAT) != (b == NLC_FLOAT))) {
           ok = 0;
           goto stop;
@@ -1987,7 +2017,10 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
       case OP_SLOT_ADD_FIX:
       case OP_SLOT_SUB_FIX: {
         uint8_t s = c[pc + 1];
-        if (s >= np || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        if (s >= np || nd >= NL_MAXSTK) {
+          ok = 0;
+          goto stop;
+        }
         st[nd++] = nl->slot_class[s]; /* non-mutating: push slot±imm */
         break;
       }
@@ -1996,13 +2029,19 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
       case OP_SLOT_GT_FIX:
       case OP_SLOT_GE_FIX: {
         uint8_t s = c[pc + 1];
-        if (s >= np || nd >= NL_MAXSTK) { ok = 0; goto stop; }
+        if (s >= np || nd >= NL_MAXSTK) {
+          ok = 0;
+          goto stop;
+        }
         st[nd++] = NLC_BOOL;
         break;
       }
       case OP_BR_IF_FALSE:
       case OP_BR_IF_TRUE: {
-        if (nd < 1 || st[nd - 1] != NLC_BOOL) { ok = 0; goto stop; }
+        if (nd < 1 || st[nd - 1] != NLC_BOOL) {
+          ok = 0;
+          goto stop;
+        }
         nd -= 1;
         int16_t off = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
         target = pc + len + off;
@@ -2016,10 +2055,16 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
       }
       case OP_TAIL_SELF: {
         uint8_t n = c[pc + 1];
-        if (n != np || nd < n) { ok = 0; goto stop; }
+        if (n != np || nd < n) {
+          ok = 0;
+          goto stop;
+        }
         for (int i = 0; i < n; i++) {
           uint8_t ac = st[nd - n + i];
-          if (ac == NLC_BOOL) { ok = 0; goto stop; }
+          if (ac == NLC_BOOL) {
+            ok = 0;
+            goto stop;
+          }
           if (ac == NLC_FLOAT && nl->slot_class[i] != NLC_FLOAT) {
             nl->slot_class[i] = NLC_FLOAT;
             changed = 1;
@@ -2031,9 +2076,15 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
         break;
       }
       case OP_RET: {
-        if (nd < 1) { ok = 0; goto stop; }
+        if (nd < 1) {
+          ok = 0;
+          goto stop;
+        }
         uint8_t r = st[nd - 1];
-        if (r == NLC_BOOL) { ok = 0; goto stop; }
+        if (r == NLC_BOOL) {
+          ok = 0;
+          goto stop;
+        }
         if (r == NLC_FLOAT)
           nl->float_result = 1;
         nd -= 1;
@@ -2062,15 +2113,24 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
 #define NL_PROP(tpc)                                                           \
   do {                                                                         \
     int _t = (tpc);                                                            \
-    if (_t < 0 || _t >= ncode) { ok = 0; goto stop; }                          \
+    if (_t < 0 || _t >= ncode) {                                               \
+      ok = 0;                                                                  \
+      goto stop;                                                               \
+    }                                                                          \
     if (nl->depth[_t] < 0) {                                                   \
       nl->depth[_t] = nd;                                                      \
       for (int k = 0; k < nd; k++)                                             \
-        nl->scls[_t][k] = st[k];                                              \
+        nl->scls[_t][k] = st[k];                                               \
     } else {                                                                   \
-      if (nl->depth[_t] != nd) { ok = 0; goto stop; }                          \
+      if (nl->depth[_t] != nd) {                                               \
+        ok = 0;                                                                \
+        goto stop;                                                             \
+      }                                                                        \
       for (int k = 0; k < nd; k++)                                             \
-        if (nl->scls[_t][k] != st[k]) { ok = 0; goto stop; }                  \
+        if (nl->scls[_t][k] != st[k]) {                                        \
+          ok = 0;                                                              \
+          goto stop;                                                           \
+        }                                                                      \
     }                                                                          \
   } while (0)
       if (fall)

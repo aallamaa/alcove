@@ -240,7 +240,7 @@ static exp_t *set_copy_exp(exp_t *src) {
   dict_t *sd = (dict_t *)src->ptr;
   if (sd)
     DICT_FOREACH(sd, k, 0, 0)
-      set_insert_value(rd, k->val);
+  set_insert_value(rd, k->val);
   return ret;
 }
 
@@ -261,7 +261,7 @@ exp_t *setunioncmd(exp_t *e, env_t *env) {
   dict_t *bd = (dict_t *)b->ptr;
   if (bd)
     DICT_FOREACH(bd, k, 0, 0)
-      set_insert_value(rd, k->val);
+  set_insert_value(rd, k->val);
   CLEAN_RETURN_2(a, b, ret);
 }
 
@@ -278,8 +278,8 @@ exp_t *setintersectioncmd(exp_t *e, env_t *env) {
   dict_t *ad = (dict_t *)a->ptr;
   if (ad)
     DICT_FOREACH(ad, k, 0, 0)
-      if (set_contains_key(b, k->key))
-        set_insert_value(rd, k->val);
+  if (set_contains_key(b, k->key))
+    set_insert_value(rd, k->val);
   CLEAN_RETURN_2(a, b, ret);
 }
 
@@ -296,8 +296,8 @@ exp_t *setdifferencecmd(exp_t *e, env_t *env) {
   dict_t *ad = (dict_t *)a->ptr;
   if (ad)
     DICT_FOREACH(ad, k, 0, 0)
-      if (!set_contains_key(b, k->key))
-        set_insert_value(rd, k->val);
+  if (!set_contains_key(b, k->key))
+    set_insert_value(rd, k->val);
   CLEAN_RETURN_2(a, b, ret);
 }
 
@@ -312,6 +312,6 @@ exp_t *setlistcmd(exp_t *e, env_t *env) {
   dict_t *d = (dict_t *)s->ptr;
   if (d)
     DICT_FOREACH(d, k, 0, 0)
-      list_append_owned(&ret, &tail, set_value_clone(k->val));
+  list_append_owned(&ret, &tail, set_value_clone(k->val));
   CLEAN_RETURN_1(s, ret);
 }

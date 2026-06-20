@@ -20,11 +20,11 @@
  * NOT use on reductions (vec-dot, vec-max, vec-argmax), whose accumulator is
  * carried across iterations and must not be reassociated without fast-math. */
 #if defined(__clang__)
-#  define VEC_SIMD _Pragma("clang loop vectorize(assume_safety)")
+#define VEC_SIMD _Pragma("clang loop vectorize(assume_safety)")
 #elif defined(__GNUC__)
-#  define VEC_SIMD _Pragma("GCC ivdep")
+#define VEC_SIMD _Pragma("GCC ivdep")
 #else
-#  define VEC_SIMD
+#define VEC_SIMD
 #endif
 /* ---------------- Vectors ----------------
    Mutable, O(1) random-access array. Storage layout:
@@ -76,8 +76,7 @@ static inline void vec_swap_storage(exp_t *vexp, alc_vec_t *old,
                                     alc_vec_t *new_v, unsigned newkind) {
   free(old);
   vexp->ptr = new_v;
-  vexp->flags =
-      (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | newkind);
+  vexp->flags = (unsigned short)((vexp->flags & ~VEC_KIND_MASK) | newkind);
 }
 
 exp_t *make_vector(int64_t n, exp_t *fill) {
@@ -670,43 +669,44 @@ exp_t *veccopycmd(exp_t *e, env_t *env) {
 
 /* Elementwise in-place binary op y[i] OP= x[i] over two equal-length vectors.
    The F64/F64 fast path uses the native ASSIGN_OP (SIMD-friendly); the generic
-   path reads/writes doubles with BIN_OP. The binary sibling of VEC_ACTIVATION. */
-#define VEC_BINOP_INPLACE(cmdname, docname, ASSIGN_OP, BIN_OP)                  \
+   path reads/writes doubles with BIN_OP. The binary sibling of VEC_ACTIVATION.
+ */
+#define VEC_BINOP_INPLACE(cmdname, docname, ASSIGN_OP, BIN_OP)                 \
   exp_t *cmdname(exp_t *e, env_t *env) {                                       \
     EVAL_ARG_2(yexp, xexp);                                                    \
     if (!isvector(yexp) || !isvector(xexp))                                    \
       CLEAN_RETURN_2(yexp, xexp,                                               \
                      error(ERROR_ILLEGAL_VALUE, e, env,                        \
                            "(" docname " y x): both must be vectors"));        \
-    int64_t ny = vec_len(yexp);                                               \
+    int64_t ny = vec_len(yexp);                                                \
     if (ny != vec_len(xexp))                                                   \
-      CLEAN_RETURN_2(yexp, xexp,                                               \
-                     error(ERROR_ILLEGAL_VALUE, e, env,                        \
-                           docname ": length mismatch"));                      \
+      CLEAN_RETURN_2(                                                          \
+          yexp, xexp,                                                          \
+          error(ERROR_ILLEGAL_VALUE, e, env, docname ": length mismatch"));    \
     VEC_REQUIRE_FLOAT_WRITABLE(yexp, docname,                                  \
                                CLEAN_RETURN_2(yexp, xexp, _alc_e));            \
-    int err = 0;                                                              \
-    if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {   \
-      double *ycells = VEC_F64_CELLS(yexp);                                   \
-      double *xcells = VEC_F64_CELLS(xexp);                                   \
-      VEC_SIMD                                                                \
-      for (int64_t i = 0; i < ny; i++)                                        \
-        ycells[i] ASSIGN_OP xcells[i];                                        \
-    } else {                                                                  \
-      for (int64_t i = 0; i < ny; i++) {                                      \
-        double yv = vec_read_double(yexp, i, &err);                           \
-        double xv = vec_read_double(xexp, i, &err);                           \
-        if (err)                                                              \
-          break;                                                             \
-        vec_write_double(yexp, i, yv BIN_OP xv);                              \
-      }                                                                       \
-    }                                                                         \
-    if (err)                                                                  \
-      CLEAN_RETURN_2(yexp, xexp,                                              \
-                     error(ERROR_NUMBER_EXPECTED, e, env,                     \
-                           docname ": non-numeric element"));                 \
-    exp_t *ret = refexp(yexp);                                                \
-    CLEAN_RETURN_2(yexp, xexp, ret);                                          \
+    int err = 0;                                                               \
+    if (vec_kind(yexp) == VEC_KIND_F64 && vec_kind(xexp) == VEC_KIND_F64) {    \
+      double *ycells = VEC_F64_CELLS(yexp);                                    \
+      double *xcells = VEC_F64_CELLS(xexp);                                    \
+      VEC_SIMD                                                                 \
+      for (int64_t i = 0; i < ny; i++)                                         \
+        ycells[i] ASSIGN_OP xcells[i];                                         \
+    } else {                                                                   \
+      for (int64_t i = 0; i < ny; i++) {                                       \
+        double yv = vec_read_double(yexp, i, &err);                            \
+        double xv = vec_read_double(xexp, i, &err);                            \
+        if (err)                                                               \
+          break;                                                               \
+        vec_write_double(yexp, i, yv BIN_OP xv);                               \
+      }                                                                        \
+    }                                                                          \
+    if (err)                                                                   \
+      CLEAN_RETURN_2(yexp, xexp,                                               \
+                     error(ERROR_NUMBER_EXPECTED, e, env,                      \
+                           docname ": non-numeric element"));                  \
+    exp_t *ret = refexp(yexp);                                                 \
+    CLEAN_RETURN_2(yexp, xexp, ret);                                           \
   }
 
 const char doc_vecadd[] = "(vec-add! y x) — in place y[i] += x[i]. Returns y.";
@@ -718,23 +718,25 @@ VEC_BINOP_INPLACE(vecaddcmd, "vec-add!", +=, +)
    (an escaped point whose z overflowed) compares false, so it stops counting,
    exactly matching a scalar escape loop. */
 const char doc_veccountle[] =
-    "(vec-count-le! count src limit) — in place count[i] += (src[i] <= limit ? 1 "
+    "(vec-count-le! count src limit) — in place count[i] += (src[i] <= limit ? "
+    "1 "
     ": 0), one SIMD pass (NaN src counts as 0). Returns count.";
 exp_t *veccountlecmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(cexp, sexp, limexp);
   if (!isvector(cexp) || !isvector(sexp))
-    CLEAN_RETURN_3(cexp, sexp, limexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(vec-count-le! count src limit): count, src vectors"));
+    CLEAN_RETURN_3(
+        cexp, sexp, limexp,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "(vec-count-le! count src limit): count, src vectors"));
   if (!isnumber(limexp) && !isfloat(limexp))
     CLEAN_RETURN_3(cexp, sexp, limexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "vec-count-le!: limit must be a number"));
   int64_t n = vec_len(cexp);
   if (n != vec_len(sexp))
-    CLEAN_RETURN_3(cexp, sexp, limexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "vec-count-le!: length mismatch"));
+    CLEAN_RETURN_3(
+        cexp, sexp, limexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "vec-count-le!: length mismatch"));
   double lim = isfloat(limexp) ? limexp->f : (double)FIX_VAL(limexp);
   VEC_REQUIRE_FLOAT_WRITABLE(cexp, "vec-count-le!",
                              CLEAN_RETURN_3(cexp, sexp, limexp, _alc_e));
@@ -893,7 +895,8 @@ exp_t *vecmaxcmd(exp_t *e, env_t *env) {
    fast-path (raw double loop, SIMD-vectorised where there's no transcendental
    call or loop-carried dependency) and a generic vec_read_double/write_double
    fallback for I64/GEN vectors. The in-place ops promote the target to F64 via
-   VEC_REQUIRE_FLOAT_WRITABLE; vec-min mirrors vec-max, vec-argmin vec-argmax. */
+   VEC_REQUIRE_FLOAT_WRITABLE; vec-min mirrors vec-max, vec-argmin vec-argmax.
+ */
 
 const char doc_vecmul[] = "(vec-mul! y x) — in place y[i] *= x[i] (Hadamard "
                           "product). Returns y.";
@@ -1008,29 +1011,30 @@ exp_t *vecargmincmd(exp_t *e, env_t *env) {
       CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,                  \
                                  "(" docname " v): not a vector"));            \
     VEC_REQUIRE_FLOAT_WRITABLE(vexp, docname, CLEAN_RETURN_1(vexp, _alc_e));   \
-    int err = 0;                                                              \
-    int64_t n = vec_len(vexp);                                                \
-    if (vec_kind(vexp) == VEC_KIND_F64) {                                     \
-      double *cells = VEC_F64_CELLS(vexp);                                    \
-      for (int64_t i = 0; i < n; i++) {                                       \
-        double x = cells[i];                                                  \
-        cells[i] = (fnexpr);                                                  \
-      }                                                                       \
-    } else {                                                                  \
-      for (int64_t i = 0; i < n; i++) {                                       \
-        double x = vec_read_double(vexp, i, &err);                            \
-        if (err)                                                              \
-          break;                                                             \
-        vec_write_double(vexp, i, (fnexpr));                                  \
-      }                                                                       \
-    }                                                                         \
-    if (err)                                                                  \
-      CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,               \
-                                 docname ": non-numeric element"));           \
-    exp_t *ret = refexp(vexp);                                                \
-    CLEAN_RETURN_1(vexp, ret);                                                \
+    int err = 0;                                                               \
+    int64_t n = vec_len(vexp);                                                 \
+    if (vec_kind(vexp) == VEC_KIND_F64) {                                      \
+      double *cells = VEC_F64_CELLS(vexp);                                     \
+      for (int64_t i = 0; i < n; i++) {                                        \
+        double x = cells[i];                                                   \
+        cells[i] = (fnexpr);                                                   \
+      }                                                                        \
+    } else {                                                                   \
+      for (int64_t i = 0; i < n; i++) {                                        \
+        double x = vec_read_double(vexp, i, &err);                             \
+        if (err)                                                               \
+          break;                                                               \
+        vec_write_double(vexp, i, (fnexpr));                                   \
+      }                                                                        \
+    }                                                                          \
+    if (err)                                                                   \
+      CLEAN_RETURN_1(vexp, error(ERROR_NUMBER_EXPECTED, e, env,                \
+                                 docname ": non-numeric element"));            \
+    exp_t *ret = refexp(vexp);                                                 \
+    CLEAN_RETURN_1(vexp, ret);                                                 \
   }
-const char doc_vecexp[] = "(vec-exp! v) — in place v[i] = exp(v[i]). Returns v.";
+const char doc_vecexp[] =
+    "(vec-exp! v) — in place v[i] = exp(v[i]). Returns v.";
 VEC_ACTIVATION(vecexpcmd, "vec-exp!", exp(x))
 const char doc_vecsigmoid[] =
     "(vec-sigmoid! v) — in place v[i] = 1/(1+exp(-v[i])). Returns v.";
@@ -1047,7 +1051,8 @@ exp_t *vecsoftmaxcmd(exp_t *e, env_t *env) {
   if (!isvector(vexp))
     CLEAN_RETURN_1(vexp, error(ERROR_ILLEGAL_VALUE, e, env,
                                "(vec-softmax! v): not a vector"));
-  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-softmax!", CLEAN_RETURN_1(vexp, _alc_e));
+  VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-softmax!",
+                             CLEAN_RETURN_1(vexp, _alc_e));
   int64_t n = vec_len(vexp);
   if (n == 0) { /* softmax of nothing is a no-op */
     exp_t *ret = refexp(vexp);
@@ -1158,8 +1163,9 @@ exp_t *matveccmd(exp_t *e, env_t *env) {
   }
   if (err) {
     unrefexp(out);
-    CLEAN_RETURN_2(aexp, xexp, error(ERROR_NUMBER_EXPECTED, e, env,
-                                     "mat-vec: non-numeric element"));
+    CLEAN_RETURN_2(
+        aexp, xexp,
+        error(ERROR_NUMBER_EXPECTED, e, env, "mat-vec: non-numeric element"));
   }
   CLEAN_RETURN_2(aexp, xexp, out);
 }
@@ -1220,9 +1226,9 @@ exp_t *matvecbangcmd(exp_t *e, env_t *env) {
     }
   }
   if (err)
-    CLEAN_RETURN_4(outexp, aexp, xexp, bexp,
-                   error(ERROR_NUMBER_EXPECTED, e, env,
-                         "mat-vec!: non-numeric element"));
+    CLEAN_RETURN_4(
+        outexp, aexp, xexp, bexp,
+        error(ERROR_NUMBER_EXPECTED, e, env, "mat-vec!: non-numeric element"));
   exp_t *ret = refexp(outexp);
   CLEAN_RETURN_4(outexp, aexp, xexp, bexp, ret);
 }
@@ -1303,9 +1309,10 @@ exp_t *vecgercmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_3(aexp, alphaexp, uexp, vexp);
   if (!isvector(aexp) || !(isnumber(alphaexp) || isfloat(alphaexp)) ||
       !isvector(uexp) || !isvector(vexp))
-    CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(vec-ger! A alpha u v): A,u,v vecs and alpha scalar"));
+    CLEAN_RETURN_4(
+        aexp, alphaexp, uexp, vexp,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "(vec-ger! A alpha u v): A,u,v vecs and alpha scalar"));
   int64_t alen = vec_len(aexp), m = vec_len(uexp), n = vec_len(vexp);
   if (m <= 0 || n <= 0 || alen != m * n)
     CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp,
@@ -1314,8 +1321,8 @@ exp_t *vecgercmd(exp_t *e, env_t *env) {
                          "(len u)=%lld * (len v)=%lld",
                          (long long)alen, (long long)m, (long long)n));
   double alpha = isfloat(alphaexp) ? alphaexp->f : (double)FIX_VAL(alphaexp);
-  VEC_REQUIRE_FLOAT_WRITABLE(aexp, "vec-ger!",
-                             CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp, _alc_e));
+  VEC_REQUIRE_FLOAT_WRITABLE(
+      aexp, "vec-ger!", CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp, _alc_e));
   int err = 0;
   if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(uexp) == VEC_KIND_F64 &&
       vec_kind(vexp) == VEC_KIND_F64) {
@@ -1334,14 +1341,15 @@ exp_t *vecgercmd(exp_t *e, env_t *env) {
       double au = alpha * vec_read_double(uexp, i, &err);
       for (int64_t j = 0; j < n; j++) {
         double a = vec_read_double(aexp, i * n + j, &err);
-        vec_write_double(aexp, i * n + j, a + au * vec_read_double(vexp, j, &err));
+        vec_write_double(aexp, i * n + j,
+                         a + au * vec_read_double(vexp, j, &err));
       }
     }
   }
   if (err)
-    CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp,
-                   error(ERROR_NUMBER_EXPECTED, e, env,
-                         "vec-ger!: non-numeric element"));
+    CLEAN_RETURN_4(
+        aexp, alphaexp, uexp, vexp,
+        error(ERROR_NUMBER_EXPECTED, e, env, "vec-ger!: non-numeric element"));
   exp_t *ret = refexp(aexp);
   CLEAN_RETURN_4(aexp, alphaexp, uexp, vexp, ret);
 }
@@ -1374,7 +1382,7 @@ exp_t *vecfromblobcmd(exp_t *e, env_t *env) {
                          "%lld bytes",
                          (long long)off, (long long)(off + n),
                          (long long)bb->len));
-  double scale = !has_scale  ? 1.0
+  double scale = !has_scale      ? 1.0
                  : isfloat(sexp) ? sexp->f
                                  : (double)FIX_VAL(sexp);
   VEC_REQUIRE_FLOAT_WRITABLE(vexp, "vec-from-blob!",
@@ -1414,20 +1422,21 @@ exp_t *matmulcmd(exp_t *e, env_t *env) {
                          (long long)k, (long long)alen, (long long)blen));
   int64_t m = alen / k, n = blen / k;
   exp_t *zero = make_floatf(0.0);
-  exp_t *out = make_vector(m * n, zero); /* zero-initialised — accumulated into */
+  exp_t *out =
+      make_vector(m * n, zero); /* zero-initialised — accumulated into */
   unrefexp(zero);
   if (!out)
     CLEAN_RETURN_3(aexp, bexp, kexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
-                         "mat-mul: result %lldx%lld too large",
-                         (long long)m, (long long)n));
+                         "mat-mul: result %lldx%lld too large", (long long)m,
+                         (long long)n));
   int err = 0;
   double *C = VEC_F64_CELLS(out);
   if (vec_kind(aexp) == VEC_KIND_F64 && vec_kind(bexp) == VEC_KIND_F64) {
     double *A = VEC_F64_CELLS(aexp);
     double *B = VEC_F64_CELLS(bexp);
-    /* i,p,j order: the inner j loop is C[i*n+..] += aip*B[p*n+..] — a contiguous
-       axpy that vectorises; C was zero-initialised above. */
+    /* i,p,j order: the inner j loop is C[i*n+..] += aip*B[p*n+..] — a
+       contiguous axpy that vectorises; C was zero-initialised above. */
     for (int64_t i = 0; i < m; i++) {
       double *crow = C + i * n;
       const double *arow = A + i * k;
@@ -1452,8 +1461,9 @@ exp_t *matmulcmd(exp_t *e, env_t *env) {
   }
   if (err) {
     unrefexp(out);
-    CLEAN_RETURN_3(aexp, bexp, kexp, error(ERROR_NUMBER_EXPECTED, e, env,
-                                           "mat-mul: non-numeric element"));
+    CLEAN_RETURN_3(
+        aexp, bexp, kexp,
+        error(ERROR_NUMBER_EXPECTED, e, env, "mat-mul: non-numeric element"));
   }
   CLEAN_RETURN_3(aexp, bexp, kexp, out);
 }

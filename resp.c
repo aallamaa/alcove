@@ -43,7 +43,7 @@
 #if defined(__linux__)
 #include <sys/epoll.h>
 #define RESP_HAVE_EPOLL 1
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) ||    \
     defined(__NetBSD__) || defined(__DragonFly__)
 #include <sys/event.h>
 #define RESP_HAVE_KQUEUE 1
@@ -132,10 +132,10 @@ static lfkv_t *g_resp_kv = NULL;
 #define RESP_KV_DEFAULT_SLOTS (1u << 20)
 #define resp_kv (current_shard->kv)
 /* _Atomic int (not volatile sig_atomic_t): the SIGINT handler writes it on one
-   thread while every reactor reads it in its loop — sig_atomic_t is the C signal
-   idiom but TSan (rightly, for the multi-thread case) flags the cross-thread
-   access as a race. A lock-free _Atomic makes the plain reads/writes below
-   atomic (C11) and async-signal-safe in the handler. */
+   thread while every reactor reads it in its loop — sig_atomic_t is the C
+   signal idiom but TSan (rightly, for the multi-thread case) flags the
+   cross-thread access as a race. A lock-free _Atomic makes the plain
+   reads/writes below atomic (C11) and async-signal-safe in the handler. */
 static _Atomic int resp_stop = 0;
 static _Atomic int64_t resp_last_sweep_us = 0;
 /* Auto-instrumentation: cached metric slots (registry lives in builtins_log.h,
@@ -153,7 +153,8 @@ static int resp_active_port = 0;
 
 static void resp_sigint(int sig) {
   (void)sig;
-  int saved = errno; /* a handler must not perturb the interrupted thread's errno */
+  int saved =
+      errno; /* a handler must not perturb the interrupted thread's errno */
   resp_stop = 1;
   errno = saved;
 }
@@ -180,7 +181,8 @@ static void resp_kv_ensure(void) {
     /* Mirror the global into the TLS shard pointer once per shard. Use the
        atomically-loaded value, never a second raw read of g_resp_kv (which
        would race a concurrent CAS-write under --threads — TSan-flagged). */
-    if (!current_shard->kv) current_shard->kv = cur;
+    if (!current_shard->kv)
+      current_shard->kv = cur;
     return;
   }
   size_t slots = RESP_KV_DEFAULT_SLOTS;
@@ -188,10 +190,12 @@ static void resp_kv_ensure(void) {
   if (env) {
     char *e;
     unsigned long v = strtoul(env, &e, 10);
-    if (*e == '\0' && v && (v & (v - 1)) == 0) slots = v;
+    if (*e == '\0' && v && (v & (v - 1)) == 0)
+      slots = v;
   }
   lfkv_t *fresh = lfkv_new(slots);
-  if (!fresh) return;
+  if (!fresh)
+    return;
   lfkv_t *expected = NULL;
   if (!atomic_compare_exchange_strong_explicit(
           (_Atomic(lfkv_t *) *)&g_resp_kv, &expected, fresh,
@@ -219,16 +223,19 @@ lfkv_t *resp_kv_get(void) {
 lfkv_t *resp_kv_init(void) {
   lfkv_t *cur = atomic_load_explicit((_Atomic(lfkv_t *) *)&g_resp_kv,
                                      memory_order_acquire);
-  if (cur) return cur;
+  if (cur)
+    return cur;
   size_t slots = RESP_KV_DEFAULT_SLOTS;
   const char *env = getenv("RESP_KV_SLOTS");
   if (env) {
     char *e;
     unsigned long v = strtoul(env, &e, 10);
-    if (*e == '\0' && v && (v & (v - 1)) == 0) slots = v;
+    if (*e == '\0' && v && (v & (v - 1)) == 0)
+      slots = v;
   }
   lfkv_t *fresh = lfkv_new(slots);
-  if (!fresh) return NULL;
+  if (!fresh)
+    return NULL;
   lfkv_t *expected = NULL;
   if (!atomic_compare_exchange_strong_explicit(
           (_Atomic(lfkv_t *) *)&g_resp_kv, &expected, fresh,
@@ -317,20 +324,23 @@ static inline int resp_kv_del(const char *key, size_t klen) {
    stay allocated until process exit (keys recycle on re-insert). */
 static inline void resp_kv_clear(void) {
   lfkv_t *kv = resp_kv_current();
-  if (kv) lfkv_clear(kv);
+  if (kv)
+    lfkv_clear(kv);
 }
 
 /* TTL helpers — preserve API names of the old keyval_t-based wrappers
    so handlers stay close to their original shape. */
 static inline int64_t resp_kv_get_expiry(const char *key, size_t klen) {
   lfkv_t *kv = resp_kv_current();
-  if (!kv) return -1;
+  if (!kv)
+    return -1;
   return lfkv_get_expiry(kv, key, klen);
 }
 static inline int resp_kv_set_expiry(const char *key, size_t klen,
                                      int64_t expire_at_us) {
   lfkv_t *kv = resp_kv_current();
-  if (!kv) return 0;
+  if (!kv)
+    return 0;
   return lfkv_set_expiry(kv, key, klen, expire_at_us);
 }
 
@@ -343,7 +353,8 @@ static inline size_t resp_kv_count(void) {
    call this so the array header matches the emitted count. */
 static inline void resp_kv_evict_expired(void) {
   lfkv_t *kv = resp_kv_current();
-  if (kv) (void)lfkv_evict_expired(kv);
+  if (kv)
+    (void)lfkv_evict_expired(kv);
 }
 
 /* Throttled background sweep — called from the reactor's top-of-loop
@@ -352,15 +363,18 @@ static inline void resp_kv_evict_expired(void) {
    server still ticks the sweep at the same cadence. */
 #define RESP_SWEEP_INTERVAL_US 1000000
 static void resp_kv_maybe_sweep(void) {
-  if (!resp_kv_current()) return;
-  if (resp_kv_count() == 0) return;
+  if (!resp_kv_current())
+    return;
+  if (resp_kv_count() == 0)
+    return;
   int64_t now = resp_now_us();
-  int64_t last = atomic_load_explicit(&resp_last_sweep_us,
-                                      memory_order_relaxed);
-  if (now - last < RESP_SWEEP_INTERVAL_US) return;
-  if (!atomic_compare_exchange_strong_explicit(
-          &resp_last_sweep_us, &last, now,
-          memory_order_relaxed, memory_order_relaxed))
+  int64_t last =
+      atomic_load_explicit(&resp_last_sweep_us, memory_order_relaxed);
+  if (now - last < RESP_SWEEP_INTERVAL_US)
+    return;
+  if (!atomic_compare_exchange_strong_explicit(&resp_last_sweep_us, &last, now,
+                                               memory_order_relaxed,
+                                               memory_order_relaxed))
     return;
   resp_kv_evict_expired();
 }
@@ -389,8 +403,10 @@ static int resp_dict_field_del(dict_t *d, const char *fk) {
 /* ---------- per-client buffer helpers ---------- */
 
 static void resp_client_free(resp_client_t *c) {
-  if (!c) return;
-  if (c->fd >= 0) close(c->fd);
+  if (!c)
+    return;
+  if (c->fd >= 0)
+    close(c->fd);
   free(c->rbuf);
   free(c->wbuf);
   free(c->argv_pool);
@@ -400,8 +416,10 @@ static void resp_client_free(resp_client_t *c) {
 
 static void resp_client_unlink(resp_client_t *c) {
   resp_client_t **pp = &resp_clients;
-  while (*pp && *pp != c) pp = &(*pp)->next;
-  if (*pp) *pp = c->next;
+  while (*pp && *pp != c)
+    pp = &(*pp)->next;
+  if (*pp)
+    *pp = c->next;
   resp_client_free(c);
 }
 
@@ -423,7 +441,8 @@ static char *resp_write_reserve(resp_client_t *c, size_t n) {
       if (need > RESP_WBUF_MAX)
         c->wfail = 1;
       size_t cap = c->wcap ? c->wcap : 256;
-      while (cap < need) cap *= 2;
+      while (cap < need)
+        cap *= 2;
       char *nb = realloc(c->wbuf, cap);
       if (!nb)
         graceful_shutdown("Fatal error: out of memory (resp wbuf)");
@@ -446,7 +465,8 @@ static void resp_write(resp_client_t *c, const char *p, size_t n) {
 static inline int resp_client_drain_write(resp_client_t *c) {
   size_t live = c->wlen - c->whead;
   ssize_t n = write(c->fd, c->wbuf + c->whead, live);
-  if (n < 0) return (errno != EAGAIN && errno != EWOULDBLOCK);
+  if (n < 0)
+    return (errno != EAGAIN && errno != EWOULDBLOCK);
   if ((size_t)n == live) {
     c->whead = 0;
     c->wlen = 0;
@@ -459,8 +479,8 @@ static inline int resp_client_drain_write(resp_client_t *c) {
 /* Emit a single-line reply: <lead><s>CRLF, where lead is '+' (simple
    string) or '-' (error). Both wrappers below are byte-identical except
    the lead char; kept inlinable so PONG/OK framing gains no call overhead. */
-static inline void resp_write_line(resp_client_t *c, char lead,
-                                   const char *s, size_t n) {
+static inline void resp_write_line(resp_client_t *c, char lead, const char *s,
+                                   size_t n) {
 #ifdef ALCOVE_METRICS
   if (lead == '-') /* RESP error reply: the single error chokepoint */
     metric_bump(g_m_errs, 1);
@@ -488,8 +508,10 @@ static inline void resp_write_err_fmt(resp_client_t *c, const char *fmt, ...) {
   va_start(ap, fmt);
   int n = vsnprintf(buf, sizeof buf, fmt, ap);
   va_end(ap);
-  if (n < 0) n = 0;
-  if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+  if (n < 0)
+    n = 0;
+  if ((size_t)n >= sizeof buf)
+    n = (int)sizeof buf - 1;
   resp_write_line(c, '-', buf, (size_t)n);
 }
 
@@ -498,8 +520,12 @@ static inline void resp_write_err_fmt(resp_client_t *c, const char *fmt, ...) {
 static int resp_u64_to_ascii(char *out, uint64_t v) {
   char tmp[20];
   int i = 0;
-  do { tmp[i++] = '0' + (int)(v % 10); v /= 10; } while (v);
-  for (int j = 0; j < i; j++) out[j] = tmp[i - 1 - j];
+  do {
+    tmp[i++] = '0' + (int)(v % 10);
+    v /= 10;
+  } while (v);
+  for (int j = 0; j < i; j++)
+    out[j] = tmp[i - 1 - j];
   return i;
 }
 
@@ -545,22 +571,26 @@ static void resp_write_array_hdr(resp_client_t *c, long long n) {
 }
 
 static void resp_write_wrongtype(resp_client_t *c) {
-  resp_write_err(c,
-      "WRONGTYPE Operation against a key holding the wrong kind of value");
+  resp_write_err(
+      c, "WRONGTYPE Operation against a key holding the wrong kind of value");
 }
 
 /* Grow the per-client argv/argl pool to fit `n` slots. Pool is sticky
    across commands — only realloc when a command exceeds the previous
    high-water mark. Returns 0 on success, -1 on alloc failure. */
 static int resp_argv_pool_reserve(resp_client_t *c, int n) {
-  if (n <= c->argv_cap) return 0;
+  if (n <= c->argv_cap)
+    return 0;
   int cap = c->argv_cap ? c->argv_cap : RESP_ARGV_POOL_INIT;
-  while (cap < n) cap *= 2;
+  while (cap < n)
+    cap *= 2;
   char **nv = realloc(c->argv_pool, sizeof(char *) * (size_t)cap);
-  if (!nv) return -1;
+  if (!nv)
+    return -1;
   c->argv_pool = nv;
   long *nl = realloc(c->argl_pool, sizeof(long) * (size_t)cap);
-  if (!nl) return -1;
+  if (!nl)
+    return -1;
   c->argl_pool = nl;
   c->argv_cap = cap;
   return 0;
@@ -574,41 +604,53 @@ static int resp_argv_pool_reserve(resp_client_t *c, int n) {
       0 = need more data
      <0 = protocol error (caller drops the client) */
 static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
-                          char ***argv_out, long **argl_out,
-                          int *argc_out) {
-  if (len == 0) return 0;
+                          char ***argv_out, long **argl_out, int *argc_out) {
+  if (len == 0)
+    return 0;
   /* Inline command form: any non-`*` first byte means a bare-text line
      like `PING\r\n` or `SET foo bar\n`. redis-benchmark's PING_INLINE
      test relies on this. We tokenize on space/tab; argv slots alias
      the input buffer (lengths carried in argl), no copy needed. */
   if (buf[0] != '*') {
     size_t end = 0;
-    while (end < len && buf[end] != '\n') end++;
-    if (end >= len) return 0;
+    while (end < len && buf[end] != '\n')
+      end++;
+    if (end >= len)
+      return 0;
     size_t line_end = end;
-    if (line_end > 0 && buf[line_end - 1] == '\r') line_end--;
+    if (line_end > 0 && buf[line_end - 1] == '\r')
+      line_end--;
 
     long n = 0;
     size_t p = 0;
     while (p < line_end) {
-      while (p < line_end && (buf[p] == ' ' || buf[p] == '\t')) p++;
-      if (p >= line_end) break;
+      while (p < line_end && (buf[p] == ' ' || buf[p] == '\t'))
+        p++;
+      if (p >= line_end)
+        break;
       n++;
-      if (n > RESP_MAX_ARGS) return -1;
-      while (p < line_end && buf[p] != ' ' && buf[p] != '\t') p++;
+      if (n > RESP_MAX_ARGS)
+        return -1;
+      while (p < line_end && buf[p] != ' ' && buf[p] != '\t')
+        p++;
     }
-    if (n == 0) return (int)(end + 1);
+    if (n == 0)
+      return (int)(end + 1);
 
-    if (resp_argv_pool_reserve(c, (int)n) < 0) return -1;
+    if (resp_argv_pool_reserve(c, (int)n) < 0)
+      return -1;
     char **argv = c->argv_pool;
     long *argl = c->argl_pool;
     long ai = 0;
     p = 0;
     while (p < line_end && ai < n) {
-      while (p < line_end && (buf[p] == ' ' || buf[p] == '\t')) p++;
-      if (p >= line_end) break;
+      while (p < line_end && (buf[p] == ' ' || buf[p] == '\t'))
+        p++;
+      if (p >= line_end)
+        break;
       size_t s = p;
-      while (p < line_end && buf[p] != ' ' && buf[p] != '\t') p++;
+      while (p < line_end && buf[p] != ' ' && buf[p] != '\t')
+        p++;
       argv[ai] = buf + s;
       argl[ai] = (long)(p - s);
       ai++;
@@ -622,15 +664,20 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
   size_t i = 1;
   long n = 0;
   while (i < len && buf[i] != '\r') {
-    if (buf[i] < '0' || buf[i] > '9') return -1;
+    if (buf[i] < '0' || buf[i] > '9')
+      return -1;
     n = n * 10 + (buf[i] - '0');
-    if (n > RESP_MAX_ARGS) return -1;
+    if (n > RESP_MAX_ARGS)
+      return -1;
     i++;
   }
-  if (i + 1 >= len) return 0;
-  if (buf[i] != '\r' || buf[i + 1] != '\n') return -1;
+  if (i + 1 >= len)
+    return 0;
+  if (buf[i] != '\r' || buf[i + 1] != '\n')
+    return -1;
   i += 2;
-  if (n <= 0) return -1;
+  if (n <= 0)
+    return -1;
 
   /* Reserve incrementally as bulk args are actually parsed, not the full n up
      front: a 10-byte `*1048576\r\n` header would otherwise pin a 16 MB sticky
@@ -638,25 +685,35 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
      there is no max-clients cap). The pool grows only to the number of
      elements that genuinely materialize in the buffer. */
   long prealloc = n < RESP_ARGV_POOL_INIT ? n : RESP_ARGV_POOL_INIT;
-  if (resp_argv_pool_reserve(c, (int)prealloc) < 0) return -1;
+  if (resp_argv_pool_reserve(c, (int)prealloc) < 0)
+    return -1;
 
   for (long a = 0; a < n; a++) {
-    if (i >= len) return 0;
-    if (buf[i] != '$') return -1;
+    if (i >= len)
+      return 0;
+    if (buf[i] != '$')
+      return -1;
     i++;
     long blen = 0;
     while (i < len && buf[i] != '\r') {
-      if (buf[i] < '0' || buf[i] > '9') return -1;
+      if (buf[i] < '0' || buf[i] > '9')
+        return -1;
       blen = blen * 10 + (buf[i] - '0');
-      if (blen > RESP_MAX_BULK) return -1;
+      if (blen > RESP_MAX_BULK)
+        return -1;
       i++;
     }
-    if (i + 1 >= len) return 0;
-    if (buf[i] != '\r' || buf[i + 1] != '\n') return -1;
+    if (i + 1 >= len)
+      return 0;
+    if (buf[i] != '\r' || buf[i + 1] != '\n')
+      return -1;
     i += 2;
-    if (i + (size_t)blen + 2 > len) return 0;
-    if (buf[i + blen] != '\r' || buf[i + blen + 1] != '\n') return -1;
-    if (resp_argv_pool_reserve(c, (int)a + 1) < 0) return -1;
+    if (i + (size_t)blen + 2 > len)
+      return 0;
+    if (buf[i + blen] != '\r' || buf[i + blen + 1] != '\n')
+      return -1;
+    if (resp_argv_pool_reserve(c, (int)a + 1) < 0)
+      return -1;
     c->argv_pool[a] = buf + i;
     c->argl_pool[a] = blen;
     i += blen + 2;
@@ -672,11 +729,14 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
 
 static int resp_cmd_eq(const char *p, long len, const char *want) {
   size_t wlen = strlen(want);
-  if ((size_t)len != wlen) return 0;
+  if ((size_t)len != wlen)
+    return 0;
   for (size_t i = 0; i < wlen; i++) {
     char a = p[i];
-    if (a >= 'a' && a <= 'z') a -= 32;
-    if (a != want[i]) return 0;
+    if (a >= 'a' && a <= 'z')
+      a -= 32;
+    if (a != want[i])
+      return 0;
   }
   return 1;
 }
@@ -685,9 +745,11 @@ static int resp_cmd_eq(const char *p, long len, const char *want) {
    key our hash via strcmp). Returns NULL on NUL or alloc failure. */
 static char *resp_dup_key(const char *p, long len) {
   for (long i = 0; i < len; i++)
-    if (p[i] == '\0') return NULL;
+    if (p[i] == '\0')
+      return NULL;
   char *k = malloc(len + 1);
-  if (!k) return NULL;
+  if (!k)
+    return NULL;
   memcpy(k, p, len);
   k[len] = '\0';
   return k;
@@ -696,14 +758,16 @@ static char *resp_dup_key(const char *p, long len) {
 /* Parse a signed integer arg into *out. Returns 1 on success, 0 on
    garbage (caller emits protocol error). */
 static int resp_arg_to_ll(const char *p, long len, long long *out) {
-  if (len <= 0 || len > 30) return 0;
+  if (len <= 0 || len > 30)
+    return 0;
   char buf[32];
   memcpy(buf, p, len);
   buf[len] = '\0';
   char *end;
   errno = 0;
   long long v = strtoll(buf, &end, 10);
-  if (*end != '\0' || errno) return 0;
+  if (*end != '\0' || errno)
+    return 0;
   *out = v;
   return 1;
 }
@@ -732,47 +796,52 @@ static void resp_key_bytes(exp_t *kx, const char **ks, size_t *klen) {
 
 /* ---------- dispatch helpers ---------- */
 
-#define ARGN(needed)                                                          \
-  do {                                                                        \
-    if (argc != (needed)) {                                                   \
-      resp_write_err(c, "ERR wrong number of arguments");                     \
-      return;                                                                 \
-    }                                                                         \
+#define ARGN(needed)                                                           \
+  do {                                                                         \
+    if (argc != (needed)) {                                                    \
+      resp_write_err(c, "ERR wrong number of arguments");                      \
+      return;                                                                  \
+    }                                                                          \
   } while (0)
-#define ARG_AT_LEAST(min)                                                     \
-  do {                                                                        \
-    if (argc < (min)) {                                                       \
-      resp_write_err(c, "ERR wrong number of arguments");                     \
-      return;                                                                 \
-    }                                                                         \
+#define ARG_AT_LEAST(min)                                                      \
+  do {                                                                         \
+    if (argc < (min)) {                                                        \
+      resp_write_err(c, "ERR wrong number of arguments");                      \
+      return;                                                                  \
+    }                                                                          \
   } while (0)
 /* Type-guard for looked-up (refcount-bumped) values. If type_ok_expr is
    false: unref v, send WRONGTYPE error, and return from the command handler.
    For peek'd (borrowed-ref) values omit the unrefexp — use a plain if block.
    Requires c and v in scope. */
-#define RESP_WRONGTYPE_IF_NOT(v, type_ok_expr)                                \
-  do {                                                                        \
-    if (!(type_ok_expr)) {                                                    \
-      unrefexp(v);                                                            \
-      resp_write_wrongtype(c);                                                \
-      return;                                                                 \
-    }                                                                         \
+#define RESP_WRONGTYPE_IF_NOT(v, type_ok_expr)                                 \
+  do {                                                                         \
+    if (!(type_ok_expr)) {                                                     \
+      unrefexp(v);                                                             \
+      resp_write_wrongtype(c);                                                 \
+      return;                                                                  \
+    }                                                                          \
   } while (0)
 
 /* Translate a Redis-style negative index (from-end). Returns the
    normalised non-negative index or -1 if out of range. */
 static long resp_norm_index(long idx, long len) {
-  if (idx < 0) idx += len;
-  if (idx < 0 || idx >= len) return -1;
+  if (idx < 0)
+    idx += len;
+  if (idx < 0 || idx >= len)
+    return -1;
   return idx;
 }
 
 /* ---------- command implementations ---------- */
 
 static void cmd_ping(resp_client_t *c, char **argv, long *argl, int argc) {
-  if (argc == 1) resp_write_simple(c, "PONG");
-  else if (argc == 2) resp_write_bulk(c, argv[1], argl[1]);
-  else resp_write_err(c, "ERR wrong number of arguments for 'ping'");
+  if (argc == 1)
+    resp_write_simple(c, "PONG");
+  else if (argc == 2)
+    resp_write_bulk(c, argv[1], argl[1]);
+  else
+    resp_write_err(c, "ERR wrong number of arguments for 'ping'");
 }
 
 static void cmd_echo(resp_client_t *c, char **argv, long *argl, int argc) {
@@ -787,8 +856,10 @@ static void cmd_quit(resp_client_t *c) {
 
 static void cmd_select(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
-  if (argl[1] == 1 && argv[1][0] == '0') resp_write_simple(c, "OK");
-  else resp_write_err(c, "ERR DB index out of range (alcove RESP has 1 db)");
+  if (argl[1] == 1 && argv[1][0] == '0')
+    resp_write_simple(c, "OK");
+  else
+    resp_write_err(c, "ERR DB index out of range (alcove RESP has 1 db)");
 }
 
 static void cmd_dbsize(resp_client_t *c) {
@@ -807,14 +878,15 @@ static void cmd_flushdb(resp_client_t *c) {
 typedef struct {
   char *bytes; /* one alloc; entries point into here */
   size_t blen, bcap;
-  size_t *off;  /* per-entry start offset into `bytes` */
-  size_t *len;  /* per-entry key length */
+  size_t *off; /* per-entry start offset into `bytes` */
+  size_t *len; /* per-entry key length */
   size_t n, ncap;
 } resp_keys_snap_t;
 
 static int resp_keys_snap_cb(const char *k, size_t klen, exp_t *v,
                              int64_t exp_us, void *ctx) {
-  (void)v; (void)exp_us;
+  (void)v;
+  (void)exp_us;
   resp_keys_snap_t *s = ctx;
   if (s->n == s->ncap) {
     size_t nc = s->ncap ? s->ncap * 2 : 64;
@@ -823,19 +895,24 @@ static int resp_keys_snap_cb(const char *k, size_t klen, exp_t *v,
        pointing at live memory. The earlier "free(no); free(nl)" form
        double-freed via resp_keys_snap_free when only one realloc failed. */
     size_t *no = realloc(s->off, nc * sizeof *no);
-    if (!no) return -1;
+    if (!no)
+      return -1;
     s->off = no;
     size_t *nl = realloc(s->len, nc * sizeof *nl);
-    if (!nl) return -1;
+    if (!nl)
+      return -1;
     s->len = nl;
     s->ncap = nc;
   }
   if (s->blen + klen > s->bcap) {
     size_t nc = s->bcap ? s->bcap * 2 : 4096;
-    while (nc < s->blen + klen) nc *= 2;
+    while (nc < s->blen + klen)
+      nc *= 2;
     char *nb = realloc(s->bytes, nc);
-    if (!nb) return -1;
-    s->bytes = nb; s->bcap = nc;
+    if (!nb)
+      return -1;
+    s->bytes = nb;
+    s->bcap = nc;
   }
   s->off[s->n] = s->blen;
   s->len[s->n] = klen;
@@ -846,18 +923,22 @@ static int resp_keys_snap_cb(const char *k, size_t klen, exp_t *v,
 }
 
 static void resp_keys_snap_free(resp_keys_snap_t *s) {
-  free(s->bytes); free(s->off); free(s->len);
+  free(s->bytes);
+  free(s->off);
+  free(s->len);
 }
 
-static void cmd_keys_star(resp_client_t *c, char **argv, long *argl,
-                          int argc) {
+static void cmd_keys_star(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   if (argl[1] != 1 || argv[1][0] != '*') {
     resp_write_err(c, "ERR alcove RESP server only supports KEYS *");
     return;
   }
   lfkv_t *kv = resp_kv_current();
-  if (!kv) { resp_write_array_hdr(c, 0); return; }
+  if (!kv) {
+    resp_write_array_hdr(c, 0);
+    return;
+  }
   resp_kv_evict_expired();
   resp_keys_snap_t s = {0};
   lfkv_foreach(kv, resp_keys_snap_cb, &s);
@@ -868,18 +949,26 @@ static void cmd_keys_star(resp_client_t *c, char **argv, long *argl,
 }
 
 static const char *resp_type_name(exp_t *v) {
-  if (!v) return "none";
-  if (isblob(v)) return "string";
-  if (islist(v)) return "list";
-  if (isdict(v)) return "hash";
-  if (isvector(v)) return "vector";
+  if (!v)
+    return "none";
+  if (isblob(v))
+    return "string";
+  if (islist(v))
+    return "list";
+  if (isdict(v))
+    return "hash";
+  if (isvector(v))
+    return "vector";
   return "none";
 }
 
 static void cmd_type(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_simple(c, "none"); return; }
+  if (!v) {
+    resp_write_simple(c, "none");
+    return;
+  }
   resp_write_simple(c, resp_type_name(v));
   unrefexp(v);
 }
@@ -890,7 +979,8 @@ static void cmd_del(resp_client_t *c, char **argv, long *argl, int argc) {
   for (int a = 1; a < argc; a++) {
     /* lfkv_del returns 1 if a live value was tombstoned. Lazy-expiry
        still kicks in via lfkv_get if needed; for DEL we just attempt. */
-    if (resp_kv_del(argv[a], (size_t)argl[a])) deleted++;
+    if (resp_kv_del(argv[a], (size_t)argl[a]))
+      deleted++;
   }
   resp_write_int(c, deleted);
 }
@@ -900,7 +990,10 @@ static void cmd_exists(resp_client_t *c, char **argv, long *argl, int argc) {
   long long present = 0;
   for (int a = 1; a < argc; a++) {
     exp_t *v = resp_kv_lookup(argv[a], (size_t)argl[a]);
-    if (v) { present++; unrefexp(v); }
+    if (v) {
+      present++;
+      unrefexp(v);
+    }
   }
   resp_write_int(c, present);
 }
@@ -944,10 +1037,17 @@ static void cmd_ttl(resp_client_t *c, char **argv, long *argl, int argc,
                     int millis) {
   ARGN(2);
   int64_t exp = resp_kv_get_expiry(argv[1], (size_t)argl[1]);
-  if (exp < 0) { resp_write_int(c, -2); return; }
-  if (exp == 0) { resp_write_int(c, -1); return; }
+  if (exp < 0) {
+    resp_write_int(c, -2);
+    return;
+  }
+  if (exp == 0) {
+    resp_write_int(c, -1);
+    return;
+  }
   int64_t left = exp - resp_now_us();
-  if (left < 0) left = 0;
+  if (left < 0)
+    left = 0;
   resp_write_int(c, millis ? (long long)(left / 1000)
                            : (long long)(left / 1000000));
 }
@@ -973,10 +1073,12 @@ static char *resp_bgsave_dst = NULL;
    caller, so there's no race even if N reactors poll concurrently. */
 static void resp_bgsave_poll(void) {
   int pid = atomic_load_explicit(&resp_bgsave_pid, memory_order_acquire);
-  if (pid <= 0) return;
+  if (pid <= 0)
+    return;
   int status;
   pid_t r = waitpid(pid, &status, WNOHANG);
-  if (r == 0) return;          /* still running */
+  if (r == 0)
+    return; /* still running */
   if (r < 0) {
     if (errno == ECHILD) {
       /* Another reactor reaped first; clear our view if we still see
@@ -989,16 +1091,19 @@ static void resp_bgsave_poll(void) {
   int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
   if (ok && resp_bgsave_tmp && resp_bgsave_dst) {
     if (rename(resp_bgsave_tmp, resp_bgsave_dst) != 0) {
-      fprintf(stderr, "BGSAVE: rename(%s, %s) failed: %s\n",
-              resp_bgsave_tmp, resp_bgsave_dst, strerror(errno));
+      fprintf(stderr, "BGSAVE: rename(%s, %s) failed: %s\n", resp_bgsave_tmp,
+              resp_bgsave_dst, strerror(errno));
       unlink(resp_bgsave_tmp);
     }
   } else {
     fprintf(stderr, "BGSAVE: child failed (status=%d)\n", status);
-    if (resp_bgsave_tmp) unlink(resp_bgsave_tmp);
+    if (resp_bgsave_tmp)
+      unlink(resp_bgsave_tmp);
   }
-  free(resp_bgsave_tmp); resp_bgsave_tmp = NULL;
-  free(resp_bgsave_dst); resp_bgsave_dst = NULL;
+  free(resp_bgsave_tmp);
+  resp_bgsave_tmp = NULL;
+  free(resp_bgsave_dst);
+  resp_bgsave_dst = NULL;
   atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
 }
 
@@ -1012,7 +1117,8 @@ static void resp_bgsave_poll(void) {
    failure the caller may inspect errno for a richer message. */
 static int resp_dump_to_tmp(const char *tmp) {
   FILE *stream = fopen(tmp, "w");
-  if (!stream) return 1;
+  if (!stream)
+    return 1;
   int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
   if (ok) {
     fflush(stream);
@@ -1027,7 +1133,8 @@ static int resp_dump_to_tmp(const char *tmp) {
 }
 
 static void cmd_bgsave(resp_client_t *c, char **argv, long *argl, int argc) {
-  (void)argv; (void)argl;
+  (void)argv;
+  (void)argl;
   ARGN(1);
   /* Reject overlapping BGSAVE: only one at a time. */
   int expected = 0;
@@ -1042,19 +1149,22 @@ static void cmd_bgsave(resp_client_t *c, char **argv, long *argl, int argc) {
   char *tmp = malloc(plen + 5);
   char *dst = malloc(plen + 1);
   if (!tmp || !dst) {
-    free(tmp); free(dst);
+    free(tmp);
+    free(dst);
     atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
     resp_write_err(c, "ERR BGSAVE: out of memory");
     return;
   }
-  memcpy(tmp, path, plen); memcpy(tmp + plen, ".tmp", 5);
+  memcpy(tmp, path, plen);
+  memcpy(tmp + plen, ".tmp", 5);
   memcpy(dst, path, plen + 1);
 
   fflush(NULL); /* flush parent's stdio before fork so child's writes
                    don't carry duplicated buffers. */
   pid_t pid = fork();
   if (pid < 0) {
-    free(tmp); free(dst);
+    free(tmp);
+    free(dst);
     atomic_store_explicit(&resp_bgsave_pid, 0, memory_order_release);
     resp_write_err(c, "ERR BGSAVE: fork failed");
     return;
@@ -1075,14 +1185,18 @@ static void cmd_bgsave(resp_client_t *c, char **argv, long *argl, int argc) {
 /* SAVE — synchronous unified dump. Blocks the reactor for the duration
    of the walk + fsync. Use BGSAVE for a non-blocking fork-based save. */
 static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
-  (void)argv; (void)argl;
+  (void)argv;
+  (void)argl;
   ARGN(1);
   const char *path = alcove_db_path;
   /* Atomic-rename: write to <path>.tmp first, fsync, rename over the
      real file. A crash mid-write leaves the previous dump intact. */
   size_t plen = strlen(path);
   char *tmp = malloc(plen + 5);
-  if (!tmp) { resp_write_err(c, "ERR SAVE: out of memory"); return; }
+  if (!tmp) {
+    resp_write_err(c, "ERR SAVE: out of memory");
+    return;
+  }
   memcpy(tmp, path, plen);
   memcpy(tmp + plen, ".tmp", 5);
   /* Pass NULL for the env (inside resp_dump_to_tmp): in RESP-only mode the
@@ -1093,8 +1207,8 @@ static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
   int rc = resp_dump_to_tmp(tmp);
   if (rc == 1) { /* fopen(tmp) failed — errno is still set */
     char msg[256];
-    snprintf(msg, sizeof msg, "ERR SAVE: cannot open %s: %s",
-             tmp, strerror(errno));
+    snprintf(msg, sizeof msg, "ERR SAVE: cannot open %s: %s", tmp,
+             strerror(errno));
     free(tmp);
     resp_write_err(c, msg);
     return;
@@ -1106,8 +1220,8 @@ static void cmd_save(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   if (rename(tmp, path) != 0) {
     char msg[256];
-    snprintf(msg, sizeof msg, "ERR SAVE: rename to %s failed: %s",
-             path, strerror(errno));
+    snprintf(msg, sizeof msg, "ERR SAVE: rename to %s failed: %s", path,
+             strerror(errno));
     free(tmp);
     resp_write_err(c, msg);
     return;
@@ -1121,7 +1235,10 @@ static void cmd_persist(resp_client_t *c, char **argv, long *argl, int argc) {
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
   int64_t exp = resp_kv_get_expiry(k, klen);
-  if (exp <= 0) { resp_write_int(c, 0); return; } /* absent or no TTL */
+  if (exp <= 0) {
+    resp_write_int(c, 0);
+    return;
+  } /* absent or no TTL */
   resp_kv_set_expiry(k, klen, 0);
   resp_write_int(c, 1);
 }
@@ -1183,14 +1300,19 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   if (nx || xx) {
     int ok = nx ? lfkv_set_nx(resp_kv, k, klen, fresh)
                 : lfkv_set_xx(resp_kv, k, klen, fresh);
-    if (!ok) { unrefexp(fresh); resp_write_nil(c); return; }
+    if (!ok) {
+      unrefexp(fresh);
+      resp_write_nil(c);
+      return;
+    }
   } else {
     resp_kv_set(k, klen, fresh); /* always consumes the ref */
   }
   if (expire_us) {
     int64_t now = resp_now_us();
     /* expire_us is already capped to fit int64 after the unit scale-up; clamp
-       the now+span add so it can't overflow into a bogus (negative) deadline. */
+       the now+span add so it can't overflow into a bogus (negative) deadline.
+     */
     int64_t deadline =
         (expire_us > INT64_MAX - now) ? INT64_MAX : now + expire_us;
     resp_kv_set_expiry(k, klen, deadline);
@@ -1201,8 +1323,14 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
 static void cmd_get(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_peek(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_nil(c); return; }
-  if (!isblob(v)) { resp_write_wrongtype(c); return; }
+  if (!v) {
+    resp_write_nil(c);
+    return;
+  }
+  if (!isblob(v)) {
+    resp_write_wrongtype(c);
+    return;
+  }
   alc_blob_t *b = (alc_blob_t *)v->ptr;
   resp_write_bulk(c, b->bytes, b->len);
 }
@@ -1210,8 +1338,14 @@ static void cmd_get(resp_client_t *c, char **argv, long *argl, int argc) {
 static void cmd_strlen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_peek(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_int(c, 0); return; }
-  if (!isblob(v)) { resp_write_wrongtype(c); return; }
+  if (!v) {
+    resp_write_int(c, 0);
+    return;
+  }
+  if (!isblob(v)) {
+    resp_write_wrongtype(c);
+    return;
+  }
   resp_write_int(c, (long long)blob_len(v));
 }
 
@@ -1238,7 +1372,8 @@ static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
     }
     if ((delta > 0 && cur > LLONG_MAX - delta) ||
         (delta < 0 && cur < LLONG_MIN - delta)) {
-      if (cur_v) unrefexp(cur_v);
+      if (cur_v)
+        unrefexp(cur_v);
       resp_write_err(c, "ERR increment or decrement would overflow");
       return;
     }
@@ -1253,10 +1388,16 @@ static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
          to drop our bumped ref afterwards. */
       ok = lfkv_cas(resp_kv, key, klen, cur_v, new_blob);
       unrefexp(cur_v);
-      if (!ok) { unrefexp(new_blob); continue; }
+      if (!ok) {
+        unrefexp(new_blob);
+        continue;
+      }
     } else {
       ok = lfkv_set_nx(resp_kv, key, klen, new_blob);
-      if (!ok) { unrefexp(new_blob); continue; }
+      if (!ok) {
+        unrefexp(new_blob);
+        continue;
+      }
     }
     resp_write_int(c, next);
     return;
@@ -1319,11 +1460,16 @@ static void cmd_append(resp_client_t *c, char **argv, long *argl, int argc) {
     size_t new_n = old_n + add;
     exp_t *fresh = make_blob(NULL, new_n);
     alc_blob_t *nb = (alc_blob_t *)fresh->ptr;
-    if (old_n) memcpy(nb->bytes, old->bytes, old_n);
-    if (add) memcpy(nb->bytes + old_n, argv[2], add);
+    if (old_n)
+      memcpy(nb->bytes, old->bytes, old_n);
+    if (add)
+      memcpy(nb->bytes + old_n, argv[2], add);
     int ok = lfkv_cas(resp_kv, k, klen, cur_v, fresh);
     unrefexp(cur_v);
-    if (!ok) { unrefexp(fresh); continue; }
+    if (!ok) {
+      unrefexp(fresh);
+      continue;
+    }
     resp_write_int(c, (long long)new_n);
     return;
   }
@@ -1343,8 +1489,8 @@ static exp_t *resp_list_clone(alc_list_t *src) {
   return dst_exp;
 }
 
-static void cmd_lpush_rpush(resp_client_t *c, char **argv, long *argl,
-                            int argc, int left) {
+static void cmd_lpush_rpush(resp_client_t *c, char **argv, long *argl, int argc,
+                            int left) {
   ARG_AT_LEAST(3);
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
@@ -1356,18 +1502,24 @@ static void cmd_lpush_rpush(resp_client_t *c, char **argv, long *argl,
       resp_write_wrongtype(c);
       return;
     }
-    exp_t *fresh = cur ? resp_list_clone((alc_list_t *)cur->ptr)
-                       : make_list_exp();
+    exp_t *fresh =
+        cur ? resp_list_clone((alc_list_t *)cur->ptr) : make_list_exp();
     alc_list_t *l = (alc_list_t *)fresh->ptr;
     for (int i = 2; i < argc; i++) {
       exp_t *nv = make_blob(argv[i], (size_t)argl[i]);
-      if (left) alc_list_push_left(l, nv);
-      else      alc_list_push_right(l, nv);
+      if (left)
+        alc_list_push_left(l, nv);
+      else
+        alc_list_push_right(l, nv);
     }
     int ok = cur ? lfkv_cas(resp_kv, k, klen, cur, fresh)
                  : lfkv_set_nx(resp_kv, k, klen, fresh);
-    if (cur) unrefexp(cur);
-    if (!ok) { unrefexp(fresh); continue; }
+    if (cur)
+      unrefexp(cur);
+    if (!ok) {
+      unrefexp(fresh);
+      continue;
+    }
     resp_write_int(c, (long long)l->len);
     return;
   }
@@ -1380,17 +1532,25 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
   size_t klen = (size_t)argl[1];
   for (;;) {
     exp_t *cur = resp_kv_lookup(k, klen);
-    if (!cur) { resp_write_nil(c); return; }
+    if (!cur) {
+      resp_write_nil(c);
+      return;
+    }
     RESP_WRONGTYPE_IF_NOT(cur, islist(cur));
     alc_list_t *src = (alc_list_t *)cur->ptr;
-    if (src->len == 0) { unrefexp(cur); resp_write_nil(c); return; }
+    if (src->len == 0) {
+      unrefexp(cur);
+      resp_write_nil(c);
+      return;
+    }
     /* Capture the popped value's bytes BEFORE the swap so an evicted
        blob can't get freed under us. */
     alc_listnode_t *target = left ? src->head : src->tail;
     alc_blob_t *tb = (alc_blob_t *)target->val->ptr;
     size_t blen = tb->len;
     char *bcopy = malloc(blen);
-    if (blen) memcpy(bcopy, tb->bytes, blen);
+    if (blen)
+      memcpy(bcopy, tb->bytes, blen);
     int ok;
     if (src->len == 1) {
       /* Last element — just delete the key (Redis container rule). */
@@ -1399,17 +1559,24 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
       exp_t *fresh = make_list_exp();
       alc_list_t *dst = (alc_list_t *)fresh->ptr;
       alc_listnode_t *start = left ? src->head->next : src->head;
-      alc_listnode_t *stop  = left ? NULL : src->tail; /* exclusive of tail when right */
+      alc_listnode_t *stop =
+          left ? NULL : src->tail; /* exclusive of tail when right */
       for (alc_listnode_t *nd = start; nd; nd = nd->next) {
-        if (!left && nd == src->tail) break;
+        if (!left && nd == src->tail)
+          break;
         alc_list_push_right(dst, refexp(nd->val));
       }
       (void)stop;
       ok = lfkv_cas(resp_kv, k, klen, cur, fresh);
-      if (!ok) { unrefexp(fresh); }
+      if (!ok) {
+        unrefexp(fresh);
+      }
     }
     unrefexp(cur);
-    if (!ok) { free(bcopy); continue; }
+    if (!ok) {
+      free(bcopy);
+      continue;
+    }
     resp_write_bulk(c, bcopy, blen);
     free(bcopy);
     return;
@@ -1419,7 +1586,10 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
 static void cmd_llen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_int(c, 0); return; }
+  if (!v) {
+    resp_write_int(c, 0);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, islist(v));
   resp_write_int(c, (long long)((alc_list_t *)v->ptr)->len);
   unrefexp(v);
@@ -1433,18 +1603,27 @@ static void cmd_lindex(resp_client_t *c, char **argv, long *argl, int argc) {
     return;
   }
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_nil(c); return; }
+  if (!v) {
+    resp_write_nil(c);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, islist(v));
   alc_list_t *l = (alc_list_t *)v->ptr;
   long ni = resp_norm_index((long)idx, l->len);
-  if (ni < 0) { unrefexp(v); resp_write_nil(c); return; }
+  if (ni < 0) {
+    unrefexp(v);
+    resp_write_nil(c);
+    return;
+  }
   alc_listnode_t *nd;
   if (ni < l->len / 2) {
     nd = l->head;
-    for (long i = 0; i < ni; i++) nd = nd->next;
+    for (long i = 0; i < ni; i++)
+      nd = nd->next;
   } else {
     nd = l->tail;
-    for (long i = l->len - 1; i > ni; i--) nd = nd->prev;
+    for (long i = l->len - 1; i > ni; i--)
+      nd = nd->prev;
   }
   alc_blob_t *b = (alc_blob_t *)nd->val->ptr;
   resp_write_bulk(c, b->bytes, b->len);
@@ -1460,14 +1639,21 @@ static void cmd_lrange(resp_client_t *c, char **argv, long *argl, int argc) {
     return;
   }
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_array_hdr(c, 0); return; }
+  if (!v) {
+    resp_write_array_hdr(c, 0);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, islist(v));
   alc_list_t *l = (alc_list_t *)v->ptr;
   long len = l->len;
-  if (start < 0) start += len;
-  if (stop < 0) stop += len;
-  if (start < 0) start = 0;
-  if (stop >= len) stop = len - 1;
+  if (start < 0)
+    start += len;
+  if (stop < 0)
+    stop += len;
+  if (start < 0)
+    start = 0;
+  if (stop >= len)
+    stop = len - 1;
   if (start > stop || start >= len) {
     unrefexp(v);
     resp_write_array_hdr(c, 0);
@@ -1475,7 +1661,8 @@ static void cmd_lrange(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   resp_write_array_hdr(c, stop - start + 1);
   alc_listnode_t *nd = l->head;
-  for (long i = 0; i < start; i++) nd = nd->next;
+  for (long i = 0; i < start; i++)
+    nd = nd->next;
   for (long i = start; i <= stop; i++, nd = nd->next) {
     alc_blob_t *b = (alc_blob_t *)nd->val->ptr;
     resp_write_bulk(c, b->bytes, b->len);
@@ -1522,21 +1709,25 @@ static void cmd_hset(resp_client_t *c, char **argv, long *argl, int argc) {
       resp_write_wrongtype(c);
       return;
     }
-    exp_t *fresh = cur ? resp_dict_clone((dict_t *)cur->ptr)
-                       : make_dict_exp();
+    exp_t *fresh = cur ? resp_dict_clone((dict_t *)cur->ptr) : make_dict_exp();
     dict_t *h = (dict_t *)fresh->ptr;
     long long created = 0;
     for (int i = 2; i + 1 < argc; i += 2) {
       char *fk = resp_dup_key(argv[i], argl[i]);
-      if (!fk) continue;
+      if (!fk)
+        continue;
       exp_t *fv = make_blob(argv[i + 1], (size_t)argl[i + 1]);
       created += resp_dict_field_set(h, fk, fv);
       free(fk);
     }
     int ok = cur ? lfkv_cas(resp_kv, k, klen, cur, fresh)
                  : lfkv_set_nx(resp_kv, k, klen, fresh);
-    if (cur) unrefexp(cur);
-    if (!ok) { unrefexp(fresh); continue; }
+    if (cur)
+      unrefexp(cur);
+    if (!ok) {
+      unrefexp(fresh);
+      continue;
+    }
     resp_write_int(c, created);
     return;
   }
@@ -1545,13 +1736,24 @@ static void cmd_hset(resp_client_t *c, char **argv, long *argl, int argc) {
 static void cmd_hget(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_nil(c); return; }
+  if (!v) {
+    resp_write_nil(c);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   char *fk = resp_dup_key(argv[2], argl[2]);
-  if (!fk) { unrefexp(v); resp_write_nil(c); return; }
+  if (!fk) {
+    unrefexp(v);
+    resp_write_nil(c);
+    return;
+  }
   exp_t *fv = resp_dict_field_get((dict_t *)v->ptr, fk);
   free(fk);
-  if (!fv) { unrefexp(v); resp_write_nil(c); return; }
+  if (!fv) {
+    unrefexp(v);
+    resp_write_nil(c);
+    return;
+  }
   alc_blob_t *b = (alc_blob_t *)fv->ptr;
   resp_write_bulk(c, b->bytes, b->len);
   unrefexp(v);
@@ -1563,14 +1765,18 @@ static void cmd_hdel(resp_client_t *c, char **argv, long *argl, int argc) {
   size_t klen = (size_t)argl[1];
   for (;;) {
     exp_t *cur = resp_kv_lookup(k, klen);
-    if (!cur) { resp_write_int(c, 0); return; }
+    if (!cur) {
+      resp_write_int(c, 0);
+      return;
+    }
     RESP_WRONGTYPE_IF_NOT(cur, isdict(cur));
     exp_t *fresh = resp_dict_clone((dict_t *)cur->ptr);
     dict_t *h = (dict_t *)fresh->ptr;
     long long deleted = 0;
     for (int i = 2; i < argc; i++) {
       char *fk = resp_dup_key(argv[i], argl[i]);
-      if (!fk) continue;
+      if (!fk)
+        continue;
       deleted += resp_dict_field_del(h, fk);
       free(fk);
     }
@@ -1581,10 +1787,12 @@ static void cmd_hdel(resp_client_t *c, char **argv, long *argl, int argc) {
       ok = lfkv_cas(resp_kv, k, klen, cur, NULL);
     } else {
       ok = lfkv_cas(resp_kv, k, klen, cur, fresh);
-      if (!ok) unrefexp(fresh);
+      if (!ok)
+        unrefexp(fresh);
     }
     unrefexp(cur);
-    if (!ok) continue;
+    if (!ok)
+      continue;
     resp_write_int(c, deleted);
     return;
   }
@@ -1593,10 +1801,17 @@ static void cmd_hdel(resp_client_t *c, char **argv, long *argl, int argc) {
 static void cmd_hexists(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(3);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_int(c, 0); return; }
+  if (!v) {
+    resp_write_int(c, 0);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   char *fk = resp_dup_key(argv[2], argl[2]);
-  if (!fk) { unrefexp(v); resp_write_int(c, 0); return; }
+  if (!fk) {
+    unrefexp(v);
+    resp_write_int(c, 0);
+    return;
+  }
   exp_t *fv = resp_dict_field_get((dict_t *)v->ptr, fk);
   free(fk);
   resp_write_int(c, fv ? 1 : 0);
@@ -1606,7 +1821,10 @@ static void cmd_hexists(resp_client_t *c, char **argv, long *argl, int argc) {
 static void cmd_hlen(resp_client_t *c, char **argv, long *argl, int argc) {
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_int(c, 0); return; }
+  if (!v) {
+    resp_write_int(c, 0);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   resp_write_int(c, (long long)dict_count((dict_t *)v->ptr));
   unrefexp(v);
@@ -1637,7 +1855,10 @@ static void cmd_hkeys_hvals_hgetall(resp_client_t *c, char **argv, long *argl,
                                     int argc, int keys, int vals) {
   ARGN(2);
   exp_t *v = resp_kv_lookup(argv[1], (size_t)argl[1]);
-  if (!v) { resp_write_array_hdr(c, 0); return; }
+  if (!v) {
+    resp_write_array_hdr(c, 0);
+    return;
+  }
   RESP_WRONGTYPE_IF_NOT(v, isdict(v));
   hash_emit(c, (dict_t *)v->ptr, keys, vals);
   unrefexp(v);
@@ -1655,18 +1876,50 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
    handler (e.g. FLUSHDB/FLUSHALL) differ only by `kind`, decoded by a
    switch in resp_dispatch. */
 typedef enum {
-  HK_PING = 1, HK_ECHO, HK_QUIT, HK_COMMAND, HK_SELECT, HK_DBSIZE,
-  HK_FLUSHDB, HK_KEYS, HK_TYPE, HK_DEL, HK_EXISTS,
-  HK_EXPIRE_S, HK_EXPIRE_MS, HK_TTL_S, HK_TTL_MS, HK_PERSIST,
-  HK_GET, HK_SET, HK_STRLEN,
-  HK_INCR, HK_DECR, HK_INCRBY, HK_DECRBY, HK_APPEND,
-  HK_LPUSH, HK_RPUSH, HK_LPOP, HK_RPOP, HK_LLEN, HK_LINDEX, HK_LRANGE,
-  HK_HSET, HK_HGET, HK_HDEL, HK_HEXISTS, HK_HLEN,
-  HK_HKEYS, HK_HVALS, HK_HGETALL,
-  HK_SAVE, HK_BGSAVE,
+  HK_PING = 1,
+  HK_ECHO,
+  HK_QUIT,
+  HK_COMMAND,
+  HK_SELECT,
+  HK_DBSIZE,
+  HK_FLUSHDB,
+  HK_KEYS,
+  HK_TYPE,
+  HK_DEL,
+  HK_EXISTS,
+  HK_EXPIRE_S,
+  HK_EXPIRE_MS,
+  HK_TTL_S,
+  HK_TTL_MS,
+  HK_PERSIST,
+  HK_GET,
+  HK_SET,
+  HK_STRLEN,
+  HK_INCR,
+  HK_DECR,
+  HK_INCRBY,
+  HK_DECRBY,
+  HK_APPEND,
+  HK_LPUSH,
+  HK_RPUSH,
+  HK_LPOP,
+  HK_RPOP,
+  HK_LLEN,
+  HK_LINDEX,
+  HK_LRANGE,
+  HK_HSET,
+  HK_HGET,
+  HK_HDEL,
+  HK_HEXISTS,
+  HK_HLEN,
+  HK_HKEYS,
+  HK_HVALS,
+  HK_HGETALL,
+  HK_SAVE,
+  HK_BGSAVE,
 } resp_kind_t;
 
-#define RESP_CMD_TABLE_BITS 6           /* 64 buckets, load = 41/64 = 0.64 */
+#define RESP_CMD_TABLE_BITS 6 /* 64 buckets, load = 41/64 = 0.64 */
 #define RESP_CMD_TABLE_SIZE (1u << RESP_CMD_TABLE_BITS)
 #define RESP_CMD_TABLE_MASK (RESP_CMD_TABLE_SIZE - 1)
 #define RESP_CMD_NAMEMAX 12
@@ -1674,34 +1927,37 @@ typedef enum {
 typedef struct {
   unsigned char namelen;
   unsigned char kind;
-  char name[RESP_CMD_NAMEMAX];        /* uppercase, NOT NUL-terminated */
+  char name[RESP_CMD_NAMEMAX]; /* uppercase, NOT NUL-terminated */
 } resp_cmd_t;
 
 static resp_cmd_t resp_cmd_table[RESP_CMD_TABLE_SIZE];
 
-static const struct { const char *name; resp_kind_t kind; } resp_cmd_seed[] = {
-  {"PING",     HK_PING},      {"ECHO",     HK_ECHO},
-  {"QUIT",     HK_QUIT},      {"COMMAND",  HK_COMMAND},
-  {"SELECT",   HK_SELECT},    {"DBSIZE",   HK_DBSIZE},
-  {"FLUSHDB",  HK_FLUSHDB},   {"FLUSHALL", HK_FLUSHDB},
-  {"KEYS",     HK_KEYS},      {"TYPE",     HK_TYPE},
-  {"DEL",      HK_DEL},       {"UNLINK",   HK_DEL},
-  {"EXISTS",   HK_EXISTS},    {"EXPIRE",   HK_EXPIRE_S},
-  {"PEXPIRE",  HK_EXPIRE_MS}, {"TTL",      HK_TTL_S},
-  {"PTTL",     HK_TTL_MS},    {"PERSIST",  HK_PERSIST},
-  {"GET",      HK_GET},       {"SET",      HK_SET},
-  {"STRLEN",   HK_STRLEN},    {"INCR",     HK_INCR},
-  {"DECR",     HK_DECR},      {"INCRBY",   HK_INCRBY},
-  {"DECRBY",   HK_DECRBY},    {"APPEND",   HK_APPEND},
-  {"LPUSH",    HK_LPUSH},     {"RPUSH",    HK_RPUSH},
-  {"LPOP",     HK_LPOP},      {"RPOP",     HK_RPOP},
-  {"LLEN",     HK_LLEN},      {"LINDEX",   HK_LINDEX},
-  {"LRANGE",   HK_LRANGE},    {"HSET",     HK_HSET},
-  {"HGET",     HK_HGET},      {"HDEL",     HK_HDEL},
-  {"HEXISTS",  HK_HEXISTS},   {"HLEN",     HK_HLEN},
-  {"HKEYS",    HK_HKEYS},     {"HVALS",    HK_HVALS},
-  {"HGETALL",  HK_HGETALL},   {"SAVE",     HK_SAVE},
-  {"BGSAVE",   HK_BGSAVE},
+static const struct {
+  const char *name;
+  resp_kind_t kind;
+} resp_cmd_seed[] = {
+    {"PING", HK_PING},         {"ECHO", HK_ECHO},
+    {"QUIT", HK_QUIT},         {"COMMAND", HK_COMMAND},
+    {"SELECT", HK_SELECT},     {"DBSIZE", HK_DBSIZE},
+    {"FLUSHDB", HK_FLUSHDB},   {"FLUSHALL", HK_FLUSHDB},
+    {"KEYS", HK_KEYS},         {"TYPE", HK_TYPE},
+    {"DEL", HK_DEL},           {"UNLINK", HK_DEL},
+    {"EXISTS", HK_EXISTS},     {"EXPIRE", HK_EXPIRE_S},
+    {"PEXPIRE", HK_EXPIRE_MS}, {"TTL", HK_TTL_S},
+    {"PTTL", HK_TTL_MS},       {"PERSIST", HK_PERSIST},
+    {"GET", HK_GET},           {"SET", HK_SET},
+    {"STRLEN", HK_STRLEN},     {"INCR", HK_INCR},
+    {"DECR", HK_DECR},         {"INCRBY", HK_INCRBY},
+    {"DECRBY", HK_DECRBY},     {"APPEND", HK_APPEND},
+    {"LPUSH", HK_LPUSH},       {"RPUSH", HK_RPUSH},
+    {"LPOP", HK_LPOP},         {"RPOP", HK_RPOP},
+    {"LLEN", HK_LLEN},         {"LINDEX", HK_LINDEX},
+    {"LRANGE", HK_LRANGE},     {"HSET", HK_HSET},
+    {"HGET", HK_HGET},         {"HDEL", HK_HDEL},
+    {"HEXISTS", HK_HEXISTS},   {"HLEN", HK_HLEN},
+    {"HKEYS", HK_HKEYS},       {"HVALS", HK_HVALS},
+    {"HGETALL", HK_HGETALL},   {"SAVE", HK_SAVE},
+    {"BGSAVE", HK_BGSAVE},
 };
 
 /* The seed→table build is one-shot for the whole process; calling it
@@ -1741,23 +1997,32 @@ static void resp_cmd_table_init(void) {
 
 /* Returns the kind for a built-in command, or 0 if not found. */
 static int resp_cmd_lookup(const char *cmd, long clen) {
-  if (clen <= 0 || clen > RESP_CMD_NAMEMAX) return 0;
+  if (clen <= 0 || clen > RESP_CMD_NAMEMAX)
+    return 0;
   if (clen == 3) {
     char a = cmd[0], b = cmd[1], d = cmd[2];
-    if (a >= 'a' && a <= 'z') a -= 32;
-    if (b >= 'a' && b <= 'z') b -= 32;
-    if (d >= 'a' && d <= 'z') d -= 32;
-    if (a == 'G' && b == 'E' && d == 'T') return HK_GET;
-    if (a == 'S' && b == 'E' && d == 'T') return HK_SET;
-    if (a == 'D' && b == 'E' && d == 'L') return HK_DEL;
-    if (a == 'T' && b == 'T' && d == 'L') return HK_TTL_S;
+    if (a >= 'a' && a <= 'z')
+      a -= 32;
+    if (b >= 'a' && b <= 'z')
+      b -= 32;
+    if (d >= 'a' && d <= 'z')
+      d -= 32;
+    if (a == 'G' && b == 'E' && d == 'T')
+      return HK_GET;
+    if (a == 'S' && b == 'E' && d == 'T')
+      return HK_SET;
+    if (a == 'D' && b == 'E' && d == 'L')
+      return HK_DEL;
+    if (a == 'T' && b == 'T' && d == 'L')
+      return HK_TTL_S;
   }
   /* Single pass: case-fold into up[] and hash simultaneously. */
   char up[RESP_CMD_NAMEMAX];
   uint32_t h = 2166136261u;
   for (long i = 0; i < clen; i++) {
     char a = cmd[i];
-    if (a >= 'a' && a <= 'z') a -= 32;
+    if (a >= 'a' && a <= 'z')
+      a -= 32;
     up[i] = a;
     h ^= (unsigned char)a;
     h *= 16777619u;
@@ -1765,7 +2030,8 @@ static int resp_cmd_lookup(const char *cmd, long clen) {
   uint32_t i = h & RESP_CMD_TABLE_MASK;
   for (uint32_t probes = 0; probes < RESP_CMD_TABLE_SIZE; probes++) {
     const resp_cmd_t *e = &resp_cmd_table[i];
-    if (e->kind == 0) return 0;
+    if (e->kind == 0)
+      return 0;
     if (e->namelen == clen && memcmp(e->name, up, clen) == 0)
       return e->kind;
     i = (i + 1) & RESP_CMD_TABLE_MASK;
@@ -1774,7 +2040,8 @@ static int resp_cmd_lookup(const char *cmd, long clen) {
 }
 
 static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
-  if (argc < 1) return;
+  if (argc < 1)
+    return;
 #ifdef ALCOVE_METRICS
   metric_bump(g_m_cmds, 1); /* one command served */
 #endif
@@ -1783,60 +2050,103 @@ static void resp_dispatch(resp_client_t *c, char **argv, long *argl, int argc) {
   int kind = resp_cmd_lookup(cmd, clen);
 
   switch (kind) {
-  case HK_PING:    return cmd_ping(c, argv, argl, argc);
-  case HK_ECHO:    return cmd_echo(c, argv, argl, argc);
-  case HK_QUIT:    return cmd_quit(c);
+  case HK_PING:
+    return cmd_ping(c, argv, argl, argc);
+  case HK_ECHO:
+    return cmd_echo(c, argv, argl, argc);
+  case HK_QUIT:
+    return cmd_quit(c);
   case HK_COMMAND:
     /* redis-cli sends `COMMAND DOCS` on connect to build help. An
        empty array satisfies it. */
     resp_write_array_hdr(c, 0);
     return;
-  case HK_SELECT:    return cmd_select(c, argv, argl, argc);
-  case HK_DBSIZE:    return cmd_dbsize(c);
-  case HK_FLUSHDB:   return cmd_flushdb(c);
-  case HK_KEYS:      return cmd_keys_star(c, argv, argl, argc);
-  case HK_TYPE:      return cmd_type(c, argv, argl, argc);
-  case HK_DEL:       return cmd_del(c, argv, argl, argc);
-  case HK_EXISTS:    return cmd_exists(c, argv, argl, argc);
-  case HK_EXPIRE_S:  return cmd_expire(c, argv, argl, argc, 0);
-  case HK_EXPIRE_MS: return cmd_expire(c, argv, argl, argc, 1);
-  case HK_TTL_S:     return cmd_ttl(c, argv, argl, argc, 0);
-  case HK_TTL_MS:    return cmd_ttl(c, argv, argl, argc, 1);
-  case HK_PERSIST:   return cmd_persist(c, argv, argl, argc);
-  case HK_GET:       return cmd_get(c, argv, argl, argc);
-  case HK_SET:       return cmd_set(c, argv, argl, argc);
-  case HK_STRLEN:    return cmd_strlen(c, argv, argl, argc);
-  case HK_INCR:      return cmd_incr_decr(c, argv, argl, argc, +1);
-  case HK_DECR:      return cmd_incr_decr(c, argv, argl, argc, -1);
-  case HK_INCRBY:    return cmd_incrby_decrby(c, argv, argl, argc, +1);
-  case HK_DECRBY:    return cmd_incrby_decrby(c, argv, argl, argc, -1);
-  case HK_APPEND:    return cmd_append(c, argv, argl, argc);
-  case HK_LPUSH:     return cmd_lpush_rpush(c, argv, argl, argc, 1);
-  case HK_RPUSH:     return cmd_lpush_rpush(c, argv, argl, argc, 0);
-  case HK_LPOP:      return cmd_lpop_rpop(c, argv, argl, argc, 1);
-  case HK_RPOP:      return cmd_lpop_rpop(c, argv, argl, argc, 0);
-  case HK_LLEN:      return cmd_llen(c, argv, argl, argc);
-  case HK_LINDEX:    return cmd_lindex(c, argv, argl, argc);
-  case HK_LRANGE:    return cmd_lrange(c, argv, argl, argc);
-  case HK_HSET:      return cmd_hset(c, argv, argl, argc);
-  case HK_HGET:      return cmd_hget(c, argv, argl, argc);
-  case HK_HDEL:      return cmd_hdel(c, argv, argl, argc);
-  case HK_HEXISTS:   return cmd_hexists(c, argv, argl, argc);
-  case HK_HLEN:      return cmd_hlen(c, argv, argl, argc);
-  case HK_HKEYS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 0);
-  case HK_HVALS:     return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
-  case HK_HGETALL:   return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
-  case HK_SAVE:      return cmd_save(c, argv, argl, argc);
-  case HK_BGSAVE:    return cmd_bgsave(c, argv, argl, argc);
+  case HK_SELECT:
+    return cmd_select(c, argv, argl, argc);
+  case HK_DBSIZE:
+    return cmd_dbsize(c);
+  case HK_FLUSHDB:
+    return cmd_flushdb(c);
+  case HK_KEYS:
+    return cmd_keys_star(c, argv, argl, argc);
+  case HK_TYPE:
+    return cmd_type(c, argv, argl, argc);
+  case HK_DEL:
+    return cmd_del(c, argv, argl, argc);
+  case HK_EXISTS:
+    return cmd_exists(c, argv, argl, argc);
+  case HK_EXPIRE_S:
+    return cmd_expire(c, argv, argl, argc, 0);
+  case HK_EXPIRE_MS:
+    return cmd_expire(c, argv, argl, argc, 1);
+  case HK_TTL_S:
+    return cmd_ttl(c, argv, argl, argc, 0);
+  case HK_TTL_MS:
+    return cmd_ttl(c, argv, argl, argc, 1);
+  case HK_PERSIST:
+    return cmd_persist(c, argv, argl, argc);
+  case HK_GET:
+    return cmd_get(c, argv, argl, argc);
+  case HK_SET:
+    return cmd_set(c, argv, argl, argc);
+  case HK_STRLEN:
+    return cmd_strlen(c, argv, argl, argc);
+  case HK_INCR:
+    return cmd_incr_decr(c, argv, argl, argc, +1);
+  case HK_DECR:
+    return cmd_incr_decr(c, argv, argl, argc, -1);
+  case HK_INCRBY:
+    return cmd_incrby_decrby(c, argv, argl, argc, +1);
+  case HK_DECRBY:
+    return cmd_incrby_decrby(c, argv, argl, argc, -1);
+  case HK_APPEND:
+    return cmd_append(c, argv, argl, argc);
+  case HK_LPUSH:
+    return cmd_lpush_rpush(c, argv, argl, argc, 1);
+  case HK_RPUSH:
+    return cmd_lpush_rpush(c, argv, argl, argc, 0);
+  case HK_LPOP:
+    return cmd_lpop_rpop(c, argv, argl, argc, 1);
+  case HK_RPOP:
+    return cmd_lpop_rpop(c, argv, argl, argc, 0);
+  case HK_LLEN:
+    return cmd_llen(c, argv, argl, argc);
+  case HK_LINDEX:
+    return cmd_lindex(c, argv, argl, argc);
+  case HK_LRANGE:
+    return cmd_lrange(c, argv, argl, argc);
+  case HK_HSET:
+    return cmd_hset(c, argv, argl, argc);
+  case HK_HGET:
+    return cmd_hget(c, argv, argl, argc);
+  case HK_HDEL:
+    return cmd_hdel(c, argv, argl, argc);
+  case HK_HEXISTS:
+    return cmd_hexists(c, argv, argl, argc);
+  case HK_HLEN:
+    return cmd_hlen(c, argv, argl, argc);
+  case HK_HKEYS:
+    return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 0);
+  case HK_HVALS:
+    return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 0, 1);
+  case HK_HGETALL:
+    return cmd_hkeys_hvals_hgetall(c, argv, argl, argc, 1, 1);
+  case HK_SAVE:
+    return cmd_save(c, argv, argl, argc);
+  case HK_BGSAVE:
+    return cmd_bgsave(c, argv, argl, argc);
   }
 
-  if (resp_user_dispatch(c, cmd, clen, argv, argl, argc)) return;
+  if (resp_user_dispatch(c, cmd, clen, argv, argl, argc))
+    return;
 
   char buf[256];
-  int n = snprintf(buf, sizeof buf, "ERR unknown command '%.*s'", (int)clen,
-                   cmd);
-  if (n < 0) n = 0;
-  if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+  int n =
+      snprintf(buf, sizeof buf, "ERR unknown command '%.*s'", (int)clen, cmd);
+  if (n < 0)
+    n = 0;
+  if ((size_t)n >= sizeof buf)
+    n = (int)sizeof buf - 1;
   resp_write_line(c, '-', buf, (size_t)n);
 }
 
@@ -1845,10 +2155,10 @@ static void resp_process_input(resp_client_t *c) {
     char **argv = NULL;
     long *argl = NULL;
     int argc = 0;
-    int consumed = resp_parse_one(c, c->rbuf + c->rhead,
-                                  c->rlen - c->rhead,
+    int consumed = resp_parse_one(c, c->rbuf + c->rhead, c->rlen - c->rhead,
                                   &argv, &argl, &argc);
-    if (consumed == 0) break;
+    if (consumed == 0)
+      break;
     if (consumed < 0) {
       resp_write_err(c, "ERR Protocol error");
       shutdown(c->fd, SHUT_RD);
@@ -1861,12 +2171,14 @@ static void resp_process_input(resp_client_t *c) {
   }
   /* Cheap reset when the window is fully consumed — the common case
      after a pipelined burst. Skips the next slide-down memmove. */
-  if (c->rhead == c->rlen) c->rhead = c->rlen = 0;
+  if (c->rhead == c->rlen)
+    c->rhead = c->rlen = 0;
 }
 
 static int resp_set_nonblock(int fd) {
   int fl = fcntl(fd, F_GETFL, 0);
-  if (fl < 0) return -1;
+  if (fl < 0)
+    return -1;
   return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
@@ -1874,11 +2186,17 @@ static int resp_set_nonblock(int fd) {
    returned. Splices into the reactor-owned resp_clients list, so this
    must only run on the reactor thread that owns that list. */
 static resp_client_t *resp_client_new(int cfd) {
-  if (resp_set_nonblock(cfd) < 0) { close(cfd); return NULL; }
+  if (resp_set_nonblock(cfd) < 0) {
+    close(cfd);
+    return NULL;
+  }
   int yes = 1;
   (void)setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof yes);
   resp_client_t *cl = calloc(1, sizeof *cl);
-  if (!cl) { close(cfd); return NULL; }
+  if (!cl) {
+    close(cfd);
+    return NULL;
+  }
   cl->fd = cfd;
   cl->rcap = RESP_RBUF_INIT;
   cl->rbuf = malloc(cl->rcap);
@@ -1906,8 +2224,8 @@ static resp_client_t *resp_client_new(int cfd) {
    Both reactor loops (resp_serve and the combined REPL+RESP loop) call
    this — keeps the read/flush/write logic in one place. Inline so the
    per-iteration call cost stays at zero in the hot loop. */
-static inline int resp_client_handle_events(resp_client_t *cur,
-                                            int readable, int writable) {
+static inline int resp_client_handle_events(resp_client_t *cur, int readable,
+                                            int writable) {
   int drop = 0;
   if (readable) {
     /* Slide before grow: reclaiming a parsed prefix is far cheaper
@@ -1919,10 +2237,12 @@ static inline int resp_client_handle_events(resp_client_t *cur,
       cur->rhead = 0;
     }
     if (cur->rlen + 4096 > cur->rcap) {
-      if (cur->rcap >= RESP_RBUF_MAX) drop = 1;
+      if (cur->rcap >= RESP_RBUF_MAX)
+        drop = 1;
       else {
         size_t cap = cur->rcap * 2;
-        if (cap > RESP_RBUF_MAX) cap = RESP_RBUF_MAX;
+        if (cap > RESP_RBUF_MAX)
+          cap = RESP_RBUF_MAX;
         char *nb = realloc(cur->rbuf, cap);
         if (!nb)
           graceful_shutdown("Fatal error: out of memory (resp rbuf)");
@@ -1931,11 +2251,12 @@ static inline int resp_client_handle_events(resp_client_t *cur,
       }
     }
     if (!drop) {
-      ssize_t n = read(cur->fd, cur->rbuf + cur->rlen,
-                       cur->rcap - cur->rlen);
-      if (n == 0) drop = 1;
+      ssize_t n = read(cur->fd, cur->rbuf + cur->rlen, cur->rcap - cur->rlen);
+      if (n == 0)
+        drop = 1;
       else if (n < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) drop = 1;
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+          drop = 1;
       } else {
         cur->rlen += (size_t)n;
         resp_process_input(cur);
@@ -1958,10 +2279,9 @@ static inline int resp_client_handle_events(resp_client_t *cur,
   return drop;
 }
 
-static inline int resp_client_handle_io(resp_client_t *cur,
-                                        fd_set *rfds, fd_set *wfds) {
-  return resp_client_handle_events(cur,
-                                   FD_ISSET(cur->fd, rfds),
+static inline int resp_client_handle_io(resp_client_t *cur, fd_set *rfds,
+                                        fd_set *wfds) {
+  return resp_client_handle_events(cur, FD_ISSET(cur->fd, rfds),
                                    FD_ISSET(cur->fd, wfds));
 }
 
@@ -1972,7 +2292,10 @@ static inline int resp_client_handle_io(resp_client_t *cur,
    REPL path. */
 static int resp_listen(int port) {
   int srv = socket(AF_INET, SOCK_STREAM, 0);
-  if (srv < 0) { perror("socket"); return -1; }
+  if (srv < 0) {
+    perror("socket");
+    return -1;
+  }
   int yes = 1;
   setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
 #ifdef SO_REUSEPORT
@@ -1986,10 +2309,13 @@ static int resp_listen(int port) {
   if (bind(srv, (struct sockaddr *)&addr, sizeof addr) < 0) {
     fprintf(stderr, "alcove: bind 127.0.0.1:%d failed: %s\n", port,
             strerror(errno));
-    close(srv); return -1;
+    close(srv);
+    return -1;
   }
   if (listen(srv, RESP_LISTEN_BACKLOG) < 0) {
-    perror("listen"); close(srv); return -1;
+    perror("listen");
+    close(srv);
+    return -1;
   }
   /* Non-blocking so a select() false-positive can't stall the loop. */
   resp_set_nonblock(srv);
@@ -2006,7 +2332,7 @@ static void resp_install_signals(void) {
 
 /* ---------- scalable RESP reactor backend (-r hot path) ---------- */
 
-#define RESP_POLL_READ  1
+#define RESP_POLL_READ 1
 #define RESP_POLL_WRITE 2
 #define RESP_EVENT_BATCH 1024
 
@@ -2047,7 +2373,8 @@ static char resp_wake_marker;
    multi-threaded branch — compile them out in single-threaded builds. */
 #if !ALCOVE_SINGLE_THREADED
 static void resp_ready_add(resp_backend_t *b, void *ptr, int mask, int *n) {
-  if (!ptr || !mask) return;
+  if (!ptr || !mask)
+    return;
   for (int i = 0; i < *n; i++) {
     if (b->ready[i].ptr == ptr) {
       b->ready[i].mask |= mask;
@@ -2127,18 +2454,21 @@ static int resp_backend_init(resp_backend_t *b, int srv, int wakefd) {
 }
 
 static void resp_backend_close(resp_backend_t *b) {
-  if (b->fd >= 0) close(b->fd);
+  if (b->fd >= 0)
+    close(b->fd);
   b->fd = -1;
   b->kind = RESP_BACKEND_SELECT;
 }
-#endif /* !ALCOVE_SINGLE_THREADED (resp_ready_add, resp_backend_init, resp_backend_close) */
+#endif /* !ALCOVE_SINGLE_THREADED (resp_ready_add, resp_backend_init,          \
+          resp_backend_close) */
 
 static int resp_backend_active(resp_backend_t *b) {
   return b && b->kind != RESP_BACKEND_SELECT && b->fd >= 0;
 }
 
 static int resp_backend_add_client(resp_backend_t *b, resp_client_t *c) {
-  if (!resp_backend_active(b)) return 0;
+  if (!resp_backend_active(b))
+    return 0;
   c->poll_mask = RESP_POLL_READ;
 #if RESP_HAVE_EPOLL
   if (b->kind == RESP_BACKEND_EPOLL) {
@@ -2172,7 +2502,8 @@ static int resp_backend_add_client(resp_backend_t *b, resp_client_t *c) {
    only called from resp_serve's multi-threaded branch. */
 #if !ALCOVE_SINGLE_THREADED
 static void resp_backend_del_client(resp_backend_t *b, resp_client_t *c) {
-  if (!resp_backend_active(b)) return;
+  if (!resp_backend_active(b))
+    return;
 #if RESP_HAVE_EPOLL
   if (b->kind == RESP_BACKEND_EPOLL) {
     (void)epoll_ctl(b->fd, EPOLL_CTL_DEL, c->fd, NULL);
@@ -2191,17 +2522,19 @@ static void resp_backend_del_client(resp_backend_t *b, resp_client_t *c) {
 }
 
 static void resp_backend_update_client(resp_backend_t *b, resp_client_t *c) {
-  if (!resp_backend_active(b)) return;
-  int want = RESP_POLL_READ |
-             ((c->wlen > c->whead) ? RESP_POLL_WRITE : 0);
-  if (want == c->poll_mask) return;
+  if (!resp_backend_active(b))
+    return;
+  int want = RESP_POLL_READ | ((c->wlen > c->whead) ? RESP_POLL_WRITE : 0);
+  if (want == c->poll_mask)
+    return;
   c->poll_mask = want;
 #if RESP_HAVE_EPOLL
   if (b->kind == RESP_BACKEND_EPOLL) {
     struct epoll_event ev;
     memset(&ev, 0, sizeof ev);
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP;
-    if (want & RESP_POLL_WRITE) ev.events |= EPOLLOUT;
+    if (want & RESP_POLL_WRITE)
+      ev.events |= EPOLLOUT;
     ev.data.ptr = c;
     if (epoll_ctl(b->fd, EPOLL_CTL_MOD, c->fd, &ev) < 0)
       perror("epoll_ctl client mod");
@@ -2221,13 +2554,15 @@ static void resp_backend_update_client(resp_backend_t *b, resp_client_t *c) {
 }
 
 static int resp_backend_wait(resp_backend_t *b, int timeout_ms) {
-  if (!resp_backend_active(b)) return 0;
+  if (!resp_backend_active(b))
+    return 0;
   int nready = 0;
 #if RESP_HAVE_EPOLL
   if (b->kind == RESP_BACKEND_EPOLL) {
     int n = epoll_wait(b->fd, b->ep_events, RESP_EVENT_BATCH, timeout_ms);
     if (n < 0) {
-      if (errno == EINTR) return -2;
+      if (errno == EINTR)
+        return -2;
       perror("epoll_wait");
       return -1;
     }
@@ -2250,7 +2585,8 @@ static int resp_backend_wait(resp_backend_t *b, int timeout_ms) {
     ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
     int n = kevent(b->fd, NULL, 0, b->kq_events, RESP_EVENT_BATCH, &ts);
     if (n < 0) {
-      if (errno == EINTR) return -2;
+      if (errno == EINTR)
+        return -2;
       perror("kevent wait");
       return -1;
     }
@@ -2269,7 +2605,8 @@ static int resp_backend_wait(resp_backend_t *b, int timeout_ms) {
 #endif
   return 0;
 }
-#endif /* !ALCOVE_SINGLE_THREADED (resp_backend_del/update_client, resp_backend_wait) */
+#endif /* !ALCOVE_SINGLE_THREADED (resp_backend_del/update_client,             \
+          resp_backend_wait) */
 
 /* Drain pending accepts on a non-blocking listen socket, capped at
    RESP_ACCEPT_BURST. EAGAIN/EWOULDBLOCK is the normal exit (queue empty,
@@ -2279,8 +2616,10 @@ static void resp_accept_drain(int srv, resp_backend_t *backend) {
   for (int i = 0; i < RESP_ACCEPT_BURST; i++) {
     int cfd = accept(srv, NULL, NULL);
     if (cfd < 0) {
-      if (errno == EINTR) continue;
-      if (errno != EAGAIN && errno != EWOULDBLOCK) perror("accept");
+      if (errno == EINTR)
+        continue;
+      if (errno != EAGAIN && errno != EWOULDBLOCK)
+        perror("accept");
       break;
     }
     resp_client_t *cl = resp_client_new(cfd);
@@ -2292,20 +2631,23 @@ static void resp_accept_drain(int srv, resp_backend_t *backend) {
 /* Common fdset build: rfds gets srv + extra_rfd (if >= 0) + every
    client; wfds gets clients with pending output. Returns maxfd for
    select(). extra_rfd is an optional second readable fd, or -1 to skip. */
-static inline int resp_build_fdset(int srv, int extra_rfd,
-                                   fd_set *rfds, fd_set *wfds) {
+static inline int resp_build_fdset(int srv, int extra_rfd, fd_set *rfds,
+                                   fd_set *wfds) {
   FD_ZERO(rfds);
   FD_ZERO(wfds);
   int maxfd = srv;
   FD_SET(srv, rfds);
   if (extra_rfd >= 0) {
     FD_SET(extra_rfd, rfds);
-    if (extra_rfd > maxfd) maxfd = extra_rfd;
+    if (extra_rfd > maxfd)
+      maxfd = extra_rfd;
   }
   for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
     FD_SET(cl->fd, rfds);
-    if (cl->wlen > cl->whead) FD_SET(cl->fd, wfds);
-    if (cl->fd > maxfd) maxfd = cl->fd;
+    if (cl->wlen > cl->whead)
+      FD_SET(cl->fd, wfds);
+    if (cl->fd > maxfd)
+      maxfd = cl->fd;
   }
   return maxfd;
 }
@@ -2339,11 +2681,12 @@ static inline void resp_clients_free_all(void) {
 /* Set once shared server state is up (see resp_serve_shared_init); cleared by
    the teardown. Declared here so both the init and teardown can see it. */
 static int resp_shared_inited = 0;
-/* Process-global teardown, the mirror of resp_serve_shared_init: run ONCE. Under
+/* Process-global teardown, the mirror of resp_serve_shared_init: run ONCE.
+   Under
    --threads every reactor would otherwise run it concurrently (racing the
-   resp_active_port write + the shared keyspace/epoch teardown — TSan-confirmed).
-   respN_serve calls it after JOINING the pool; the single-reactor path calls it
-   from resp_reactor_teardown below. */
+   resp_active_port write + the shared keyspace/epoch teardown —
+   TSan-confirmed). respN_serve calls it after JOINING the pool; the
+   single-reactor path calls it from resp_reactor_teardown below. */
 void resp_serve_shared_teardown(void) {
   resp_active_port = 0;
   resp_kv_clear();
@@ -2385,14 +2728,15 @@ void resp_serve_shared_init(int port) {
 int resp_serve(int port) {
 #if ALCOVE_SINGLE_THREADED
   (void)port;
-  fprintf(stderr,
-          "alcove: -r requires the multi-threaded build "
-          "(rebuild without ALCOVE_SINGLE_THREADED).\n");
+  fprintf(stderr, "alcove: -r requires the multi-threaded build "
+                  "(rebuild without ALCOVE_SINGLE_THREADED).\n");
   return 1;
 #else
   int srv = resp_listen(port);
-  if (srv < 0) return 1;
-  resp_serve_shared_init(port); /* once-only (already done before a thread pool) */
+  if (srv < 0)
+    return 1;
+  resp_serve_shared_init(
+      port); /* once-only (already done before a thread pool) */
 
   printf("alcove RESP2 server listening on 127.0.0.1:%d\n", port);
   fflush(stdout);
@@ -2418,8 +2762,10 @@ int resp_serve(int port) {
 
     if (resp_backend_active(&backend)) {
       int n = resp_backend_wait(&backend, 1000);
-      if (n == -2) continue; /* EINTR */
-      if (n < 0) break;
+      if (n == -2)
+        continue; /* EINTR */
+      if (n < 0)
+        break;
       for (int i = 0; i < n; i++) {
         void *ptr = backend.ready[i].ptr;
         int mask = backend.ready[i].mask;
@@ -2429,8 +2775,7 @@ int resp_serve(int port) {
           alc_wake_drain(&sh->wake);
         } else {
           resp_client_t *cl = (resp_client_t *)ptr;
-          if (resp_client_handle_events(cl,
-                                        (mask & RESP_POLL_READ) != 0,
+          if (resp_client_handle_events(cl, (mask & RESP_POLL_READ) != 0,
                                         (mask & RESP_POLL_WRITE) != 0)) {
             resp_backend_del_client(&backend, cl);
             resp_client_unlink(cl);
@@ -2445,7 +2790,8 @@ int resp_serve(int port) {
       struct timeval tv = {1, 0};
       int r = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
       if (r < 0) {
-        if (errno == EINTR) continue;
+        if (errno == EINTR)
+          continue;
         perror("select");
         break;
       }
@@ -2453,9 +2799,11 @@ int resp_serve(int port) {
       /* Drain the wake fd if signalled. TODO(step-2.5): when cross-shard
          ops add a real inbox producer, also drain sh->inbox here and
          dispatch each message before resuming client I/O. */
-      if (wakefd >= 0 && FD_ISSET(wakefd, &rfds)) alc_wake_drain(&sh->wake);
+      if (wakefd >= 0 && FD_ISSET(wakefd, &rfds))
+        alc_wake_drain(&sh->wake);
 
-      if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv, NULL);
+      if (FD_ISSET(srv, &rfds))
+        resp_accept_drain(srv, NULL);
 
       resp_drive_clients(&rfds, &wfds);
     }
@@ -2507,19 +2855,31 @@ static size_t resp_repl_consume_form(const char *acc, size_t len) {
   for (; i < len; i++) {
     char c = acc[i];
     if (in_string) {
-      if (c == '\\' && i + 1 < len) i++;
-      else if (c == '"') in_string = 0;
+      if (c == '\\' && i + 1 < len)
+        i++;
+      else if (c == '"')
+        in_string = 0;
       continue;
     }
-    if (c == '"') { in_string = 1; saw_token = 1; continue; }
+    if (c == '"') {
+      in_string = 1;
+      saw_token = 1;
+      continue;
+    }
     if (c == ';') {
-      while (i < len && acc[i] != '\n') i++;
+      while (i < len && acc[i] != '\n')
+        i++;
       continue;
     }
-    if (c == '(') { depth++; saw_token = 1; continue; }
+    if (c == '(') {
+      depth++;
+      saw_token = 1;
+      continue;
+    }
     if (c == ')') {
       depth--;
-      if (depth == 0) return i + 1; /* complete parenthesised form */
+      if (depth == 0)
+        return i + 1; /* complete parenthesised form */
       continue;
     }
     if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
@@ -2557,7 +2917,8 @@ static size_t resp_repl_consume_als(const char *acc, size_t len) {
       in_string = 1;
       continue;
     }
-    /* '#' opens an als comment to end-of-line — except '#[' (vector literal). */
+    /* '#' opens an als comment to end-of-line — except '#[' (vector literal).
+     */
     if (c == '#' && !(i + 1 < len && acc[i + 1] == '[')) {
       while (i + 1 < len && acc[i + 1] != '\n')
         i++;
@@ -2581,8 +2942,8 @@ static size_t resp_repl_consume_als(const char *acc, size_t len) {
           break;
         }
       size_t k = i; /* last non-whitespace char of this line */
-      while (k > ls && (acc[k - 1] == ' ' || acc[k - 1] == '\t' ||
-                        acc[k - 1] == '\r'))
+      while (k > ls &&
+             (acc[k - 1] == ' ' || acc[k - 1] == '\t' || acc[k - 1] == '\r'))
         k--;
       int opens = (k > ls && acc[k - 1] == ':');
       if (depth == 0) {
@@ -2624,10 +2985,11 @@ static env_t *resp_rl_env = NULL;
 static pthread_t resp_rl_tid;
 static pthread_mutex_t resp_rl_mtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t resp_rl_cv = PTHREAD_COND_INITIALIZER;
-static char *resp_rl_unit = NULL; /* mailbox: reader -> reactor; reactor frees */
-static int resp_rl_ready = 0;     /* a unit (or EOF) is waiting */
-static int resp_rl_done = 1;      /* reactor finished the previous unit */
-static int resp_rl_eof = 0;       /* reader hit EOF / Ctrl-D */
+static char *resp_rl_unit =
+    NULL;                     /* mailbox: reader -> reactor; reactor frees */
+static int resp_rl_ready = 0; /* a unit (or EOF) is waiting */
+static int resp_rl_done = 1;  /* reactor finished the previous unit */
+static int resp_rl_eof = 0;   /* reader hit EOF / Ctrl-D */
 static int resp_rl_wake[2] = {-1, -1}; /* reader -> reactor select() wakeup */
 static int resp_rl_idx = 0;
 
@@ -2692,7 +3054,8 @@ static void resp_rl_consume_unit(void) {
 
 int resp_repl_serve(int port, env_t *global) {
   int srv = resp_listen(port);
-  if (srv < 0) return 1;
+  if (srv < 0)
+    return 1;
   resp_active_port = port;
   resp_cmd_table_init();
   resp_install_signals();
@@ -2721,7 +3084,7 @@ int resp_repl_serve(int port, env_t *global) {
     use_thread = 1;
     resp_rl_env = global;
     repl_readline_setup(global); /* exact same readline config as the REPL */
-    repl_history_load(1);        /* round-trip ~/.alcove(s)_history like the REPL */
+    repl_history_load(1); /* round-trip ~/.alcove(s)_history like the REPL */
     resp_set_nonblock(resp_rl_wake[0]);
     repl_fd = resp_rl_wake[0];
     pthread_create(&resp_rl_tid, NULL, resp_rl_reader_main, NULL);
@@ -2747,7 +3110,8 @@ int resp_repl_serve(int port, env_t *global) {
     struct timeval tv = {1, 0};
     int r = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
     if (r < 0) {
-      if (errno == EINTR) continue;
+      if (errno == EINTR)
+        continue;
       perror("select");
       break;
     }
@@ -2765,7 +3129,8 @@ int resp_repl_serve(int port, env_t *global) {
       {
         if (acc_len + 4096 > acc_cap) {
           acc_cap *= 2;
-          acc = xrealloc(acc, acc_cap); /* OOM → graceful_shutdown, no NULL deref */
+          acc = xrealloc(acc,
+                         acc_cap); /* OOM → graceful_shutdown, no NULL deref */
         }
         ssize_t got = read(0, acc + acc_len, acc_cap - acc_len - 1);
         if (got == 0) {
@@ -2787,7 +3152,8 @@ int resp_repl_serve(int port, env_t *global) {
 #else
             size_t consumed = resp_repl_consume_form(acc, acc_len);
 #endif
-            if (!consumed) break;
+            if (!consumed)
+              break;
             idx++;
             resp_repl_eval_print(global, acc, consumed, idx);
             memmove(acc, acc + consumed, acc_len - consumed);
@@ -2805,7 +3171,8 @@ int resp_repl_serve(int port, env_t *global) {
     }
 
     /* --- listen socket --- */
-    if (FD_ISSET(srv, &rfds)) resp_accept_drain(srv, NULL);
+    if (FD_ISSET(srv, &rfds))
+      resp_accept_drain(srv, NULL);
 
     /* --- per-client read/write --- */
     resp_drive_clients(&rfds, &wfds);
@@ -2820,8 +3187,10 @@ int resp_repl_serve(int port, env_t *global) {
     resp_rl_done = 1;
     pthread_cond_signal(&resp_rl_cv);
     pthread_mutex_unlock(&resp_rl_mtx);
-    if (resp_rl_wake[0] >= 0) close(resp_rl_wake[0]);
-    if (resp_rl_wake[1] >= 0) close(resp_rl_wake[1]);
+    if (resp_rl_wake[0] >= 0)
+      close(resp_rl_wake[0]);
+    if (resp_rl_wake[1] >= 0)
+      close(resp_rl_wake[1]);
     repl_history_save(); /* persist this session like the standalone REPL */
   }
 #endif
@@ -2838,7 +3207,8 @@ int resp_repl_serve(int port, env_t *global) {
    global lock-free table so it's safe regardless. A read-only reactor
    lazily mirrors g_resp_kv into its TLS shard pointer on first touch. */
 
-const char doc_redis_count[] = "(redis-count) — number of keys in the running RESP server's db.";
+const char doc_redis_count[] =
+    "(redis-count) — number of keys in the running RESP server's db.";
 exp_t *rediscountcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
@@ -2852,20 +3222,25 @@ typedef struct {
 
 static int resp_keys_lisp_cb(const char *k, size_t klen, exp_t *v,
                              int64_t exp_us, void *ctx) {
-  (void)v; (void)exp_us;
+  (void)v;
+  (void)exp_us;
   resp_keys_lisp_ctx_t *s = ctx;
   exp_t *node = make_node(make_string((char *)k, (int)klen));
-  if (s->tail) s->tail = s->tail->next = node;
-  else         s->head = s->tail = node;
+  if (s->tail)
+    s->tail = s->tail->next = node;
+  else
+    s->head = s->tail = node;
   return 0;
 }
 
-const char doc_redis_keys[] = "(redis-keys) — list of all keys (as strings) in the RESP db. Skips expired entries.";
+const char doc_redis_keys[] = "(redis-keys) — list of all keys (as strings) in "
+                              "the RESP db. Skips expired entries.";
 exp_t *rediskeyscmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
   lfkv_t *kv = resp_kv_current();
-  if (!kv) return NIL_EXP;
+  if (!kv)
+    return NIL_EXP;
   resp_keys_lisp_ctx_t ctx = {NULL, NULL};
   lfkv_foreach(kv, resp_keys_lisp_cb, &ctx);
   return ctx.head ? ctx.head : NIL_EXP;
@@ -2876,32 +3251,44 @@ exp_t *rediskeyscmd(exp_t *e, env_t *env) {
    per-command "<who>: key must be a string or blob" message. On any reject
    path the macro returns from the enclosing builtin (releasing kx and e).
    `who` is the command name string literal (e.g. "redis-type"). */
-#define RESP_EVAL_KEY(kx, e, env, who)                                        \
-  exp_t *kx = EVAL(cadr(e), env);                                             \
-  if (iserror(kx)) { unrefexp(e); return kx; }                               \
-  if (!isstring(kx) && !isblob(kx)) {                                         \
-    unrefexp(kx); unrefexp(e);                                                \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
-                 who ": key must be a string or blob");                      \
+#define RESP_EVAL_KEY(kx, e, env, who)                                         \
+  exp_t *kx = EVAL(cadr(e), env);                                              \
+  if (iserror(kx)) {                                                           \
+    unrefexp(e);                                                               \
+    return kx;                                                                 \
+  }                                                                            \
+  if (!isstring(kx) && !isblob(kx)) {                                          \
+    unrefexp(kx);                                                              \
+    unrefexp(e);                                                               \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,                               \
+                 who ": key must be a string or blob");                        \
   }
 
-const char doc_redis_type[] = "(redis-type k) — RESP type of key k as a string: \"string\", \"list\", \"hash\", \"vector\", or \"none\".";
+const char doc_redis_type[] =
+    "(redis-type k) — RESP type of key k as a string: \"string\", \"list\", "
+    "\"hash\", \"vector\", or \"none\".";
 exp_t *redistypecmd(exp_t *e, env_t *env) {
   RESP_EVAL_KEY(kx, e, env, "redis-type");
-  const char *ks; size_t klen;
+  const char *ks;
+  size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
   const char *tn = v ? resp_type_name(v) : "none";
   exp_t *ret = make_string((char *)tn, (int)strlen(tn));
-  if (v) unrefexp(v);
-  unrefexp(kx); unrefexp(e);
+  if (v)
+    unrefexp(v);
+  unrefexp(kx);
+  unrefexp(e);
   return ret;
 }
 
-const char doc_redis_get[] = "(redis-get k) — Redis-string value of key k as a blob. Non-string containers return nil; use redis-val for raw exp_t containers.";
+const char doc_redis_get[] =
+    "(redis-get k) — Redis-string value of key k as a blob. Non-string "
+    "containers return nil; use redis-val for raw exp_t containers.";
 exp_t *redisgetcmd(exp_t *e, env_t *env) {
   RESP_EVAL_KEY(kx, e, env, "redis-get");
-  const char *ks; size_t klen;
+  const char *ks;
+  size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
   exp_t *ret = NIL_EXP;
@@ -2909,8 +3296,10 @@ exp_t *redisgetcmd(exp_t *e, env_t *env) {
     alc_blob_t *bl = (alc_blob_t *)v->ptr;
     ret = make_blob(bl->bytes, bl->len);
   }
-  if (v) unrefexp(v);
-  unrefexp(kx); unrefexp(e);
+  if (v)
+    unrefexp(v);
+  unrefexp(kx);
+  unrefexp(e);
   return ret;
 }
 
@@ -2939,7 +3328,8 @@ static exp_t *resp_exp_clone_for_lisp(exp_t *v, int depth) {
     unsigned k = vec_kind(v);
     if (k == VEC_KIND_I64) {
       dst = make_vector(n, MAKE_FIX(0));
-      if (!dst) return NULL;
+      if (!dst)
+        return NULL;
       for (int64_t i = 0; i < n; i++)
         vec_i64_at(dst, i) = vec_i64_at(v, i);
       return dst;
@@ -2948,13 +3338,15 @@ static exp_t *resp_exp_clone_for_lisp(exp_t *v, int depth) {
       exp_t *zero = make_floatf(0.0);
       dst = make_vector(n, zero);
       unrefexp(zero);
-      if (!dst) return NULL;
+      if (!dst)
+        return NULL;
       for (int64_t i = 0; i < n; i++)
         vec_f64_at(dst, i) = vec_f64_at(v, i);
       return dst;
     }
     dst = make_vector(n, NIL_EXP);
-    if (!dst) return NULL;
+    if (!dst)
+      return NULL;
     for (int64_t i = 0; i < n; i++) {
       exp_t *cell = resp_exp_clone_for_lisp(vec_gen_at(v, i), depth + 1);
       if (!cell) {
@@ -3009,14 +3401,18 @@ const char doc_redis_val[] =
     "Returns blobs, deques, hash-maps, vectors, or nil when missing.";
 exp_t *redisvalcmd(exp_t *e, env_t *env) {
   RESP_EVAL_KEY(kx, e, env, "redis-val");
-  const char *ks; size_t klen;
+  const char *ks;
+  size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   exp_t *v = resp_kv_lookup(ks, klen);
   exp_t *ret = v ? resp_exp_clone_for_lisp(v, 0) : NIL_EXP;
-  if (v) unrefexp(v);
-  unrefexp(kx); unrefexp(e);
-  return ret ? ret : error(ERROR_ILLEGAL_VALUE, NULL, env,
-                           "redis-val: value too deeply nested or unsupported");
+  if (v)
+    unrefexp(v);
+  unrefexp(kx);
+  unrefexp(e);
+  return ret ? ret
+             : error(ERROR_ILLEGAL_VALUE, NULL, env,
+                     "redis-val: value too deeply nested or unsupported");
 }
 
 static exp_t *resp_lisp_to_blob(exp_t *v) {
@@ -3034,8 +3430,10 @@ static exp_t *resp_lisp_to_blob(exp_t *v) {
   if (isfloat(v)) {
     char buf[64];
     int n = snprintf(buf, sizeof buf, "%.17g", (double)v->f);
-    if (n < 0) return NULL;
-    if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+    if (n < 0)
+      return NULL;
+    if ((size_t)n >= sizeof buf)
+      n = (int)sizeof buf - 1;
     return make_blob(buf, (size_t)n);
   }
   if (ischar(v)) {
@@ -3097,34 +3495,46 @@ const char doc_redis_set[] =
 exp_t *redissetcmd(exp_t *e, env_t *env) {
   RESP_EVAL_KEY(kx, e, env, "redis-set");
   exp_t *vx = EVAL(caddr(e), env);
-  if (iserror(vx)) { unrefexp(kx); unrefexp(e); return vx; }
+  if (iserror(vx)) {
+    unrefexp(kx);
+    unrefexp(e);
+    return vx;
+  }
   exp_t *stored = resp_lisp_to_store_value(vx);
   if (!stored) {
-    unrefexp(vx); unrefexp(kx); unrefexp(e);
+    unrefexp(vx);
+    unrefexp(kx);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-set: value must be string/blob/number/char, "
                  "or a deque/hash-map containing those scalar values");
   }
-  const char *ks; size_t klen;
+  const char *ks;
+  size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   resp_kv_ensure();
   resp_kv_set(ks, klen, stored); /* consumes stored */
-  unrefexp(vx); unrefexp(kx); unrefexp(e);
+  unrefexp(vx);
+  unrefexp(kx);
+  unrefexp(e);
   return TRUE_EXP;
 }
 
-const char doc_redis_del[] =
-    "(redis-del k) — delete key k from the RESP db. Returns 1 if removed, 0 otherwise.";
+const char doc_redis_del[] = "(redis-del k) — delete key k from the RESP db. "
+                             "Returns 1 if removed, 0 otherwise.";
 exp_t *redisdelcmd(exp_t *e, env_t *env) {
   RESP_EVAL_KEY(kx, e, env, "redis-del");
-  const char *ks; size_t klen;
+  const char *ks;
+  size_t klen;
   resp_key_bytes(kx, &ks, &klen);
   int removed = resp_kv_del(ks, klen);
-  unrefexp(kx); unrefexp(e);
+  unrefexp(kx);
+  unrefexp(e);
   return MAKE_FIX(removed ? 1 : 0);
 }
 
-const char doc_redis_flush[] = "(redis-flush) — remove every key from the RESP db (FLUSHDB). Returns t.";
+const char doc_redis_flush[] =
+    "(redis-flush) — remove every key from the RESP db (FLUSHDB). Returns t.";
 exp_t *redisflushcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
@@ -3132,7 +3542,8 @@ exp_t *redisflushcmd(exp_t *e, env_t *env) {
   return TRUE_EXP;
 }
 
-const char doc_redis_port[] = "(redis-port) — port the RESP server is bound to, or 0 if not running.";
+const char doc_redis_port[] =
+    "(redis-port) — port the RESP server is bound to, or 0 if not running.";
 exp_t *redisportcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
@@ -3163,7 +3574,8 @@ static void resp_user_upper(const char *src, long len, char *dst, size_t cap) {
   size_t n = (size_t)len < cap - 1 ? (size_t)len : cap - 1;
   for (i = 0; i < n; i++) {
     char ch = src[i];
-    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
+    if (ch >= 'a' && ch <= 'z')
+      ch = (char)(ch - 'a' + 'A');
     dst[i] = ch;
   }
   dst[n] = '\0';
@@ -3215,9 +3627,11 @@ static void resp_user_encode(resp_client_t *c, exp_t *v) {
   if (ispair(v)) {
     long n = 0;
     exp_t *p;
-    for (p = v; ispair(p); p = cdr(p)) n++;
+    for (p = v; ispair(p); p = cdr(p))
+      n++;
     resp_write_array_hdr(c, n);
-    for (p = v; ispair(p); p = cdr(p)) resp_user_encode(c, car(p));
+    for (p = v; ispair(p); p = cdr(p))
+      resp_user_encode(c, car(p));
     return;
   }
   if (islist(v)) {
@@ -3247,18 +3661,22 @@ static void resp_user_encode(resp_client_t *c, exp_t *v) {
      would require buffering; for now emit the type as a debug hint. */
   char tag[64];
   int n = snprintf(tag, sizeof tag, "<unencodable type %d>", v->type);
-  if (n < 0) n = 0;
-  if ((size_t)n >= sizeof tag) n = (int)sizeof tag - 1;
+  if (n < 0)
+    n = 0;
+  if ((size_t)n >= sizeof tag)
+    n = (int)sizeof tag - 1;
   resp_write_bulk(c, tag, (size_t)n);
 }
 
 static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
                               char **argv, long *argl, int argc) {
-  if (!resp_user_commands || resp_user_commands->ht[0].size == 0) return 0;
+  if (!resp_user_commands || resp_user_commands->ht[0].size == 0)
+    return 0;
   char name[256];
   resp_user_upper(cmd, clen, name, sizeof name);
   keyval_t *k = set_get_keyval_dict(resp_user_commands, name, NULL);
-  if (!k || !k->val) return 0;
+  if (!k || !k->val)
+    return 0;
   exp_t *fn = k->val;
 
   /* Marshal RESP bulks as a single Lisp pair-list bound to the lambda's
@@ -3269,8 +3687,11 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
   for (int i = 0; i < rargc; i++) {
     exp_t *s = make_blob(argv[i + 1], (size_t)argl[i + 1]);
     exp_t *node = make_node(s);
-    if (cur) cur = cur->next = node;
-    else { arglist = cur = node; }
+    if (cur)
+      cur = cur->next = node;
+    else {
+      arglist = cur = node;
+    }
   }
   exp_t *fn_ref = refexp(fn);
   exp_t *vargv[1] = {arglist};
@@ -3296,11 +3717,19 @@ static int resp_user_dispatch(resp_client_t *c, const char *cmd, long clen,
   g_resp_cb_guard = _save;
   unrefexp(fn_ref);
   resp_user_encode(c, ret);
-  if (ret) unrefexp(ret);
+  if (ret)
+    unrefexp(ret);
   return 1;
 }
 
-const char doc_redis_defcmd[] = "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from redis-cli. fn must take one parameter; it receives the RESP bulk args after the cmd name as a list of blobs (nil if none). Returns t. Under --threads N the callback runs concurrently; it must be READ-ONLY w.r.t. Lisp globals (no def/=/persist of globals — those error) and must not mutate state shared across invocations (captured closure vars, in-place container mutation); operate on the keyspace, which is concurrency-safe.";
+const char doc_redis_defcmd[] =
+    "(redis-defcmd \"NAME\" fn) — register fn as a Redis command callable from "
+    "redis-cli. fn must take one parameter; it receives the RESP bulk args "
+    "after the cmd name as a list of blobs (nil if none). Returns t. Under "
+    "--threads N the callback runs concurrently; it must be READ-ONLY w.r.t. "
+    "Lisp globals (no def/=/persist of globals — those error) and must not "
+    "mutate state shared across invocations (captured closure vars, in-place "
+    "container mutation); operate on the keyspace, which is concurrency-safe.";
 exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
   /* Registering a command mutates the shared command table + resp_user_env.
      These are written only during single-threaded setup (before respN_serve
@@ -3315,20 +3744,31 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
     return resp_cb_readonly_error(env);
   }
   exp_t *nx = EVAL(cadr(e), env);
-  if (iserror(nx)) { unrefexp(e); return nx; }
+  if (iserror(nx)) {
+    unrefexp(e);
+    return nx;
+  }
   if (!isstring(nx) && !isblob(nx)) {
-    unrefexp(nx); unrefexp(e);
+    unrefexp(nx);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-defcmd: command name must be a string or blob");
   }
   exp_t *fx = EVAL(caddr(e), env);
-  if (iserror(fx)) { unrefexp(nx); unrefexp(e); return fx; }
+  if (iserror(fx)) {
+    unrefexp(nx);
+    unrefexp(e);
+    return fx;
+  }
   if (!islambda(fx)) {
-    unrefexp(nx); unrefexp(fx); unrefexp(e);
+    unrefexp(nx);
+    unrefexp(fx);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-defcmd: second arg must be a lambda");
   }
-  const char *raw; size_t rawlen;
+  const char *raw;
+  size_t rawlen;
   resp_key_bytes(nx, &raw, &rawlen);
   char name[256];
   resp_user_upper(raw, (long)rawlen, name, sizeof name);
@@ -3336,11 +3776,15 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env) {
     resp_user_commands = memalloc(1, sizeof(dict_t));
   resp_user_env = env;
   set_get_keyval_dict(resp_user_commands, name, fx);
-  unrefexp(nx); unrefexp(fx); unrefexp(e);
+  unrefexp(nx);
+  unrefexp(fx);
+  unrefexp(e);
   return TRUE_EXP;
 }
 
-const char doc_redis_undefcmd[] = "(redis-undefcmd \"NAME\") — remove a previously registered Redis command. Returns t if removed, nil if not found.";
+const char doc_redis_undefcmd[] =
+    "(redis-undefcmd \"NAME\") — remove a previously registered Redis command. "
+    "Returns t if removed, nil if not found.";
 exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
   /* Unregistering mutates the shared command table — refuse from a callback
      and (defensively) from any context once multi-reactor serving is live, so
@@ -3350,13 +3794,18 @@ exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
     return resp_cb_readonly_error(env);
   }
   exp_t *nx = EVAL(cadr(e), env);
-  if (iserror(nx)) { unrefexp(e); return nx; }
+  if (iserror(nx)) {
+    unrefexp(e);
+    return nx;
+  }
   if (!isstring(nx) && !isblob(nx)) {
-    unrefexp(nx); unrefexp(e);
+    unrefexp(nx);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "redis-undefcmd: command name must be a string or blob");
   }
-  const char *raw; size_t rawlen;
+  const char *raw;
+  size_t rawlen;
   resp_key_bytes(nx, &raw, &rawlen);
   char name[256];
   resp_user_upper(raw, (long)rawlen, name, sizeof name);
@@ -3368,11 +3817,13 @@ exp_t *rediscmdundefcmd(exp_t *e, env_t *env) {
       ret = TRUE_EXP;
     }
   }
-  unrefexp(nx); unrefexp(e);
+  unrefexp(nx);
+  unrefexp(e);
   return ret;
 }
 
-const char doc_redis_cmds[] = "(redis-cmds) — list of currently registered user Redis command names (uppercase).";
+const char doc_redis_cmds[] = "(redis-cmds) — list of currently registered "
+                              "user Redis command names (uppercase).";
 exp_t *rediscmdscmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
@@ -3382,10 +3833,13 @@ exp_t *rediscmdscmd(exp_t *e, env_t *env) {
   kvht_t *h = &resp_user_commands->ht[0];
   for (unsigned long b = 0; b < h->size; b++) {
     for (keyval_t *k = h->table[b]; k; k = k->next) {
-      exp_t *node = make_node(make_string((char *)k->key,
-                                          (int)strlen((char *)k->key)));
-      if (cur) cur = cur->next = node;
-      else { ret = cur = node; }
+      exp_t *node =
+          make_node(make_string((char *)k->key, (int)strlen((char *)k->key)));
+      if (cur)
+        cur = cur->next = node;
+      else {
+        ret = cur = node;
+      }
     }
   }
   return ret;

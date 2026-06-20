@@ -71,9 +71,9 @@ static void test_atoms(void) {
 
 static void test_lists_and_callsugar(void) {
   CHECK_EQ("(a b c)", "(a b c)");
-  CHECK_EQ("a b c", "(a b c)");    /* many forms on a line -> a call */
-  CHECK_EQ("f(a b)", "(f a b)");   /* call sugar §6: any arity, args spread */
-  CHECK_EQ("g()", "(g)");          /* empty-arg call sugar */
+  CHECK_EQ("a b c", "(a b c)");     /* many forms on a line -> a call */
+  CHECK_EQ("f(a b)", "(f a b)");    /* call sugar §6: any arity, args spread */
+  CHECK_EQ("g()", "(g)");           /* empty-arg call sugar */
   CHECK_EQ("f(a)(b)", "((f a) b)"); /* chained call sugar (currying) */
   CHECK_EQ("(f (g x) y)", "(f (g x) y)");
 }

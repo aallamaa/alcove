@@ -36,8 +36,8 @@
 
 /* Two-argument both-must-be-strings guard (the binary-string builtins:
    string-contains?/index, starts-with?/ends-with?, setenv, rename-file). Same
-   shape as REQUIRE_TYPE — `cleanup` runs the caller's CLEAN_RETURN_n with _alc_e,
-   the trailing args are the error() call. */
+   shape as REQUIRE_TYPE — `cleanup` runs the caller's CLEAN_RETURN_n with
+   _alc_e, the trailing args are the error() call. */
 #define REQUIRE_2_STRINGS(a, b, cleanup, ...)                                  \
   do {                                                                         \
     if (!isstring(a) || !isstring(b)) {                                        \
@@ -124,8 +124,8 @@ static inline int env_break_self_cycle(env_t *env, int residual) {
       env->inline_vals[i]->next->meta = NULL;
   if (env->d)
     DICT_FOREACH(env->d, k, 0, 1)
-      if (is_self_closure(k->val, env))
-        k->val->next->meta = NULL;
+  if (is_self_closure(k->val, env))
+    k->val->next->meta = NULL;
   return 1;
 }
 

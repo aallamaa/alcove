@@ -55,7 +55,8 @@ typedef struct epoch_retire {
 /* Cache-line aligned to avoid false sharing between reactor slots. */
 typedef struct epoch_thread {
   _Atomic uint64_t quiescent; /* 0 = unregistered */
-  epoch_retire_t *retire_head; /* TLS-owned: only this slot's owner reads/writes */
+  epoch_retire_t
+      *retire_head; /* TLS-owned: only this slot's owner reads/writes */
   size_t retire_count;
   char _pad[64 - sizeof(_Atomic uint64_t) - sizeof(void *) - sizeof(size_t)];
 } __attribute__((aligned(64))) epoch_thread_t;

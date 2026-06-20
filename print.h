@@ -90,8 +90,7 @@ void print_node(exp_t *node) {
     char db[48];
     dec_to_str((alc_dec_t *)node->ptr, db);
     printf("\x1B[92m%sm\x1B[39m", db);
-  }
-  else if (node->type == EXP_VECTOR) {
+  } else if (node->type == EXP_VECTOR) {
     int64_t n = vec_len(node);
     printf("#[");
     unsigned k = vec_kind(node);

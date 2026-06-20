@@ -247,8 +247,9 @@ static int x64_add_reg_rsp(uint8_t *buf, int dst) {
    GP regs in the low 8. Byte patterns verified against the GNU assembler. */
 
 /* REX.R for an xmm/gp in the ModRM.reg field, REX.B for the ModRM.r/m field —
-   the low 3 bits go in the ModRM byte, the 4th bit here. Only xmm8-15 (or r8-15)
-   set a bit, so callers using xmm0-7 stay byte-identical (these return 0). */
+   the low 3 bits go in the ModRM byte, the 4th bit here. Only xmm8-15 (or
+   r8-15) set a bit, so callers using xmm0-7 stay byte-identical (these return
+   0). */
 #define X64_REXR(reg) (((reg) >= 8) ? 0x04 : 0)
 #define X64_REXB(rm) (((rm) >= 8) ? 0x01 : 0)
 /* cvtsi2sd xmm, r64  →  F2 REX.W 0F 2A /r.  Signed int64 → double. */
@@ -880,7 +881,8 @@ static int try_jit_float_series_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_pop_reg(buf + n, X64_RBX);
   n += x64_ret(buf + n);
 
-  /* deopt_framed: a tag/type/divisor guard failed after the frame was set up. */
+  /* deopt_framed: a tag/type/divisor guard failed after the frame was set up.
+   */
   int deopt_framed_pc = n;
   n += x64_pop_reg(buf + n, X64_RBX);
   n += x64_zero_reg(buf + n, X64_RAX);
@@ -909,11 +911,12 @@ static int try_jit_float_series_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
    typed, register-budgeted plan from numloop_analyze (jit_common.h) into native
    code: one INT counter slot (untagged in a GPR) + N FLOAT slots (unboxed in
    xmm), float +−×÷ and int/float comparisons, if-chain exits, tail-self.
-   Subsumes float_acc/float_series and handles logistic/Newton/Mandelbrot via one
-   mechanism. The env is never mutated mid-loop, so any deopt (entry guard or
-   div-by-0) re-runs the VM on the untouched entry env. FLOAT slots are guarded
-   as strict EXP_FLOAT at entry, so a returned FLOAT is always make_floatf(reg),
-   bit-identical to the VM (no fixnum-vs-float zero-iter divergence). */
+   Subsumes float_acc/float_series and handles logistic/Newton/Mandelbrot via
+   one mechanism. The env is never mutated mid-loop, so any deopt (entry guard
+   or div-by-0) re-runs the VM on the untouched entry env. FLOAT slots are
+   guarded as strict EXP_FLOAT at entry, so a returned FLOAT is always
+   make_floatf(reg), bit-identical to the VM (no fixnum-vs-float zero-iter
+   divergence). */
 static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   numloop_t nl;
   if (!numloop_analyze(bc, &nl))
@@ -945,15 +948,16 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     return 0;
 
   /* Emit into a generous local buffer (ncode ≤ NL_MAXPC ops × max bytes/op can
-     exceed the caller's buf[512]); copy out only if the result actually fits. */
+     exceed the caller's buf[512]); copy out only if the result actually fits.
+   */
   uint8_t local[4096];
   uint8_t *out_buf = buf;
   buf = local;
 
   int framed = nl.float_result;
   int n = 0;
-  int dj0[64], ndj0 = 0;   /* pre-frame deopt jumps */
-  int djf[300], ndjf = 0;  /* framed deopt jumps (div-by-0) */
+  int dj0[64], ndj0 = 0;  /* pre-frame deopt jumps */
+  int djf[300], ndjf = 0; /* framed deopt jumps (div-by-0) */
 
   /* ---- entry: load + guard each slot home ---- */
   for (int s = 0; s < np; s++) {
@@ -968,7 +972,8 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     } else {
       int hx = nl.fidx[s];
       n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off);
-      n += x64_test_reg8_imm8(buf + n, X64_RAX, 7); /* low-3 tag != 0 → not ptr */
+      n += x64_test_reg8_imm8(buf + n, X64_RAX,
+                              7); /* low-3 tag != 0 → not ptr */
       dj0[ndj0++] = n;
       n += x64_jcc_rel32(buf + n, 0x05, 0); /* jnz deopt0 */
       n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
@@ -1051,7 +1056,8 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     case OP_MUL:
     case OP_DIV: {
       /* float only (analyzer guarantees) — operands a@d-2, b@d-1, result→a */
-      int ra = nl_freg(st, d - 2, nl.nfslots), rb = nl_freg(st, d - 1, nl.nfslots);
+      int ra = nl_freg(st, d - 2, nl.nfslots),
+          rb = nl_freg(st, d - 1, nl.nfslots);
       uint8_t o2 = op == OP_ADD   ? 0x58
                    : op == OP_SUB ? 0x5C
                    : op == OP_MUL ? 0x59
@@ -1208,8 +1214,8 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
            error, not a wrap or implicit float). Float results never reach this
            path, so the perf-critical float kernels gain nothing. */
         dj0[ndj0++] = n;
-        n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt0 */
-        n += x64_add_imm32(buf + n, X64_RAX, 1);              /* | 1 */
+        n += x64_jcc_rel32(buf + n, 0x00, 0);    /* jo deopt0 */
+        n += x64_add_imm32(buf + n, X64_RAX, 1); /* | 1 */
       }
       if (framed)
         n += x64_pop_reg(buf + n, X64_RBX);
@@ -1619,7 +1625,8 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
     n += x64_pop_reg(buf + n, X64_RBX);
     n += x64_ret(buf + n);
 
-    /* overflow deopt: tear down frame, return NULL so the VM re-runs + raises */
+    /* overflow deopt: tear down frame, return NULL so the VM re-runs + raises
+     */
     int ovf_it = n;
     n += x64_add_imm32(buf + n, 4 /* rsp */, 8);
     n += x64_pop_reg(buf + n, X64_RBX);
@@ -1724,7 +1731,7 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* tagged add: rax = call2 + call1 - 1. The operands are tagged (v<<3|1), so a
      sum whose value leaves the 61-bit range overflows int64 here — jo deopts to
      the VM, which raises (overflow is an error, not a wrap). */
-  n += x64_add_reg_rsp(buf + n, X64_RAX);  /* rax += [rsp]   */
+  n += x64_add_reg_rsp(buf + n, X64_RAX); /* rax += [rsp]   */
   int jo_ovf = n;
   n += x64_jcc_rel32(buf + n, 0x00, 0);    /* jo overflow_deopt */
   n += x64_sub_imm32(buf + n, X64_RAX, 1); /* drop the duplicated tag bit */
@@ -1740,7 +1747,8 @@ static int try_jit_recurse_add_two(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_pop_reg(buf + n, X64_RBX);
   n += x64_ret(buf + n);
 
-  /* overflow deopt: tear down frame, return NULL so the VM re-runs and raises */
+  /* overflow deopt: tear down frame, return NULL so the VM re-runs and raises
+   */
   int ovf_pc = n;
   n += x64_add_imm32(buf + n, 4 /* rsp */, 16);
   n += x64_pop_reg(buf + n, X64_RBX);
@@ -3212,7 +3220,7 @@ int jit_compile(bytecode_t *bc) {
       n += x64_sub_imm32(buf + n, X64_RAX, 1); /* drop tag */
       n += x64_imul_reg_reg_imm32(buf + n, X64_RAX, X64_RAX, (int32_t)k);
       jo_op = n;
-      n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo deopt */
+      n += x64_jcc_rel32(buf + n, 0x00, 0);    /* jo deopt */
       n += x64_add_imm32(buf + n, X64_RAX, 1); /* re-tag */
     } else {
       int32_t delta = ((int32_t)k) << 3;
@@ -3254,7 +3262,8 @@ int jit_compile(bytecode_t *bc) {
     x64_patch_rel32(buf, jz_start, 6, deopt_pc);
     x64_patch_rel32(buf, jo_op, 6, deopt_pc);
   } else if (try_jit_numloop(bc, buf, &n)) {
-    JT("numloop"); /* general numeric self-tail loop (last-resort, after shapes) */
+    JT("numloop"); /* general numeric self-tail loop (last-resort, after shapes)
+                    */
   } else {
     JT("miss");
     return 0; /* shape not recognized */

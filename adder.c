@@ -28,6 +28,7 @@ int adfmt_cli_main(int argc, char **argv);
 
 int main(int argc, char *argv[]) {
   if (argc > 1 && !strcmp(argv[1], "fmt"))
-    return adfmt_cli_main(argc - 1, argv + 1); /* shift so files start at argv[1] */
+    return adfmt_cli_main(argc - 1,
+                          argv + 1); /* shift so files start at argv[1] */
   return alcove_real_main(argc, argv);
 }

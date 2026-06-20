@@ -459,8 +459,8 @@ static char *als_strip_comment(const char *line) {
        #{ set, #b"..." blob) and passes through to the reader untouched.
        This one rule replaces a per-token exception list — see the matching
        rule in adr.py / als_read_one. */
-    if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' ||
-                     line[i + 1] == '\t' || line[i + 1] == '!'))
+    if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' || line[i + 1] == '\t' ||
+                     line[i + 1] == '!'))
       break;
     out[o++] = c;
     if (c == '"')
@@ -544,8 +544,9 @@ static void als_head_remap(als_node *node) {
 
 /* ---- source map: generated s-expr line -> original Adder line ----
    als_to_sexpr emits exactly ONE generated line per top-level form, so the map
-   is a flat array: generated line N (1-based) came from Adder line map->line[N-1].
-   Lets an error in transpiled .adr code point at the user's real source line. */
+   is a flat array: generated line N (1-based) came from Adder line
+   map->line[N-1]. Lets an error in transpiled .adr code point at the user's
+   real source line. */
 typedef struct {
   int *line;
   int n, cap;
@@ -596,8 +597,8 @@ static int als_starts_with(const char *s, const char *kw, size_t kwlen) {
 }
 
 /* ---- top level: src -> s-expr string (+ optional source map) ----
-   When `map` is non-NULL it is filled with one entry per emitted top-level line,
-   each the 1-based Adder source line that form began on. */
+   When `map` is non-NULL it is filled with one entry per emitted top-level
+   line, each the 1-based Adder source line that form began on. */
 char *als_to_sexpr_mapped(const char *src, als_map *map) {
   /* split into lines (keep leading whitespace for indent calc) */
   size_t slen = strlen(src);
@@ -617,7 +618,8 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
 
   size_t i = 0;
   while (i <= slen) {
-    cur_line++; /* at the top so every `continue` still advances the line count */
+    cur_line++; /* at the top so every `continue` still advances the line count
+                 */
     size_t j = i;
     while (j < slen && src[j] != '\n')
       j++;
@@ -731,7 +733,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
     if (sp > 0) {
       als_push(node_stack[sp - 1], node);
     } else {
-      als_push(roots, node);      /* defer emit until tree is complete */
+      als_push(roots, node);       /* defer emit until tree is complete */
       als_map_push(map, cur_line); /* this root → its Adder start line */
     }
 

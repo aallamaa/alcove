@@ -91,7 +91,8 @@ static inline mpsc_node_t *mpsc_dequeue(mpsc_queue_t *q) {
   mpsc_node_t *tail = q->tail;
   mpsc_node_t *next = atomic_load_explicit(&tail->next, memory_order_acquire);
   if (tail == &q->stub) {
-    if (!next) return NULL;
+    if (!next)
+      return NULL;
     q->tail = next;
     tail = next;
     next = atomic_load_explicit(&tail->next, memory_order_acquire);
@@ -103,7 +104,8 @@ static inline mpsc_node_t *mpsc_dequeue(mpsc_queue_t *q) {
   /* tail == head (so far we've seen). If head has moved we missed
      a producer mid-flight; bail and let the caller retry. */
   mpsc_node_t *head = atomic_load_explicit(&q->head, memory_order_acquire);
-  if (tail != head) return NULL;
+  if (tail != head)
+    return NULL;
   /* Re-enqueue the stub so the queue stays well-formed. */
   atomic_store_explicit(&q->stub.next, NULL, memory_order_relaxed);
   mpsc_node_t *prev =
@@ -136,15 +138,18 @@ static inline int alc_wake_init(alc_wake_t *w) {
   return w->fd < 0 ? -1 : 0;
 #else
   int fds[2];
-  if (pipe(fds) < 0) return -1;
+  if (pipe(fds) < 0)
+    return -1;
   for (int i = 0; i < 2; i++) {
     int fl = fcntl(fds[i], F_GETFL, 0);
     if (fl < 0 || fcntl(fds[i], F_SETFL, fl | O_NONBLOCK) < 0) {
-      close(fds[0]); close(fds[1]);
+      close(fds[0]);
+      close(fds[1]);
       return -1;
     }
     fl = fcntl(fds[i], F_GETFD, 0);
-    if (fl >= 0) fcntl(fds[i], F_SETFD, fl | FD_CLOEXEC);
+    if (fl >= 0)
+      fcntl(fds[i], F_SETFD, fl | FD_CLOEXEC);
   }
   w->rfd = fds[0];
   w->wfd = fds[1];
@@ -169,13 +174,17 @@ static inline void alc_wake_signal(alc_wake_t *w) {
 #ifdef __linux__
   uint64_t one = 1;
   ssize_t n;
-  do { n = write(w->fd, &one, sizeof one); } while (n < 0 && errno == EINTR);
+  do {
+    n = write(w->fd, &one, sizeof one);
+  } while (n < 0 && errno == EINTR);
   /* EAGAIN can't happen on eventfd in counter mode unless the counter
      would overflow (2^64-2) — practically never. */
 #else
   char b = 1;
   ssize_t n;
-  do { n = write(w->wfd, &b, 1); } while (n < 0 && errno == EINTR);
+  do {
+    n = write(w->wfd, &b, 1);
+  } while (n < 0 && errno == EINTR);
   /* EAGAIN: pipe buffer full → consumer will wake anyway, so drop. */
 #endif
 }
@@ -188,7 +197,9 @@ static inline void alc_wake_drain(alc_wake_t *w) {
 #ifdef __linux__
   uint64_t v;
   ssize_t n;
-  do { n = read(w->fd, &v, sizeof v); } while (n < 0 && errno == EINTR);
+  do {
+    n = read(w->fd, &v, sizeof v);
+  } while (n < 0 && errno == EINTR);
 #else
   char buf[64];
   ssize_t n;
@@ -200,11 +211,14 @@ static inline void alc_wake_drain(alc_wake_t *w) {
 
 static inline void alc_wake_destroy(alc_wake_t *w) {
 #ifdef __linux__
-  if (w->fd >= 0) close(w->fd);
+  if (w->fd >= 0)
+    close(w->fd);
   w->fd = -1;
 #else
-  if (w->rfd >= 0) close(w->rfd);
-  if (w->wfd >= 0) close(w->wfd);
+  if (w->rfd >= 0)
+    close(w->rfd);
+  if (w->wfd >= 0)
+    close(w->wfd);
   w->rfd = w->wfd = -1;
 #endif
 }

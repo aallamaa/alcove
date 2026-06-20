@@ -9,7 +9,8 @@
 extern const char doc_quote[], doc_quasiquote[], doc_if[], doc_do[];
 extern const char doc_when[], doc_unless[], doc_while[], doc_repeat[];
 exp_t *unlesscmd(exp_t *e, env_t *env);
-extern const char doc_and[], doc_or[], doc_case[], doc_cond[], doc_for[], doc_each[];
+extern const char doc_and[], doc_or[], doc_case[], doc_cond[], doc_for[],
+    doc_each[];
 extern const char doc_match[], doc_forgen[];
 exp_t *condcmd(exp_t *e, env_t *env);
 exp_t *matchcmd(exp_t *e, env_t *env);
@@ -17,7 +18,8 @@ exp_t *forgencmd(exp_t *e, env_t *env);
 extern const char doc_let[], doc_letstar[], doc_with[];
 exp_t *letstar_cmd(exp_t *e, env_t *env);
 extern const char doc_gendone[], doc_gendonep[], doc_genlist[], doc_genrange[];
-extern const char doc_gennext[], doc_gencollect[], doc_genmap[], doc_genfilter[];
+extern const char doc_gennext[], doc_gencollect[], doc_genmap[],
+    doc_genfilter[];
 exp_t *gendone_cmd(exp_t *e, env_t *env);
 exp_t *gendonep_cmd(exp_t *e, env_t *env);
 exp_t *genlist_cmd(exp_t *e, env_t *env);
@@ -27,7 +29,8 @@ exp_t *gencollect_cmd(exp_t *e, env_t *env);
 exp_t *genmap_cmd(exp_t *e, env_t *env);
 exp_t *genfilter_cmd(exp_t *e, env_t *env);
 extern const char doc_eq[], doc_setf[], doc_lt[], doc_gt[], doc_le[], doc_ge[];
-extern const char doc_is[], doc_iso[], doc_in[], doc_no[], doc_isnt[], doc_yes[];
+extern const char doc_is[], doc_iso[], doc_in[], doc_no[], doc_isnt[],
+    doc_yes[];
 extern const char doc_plus[], doc_mul[], doc_minus[], doc_div[];
 extern const char doc_rational[], doc_numerator[], doc_denominator[],
     doc_rationalp[];
@@ -41,7 +44,8 @@ exp_t *decimalpcmd(exp_t *e, env_t *env);
 extern const char doc_mod[], doc_abs[], doc_max[], doc_min[], doc_odd[];
 extern const char doc_bitand[], doc_bitor[], doc_bitxor[], doc_bitnot[];
 extern const char doc_shl[], doc_shr[];
-extern const char doc_sqrt[], doc_sqrtint[], doc_exp[], doc_expt[], doc_random[];
+extern const char doc_sqrt[], doc_sqrtint[], doc_exp[], doc_expt[],
+    doc_random[];
 extern const char doc_round[], doc_floor[], doc_ceil[], doc_truncate[];
 extern const char doc_log[], doc_sin[], doc_cos[], doc_tan[];
 extern const char doc_float[], doc_int[];
@@ -66,7 +70,8 @@ extern const char doc_def[], doc_defn[], doc_fn[], doc_defc[], doc_defmacro[],
     doc_macroexpand[];
 extern const char doc_eval[], doc_apply[], doc_setq[];
 extern const char doc_map[], doc_filter[], doc_reduce[], doc_any[], doc_all[];
-extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[], doc_fnp[];
+extern const char doc_numberp[], doc_stringp[], doc_symbolp[], doc_pairp[],
+    doc_fnp[];
 extern const char doc_charp[], doc_zerop[];
 extern const char doc_listp[], doc_nullp[], doc_gensym[], doc_withgensyms[];
 exp_t *withgensymscmd(exp_t *e, env_t *env);
@@ -91,7 +96,8 @@ exp_t *sortbycmd(exp_t *e, env_t *env);
 exp_t *stringcontainspcmd(exp_t *e, env_t *env);
 exp_t *stringindexcmd(exp_t *e, env_t *env);
 exp_t *stringreplacecmd(exp_t *e, env_t *env);
-extern const char doc_vecp[], doc_blobp[], doc_dictp[], doc_dequep[], doc_setp[];
+extern const char doc_vecp[], doc_blobp[], doc_dictp[], doc_dequep[],
+    doc_setp[];
 exp_t *vecpcmd(exp_t *e, env_t *env);
 exp_t *blobpcmd(exp_t *e, env_t *env);
 exp_t *dictpcmd(exp_t *e, env_t *env);
@@ -114,8 +120,8 @@ exp_t *allowunsafecmd(exp_t *e, env_t *env);
 
 /* builtins_os.h — OS/scripting floor */
 extern const char doc_getenv[], doc_setenv[], doc_epr[], doc_eprn[],
-                  doc_readline[], doc_deletefile[], doc_renamefile[],
-                  doc_makedir[], doc_listdir[], doc_fileinfo[], doc_shell[];
+    doc_readline[], doc_deletefile[], doc_renamefile[], doc_makedir[],
+    doc_listdir[], doc_fileinfo[], doc_shell[];
 exp_t *getenvcmd(exp_t *e, env_t *env);
 exp_t *setenvcmd(exp_t *e, env_t *env);
 exp_t *eprcmd(exp_t *e, env_t *env);
@@ -156,7 +162,7 @@ exp_t *metricscmd(exp_t *e, env_t *env);
 
 /* blob.h byte codecs */
 extern const char doc_base64encode[], doc_base64decode[], doc_hexencode[],
-                  doc_hexdecode[];
+    doc_hexdecode[];
 exp_t *base64encodecmd(exp_t *e, env_t *env);
 exp_t *base64decodecmd(exp_t *e, env_t *env);
 exp_t *hexencodecmd(exp_t *e, env_t *env);
@@ -164,9 +170,9 @@ exp_t *hexdecodecmd(exp_t *e, env_t *env);
 
 /* builtins_stdlib.h — v0.2 stdlib batch */
 extern const char doc_groupby[], doc_frequencies[], doc_partition[],
-                  doc_interleave[], doc_maxby[], doc_minby[],
-                  doc_startswith[], doc_endswith[], doc_stringrepeat[],
-                  doc_stringpadleft[], doc_stringpadright[];
+    doc_interleave[], doc_maxby[], doc_minby[], doc_startswith[],
+    doc_endswith[], doc_stringrepeat[], doc_stringpadleft[],
+    doc_stringpadright[];
 exp_t *groupbycmd(exp_t *e, env_t *env);
 exp_t *frequenciescmd(exp_t *e, env_t *env);
 exp_t *partitioncmd(exp_t *e, env_t *env);
@@ -180,8 +186,8 @@ exp_t *stringpadleftcmd(exp_t *e, env_t *env);
 exp_t *stringpadrightcmd(exp_t *e, env_t *env);
 
 /* builtins_regex.h — POSIX ERE */
-extern const char doc_rematch[], doc_refind[], doc_refindall[],
-                  doc_rereplace[], doc_resplit[];
+extern const char doc_rematch[], doc_refind[], doc_refindall[], doc_rereplace[],
+    doc_resplit[];
 exp_t *rematchcmd(exp_t *e, env_t *env);
 exp_t *refindcmd(exp_t *e, env_t *env);
 exp_t *refindallcmd(exp_t *e, env_t *env);
@@ -190,7 +196,7 @@ exp_t *resplitcmd(exp_t *e, env_t *env);
 
 /* introspection + LSP primitives */
 extern const char doc_builtins[], doc_globals[], doc_checksyntax[],
-                  doc_readstdin[];
+    doc_readstdin[];
 exp_t *builtinscmd(exp_t *e, env_t *env);
 exp_t *globalscmd(exp_t *e, env_t *env);
 exp_t *checksyntaxcmd(exp_t *e, env_t *env);
@@ -203,11 +209,11 @@ exp_t *withdbcmd(exp_t *e, env_t *env);
 extern const char doc_withdb[];
 extern const char doc_pr[], doc_prn[];
 extern const char doc_str[], doc_fmt[], doc_substr[], doc_stringappend[],
-                  doc_stringsplit[], doc_stringjoin[], doc_stringtrim[],
-                  doc_stringupcase[], doc_stringdowncase[];
+    doc_stringsplit[], doc_stringjoin[], doc_stringtrim[], doc_stringupcase[],
+    doc_stringdowncase[];
 extern const char doc_readstring[], doc_writestring[], doc_appendstring[],
-                  doc_readlines[], doc_fileexistsp[], doc_writebytes[],
-                  doc_load[], doc_ns[], doc_require[];
+    doc_readlines[], doc_fileexistsp[], doc_writebytes[], doc_load[], doc_ns[],
+    doc_require[];
 extern const char doc_persist[], doc_forget[], doc_unpersist[];
 extern const char doc_savedb[], doc_loaddb[];
 extern const char doc_ispersistent[];
@@ -251,25 +257,24 @@ extern const char doc_ffiunpack[];
 extern const char doc_doc[], doc_help[];
 /* Clojure-style containers (EXP_DICT / EXP_LIST / EXP_BLOB). */
 extern const char doc_hashmap[], doc_assocbang[], doc_dissocbang[], doc_get[],
-                  doc_containsp[], doc_keys[], doc_vals[], doc_count[];
+    doc_containsp[], doc_keys[], doc_vals[], doc_count[];
 extern const char doc_deque[], doc_pushrightbang[], doc_pushleftbang[],
-                  doc_poprightbang[], doc_popleftbang[],
-                  doc_peekleft[], doc_peekright[];
+    doc_poprightbang[], doc_popleftbang[], doc_peekleft[], doc_peekright[];
 extern const char doc_set[], doc_hashset[], doc_setaddbang[], doc_setdelbang[],
-                  doc_sethasp[], doc_setunion[], doc_setintersection[],
-                  doc_setdifference[], doc_setlist[];
+    doc_sethasp[], doc_setunion[], doc_setintersection[], doc_setdifference[],
+    doc_setlist[];
 extern const char doc_hamt[], doc_hamtassoc[], doc_hamtget[], doc_hamtdissoc[],
-                  doc_hamtcount[], doc_hamtcontainsp[], doc_hamtkeys[],
-                  doc_hamtvals[], doc_hamtlist[], doc_hamtmerge[], doc_hamtp[];
+    doc_hamtcount[], doc_hamtcontainsp[], doc_hamtkeys[], doc_hamtvals[],
+    doc_hamtlist[], doc_hamtmerge[], doc_hamtp[];
 extern const char doc_msgpackencode[], doc_msgpackdecode[];
 extern const char doc_makeblob[], doc_bloblen[], doc_blobref[],
-                  doc_blob2string[], doc_string2blob[], doc_readbytes[];
+    doc_blob2string[], doc_string2blob[], doc_readbytes[];
 extern const char doc_vecdot[], doc_vecaxpy[], doc_vecscale[], doc_vecadd[],
-                  doc_vecfill[], doc_vecrelu[], doc_vecargmax[], doc_vecmax[],
-                  doc_veccopy[], doc_veccountle[];
+    doc_vecfill[], doc_vecrelu[], doc_vecargmax[], doc_vecmax[], doc_veccopy[],
+    doc_veccountle[];
 extern const char doc_vecmul[], doc_vecsub[], doc_vecsum[], doc_vecmin[],
-                  doc_vecargmin[], doc_vecexp[], doc_vecsigmoid[],
-                  doc_vectanh[], doc_vecsoftmax[];
+    doc_vecargmin[], doc_vecexp[], doc_vecsigmoid[], doc_vectanh[],
+    doc_vecsoftmax[];
 exp_t *vecmulcmd(exp_t *e, env_t *env);
 exp_t *vecsubcmd(exp_t *e, env_t *env);
 exp_t *vecsumcmd(exp_t *e, env_t *env);
@@ -292,9 +297,9 @@ extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
 /* Redis keyspace bridge builtins. Defined below the `#include "resp.c"`
    line so they can use the RESP exp_t-backed keyspace directly. */
 extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
-                  doc_redis_get[], doc_redis_val[], doc_redis_set[],
-                  doc_redis_del[], doc_redis_flush[], doc_redis_port[],
-                  doc_redis_defcmd[], doc_redis_undefcmd[], doc_redis_cmds[];
+    doc_redis_get[], doc_redis_val[], doc_redis_set[], doc_redis_del[],
+    doc_redis_flush[], doc_redis_port[], doc_redis_defcmd[],
+    doc_redis_undefcmd[], doc_redis_cmds[];
 
 /* Forward decls for cmds defined below the table — every callee must be
    visible at table-init time. The original cmds had a top-level
@@ -388,18 +393,7 @@ exp_t *rediscmddefcmd(exp_t *e, env_t *env);
 exp_t *rediscmdundefcmd(exp_t *e, env_t *env);
 exp_t *rediscmdscmd(exp_t *e, env_t *env);
 
-
 /* ---------------- Macros for Builtin Commands ---------------- */
-
-
-
-
-
-
-
-
-
-
 
 /* Segfault guard shared by map/filter/reduce/any?/all?/nth/reverse/append:
    a tagged immediate (fixnum, char) passes a bare `cur != NULL` walk and then
@@ -408,66 +402,92 @@ exp_t *rediscmdscmd(exp_t *e, env_t *env);
    id (NULL vs e), so the macro changes nothing about behavior. */
 #define NOT_A_LIST(x) ((x) && (x) != NIL_EXP && !ispair(x))
 
-#define DICT_KV_SETUP(err_name) \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!isdict(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": first arg must be a hash-map"); } \
-  exp_t *k = EVAL(caddr(e), env); \
-  if (iserror(k)) { unrefexp(d); unrefexp(e); return k; } \
-  char tmp[32]; \
+#define DICT_KV_SETUP(err_name)                                                \
+  exp_t *d = EVAL(cadr(e), env);                                               \
+  if (iserror(d)) {                                                            \
+    unrefexp(e);                                                               \
+    return d;                                                                  \
+  }                                                                            \
+  if (!isdict(d)) {                                                            \
+    unrefexp(d);                                                               \
+    unrefexp(e);                                                               \
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,                               \
+                 err_name ": first arg must be a hash-map");                   \
+  }                                                                            \
+  exp_t *k = EVAL(caddr(e), env);                                              \
+  if (iserror(k)) {                                                            \
+    unrefexp(d);                                                               \
+    unrefexp(e);                                                               \
+    return k;                                                                  \
+  }                                                                            \
+  char tmp[32];                                                                \
   char *ks = alc_key_to_cstr(k, tmp);
 
+#define DICT_ITER_CMD(name, err_name, node_val)                                \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *d = EVAL(cadr(e), env);                                             \
+    if (iserror(d)) {                                                          \
+      unrefexp(e);                                                             \
+      return d;                                                                \
+    }                                                                          \
+    if (!isdict(d)) {                                                          \
+      unrefexp(d);                                                             \
+      unrefexp(e);                                                             \
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
+                   err_name ": arg must be a hash-map");                       \
+    }                                                                          \
+    dict_t *dp = (dict_t *)d->ptr;                                             \
+    exp_t *ret = NIL_EXP;                                                      \
+    exp_t *cur = NULL;                                                         \
+    unsigned int i;                                                            \
+    for (i = 0; i < dp->ht[0].size; i++) {                                     \
+      keyval_t *k = dp->ht[0].table[i];                                        \
+      while (k) {                                                              \
+        exp_t *node = make_node(node_val);                                     \
+        if (cur)                                                               \
+          cur = cur->next = node;                                              \
+        else {                                                                 \
+          ret = cur = node;                                                    \
+        }                                                                      \
+        k = k->next;                                                           \
+      }                                                                        \
+    }                                                                          \
+    unrefexp(d);                                                               \
+    unrefexp(e);                                                               \
+    return ret ? ret : NIL_EXP;                                                \
+  }
 
-#define DICT_ITER_CMD(name, err_name, node_val) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *d = EVAL(cadr(e), env); \
-  if (iserror(d)) { unrefexp(e); return d; } \
-  if (!isdict(d)) { unrefexp(d); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_name ": arg must be a hash-map"); } \
-  dict_t *dp = (dict_t *)d->ptr; \
-  exp_t *ret = NIL_EXP; \
-  exp_t *cur = NULL; \
-  unsigned int i; \
-  for (i = 0; i < dp->ht[0].size; i++) { \
-    keyval_t *k = dp->ht[0].table[i]; \
-    while (k) { \
-      exp_t *node = make_node(node_val); \
-      if (cur) cur = cur->next = node; \
-      else { ret = cur = node; } \
-      k = k->next; \
-    } \
-  } \
-  unrefexp(d); unrefexp(e); \
-  return ret ? ret : NIL_EXP; \
-}
+#define UNARY_TYPE_CMD(name, err_str, TYPE_CHECK, PTR_TYPE, RET_EXPR)          \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    exp_t *obj = EVAL(cadr(e), env);                                           \
+    if (iserror(obj)) {                                                        \
+      unrefexp(e);                                                             \
+      return obj;                                                              \
+    }                                                                          \
+    if (!(TYPE_CHECK(obj))) {                                                  \
+      unrefexp(obj);                                                           \
+      unrefexp(e);                                                             \
+      return error(ERROR_ILLEGAL_VALUE, NULL, env, err_str);                   \
+    }                                                                          \
+    PTR_TYPE *val_ptr = (PTR_TYPE *)exp_text(obj);                             \
+    exp_t *ret = (RET_EXPR);                                                   \
+    unrefexp(obj);                                                             \
+    unrefexp(e);                                                               \
+    return ret;                                                                \
+  }
 
+#define PAIR_PART_CMD(name, part_macro)                                        \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    EVAL_ARG_1(a);                                                             \
+    exp_t *ret = refexp(part_macro(a));                                        \
+    CLEAN_RETURN_1(a, ret);                                                    \
+  }
 
-#define UNARY_TYPE_CMD(name, err_str, TYPE_CHECK, PTR_TYPE, RET_EXPR) \
-exp_t *name(exp_t *e, env_t *env) { \
-  exp_t *obj = EVAL(cadr(e), env); \
-  if (iserror(obj)) { unrefexp(e); return obj; } \
-  if (!(TYPE_CHECK(obj))) { unrefexp(obj); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, err_str); } \
-  PTR_TYPE *val_ptr = (PTR_TYPE *)exp_text(obj); \
-  exp_t *ret = (RET_EXPR); \
-  unrefexp(obj); unrefexp(e); \
-  return ret; \
-}
-
-
-#define PAIR_PART_CMD(name, part_macro) \
-exp_t *name(exp_t *e, env_t *env) { \
-  EVAL_ARG_1(a); \
-  exp_t *ret = refexp(part_macro(a)); \
-  CLEAN_RETURN_1(a, ret); \
-}
-
-#define EQUALITY_CMD(name, eq_func) \
-exp_t *name(exp_t *e, env_t *env) { \
-  EVAL_ARG_2(a, b); \
-  exp_t *ret = (eq_func(a, b) ? TRUE_EXP : NIL_EXP); \
-  CLEAN_RETURN_2(a, b, ret); \
-}
+#define EQUALITY_CMD(name, eq_func)                                            \
+  exp_t *name(exp_t *e, env_t *env) {                                          \
+    EVAL_ARG_2(a, b);                                                          \
+    exp_t *ret = (eq_func(a, b) ? TRUE_EXP : NIL_EXP);                         \
+    CLEAN_RETURN_2(a, b, ret);                                                 \
+  }
 
 #endif /* ALCOVE_BUILTINS_H */

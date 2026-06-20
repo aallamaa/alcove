@@ -120,8 +120,8 @@ exp_t *rematchcmd(exp_t *e, env_t *env) {
     if (m[g].rm_so < 0)
       el = refexp(NIL_EXP); /* optional group that didn't participate */
     else
-      el = make_string((char *)str + m[g].rm_so,
-                       (int)(m[g].rm_eo - m[g].rm_so));
+      el =
+          make_string((char *)str + m[g].rm_so, (int)(m[g].rm_eo - m[g].rm_so));
     list_append_owned(&head, &tail, el);
   }
   RE_CLEANUP(pat, s);
@@ -212,9 +212,8 @@ exp_t *rereplacecmd(exp_t *e, env_t *env) {
     RE_CLEANUP(pat, s);
     return err;
   }
-  exp_t *rep = e->next->next->next
-                   ? EVAL(e->next->next->next->content, env)
-                   : NULL;
+  exp_t *rep =
+      e->next->next->next ? EVAL(e->next->next->next->content, env) : NULL;
   if (rep && iserror(rep)) {
     RE_CLEANUP(pat, s);
     return rep;
@@ -283,8 +282,8 @@ exp_t *resplitcmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   while (1) {
     regmatch_t m[1];
-    int hit = off <= slen &&
-              regexec(re, str + off, 1, m, off ? REG_NOTBOL : 0) == 0;
+    int hit =
+        off <= slen && regexec(re, str + off, 1, m, off ? REG_NOTBOL : 0) == 0;
     if (hit && m[0].rm_eo == m[0].rm_so) {
       /* an empty match would split between every byte forever — reject the
          degenerate pattern outright rather than guess */

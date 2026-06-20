@@ -18,20 +18,20 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h> /* LLONG_MIN for hex literal overflow guard */
 #include <locale.h> /* setlocale: make readline UTF-8 / multibyte aware */
-#include <errno.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-#include <time.h> /* clock_gettime(CLOCK_MONOTONIC) for (now-ms) */
+#include <time.h>   /* clock_gettime(CLOCK_MONOTONIC) for (now-ms) */
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
-#include <sys/resource.h> /* getrlimit(RLIMIT_STACK) for the stack-overflow guard */
 #include <setjmp.h> /* OOM recovery: longjmp from a failed alloc to the eval boundary */
+#include <sys/resource.h> /* getrlimit(RLIMIT_STACK) for the stack-overflow guard */
 /* Adder front end: a string->string transpiler that turns the
    whitespace/`:`-block surface syntax into ordinary alcove s-expressions
    before they reach reader(). Included UNCONDITIONALLY (not just in the adder
@@ -91,10 +91,12 @@ exp_tfunc *exp_tfuncList[ALCOVE_TYPE_CAP];
    (module-qualified) name and the module spec to re-(require) on db load.
    Indexed by type id. name==NULL means the slot is unused. */
 static struct {
-  char *name;        /* module-qualified type name — the persistent identity */
-  char *module_spec; /* what (require) loaded the module (for db auto-require) */
+  char *name; /* module-qualified type name — the persistent identity */
+  char
+      *module_spec; /* what (require) loaded the module (for db auto-require) */
 } g_custom_types[ALCOVE_TYPE_CAP];
-static unsigned short g_next_type_id = 0; /* lazily set to EXP_MAXSIZE on first use */
+static unsigned short g_next_type_id =
+    0; /* lazily set to EXP_MAXSIZE on first use */
 /* The module spec currently being loaded by load_native_module, so a type
    registered inside its alcove_module_init records where it came from. */
 static const char *g_current_module_spec = NULL;
@@ -102,16 +104,18 @@ static const char *g_current_module_spec = NULL;
 static int g_safe_mode = 0;
 /* --interpret: force every lambda body to run on the AST tree-walker (skip the
    bytecode compiler). Used to differential-test compiled-vs-interpreted on the
-   same source (run twice, diff). Deep tail recursion has no TCO in this mode, so
-   keep test depths bounded. */
+   same source (run twice, diff). Deep tail recursion has no TCO in this mode,
+   so keep test depths bounded. */
 static int g_no_compile = 0;
-/* Load-scoped: dump-session custom type id → this process's id (0 = unresolved).
-   Built by alcove_load_unified from the v3 type table; read by load_exp_t.
-   Declared here (before load_exp_t) since load_exp_t precedes the dump code. */
+/* Load-scoped: dump-session custom type id → this process's id (0 =
+   unresolved). Built by alcove_load_unified from the v3 type table; read by
+   load_exp_t. Declared here (before load_exp_t) since load_exp_t precedes the
+   dump code. */
 static unsigned short g_type_remap[ALCOVE_TYPE_CAP];
 /* The db.dump format version being loaded; alcove_load_unified sets it before
    any load fn runs (the initializer is just a safe default). Defined here so
-   load_exp_t and persist.h both see it. Kept in sync with ALCOVE_DUMP_VERSION. */
+   load_exp_t and persist.h both see it. Kept in sync with ALCOVE_DUMP_VERSION.
+ */
 static int alcove_load_dump_version = 3;
 
 /* Canonical singletons — pointer set at main() startup. */
@@ -120,21 +124,23 @@ exp_t *true_singleton = NULL;
 exp_t *gen_done_singleton = NULL;
 static exp_t *alc_cstr_to_key(const char *k);
 static int set_insert_value(dict_t *d, exp_t *v);
-static void alc_list_push_right(alc_list_t *l, exp_t *val); /* defined far below; used by load_deque_value */
-static int is_reserved_name(const char *name);            /* defined below; used by updatebang/setq */
+static void alc_list_push_right(
+    alc_list_t *l,
+    exp_t *val); /* defined far below; used by load_deque_value */
+static int
+is_reserved_name(const char *name); /* defined below; used by updatebang/setq */
 
 /* Reject assigning to a bare reserved-name symbol (= / setf / setq). Only a
    symbol LHS triggers it — place forms ((vec i), (s i), (car x)) and string
    keys pass through. On a hit, build the error into ERRLV and run FAIL
    (cleanup + return/propagate). `env` must be in scope at the use site. */
-#define REJECT_RESERVED_ASSIGN(SYM, ERRLV, FAIL)                              \
-  do {                                                                        \
-    if (issymbol(SYM) && is_reserved_name(exp_text(SYM))) {                   \
-      (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                         \
-                      "cannot assign to reserved name '%s'",                  \
-                      exp_text(SYM));                                         \
+#define REJECT_RESERVED_ASSIGN(SYM, ERRLV, FAIL)                               \
+  do {                                                                         \
+    if (issymbol(SYM) && is_reserved_name(exp_text(SYM))) {                    \
+      (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                          \
+                      "cannot assign to reserved name '%s'", exp_text(SYM));   \
       FAIL;                                                                    \
-    }                                                                         \
+    }                                                                          \
   } while (0)
 
 /* Global env handle for the readline tab-completion callback (which
@@ -159,11 +165,12 @@ static ALCOVE_TLS int in_tail_position = 0;
    standard for a TCO language. */
 #define ALC_BT_MAX 128
 static ALCOVE_TLS const char *g_callstack[ALC_BT_MAX];
-static ALCOVE_TLS int g_calldepth = 0;       /* may exceed ALC_BT_MAX; only the
-                                                first ALC_BT_MAX names are kept */
+static ALCOVE_TLS int g_calldepth = 0; /* may exceed ALC_BT_MAX; only the
+                                          first ALC_BT_MAX names are kept */
 static ALCOVE_TLS const char *g_error_bt[ALC_BT_MAX];
-static ALCOVE_TLS int g_error_bt_n = 0;      /* >0 once an error snapshot is live */
-static ALCOVE_TLS int g_error_bt_more = 0;   /* frames beyond ALC_BT_MAX, elided */
+static ALCOVE_TLS int g_error_bt_n = 0; /* >0 once an error snapshot is live */
+static ALCOVE_TLS int g_error_bt_more =
+    0; /* frames beyond ALC_BT_MAX, elided */
 static inline void bt_push(const char *name) {
   if (g_calldepth >= 0 && g_calldepth < ALC_BT_MAX)
     g_callstack[g_calldepth] = name ? name : "<anonymous>";
@@ -201,36 +208,47 @@ static inline void bt_clear(void) {
    form's start line into the pair's otherwise-unused `meta` slot (lambda/macro
    heads, symbols and vectors use `meta`; a plain list-form pair never does) —
    read it back via form_line(). */
-static ALCOVE_TLS int g_track_lines = 1; /* reader stamps each list form's line+col
-                                            into its pair meta (on by default — feeds
-                                            precise error locations + the debugger) */
+static ALCOVE_TLS int g_track_lines =
+    1; /* reader stamps each list form's line+col
+          into its pair meta (on by default — feeds
+          precise error locations + the debugger) */
 /* Precise source position of a raised error (raw reader line/col), 0 = unknown.
-   The AST path fills it in error() from the offending form; the VM path fills it
-   from the bytecode pc→loc table in RUNTIME_ERR. The top-level renderer prefers
-   it over g_form_line (the enclosing top-level form only). Reset per form. */
+   The AST path fills it in error() from the offending form; the VM path fills
+   it from the bytecode pc→loc table in RUNTIME_ERR. The top-level renderer
+   prefers it over g_form_line (the enclosing top-level form only). Reset per
+   form. */
 static ALCOVE_TLS int g_err_line = 0;
 static ALCOVE_TLS int g_err_col = 0;
-static ALCOVE_TLS int g_debug = 0;       /* debugger active (hooks live) */
-static ALCOVE_TLS int g_dbg_mode = 0;    /* 0 run, 1 step-into, 2 next/step-over */
-static ALCOVE_TLS int g_dbg_next_depth = 0; /* for `next`: stop when depth <= this */
-static ALCOVE_TLS int g_dbg_sel = 0;     /* frame selected for locals / p */
-static ALCOVE_TLS int g_dbg_active = 0;  /* inside the debug REPL: suppress the hook
-                                            so `p <expr>` / locals don't re-stop */
-static ALCOVE_TLS int g_try_depth = 0;   /* AST (try ...) body nesting: an error here
-                                            is about to be caught — don't break on it */
-static ALCOVE_TLS int g_dbg_evaluating = 0; /* set only while a top-level user form is
-                                               evaluating, so break-on-error never fires
-                                               during parsing/loading */
-static ALCOVE_TLS int g_dbg_color = 0;   /* colorize debug output (a tty stderr) */
-static ALCOVE_TLS env_t *g_dbg_complete_env = NULL; /* frame env for tab-completion */
-static ALCOVE_TLS int g_dbg_in_error_break = 0; /* in the break-on-raise prompt: the
-                                                   `return <expr>` recovery is allowed */
-static ALCOVE_TLS exp_t *g_dbg_replace = NULL; /* `return <expr>` value (owned) — error()
-                                                  hands it back in place of the error */
+static ALCOVE_TLS int g_debug = 0;    /* debugger active (hooks live) */
+static ALCOVE_TLS int g_dbg_mode = 0; /* 0 run, 1 step-into, 2 next/step-over */
+static ALCOVE_TLS int g_dbg_next_depth =
+    0;                               /* for `next`: stop when depth <= this */
+static ALCOVE_TLS int g_dbg_sel = 0; /* frame selected for locals / p */
+static ALCOVE_TLS int g_dbg_active =
+    0; /* inside the debug REPL: suppress the hook
+          so `p <expr>` / locals don't re-stop */
+static ALCOVE_TLS int g_try_depth =
+    0; /* AST (try ...) body nesting: an error here
+          is about to be caught — don't break on it */
+static ALCOVE_TLS int g_dbg_evaluating =
+    0; /* set only while a top-level user form is
+          evaluating, so break-on-error never fires
+          during parsing/loading */
+static ALCOVE_TLS int g_dbg_color =
+    0; /* colorize debug output (a tty stderr) */
+static ALCOVE_TLS env_t *g_dbg_complete_env =
+    NULL; /* frame env for tab-completion */
+static ALCOVE_TLS int g_dbg_in_error_break =
+    0; /* in the break-on-raise prompt: the
+          `return <expr>` recovery is allowed */
+static ALCOVE_TLS exp_t *g_dbg_replace =
+    NULL; /* `return <expr>` value (owned) — error()
+             hands it back in place of the error */
 static ALCOVE_TLS int g_dbg_did_replace = 0;
-static exp_t *dbg_error_break(exp_t *err, env_t *env); /* returns err, or a replacement
-                                                          value if the user `return`ed */
-static char *dbg_read_command(env_t *frame_env);     /* readline (tty) or getline */
+static exp_t *dbg_error_break(exp_t *err,
+                              env_t *env); /* returns err, or a replacement
+                                              value if the user `return`ed */
+static char *dbg_read_command(env_t *frame_env); /* readline (tty) or getline */
 /* ANSI colors for the debug REPL, suppressed when stderr isn't a tty (so piped
    output — and the test harness — stays plain). dc() returns the code or "". */
 #define DBGC_HDR "\x1B[1;96m" /* header (break / ready) */
@@ -241,7 +259,9 @@ static char *dbg_read_command(env_t *frame_env);     /* readline (tty) or getlin
 #define DBGC_SEL "\x1B[95m"   /* selected-frame marker */
 #define DBGC_ERR "\x1B[91m"   /* error text */
 #define DBGC_RST "\x1B[0m"
-static inline const char *dc(const char *code) { return g_dbg_color ? code : ""; }
+static inline const char *dc(const char *code) {
+  return g_dbg_color ? code : "";
+}
 typedef struct {
   const char *name; /* function name (borrowed from fn->meta) */
   env_t *env;       /* most-local env seen executing in this frame */
@@ -249,17 +269,18 @@ typedef struct {
   int line;         /* its source line, or 0 */
 } dbg_frame_t;
 static ALCOVE_TLS dbg_frame_t g_dbg_frames[ALC_BT_MAX];
-static ALCOVE_TLS int g_dbg_depth = 0;   /* may exceed ALC_BT_MAX; array capped */
+static ALCOVE_TLS int g_dbg_depth = 0; /* may exceed ALC_BT_MAX; array capped */
 #define DBG_BP_MAX 32
 static ALCOVE_TLS char *g_dbg_bp_fn[DBG_BP_MAX]; /* break-on-function names */
 static ALCOVE_TLS int g_dbg_nbp_fn = 0;
 static ALCOVE_TLS int g_dbg_bp_line[DBG_BP_MAX]; /* break-on-line numbers */
 static ALCOVE_TLS int g_dbg_nbp_line = 0;
 /* Source position stamped on a list form, packed into the pair's `meta` union
-   (unused on plain list-form pairs): line in the low 20 bits, column in the next
-   12 — so it fits a 32-bit pointer slot (wasm32). 0 = unknown. The reader packs
-   via FORM_LOC_PACK; form_line/form_col unpack. Lines past ~1M / cols past ~4095
-   clamp (cosmetic only — used for error display, never semantics). */
+   (unused on plain list-form pairs): line in the low 20 bits, column in the
+   next 12 — so it fits a 32-bit pointer slot (wasm32). 0 = unknown. The reader
+   packs via FORM_LOC_PACK; form_line/form_col unpack. Lines past ~1M / cols
+   past ~4095 clamp (cosmetic only — used for error display, never semantics).
+ */
 #define FORM_LOC_LINE_MAX 0xFFFFF /* 2^20 - 1 */
 #define FORM_LOC_COL_MAX 0xFFF    /* 2^12 - 1 */
 #define FORM_LOC_PACK(line, col)                                               \
@@ -504,15 +525,15 @@ lispProc lispProcList[] = {
     LISPCMD(">", cmpcmd, doc_gt),
     LISPCMD("<=", cmpcmd, doc_le),
     LISPCMD(">=", cmpcmd, doc_ge),
-    LISPCMD("is", iscmd, doc_is),          /* has inline OP handling */
-    LISPCMD_APP("eq", iscmd, doc_is),      /* alias of is (no inline path) */
-    LISPCMD_APP("eq?", iscmd, doc_is),     /* alias of is (no inline path) */
+    LISPCMD("is", iscmd, doc_is),           /* has inline OP handling */
+    LISPCMD_APP("eq", iscmd, doc_is),       /* alias of is (no inline path) */
+    LISPCMD_APP("eq?", iscmd, doc_is),      /* alias of is (no inline path) */
     LISPCMD_APP("isnt", isntcmd, doc_isnt), /* complement of is */
-    LISPCMD("iso", isocmd, doc_iso),       /* has inline OP handling */
+    LISPCMD("iso", isocmd, doc_iso),        /* has inline OP handling */
     LISPCMD_APP("in", incmd, doc_in),
-    LISPCMD("no", nocmd, doc_no),          /* has inline OP handling */
-    LISPCMD_APP("not", nocmd, doc_no),     /* alias of no (no inline path) */
-    LISPCMD_APP("yes", yespcmd, doc_yes),  /* complement of no */
+    LISPCMD("no", nocmd, doc_no),         /* has inline OP handling */
+    LISPCMD_APP("not", nocmd, doc_no),    /* alias of no (no inline path) */
+    LISPCMD_APP("yes", yespcmd, doc_yes), /* complement of no */
     /* Arithmetic */
     LISPCMD("+", pluscmd, doc_plus),
     LISPCMD("*", multiplycmd, doc_mul),
@@ -969,13 +990,14 @@ exp_t *error(int errnum, exp_t *id, env_t *env, const char *err_message, ...) {
      top-level form's evaluation drops into the debugger HERE — at the raise
      site, where every frame and its env are still live (locals/p work). Gated
      so it never fires while parsing/loading, inside a try, or re-entrantly from
-     a `p` evaluation. Like gdb's `catch throw`: wrap in (try ...) to suppress. */
+     a `p` evaluation. Like gdb's `catch throw`: wrap in (try ...) to suppress.
+   */
   if (g_debug && g_dbg_evaluating && !g_dbg_active && g_try_depth == 0 &&
       g_handler_sp == 0 && errnum != EXP_ERROR_PARSING_EOF) {
     exp_t *rep = dbg_error_break(ret, env);
-    if (rep != ret) {     /* user typed `return <expr>` — recover with that value */
-      unrefexp(ret);      /* discard the error; the failing form yields `rep` */
-      return rep;         /* ownership transfers to error()'s caller */
+    if (rep != ret) { /* user typed `return <expr>` — recover with that value */
+      unrefexp(ret);  /* discard the error; the failing form yields `rep` */
+      return rep;     /* ownership transfers to error()'s caller */
     }
   }
   return ret;
@@ -985,17 +1007,18 @@ exp_t *error(int errnum, exp_t *id, env_t *env, const char *err_message, ...) {
 /* Execute an internal builtin on its call form. THE single gate for the --safe
    sandbox: a FLAG_UNSAFE builtin (OS / filesystem / FFI / persistence / code-
    loading) is refused here. Every internal-cmd execution path routes through
-   this — the AST evaluator's two fnc() sites and alc_apply_n (which backs apply,
-   map/filter/reduce, and the compiled OP_CALL_GLOBAL fall-through) — so there is
-   no bypass. Consumes `form` exactly as fnc does (the refusal error keeps it via
-   its id ref), so callers need no extra cleanup. */
+   this — the AST evaluator's two fnc() sites and alc_apply_n (which backs
+   apply, map/filter/reduce, and the compiled OP_CALL_GLOBAL fall-through) — so
+   there is no bypass. Consumes `form` exactly as fnc does (the refusal error
+   keeps it via its id ref), so callers need no extra cleanup. */
 static inline exp_t *invoke_internal(exp_t *fn, exp_t *form, env_t *env) {
   /* Refuse a host-escape builtin (FLAG_UNSAFE) when sandboxed: either process-
      wide under --safe, or — the main case — while executing a RESP client's
      command callback (g_in_client_cmd, armed around resp_invoke_user_cmd). So
      code a network client can trigger can't reach OS/FS/FFI/code-loading, while
      the operator's own setup/REPL code stays unrestricted. (Global mutation
-     from a callback — def/=/persist — is separately refused by g_resp_cb_guard.)
+     from a callback — def/=/persist — is separately refused by
+     g_resp_cb_guard.)
      `(allow-unsafe "name")` from trusted init grants a specific exception. */
   if ((g_safe_mode || g_in_client_cmd) && (fn->flags & FLAG_UNSAFE)) {
     exp_t *err = error(ERROR_ILLEGAL_VALUE, form, env,
@@ -1061,9 +1084,9 @@ void graceful_shutdown(const char *msg) {
    the experimental --threads path), a failed alloc still graceful_shutdowns. */
 static ALCOVE_TLS jmp_buf g_oom_jmp;
 static ALCOVE_TLS int g_oom_armed = 0;
-/* Test-only fault injection (driven by the unsafe (alloc-fail-after N) builtin):
-   when >= 0, count down on each guarded alloc and fail when it reaches 0. Only
-   consulted while armed, so it can't fire during init. */
+/* Test-only fault injection (driven by the unsafe (alloc-fail-after N)
+   builtin): when >= 0, count down on each guarded alloc and fail when it
+   reaches 0. Only consulted while armed, so it can't fire during init. */
 static ALCOVE_TLS long g_alloc_fail_after = -1;
 
 /* Raise OOM: longjmp to the armed recovery point, else die. Never returns. */
@@ -1113,8 +1136,8 @@ void *xrealloc(void *ptr, size_t size) {
    is fatal when embedding untrusted/buggy code or running a server. A stack-
    pointer probe at the call boundaries raises an ordinary, *catchable* error
    instead, leaving enough headroom to build + raise + unwind it. Tail calls
-   reuse the frame (VM trampoline / AST tail-marker), so they never trip it — the
-   probe is in BYTES, so it adapts to the real per-frame size automatically.
+   reuse the frame (VM trampoline / AST tail-marker), so they never trip it —
+   the probe is in BYTES, so it adapts to the real per-frame size automatically.
 
    g_stack_base is per-thread, captured lazily at the first guarded call (always
    shallow — a top-level form's evaluation), so RESP worker threads each stamp
@@ -1172,14 +1195,17 @@ static int stack_guard_exhausted(void) {
    numeric loop is a terminating counting shape by construction, and a runaway
    (while t ...) / infinite tail loop is not a JIT shape, so it stays in the VM
    where the check lives. */
-static ALCOVE_TLS int64_t g_deadline_ms = 0;    /* 0 = unlimited; else abs mono-ms */
-static ALCOVE_TLS int64_t g_chunk_ceiling = 0;  /* 0 = unlimited; else max g_exp_chunks (Tier 1.3) */
+static ALCOVE_TLS int64_t g_deadline_ms =
+    0; /* 0 = unlimited; else abs mono-ms */
+static ALCOVE_TLS int64_t g_chunk_ceiling =
+    0; /* 0 = unlimited; else max g_exp_chunks (Tier 1.3) */
 static ALCOVE_TLS uint32_t g_budget_tick = 0;
-/* exp_t arena high-water: # of EXP_BUMP_CHUNK-sized chunks ever calloc'd on this
-   thread. Bumped only on the rare chunk-exhaustion path (every 256 allocations),
-   so the hot make_nil path is untouched. Backs both (heap-stats) [1.2] and the
-   memory budget [1.3]: it rises only on genuine cell ACCUMULATION, never on
-   alloc/free churn. Defined here (ahead of make_nil) so budget_check can read it. */
+/* exp_t arena high-water: # of EXP_BUMP_CHUNK-sized chunks ever calloc'd on
+   this thread. Bumped only on the rare chunk-exhaustion path (every 256
+   allocations), so the hot make_nil path is untouched. Backs both (heap-stats)
+   [1.2] and the memory budget [1.3]: it rises only on genuine cell
+   ACCUMULATION, never on alloc/free churn. Defined here (ahead of make_nil) so
+   budget_check can read it. */
 static ALCOVE_TLS int64_t g_exp_chunks = 0;
 
 static int64_t alc_monotonic_ms(void) {
@@ -1239,7 +1265,8 @@ static ALCOVE_TLS int exp_bump_left = 0;
    inline in the wrapper and never call here. e is always a heap object.
    Recurses (through the wrapper, so immediate children are free) for e->content
    and vector/list elements. */
-int unrefexp_free(exp_t *e, int ret) { /* non-static: see alcove.h (native modules) */
+int unrefexp_free(exp_t *e,
+                  int ret) { /* non-static: see alcove.h (native modules) */
   SAFE_ASSERT(is_ptr(e)); /* wrapper's contract — checked under ALCOVE_SAFE */
   while (1) {
     /* Detect double-free: a refcount that went negative means this exp_t
@@ -1312,7 +1339,8 @@ int unrefexp_free(exp_t *e, int ret) { /* non-static: see alcove.h (native modul
     case EXP_BLOB:
       free(e->ptr); /* alc_blob_t is a single flex-array alloc */
       break;
-    case EXP_RATIONAL: /* alc_rat_t / alc_dec_t: single malloc, no nested refs */
+    case EXP_RATIONAL: /* alc_rat_t / alc_dec_t: single malloc, no nested refs
+                        */
     case EXP_DECIMAL:
       free(e->ptr);
       break;
@@ -1324,7 +1352,7 @@ int unrefexp_free(exp_t *e, int ret) { /* non-static: see alcove.h (native modul
     case EXP_HAMT:
       if (e->ptr) {
         extern void hamt_free(void *ptr); /* defined alongside the HAMT ops */
-        hamt_free(e->ptr);                /* unrefs the shared (refcounted) trie */
+        hamt_free(e->ptr); /* unrefs the shared (refcounted) trie */
       }
       break;
     case EXP_LIST:
@@ -1626,7 +1654,8 @@ int alcove_register_cmd(const char *name, lispCmd *fn, int tail_aware) {
   /* Non-tail-aware module builtins are applicative (they eval all their args),
      so mark them FLAG_APPLICATIVE — the compiler can then emit a fast
      OP_CALL_GLOBAL for them instead of the OP_EVAL_AST tree-walk. */
-  exp_t *val = make_internal(fn, tail_aware ? FLAG_TAIL_AWARE : FLAG_APPLICATIVE);
+  exp_t *val =
+      make_internal(fn, tail_aware ? FLAG_TAIL_AWARE : FLAG_APPLICATIVE);
   set_get_keyval_dict(reserved_symbol, (char *)name, val);
   unrefexp(val);
   return 0;
@@ -1730,8 +1759,11 @@ const char *alcove_arg_string(exp_t *e, env_t *env, int n) {
   if (!cur || !cur->content)
     return NULL;
   exp_t *val = EVAL(cur->content, env);
-  if (!val) return NULL;
-  const char *s = (is_ptr(val) && val->type == EXP_STRING) ? (const char *)exp_text(val) : NULL;
+  if (!val)
+    return NULL;
+  const char *s = (is_ptr(val) && val->type == EXP_STRING)
+                      ? (const char *)exp_text(val)
+                      : NULL;
   /* Copy into a static round-robin buffer so the pointer is safe to
      return after we unref. Round-robin gives a few concurrent slots
      for the common pattern of reading several string args in a row. */
@@ -1774,7 +1806,8 @@ void pair_add_node(exp_t *pair, exp_t *node) {
       cur = cur->next;
       if (cur->type == EXP_PAIR)
         pair_add_node(cur, node);
-      else if (cur->type == EXP_TREE)  /* was duplicate EXP_PAIR — copy-paste bug */
+      else if (cur->type ==
+               EXP_TREE) /* was duplicate EXP_PAIR — copy-paste bug */
         tree_add_node(cur, node);
       else
         printf("ERROR UNABLE TO ADD NODE TO EXP");
@@ -1898,8 +1931,9 @@ static exp_t *make_string_take(char *buf, int length) {
   }
   exp_t *cur = make_nil();
   cur->type = EXP_STRING;
-  buf[length] = '\0'; /* in-capacity (buf has >= length+1); ensure termination */
-  cur->ptr = buf;     /* adopt — no copy */
+  buf[length] =
+      '\0';       /* in-capacity (buf has >= length+1); ensure termination */
+  cur->ptr = buf; /* adopt — no copy */
   return cur;
 }
 
@@ -2051,8 +2085,8 @@ exp_t *load_exp_t(FILE *stream) {
   }
   /* v3: a custom-type id in the body is the DUMP session's id — remap it to
      this process's id by durable name (table built in alcove_load_unified)
-     BEFORE validating against exp_tfuncList. Unresolved (module absent / --safe)
-     → abort this value's load. */
+     BEFORE validating against exp_tfuncList. Unresolved (module absent /
+     --safe) → abort this value's load. */
   if (alcove_load_dump_version >= 3 && resp->type >= EXP_MAXSIZE) {
     unsigned short cur =
         (resp->type < ALCOVE_TYPE_CAP) ? g_type_remap[resp->type] : 0;
@@ -2129,11 +2163,11 @@ static int display_line(int gen_line) {
 /* Module system (see requirecmd / nscmd):
    g_reader_dir  — directory of the file currently being loaded, so `require`
                    can resolve a sibling module relative to the requirer first.
-                   NULL for interactive/stdin. Saved/restored across nested loads.
-   g_current_ns  — the active namespace set by (ns name); while non-NULL the
-                   def* forms auto-qualify a GLOBAL binding's name to ns/name.
-                   Reset to NULL at the start of each loaded file (a file has no
-                   namespace until it declares one) and restored afterward. */
+                   NULL for interactive/stdin. Saved/restored across nested
+   loads. g_current_ns  — the active namespace set by (ns name); while non-NULL
+   the def* forms auto-qualify a GLOBAL binding's name to ns/name. Reset to NULL
+   at the start of each loaded file (a file has no namespace until it declares
+   one) and restored afterward. */
 static ALCOVE_TLS char *g_reader_dir = NULL;
 static ALCOVE_TLS char *g_current_ns = NULL;
 /* Set to 1 when a top-level form in a SCRIPT (a file argument or -e) fails to
@@ -2459,8 +2493,11 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
   /* (= count 5) where count is a builtin: lookup would never return this
      binding (reserved symbols resolve first), so reject it like let/param. */
   exp_t *_rerr = NULL;
-  REJECT_RESERVED_ASSIGN(keyv, _rerr,
-                         { unrefexp(keyv); unrefexp(val); return _rerr; });
+  REJECT_RESERVED_ASSIGN(keyv, _rerr, {
+    unrefexp(keyv);
+    unrefexp(val);
+    return _rerr;
+  });
   if (issymbol(keyv) || isstring(keyv)) { // form (= "qweqwe" 10) (= weq 10)
     if (islambda(val) && val->meta == NULL)
       val->meta = (keyval_t *)strdup(exp_text(keyv));
@@ -2676,13 +2713,13 @@ static const char *reserved_param_name(exp_t *params) {
    Used across def, fn, let, let*, with, and for so the check is in one
    place. */
 #define CHECK_RESERVED_BIND(PARAMS, ERRLV, CTX, FAIL)                          \
-  do {                                                                        \
-    const char *_rsv = reserved_param_name(PARAMS);                           \
-    if (_rsv) {                                                               \
-      (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                         \
-                      "cannot bind reserved name '%s' " CTX, _rsv);           \
+  do {                                                                         \
+    const char *_rsv = reserved_param_name(PARAMS);                            \
+    if (_rsv) {                                                                \
+      (ERRLV) = error(ERROR_ILLEGAL_VALUE, NULL, env,                          \
+                      "cannot bind reserved name '%s' " CTX, _rsv);            \
       FAIL;                                                                    \
-    }                                                                         \
+    }                                                                          \
   } while (0)
 
 /* ---- optional type annotations (JIT speculation hints) ----
@@ -2693,9 +2730,10 @@ static const char *reserved_param_name(exp_t *params) {
    doesn't match its hint at runtime just de-opts to the VM. Unknown type
    keywords are a hard error at definition (catches typos). Phase 1 validates
    the hints and strips them so var2env / compile_lambda / arity see plain
-   params and bodies; Phase 2 will record them for the JIT instead of discarding.
-   The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64, :vec-i64.
-   The TYPE_HINT_* enum lives in alcove.h (used by bytecode_t / compile_lambda). */
+   params and bodies; Phase 2 will record them for the JIT instead of
+   discarding. The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64,
+   :vec-i64. The TYPE_HINT_* enum lives in alcove.h (used by bytecode_t /
+   compile_lambda). */
 /* Name of a TYPE_HINT_* code, for disasm / introspection. */
 static const char *type_hint_name(int code) { /* expanded from ALC_TYPE_HINTS */
   switch (code) {
@@ -2843,8 +2881,10 @@ exp_t *fncmd(exp_t *e, env_t *env) {
   if (cur && (ispair(cur->content) || issymbol(cur->content))) {
     header = car(cur);
     cur = cdr(cur);
-    CHECK_RESERVED_BIND(header, val, "as a parameter",
-                        { unrefexp(e); return val; });
+    CHECK_RESERVED_BIND(header, val, "as a parameter", {
+      unrefexp(e);
+      return val;
+    });
     if (cur) {
       /* Type annotations: validate + strip param hints + an optional
          return-type keyword, exactly as def does; record them for the JIT. */
@@ -2920,8 +2960,10 @@ exp_t *defcmd(exp_t *e, env_t *env) {
     if (cur && (ispair(cur->content) || issymbol(cur->content))) {
       header = car(cur);
       cur = cdr(cur);
-      CHECK_RESERVED_BIND(header, val, "as a parameter",
-                          { unrefexp(e); return val; });
+      CHECK_RESERVED_BIND(header, val, "as a parameter", {
+        unrefexp(e);
+        return val;
+      });
       if (cur) {
         /* Type annotations: validate + strip the param hints and an optional
            return-type keyword (recording them for the JIT). `clean_params` is
@@ -2987,7 +3029,7 @@ exp_t *defcmd(exp_t *e, env_t *env) {
         if (!(env->d))
           env->d = create_dict();
         set_get_keyval_dict(env->d, qname,
-                            val); /* return value (the kv) unused */
+                            val);    /* return value (the kv) unused */
         if (qname != exp_text(name)) /* ns_qualify allocated iff qualified */
           free(qname);
         GEN_BUMP(); /* invalidate bytecode global-resolution caches */
@@ -3024,8 +3066,10 @@ exp_t *defncmd(exp_t *e, env_t *env) {
     return val;
   }
   exp_t *name = car(cur);
-  CHECK_RESERVED_BIND(name, val, "as a function name",
-                      { unrefexp(e); return val; });
+  CHECK_RESERVED_BIND(name, val, "as a function name", {
+    unrefexp(e);
+    return val;
+  });
   cur = cdr(cur);
   if (!cur) {
     val = error(ERROR_MISSING_PARAMETER, e, env,
@@ -3045,7 +3089,8 @@ exp_t *defncmd(exp_t *e, env_t *env) {
   exp_t *clauses_head = NIL_EXP, *clauses_tail = NULL;
   for (exp_t *cl = cur; cl; cl = cl->next) {
     exp_t *clause = cl->content;
-    exp_t *params_node = NULL, *body_node = NULL; /* each becomes an owned ref */
+    exp_t *params_node = NULL,
+          *body_node = NULL; /* each becomes an owned ref */
     uint8_t phints[ENV_INLINE_SLOTS];
     memset(phints, 0, sizeof phints);
     if (is_ptr(clause) && ispair(clause)) {
@@ -3116,8 +3161,8 @@ exp_t *defncmd(exp_t *e, env_t *env) {
       unrefexp(e);
       return val;
     }
-    exp_t *L = make_node(params_node);              /* content = params */
-    L->next = make_node(body_node);                 /* next->content = body */
+    exp_t *L = make_node(params_node); /* content = params */
+    L->next = make_node(body_node);    /* next->content = body */
     L->type = EXP_LAMBDA;
     if (env)
       L->next->meta = (struct keyval_t *)ref_env(env); /* closure capture */
@@ -3129,7 +3174,8 @@ exp_t *defncmd(exp_t *e, env_t *env) {
       clauses_head = clauses_tail = node;
   }
   /* Wrapper: an EXP_LAMBDA flagged multi; content holds the clause list. */
-  char *qname = ns_qualify(exp_text(name), env); /* (ns ...)-aware, see defcmd */
+  char *qname =
+      ns_qualify(exp_text(name), env); /* (ns ...)-aware, see defcmd */
   val = make_node(clauses_head);
   val->type = EXP_LAMBDA;
   val->flags |= FLAG_MULTI;
@@ -3239,7 +3285,8 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
         vali = make_node(refexp(body));
         /* Strip/validate type hints in the macro's param list, just like
            def/fn/defn (so (defmacro f (x :int) ...) doesn't treat :int as a
-           parameter). Hints are meaningless for macros, so phints is ignored. */
+           parameter). Hints are meaningless for macros, so phints is ignored.
+         */
         uint8_t phints[ENV_INLINE_SLOTS];
         exp_t *herr = NULL;
         exp_t *clean_params = build_clean_params(header, e, env, &herr, phints);
@@ -3260,7 +3307,7 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
         if (!(env->d))
           env->d = create_dict();
         set_get_keyval_dict(env->d, qname,
-                            val); /* return value (the kv) unused */
+                            val);    /* return value (the kv) unused */
         if (qname != exp_text(name)) /* ns_qualify allocated iff qualified */
           free(qname);
         GEN_BUMP();
@@ -3359,7 +3406,7 @@ static exp_t *qq_expand(exp_t *tmpl, int depth) {
     }
     /* (quote nil) for empty cdr */
     cdr_exp->next = make_node(refexp(NIL_EXP));
-    done:
+  done:
     return qq_make_list2("cons", car_exp, cdr_exp);
   }
 }
@@ -3415,7 +3462,8 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
             unrefexp(e);
             in_tail_position = outer_tail;
             return NIL_EXP; /* clauses exhausted, no match — canonical nil, not
-                               raw NULL (else iso/is mis-compare vs nil literal) */
+                               raw NULL (else iso/is mis-compare vs nil literal)
+                             */
           }
         } else {
           unrefexp(e);
@@ -3535,9 +3583,12 @@ exp_t *setqcmd(exp_t *e, env_t *env) {
                    "setq: variable name must be a symbol");
     }
     exp_t *_rerr = NULL;
-    REJECT_RESERVED_ASSIGN(sym, _rerr,
-                           { if (ret != NIL_EXP) unrefexp(ret);
-                             unrefexp(e); return _rerr; });
+    REJECT_RESERVED_ASSIGN(sym, _rerr, {
+      if (ret != NIL_EXP)
+        unrefexp(ret);
+      unrefexp(e);
+      return _rerr;
+    });
     if (!cdr(a)) {
       unrefexp(e);
       return error(ERROR_MISSING_PARAMETER, NULL, env,
@@ -4032,7 +4083,8 @@ int alcove_load_unified(env_t *global, struct lfkv *kv, FILE *stream,
         fprintf(stderr,
                 "loaddb: custom type '%s' unavailable%s — values of it won't "
                 "load\n",
-                name, g_safe_mode ? " (--safe: module auto-load disabled)" : "");
+                name,
+                g_safe_mode ? " (--safe: module auto-load disabled)" : "");
       free(name);
       free(spec);
     }
@@ -4081,9 +4133,10 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(path_arg);
   if (path_arg) {
     if (!isstring(path_arg))
-      CLEAN_RETURN_1(path_arg,
-                     error(ERROR_ILLEGAL_VALUE, NULL, env,
-                           "savedb: optional argument must be a filename string"));
+      CLEAN_RETURN_1(
+          path_arg,
+          error(ERROR_ILLEGAL_VALUE, NULL, env,
+                "savedb: optional argument must be a filename string"));
     path = (const char *)exp_text(path_arg);
   }
   /* Snapshot path before releasing path_arg — error() would receive a
@@ -4091,11 +4144,12 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   char *path_snap = (path == alcove_db_path) ? NULL : strdup(path);
   FILE *stream = fopen(path, "w");
   if (!stream) {
-    if (path_arg) unrefexp(path_arg);
+    if (path_arg)
+      unrefexp(path_arg);
     unrefexp(e);
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
-                       "Unable to open '%s' for writing",
-                       path_snap ? path_snap : path);
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "Unable to open '%s' for writing",
+              path_snap ? path_snap : path);
     free(path_snap);
     return err;
   }
@@ -4105,11 +4159,12 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   int ok = alcove_dump_unified(env, resp_kv_get(), stream);
   fclose(stream);
   if (!ok) {
-    if (path_arg) unrefexp(path_arg);
+    if (path_arg)
+      unrefexp(path_arg);
     unrefexp(e);
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, NULL, env,
-                       "savedb: I/O error writing '%s'",
-                       path_snap ? path_snap : path);
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "savedb: I/O error writing '%s'",
+              path_snap ? path_snap : path);
     free(path_snap);
     return err;
   }
@@ -4195,9 +4250,10 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(path_arg);
   if (path_arg) {
     if (!isstring(path_arg))
-      CLEAN_RETURN_1(path_arg,
-                     error(ERROR_ILLEGAL_VALUE, NULL, env,
-                           "loaddb: optional argument must be a filename string"));
+      CLEAN_RETURN_1(
+          path_arg,
+          error(ERROR_ILLEGAL_VALUE, NULL, env,
+                "loaddb: optional argument must be a filename string"));
     path = (const char *)exp_text(path_arg);
   }
   int n = loaddb_from_file_path(env, path);
@@ -4227,11 +4283,12 @@ const char doc_gt[] = "(> a b ...) — strictly greater than (chained).";
 const char doc_le[] = "(<= a b ...) — less than or equal (chained).";
 const char doc_ge[] = "(>= a b ...) — greater than or equal (chained).";
 /* Error texts shared by the AST and VM tiers so the two cannot drift (the same
-   operator must report identically in interpreted and compiled code). Visible to
-   the later-#included builtins_stdlib.h (modcmd). */
+   operator must report identically in interpreted and compiled code). Visible
+   to the later-#included builtins_stdlib.h (modcmd). */
 /* Only mod-by-zero and compare-incompatible are unified here (they had drifted
    between the AST and VM tiers); other cross-tier messages — div-by-zero,
-   integer overflow — still use per-site literals and could be folded in later. */
+   integer overflow — still use per-site literals and could be folded in later.
+ */
 static const char ERR_MODULO_BY_ZERO[] = "Illegal modulo by 0";
 static const char ERR_COMPARE_INCOMPAT[] = "compare: incompatible types";
 
@@ -4239,7 +4296,8 @@ static const char ERR_COMPARE_INCOMPAT[] = "compare: incompatible types";
    of (a - b); returns 0 on type mismatch (caller raises error). */
 static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
   /* Decimal: exact when both are decimals; mixed with another numeric compares
-     via double (comparison is permissive — only *arithmetic* mixing is strict). */
+     via double (comparison is permissive — only *arithmetic* mixing is strict).
+   */
   if (isdecimal(a) || isdecimal(b)) {
     if (isdecimal(a) && isdecimal(b)) {
       *d = (double)dec_cmp((alc_dec_t *)a->ptr, (alc_dec_t *)b->ptr);
@@ -4248,10 +4306,10 @@ static int alc_pair_cmp(exp_t *a, exp_t *b, double *d) {
     int aok = isdecimal(a) || isnumber(a) || isfloat(a) || isrational(a);
     int bok = isdecimal(b) || isnumber(b) || isfloat(b) || isrational(b);
     if (aok && bok) {
-      double da = isdecimal(a)  ? dec_to_double(a)
+      double da = isdecimal(a)    ? dec_to_double(a)
                   : isrational(a) ? rat_to_double(a)
                                   : TO_DOUBLE(a);
-      double db = isdecimal(b)  ? dec_to_double(b)
+      double db = isdecimal(b)    ? dec_to_double(b)
                   : isrational(b) ? rat_to_double(b)
                                   : TO_DOUBLE(b);
       *d = da - db;
@@ -4332,10 +4390,18 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
       }
       int ok;
       switch (op_kind) {
-      case CMP_LT: ok = d < 0; break;
-      case CMP_GT: ok = d > 0; break;
-      case CMP_LE: ok = d <= 0; break;
-      default:     ok = d >= 0; break; /* CMP_GE */
+      case CMP_LT:
+        ok = d < 0;
+        break;
+      case CMP_GT:
+        ok = d > 0;
+        break;
+      case CMP_LE:
+        ok = d <= 0;
+        break;
+      default:
+        ok = d >= 0;
+        break; /* CMP_GE */
       }
       unrefexp(prev);
       if (!ok) {
@@ -4358,10 +4424,10 @@ exp_t *cmpcmd(exp_t *e, env_t *env) {
    running result (owned: fixnum or rational), `c` is the remaining arg list,
    `count` is how many operands were already folded into acc (incl. the one that
    triggered the hand-off). Applies `op` ('+','-','*','/') across the rest with
-   Python-style contagion: meeting a float demotes the whole expression to float;
-   meeting a non-number errors. Bounded: an exact result that overflows int64
-   raises rather than wrapping. Consumes acc, e, and every arg it evaluates;
-   returns an owned result or an error exp_t. */
+   Python-style contagion: meeting a float demotes the whole expression to
+   float; meeting a non-number errors. Bounded: an exact result that overflows
+   int64 raises rather than wrapping. Consumes acc, e, and every arg it
+   evaluates; returns an owned result or an error exp_t. */
 static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
                          int is_div, int count, exp_t *e) {
   int i = count;
@@ -4388,7 +4454,8 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
            dropping our own ref (unrefexp(e) first would free e, then
            error()'s refexp(e) would resurrect a freed node — a UAF that
            corrupts refcounts cumulatively). */
-        exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+        exp_t *er =
+            error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
         unrefexp(w);
         unrefexp(e);
         return er;
@@ -4424,7 +4491,8 @@ static exp_t *tower_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
     /* rational/decimal mixing and non-numbers: refuse (two exact systems don't
        silently combine; non-numbers are type errors). */
     {
-      exp_t *er = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+      exp_t *er =
+          error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
       unrefexp(w);
       unrefexp(acc);
       unrefexp(e);
@@ -4470,8 +4538,8 @@ static exp_t *dec_err(exp_t *e, env_t *env, int over) {
                over == 2 ? "Illegal division by 0"
                          : "decimal overflow (exceeds 28 significant digits)");
 }
-static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub,
-                           int is_div, int count, exp_t *e) {
+static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env,
+                           int is_sub, int is_div, int count, exp_t *e) {
   int i = count, over;
   for (; c; c = c->next) {
     exp_t *w = EVAL(c->content, env);
@@ -4537,174 +4605,174 @@ static exp_t *decimal_fold(char op, exp_t *acc, exp_t *c, env_t *env, int is_sub
   return acc;
 }
 
-#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV, OP_CHAR)                    \
-  exp_t *name(exp_t *e, env_t *env) {                                          \
-    int64_t sum_i = (init_i);                                                  \
-    expfloat sum_f = (init_i);                                                 \
-    int saw_float = 0;                                                         \
-    exp_t *c = cdr(e);                                                         \
-    exp_t *v = NULL;                                                           \
-    int i = 0;                                                                 \
-    exp_t *ret = NULL;                                                         \
-    do {                                                                       \
-      if (c) {                                                                 \
-        i++;                                                                   \
-        v = EVAL(c->content, env);                                             \
-        if (iserror(v)) {                                                      \
-          unrefexp(e);                                                         \
-          return v;                                                            \
-        }                                                                      \
-        if ((IS_DIV) && i > 1) {                                               \
-          if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) { \
-            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");       \
-            unrefexp(v);                                                       \
-            goto finish;                                                       \
-          }                                                                    \
-        }                                                                      \
-        if (saw_float) {                                                       \
-          if (isnumber(v)) {                                                   \
-            sum_f OP FIX_VAL(v);                                               \
-          } else if (isfloat(v)) {                                             \
-            sum_f OP v->f;                                                     \
-          } else if (isrational(v)) { /* rational in float context -> float */ \
-            sum_f OP rat_to_double(v);                                         \
-          } else if (isdecimal(v)) { /* float + decimal: strict refusal */     \
-            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
-                        "decimal does not combine with float (convert "        \
-                        "explicitly)");                                        \
-            unrefexp(v);                                                       \
-            goto finish;                                                       \
-          } else {                                                             \
-            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
-                        "Illegal value in operation");                         \
-            unrefexp(v);                                                       \
-            goto finish;                                                       \
-          }                                                                    \
-        } else {                                                               \
-          if (isnumber(v)) {                                                   \
-            if (i > 1 || (init_i) != 0) {                                      \
-              if (fix_op_ovf((OP_CHAR), &sum_i, FIX_VAL(v))) {                  \
-                ret = error(ERROR_ILLEGAL_VALUE, e, env,                        \
-                            "integer overflow (no implicit float; use a "      \
-                            "float, rational, or decimal)");                   \
-                unrefexp(v);                                                   \
-                goto finish;                                                   \
-              }                                                                \
-            } else {                                                           \
-              sum_i = FIX_VAL(v);                                              \
-            }                                                                  \
-          } else if (isfloat(v)) {                                             \
-            if (i > 1 || (init_i) != 0) {                                      \
-              sum_f = sum_i;                                                   \
-              sum_f OP v->f;                                                   \
-            } else {                                                           \
-              sum_f = v->f;                                                    \
-            }                                                                  \
-            sum_i = 0;                                                         \
-            saw_float = 1;                                                     \
-          } else if (isrational(v)) {                                          \
-            /* Exact non-integer: leave the int/float fast path and finish the \
-               fold in rational mode. acc = v seeds the first operand, else    \
-               apply OP to the integer accumulated so far. tower_fold consumes  \
-               e and the remaining args. */                                    \
-            exp_t *acc;                                                        \
-            if (i == 1) {                                                      \
-              acc = v; /* transfer ownership */                               \
-            } else {                                                           \
-              const char *_err;                                                \
-              acc = rat_binop((OP_CHAR), MAKE_FIX(sum_i), v, &_err);           \
-              unrefexp(v);                                                     \
-              if (_err) {                                                      \
-                ret = error(_err[0] == 'd' ? ERROR_DIV_BY0                      \
-                                           : ERROR_ILLEGAL_VALUE,              \
-                            e, env,                                            \
-                            _err[0] == 'd' ? "Illegal division by 0"           \
-                                           : "exact arithmetic overflow");     \
-                goto finish;                                                   \
-              }                                                                \
-            }                                                                  \
-            return tower_fold((OP_CHAR), acc, c->next, env, (IS_SUB),          \
-                              (IS_DIV), i, e);                                 \
-          } else if (isdecimal(v)) {                                           \
-            /* Decimal: finish the fold in decimal mode. Seed with v, else     \
-               apply OP to the integer accumulated so far (coerced). */        \
-            int _o;                                                            \
-            exp_t *acc;                                                        \
-            if (i == 1) {                                                      \
-              acc = v;                                                         \
-            } else {                                                           \
-              exp_t *si = make_decimal_raw((__int128)sum_i, 0, &_o);           \
-              acc = dec_binop((OP_CHAR), si, v, &_o);                          \
-              unrefexp(si);                                                    \
-              unrefexp(v);                                                     \
-              if (_o) {                                                        \
-                ret = dec_err(e, env, _o);                                     \
-                goto finish;                                                   \
-              }                                                                \
-            }                                                                  \
-            return decimal_fold((OP_CHAR), acc, c->next, env, (IS_SUB),        \
-                                (IS_DIV), i, e);                               \
-          } else {                                                             \
-            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
-                        "Illegal value in operation");                         \
-            unrefexp(v);                                                       \
-            goto finish;                                                       \
-          }                                                                    \
-        }                                                                      \
-        unrefexp(v);                                                           \
-      }                                                                        \
-    } while (c && (c = c->next));                                              \
-    /* (-)  and (/) with no args are errors — they have no identity value. */  \
-    if (i == 0 && ((IS_SUB) || (IS_DIV))) {                                   \
-      ret = error(ERROR_MISSING_PARAMETER, e, env,                             \
-                  (IS_SUB) ? "(- a ...): needs at least one argument"          \
-                           : "(/ a ...): needs at least one argument");        \
-      goto finish;                                                             \
-    }                                                                          \
-    if (i == 1) {                                                              \
-      if (IS_SUB) {                                                            \
-        if (saw_float) {                                                       \
-          sum_f = -sum_f;                                                      \
-        } else {                                                               \
-          int64_t _neg;                                                        \
+#define MATH_CMD(name, init_i, OP, IS_SUB, IS_DIV, OP_CHAR)                      \
+  exp_t *name(exp_t *e, env_t *env) {                                            \
+    int64_t sum_i = (init_i);                                                    \
+    expfloat sum_f = (init_i);                                                   \
+    int saw_float = 0;                                                           \
+    exp_t *c = cdr(e);                                                           \
+    exp_t *v = NULL;                                                             \
+    int i = 0;                                                                   \
+    exp_t *ret = NULL;                                                           \
+    do {                                                                         \
+      if (c) {                                                                   \
+        i++;                                                                     \
+        v = EVAL(c->content, env);                                               \
+        if (iserror(v)) {                                                        \
+          unrefexp(e);                                                           \
+          return v;                                                              \
+        }                                                                        \
+        if ((IS_DIV) && i > 1) {                                                 \
+          if ((isnumber(v) && FIX_VAL(v) == 0) || (isfloat(v) && v->f == 0)) {   \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");         \
+            unrefexp(v);                                                         \
+            goto finish;                                                         \
+          }                                                                      \
+        }                                                                        \
+        if (saw_float) {                                                         \
+          if (isnumber(v)) {                                                     \
+            sum_f OP FIX_VAL(v);                                                 \
+          } else if (isfloat(v)) {                                               \
+            sum_f OP v->f;                                                       \
+          } else if (isrational(v)) { /* rational in float context -> float */   \
+            sum_f OP rat_to_double(v);                                           \
+          } else if (isdecimal(v)) { /* float + decimal: strict refusal */       \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                             \
+                        "decimal does not combine with float (convert "          \
+                        "explicitly)");                                          \
+            unrefexp(v);                                                         \
+            goto finish;                                                         \
+          } else {                                                               \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                             \
+                        "Illegal value in operation");                           \
+            unrefexp(v);                                                         \
+            goto finish;                                                         \
+          }                                                                      \
+        } else {                                                                 \
+          if (isnumber(v)) {                                                     \
+            if (i > 1 || (init_i) != 0) {                                        \
+              if (fix_op_ovf((OP_CHAR), &sum_i, FIX_VAL(v))) {                   \
+                ret = error(ERROR_ILLEGAL_VALUE, e, env,                         \
+                            "integer overflow (no implicit float; use a "        \
+                            "float, rational, or decimal)");                     \
+                unrefexp(v);                                                     \
+                goto finish;                                                     \
+              }                                                                  \
+            } else {                                                             \
+              sum_i = FIX_VAL(v);                                                \
+            }                                                                    \
+          } else if (isfloat(v)) {                                               \
+            if (i > 1 || (init_i) != 0) {                                        \
+              sum_f = sum_i;                                                     \
+              sum_f OP v->f;                                                     \
+            } else {                                                             \
+              sum_f = v->f;                                                      \
+            }                                                                    \
+            sum_i = 0;                                                           \
+            saw_float = 1;                                                       \
+          } else if (isrational(v)) {                                            \
+            /* Exact non-integer: leave the int/float fast path and finish the   \
+               fold in rational mode. acc = v seeds the first operand, else      \
+               apply OP to the integer accumulated so far. tower_fold consumes   \
+               e and the remaining args. */                                      \
+            exp_t *acc;                                                          \
+            if (i == 1) {                                                        \
+              acc = v; /* transfer ownership */                                  \
+            } else {                                                             \
+              const char *_err;                                                  \
+              acc = rat_binop((OP_CHAR), MAKE_FIX(sum_i), v, &_err);             \
+              unrefexp(v);                                                       \
+              if (_err) {                                                        \
+                ret = error(_err[0] == 'd' ? ERROR_DIV_BY0                       \
+                                           : ERROR_ILLEGAL_VALUE,                \
+                            e, env,                                              \
+                            _err[0] == 'd' ? "Illegal division by 0"             \
+                                           : "exact arithmetic overflow");       \
+                goto finish;                                                     \
+              }                                                                  \
+            }                                                                    \
+            return tower_fold((OP_CHAR), acc, c->next, env, (IS_SUB),            \
+                              (IS_DIV), i, e);                                   \
+          } else if (isdecimal(v)) {                                             \
+            /* Decimal: finish the fold in decimal mode. Seed with v, else       \
+               apply OP to the integer accumulated so far (coerced). */          \
+            int _o;                                                              \
+            exp_t *acc;                                                          \
+            if (i == 1) {                                                        \
+              acc = v;                                                           \
+            } else {                                                             \
+              exp_t *si = make_decimal_raw((__int128)sum_i, 0, &_o);             \
+              acc = dec_binop((OP_CHAR), si, v, &_o);                            \
+              unrefexp(si);                                                      \
+              unrefexp(v);                                                       \
+              if (_o) {                                                          \
+                ret = dec_err(e, env, _o);                                       \
+                goto finish;                                                     \
+              }                                                                  \
+            }                                                                    \
+            return decimal_fold((OP_CHAR), acc, c->next, env, (IS_SUB),          \
+                                (IS_DIV), i, e);                                 \
+          } else {                                                               \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                             \
+                        "Illegal value in operation");                           \
+            unrefexp(v);                                                         \
+            goto finish;                                                         \
+          }                                                                      \
+        }                                                                        \
+        unrefexp(v);                                                             \
+      }                                                                          \
+    } while (c && (c = c->next));                                                \
+    /* (-)  and (/) with no args are errors — they have no identity value. */    \
+    if (i == 0 && ((IS_SUB) || (IS_DIV))) {                                      \
+      ret = error(ERROR_MISSING_PARAMETER, e, env,                               \
+                  (IS_SUB) ? "(- a ...): needs at least one argument"            \
+                           : "(/ a ...): needs at least one argument");          \
+      goto finish;                                                               \
+    }                                                                            \
+    if (i == 1) {                                                                \
+      if (IS_SUB) {                                                              \
+        if (saw_float) {                                                         \
+          sum_f = -sum_f;                                                        \
+        } else {                                                                 \
+          int64_t _neg;                                                          \
           /* Negation that leaves the 61-bit fixnum range errors — no implicit \
-             float (explicit over implicit). */                                \
-          if (__builtin_sub_overflow((int64_t)0, sum_i, &_neg) ||              \
-              !FIX_FITS(_neg)) {                                               \
-            ret = error(ERROR_ILLEGAL_VALUE, e, env,                           \
-                        "integer overflow (no implicit float; use a float, "   \
-                        "rational, or decimal)");                              \
-            goto finish;                                                       \
-          }                                                                    \
-          sum_i = _neg;                                                        \
-        }                                                                      \
-      } else if (IS_DIV) {                                                     \
-        if (saw_float) {                                                       \
-          if (sum_f == 0) {                                                    \
-            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");       \
-            goto finish;                                                       \
-          }                                                                    \
-          sum_f = 1 / sum_f;                                                   \
-        } else {                                                               \
-          if (sum_i == 0) {                                                    \
-            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");       \
-            goto finish;                                                       \
-          }                                                                    \
-          sum_i = 1 / sum_i;                                                   \
-        }                                                                      \
-      }                                                                        \
-    }                                                                          \
-    if (saw_float)                                                             \
-      ret = make_floatf(sum_f);                                                \
-    else if (!FIX_FITS(sum_i)) /* result left the 61-bit fixnum range */       \
-      ret = error(ERROR_ILLEGAL_VALUE, e, env,                                 \
-                  "integer overflow (no implicit float; use a float, "         \
-                  "rational, or decimal)");                                    \
-    else                                                                       \
-      ret = make_integeri(sum_i);                                              \
-  finish:                                                                      \
-    unrefexp(e);                                                               \
-    return ret;                                                                \
+             float (explicit over implicit). */                                  \
+          if (__builtin_sub_overflow((int64_t)0, sum_i, &_neg) ||                \
+              !FIX_FITS(_neg)) {                                                 \
+            ret = error(ERROR_ILLEGAL_VALUE, e, env,                             \
+                        "integer overflow (no implicit float; use a float, "     \
+                        "rational, or decimal)");                                \
+            goto finish;                                                         \
+          }                                                                      \
+          sum_i = _neg;                                                          \
+        }                                                                        \
+      } else if (IS_DIV) {                                                       \
+        if (saw_float) {                                                         \
+          if (sum_f == 0) {                                                      \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");         \
+            goto finish;                                                         \
+          }                                                                      \
+          sum_f = 1 / sum_f;                                                     \
+        } else {                                                                 \
+          if (sum_i == 0) {                                                      \
+            ret = error(ERROR_DIV_BY0, e, env, "Illegal division by 0");         \
+            goto finish;                                                         \
+          }                                                                      \
+          sum_i = 1 / sum_i;                                                     \
+        }                                                                        \
+      }                                                                          \
+    }                                                                            \
+    if (saw_float)                                                               \
+      ret = make_floatf(sum_f);                                                  \
+    else if (!FIX_FITS(sum_i)) /* result left the 61-bit fixnum range */         \
+      ret = error(ERROR_ILLEGAL_VALUE, e, env,                                   \
+                  "integer overflow (no implicit float; use a float, "           \
+                  "rational, or decimal)");                                      \
+    else                                                                         \
+      ret = make_integeri(sum_i);                                                \
+  finish:                                                                        \
+    unrefexp(e);                                                                 \
+    return ret;                                                                  \
   }
 
 const char doc_plus[] =
@@ -4742,8 +4810,8 @@ exp_t *rationalcmd(exp_t *e, env_t *env) {
                            "rational: denominator must be an integer"));
     den = FIX_VAL(d);
     if (den == 0)
-      CLEAN_RETURN_2(n, d,
-                     error(ERROR_DIV_BY0, e, env, "rational: denominator is 0"));
+      CLEAN_RETURN_2(
+          n, d, error(ERROR_DIV_BY0, e, env, "rational: denominator is 0"));
   }
   CLEAN_RETURN_2(n, d, make_rational(FIX_VAL(n), den));
 }
@@ -4768,8 +4836,9 @@ exp_t *denominatorcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_1(v, make_rational(((alc_rat_t *)v->ptr)->den, 1));
   if (isnumber(v))
     CLEAN_RETURN_1(v, MAKE_FIX(1));
-  CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
-                          "denominator: argument must be a rational or integer"));
+  CLEAN_RETURN_1(v,
+                 error(ERROR_ILLEGAL_VALUE, e, env,
+                       "denominator: argument must be a rational or integer"));
 }
 
 const char doc_rationalp[] =
@@ -4808,9 +4877,10 @@ exp_t *decimalcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
                             "decimal: argument must be a string or integer"));
   if (!d)
-    CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
-                            over == 3 ? "decimal: malformed number string"
-                                      : "decimal: too many significant digits"));
+    CLEAN_RETURN_1(v,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         over == 3 ? "decimal: malformed number string"
+                                   : "decimal: too many significant digits"));
   CLEAN_RETURN_1(v, d);
 }
 
@@ -4957,51 +5027,94 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
   return ret;
 }
 
-#define FLOAT_UNARY_CMD(cname, fname, docstr, cdoc_sym) \
-const char cdoc_sym[] = docstr; \
-exp_t *cname(exp_t *e, env_t *env) { \
-  exp_t *v = EVAL(cadr(e), env); \
-  if (iserror(v)) { unrefexp(e); return v; } \
-  exp_t *ret; \
-  if (isfloat(v)) ret = make_floatf(fname(v->f)); \
-  else if (isnumber(v)) ret = make_floatf(fname((double)FIX_VAL(v))); \
-  else { unrefexp(v); unrefexp(e); \
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, #cname ": arg must be a number"); } \
-  unrefexp(v); unrefexp(e); return ret; \
-}
+#define FLOAT_UNARY_CMD(cname, fname, docstr, cdoc_sym)                        \
+  const char cdoc_sym[] = docstr;                                              \
+  exp_t *cname(exp_t *e, env_t *env) {                                         \
+    exp_t *v = EVAL(cadr(e), env);                                             \
+    if (iserror(v)) {                                                          \
+      unrefexp(e);                                                             \
+      return v;                                                                \
+    }                                                                          \
+    exp_t *ret;                                                                \
+    if (isfloat(v))                                                            \
+      ret = make_floatf(fname(v->f));                                          \
+    else if (isnumber(v))                                                      \
+      ret = make_floatf(fname((double)FIX_VAL(v)));                            \
+    else {                                                                     \
+      unrefexp(v);                                                             \
+      unrefexp(e);                                                             \
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,                             \
+                   #cname ": arg must be a number");                           \
+    }                                                                          \
+    unrefexp(v);                                                               \
+    unrefexp(e);                                                               \
+    return ret;                                                                \
+  }
 
-FLOAT_UNARY_CMD(roundcmd,  round,  "(round x) — round to nearest integer, as float.", doc_round)
-FLOAT_UNARY_CMD(floorcmd,  floor,  "(floor x) — largest integer not greater than x, as float.", doc_floor)
-FLOAT_UNARY_CMD(ceilcmd,   ceil,   "(ceil x) — smallest integer not less than x, as float.", doc_ceil)
-FLOAT_UNARY_CMD(truncatecmd, trunc, "(truncate x) — round toward zero, as float.", doc_truncate)
-FLOAT_UNARY_CMD(logcmd,    log,    "(log x) — natural logarithm of x.", doc_log)
-FLOAT_UNARY_CMD(sincmd,    sin,    "(sin x) — sine of x (radians).", doc_sin)
-FLOAT_UNARY_CMD(coscmd,    cos,    "(cos x) — cosine of x (radians).", doc_cos)
-FLOAT_UNARY_CMD(tancmd,    tan,    "(tan x) — tangent of x (radians).", doc_tan)
+FLOAT_UNARY_CMD(roundcmd, round,
+                "(round x) — round to nearest integer, as float.", doc_round)
+FLOAT_UNARY_CMD(floorcmd, floor,
+                "(floor x) — largest integer not greater than x, as float.",
+                doc_floor)
+FLOAT_UNARY_CMD(ceilcmd, ceil,
+                "(ceil x) — smallest integer not less than x, as float.",
+                doc_ceil)
+FLOAT_UNARY_CMD(truncatecmd, trunc,
+                "(truncate x) — round toward zero, as float.", doc_truncate)
+FLOAT_UNARY_CMD(logcmd, log, "(log x) — natural logarithm of x.", doc_log)
+FLOAT_UNARY_CMD(sincmd, sin, "(sin x) — sine of x (radians).", doc_sin)
+FLOAT_UNARY_CMD(coscmd, cos, "(cos x) — cosine of x (radians).", doc_cos)
+FLOAT_UNARY_CMD(tancmd, tan, "(tan x) — tangent of x (radians).", doc_tan)
 #undef FLOAT_UNARY_CMD
 
 const char doc_float[] = "(float x) — coerce integer to floating-point.";
 exp_t *floatcmd(exp_t *e, env_t *env) {
   exp_t *v = EVAL(cadr(e), env);
-  if (iserror(v)) { unrefexp(e); return v; }
+  if (iserror(v)) {
+    unrefexp(e);
+    return v;
+  }
   exp_t *ret;
-  if (isfloat(v)) { ret = v; unrefexp(e); return ret; }
-  if (isnumber(v)) ret = make_floatf((double)FIX_VAL(v));
-  else { unrefexp(v); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "float: arg must be a number"); }
-  unrefexp(v); unrefexp(e); return ret;
+  if (isfloat(v)) {
+    ret = v;
+    unrefexp(e);
+    return ret;
+  }
+  if (isnumber(v))
+    ret = make_floatf((double)FIX_VAL(v));
+  else {
+    unrefexp(v);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "float: arg must be a number");
+  }
+  unrefexp(v);
+  unrefexp(e);
+  return ret;
 }
 
 const char doc_int[] = "(int x) — coerce float to integer by truncation.";
 exp_t *intcmd(exp_t *e, env_t *env) {
   exp_t *v = EVAL(cadr(e), env);
-  if (iserror(v)) { unrefexp(e); return v; }
+  if (iserror(v)) {
+    unrefexp(e);
+    return v;
+  }
   exp_t *ret;
-  if (isnumber(v)) { ret = v; unrefexp(e); return ret; }
-  if (isfloat(v)) ret = make_integeri((int64_t)v->f);
-  else { unrefexp(v); unrefexp(e);
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "int: arg must be a number"); }
-  unrefexp(v); unrefexp(e); return ret;
+  if (isnumber(v)) {
+    ret = v;
+    unrefexp(e);
+    return ret;
+  }
+  if (isfloat(v))
+    ret = make_integeri((int64_t)v->f);
+  else {
+    unrefexp(v);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "int: arg must be a number");
+  }
+  unrefexp(v);
+  unrefexp(e);
+  return ret;
 }
 
 /* prcmd backs both `pr` and `print`; prncmd backs `prn` and `println`. */
@@ -5041,7 +5154,8 @@ static void str_buf_put(char **buf, size_t *len, size_t *cap, const char *s,
                         size_t n) {
   if (*len + n + 1 > *cap) {
     if (*cap == 0)
-      *cap = 64; /* seed: doubling from 0 would loop forever (buf may be NULL) */
+      *cap =
+          64; /* seed: doubling from 0 would loop forever (buf may be NULL) */
     while (*len + n + 1 > *cap)
       *cap *= 2;
     char *p = realloc(*buf, *cap);
@@ -5132,7 +5246,8 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     exp_t *n = v;
     int first = 1;
     while (n && ispair(n) && istrue(n)) {
-      if (!first) str_buf_put(buf, len, cap, " ", 1);
+      if (!first)
+        str_buf_put(buf, len, cap, " ", 1);
       first = 0;
       exp_to_string_buf(n->content, buf, len, cap);
       n = n->next;
@@ -5152,7 +5267,8 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     str_buf_put(buf, len, cap, "#[", 2);
     int64_t vn = vec_len(v);
     for (int64_t i = 0; i < vn; i++) {
-      if (i) str_buf_put(buf, len, cap, " ", 1);
+      if (i)
+        str_buf_put(buf, len, cap, " ", 1);
       exp_t *cell = vec_get_boxed(v, i);
       exp_to_string_buf(cell, buf, len, cap);
       unrefexp(cell);
@@ -5167,7 +5283,8 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     if (d)
       for (unsigned int i = 0; i < d->ht[0].size; i++)
         for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
-          if (!first) str_buf_put(buf, len, cap, ", ", 2);
+          if (!first)
+            str_buf_put(buf, len, cap, ", ", 2);
           first = 0;
           /* keys raw, like every other nested string in str output */
           str_buf_put(buf, len, cap, k->key, strlen(k->key));
@@ -5184,7 +5301,8 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     if (d)
       for (unsigned int i = 0; i < d->ht[0].size; i++)
         for (keyval_t *k = d->ht[0].table[i]; k; k = k->next) {
-          if (!first) str_buf_put(buf, len, cap, " ", 1);
+          if (!first)
+            str_buf_put(buf, len, cap, " ", 1);
           first = 0;
           exp_to_string_buf(k->val, buf, len, cap);
         }
@@ -5197,7 +5315,8 @@ static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
     if (l) {
       int first = 1;
       for (alc_listnode_t *ln = l->head; ln; ln = ln->next) {
-        if (!first) str_buf_put(buf, len, cap, " ", 1);
+        if (!first)
+          str_buf_put(buf, len, cap, " ", 1);
         first = 0;
         exp_to_string_buf(ln->val, buf, len, cap);
       }
@@ -5256,9 +5375,13 @@ const char doc_fmt[] =
     "Example: (fmt \"{} + {} = {:.1f}\" 1 2 3.0) → \"1 + 2 = 3.0\".";
 exp_t *fmtcmd(exp_t *e, env_t *env) {
   exp_t *fmtarg = EVAL(cadr(e), env);
-  if (iserror(fmtarg)) { unrefexp(e); return fmtarg; }
+  if (iserror(fmtarg)) {
+    unrefexp(e);
+    return fmtarg;
+  }
   if (!isstring(fmtarg)) {
-    unrefexp(fmtarg); unrefexp(e);
+    unrefexp(fmtarg);
+    unrefexp(e);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "fmt: first arg must be a string template");
   }
@@ -5273,15 +5396,22 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
     }
     if (tmpl[i + 1] == '}') {
       i++;
-      if (!cur) continue;
+      if (!cur)
+        continue;
       exp_t *v = EVAL(car(cur), env);
-      if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
+      if (iserror(v)) {
+        free(buf);
+        unrefexp(fmtarg);
+        unrefexp(e);
+        return v;
+      }
       exp_to_string_buf(v, &buf, &len, &cap);
       unrefexp(v);
       cur = cur->next;
     } else if (tmpl[i + 1] == ':') {
       size_t j = i + 2;
-      while (tmpl[j] && tmpl[j] != '}') j++;
+      while (tmpl[j] && tmpl[j] != '}')
+        j++;
       size_t spec_len = j - (i + 2);
       if (!tmpl[j] || spec_len == 0 || spec_len >= FMT_SPEC_MAX) {
         str_buf_put(&buf, &len, &cap, "{", 1);
@@ -5301,8 +5431,8 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       int spec_ok = 1;
       for (size_t k = 0; k + 1 < spec_len; k++) {
         char sc = printf_fmt[1 + k];
-        if (!(sc == '-' || sc == '+' || sc == ' ' || sc == '#' ||
-              sc == '.' || (sc >= '0' && sc <= '9'))) {
+        if (!(sc == '-' || sc == '+' || sc == ' ' || sc == '#' || sc == '.' ||
+              (sc >= '0' && sc <= '9'))) {
           spec_ok = 0;
           break;
         }
@@ -5312,29 +5442,35 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
         continue;
       }
       i = j;
-      if (!cur) continue;
+      if (!cur)
+        continue;
       exp_t *v = EVAL(car(cur), env);
-      if (iserror(v)) { free(buf); unrefexp(fmtarg); unrefexp(e); return v; }
+      if (iserror(v)) {
+        free(buf);
+        unrefexp(fmtarg);
+        unrefexp(e);
+        return v;
+      }
       char tmp[256];
       char *out = tmp;
       char *heap = NULL;
       int n = 0;
-      if (ftype == 'd' || ftype == 'i' || ftype == 'o' ||
-          ftype == 'u' || ftype == 'x' || ftype == 'X') {
-        int64_t iv = isnumber(v) ? FIX_VAL(v) :
-                     isfloat(v)  ? (int64_t)v->f : 0LL;
+      if (ftype == 'd' || ftype == 'i' || ftype == 'o' || ftype == 'u' ||
+          ftype == 'x' || ftype == 'X') {
+        int64_t iv = isnumber(v)  ? FIX_VAL(v)
+                     : isfloat(v) ? (int64_t)v->f
+                                  : 0LL;
         /* int64_t needs 'll' length modifier before the type letter */
         char safe_fmt[FMT_SPEC_MAX + 4]; /* '%' + spec + 'll' + '\0' */
         memcpy(safe_fmt, printf_fmt, spec_len);
-        safe_fmt[spec_len]     = 'l';
+        safe_fmt[spec_len] = 'l';
         safe_fmt[spec_len + 1] = 'l';
         safe_fmt[spec_len + 2] = ftype;
         safe_fmt[spec_len + 3] = '\0';
         n = snprintf(tmp, sizeof(tmp), safe_fmt, iv);
-      } else if (ftype == 'f' || ftype == 'e' || ftype == 'E' ||
-                 ftype == 'g' || ftype == 'G') {
-        double dv = isfloat(v)  ? v->f :
-                    isnumber(v) ? (double)FIX_VAL(v) : 0.0;
+      } else if (ftype == 'f' || ftype == 'e' || ftype == 'E' || ftype == 'g' ||
+                 ftype == 'G') {
+        double dv = isfloat(v) ? v->f : isnumber(v) ? (double)FIX_VAL(v) : 0.0;
         n = snprintf(tmp, sizeof(tmp), printf_fmt, dv);
       } else if (ftype == 's') {
         const char *sv = isstring(v) ? (char *)exp_text(v) : "";
@@ -5353,7 +5489,8 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
                     (size_t)(n < (int)sizeof(tmp) || out == heap
                                  ? n
                                  : (int)sizeof(tmp) - 1));
-      if (heap) free(heap);
+      if (heap)
+        free(heap);
       unrefexp(v);
       cur = cur->next;
     } else {
@@ -5387,7 +5524,10 @@ exp_t *stringappendcmd(exp_t *e, env_t *env) {
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "string-append: args must be strings");
     }
-    { const char *_t = exp_text(v); str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t)); }
+    {
+      const char *_t = exp_text(v);
+      str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t));
+    }
     unrefexp(v);
   }
   exp_t *ret = make_string_take(buf, (int)len);
@@ -5427,9 +5567,9 @@ exp_t *stringbufcmd(exp_t *e, env_t *env) {
                    error(ERROR_NUMBER_EXPECTED, e, env,
                          "string-buf: length must be an integer"));
   if (initexp && !ischar(initexp))
-    CLEAN_RETURN_2(nexp, initexp,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "string-buf: init must be a char"));
+    CLEAN_RETURN_2(
+        nexp, initexp,
+        error(ERROR_ILLEGAL_VALUE, e, env, "string-buf: init must be a char"));
   int64_t n = FIX_VAL(nexp);
   if (n < 0 || n > ((int64_t)1 << 30))
     CLEAN_RETURN_2(nexp, initexp,
@@ -5446,9 +5586,10 @@ const char doc_stringset[] =
 exp_t *stringsetcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(s, idx, ch);
   if (!isstring(s) || !isnumber(idx) || !ischar(ch))
-    CLEAN_RETURN_3(s, idx, ch,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(string-set! s i ch): expected string, integer, char"));
+    CLEAN_RETURN_3(
+        s, idx, ch,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "(string-set! s i ch): expected string, integer, char"));
   const char *cur = exp_text(s);
   int64_t cpi = FIX_VAL(idx);
   if (cpi < 0 || cpi >= utf8_strlen(cur))
@@ -5502,9 +5643,10 @@ const char doc_stringcopy[] =
 exp_t *stringcopycmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(dst, idx, src);
   if (!isstring(dst) || !isnumber(idx) || !isstring(src))
-    CLEAN_RETURN_3(dst, idx, src,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "(string-copy! dst i src): expected string, integer, string"));
+    CLEAN_RETURN_3(
+        dst, idx, src,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "(string-copy! dst i src): expected string, integer, string"));
   int64_t di = FIX_VAL(idx);
   if (di < 0)
     CLEAN_RETURN_3(dst, idx, src,
@@ -5628,11 +5770,12 @@ exp_t *stringjoincmd(exp_t *e, env_t *env) {
                      error(ERROR_ILLEGAL_VALUE, NULL, env,
                            "string-join: xs must be a list of strings"));
     }
-    if (!first)
-      { const char *_t = exp_text(sep); str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t)); }
+    if (!first) {
+      const char *_t = exp_text(sep);
+      str_buf_put(&buf, &len, &cap, (char *)_t, strlen((char *)_t));
+    }
     first = 0;
-    str_buf_put(&buf, &len, &cap, exp_text(car(p)),
-                strlen(exp_text(car(p))));
+    str_buf_put(&buf, &len, &cap, exp_text(car(p)), strlen(exp_text(car(p))));
     p = cdr(p);
   }
   exp_t *ret = make_string_take(buf, (int)len);
@@ -5663,10 +5806,10 @@ exp_t *stringtrimcmd(exp_t *e, env_t *env) {
     if (!isstring(s))                                                          \
       CLEAN_RETURN_1(s, error(ERROR_ILLEGAL_VALUE, NULL, env,                  \
                               cname ": arg must be a string"));                \
-    size_t n = strlen((char *)exp_text(s));                                         \
+    size_t n = strlen((char *)exp_text(s));                                    \
     char *buf = memalloc(n + 1, 1);                                            \
     for (size_t i = 0; i < n; i++)                                             \
-      buf[i] = (char)fn((unsigned char)((char *)exp_text(s))[i]);                   \
+      buf[i] = (char)fn((unsigned char)((char *)exp_text(s))[i]);              \
     exp_t *ret = make_string_take(buf, (int)n);                                \
     CLEAN_RETURN_1(s, ret);                                                    \
   }
@@ -5779,7 +5922,8 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
      transpile to s-expressions via als_to_sexpr, and read the result from a
      memstream. ".alc" (and anything else) is read directly as s-expressions.
      This is what lets an .alc program (require) a .adr module and vice versa,
-     in either binary. `transpiled` backs the memstream and is freed at the end. */
+     in either binary. `transpiled` backs the memstream and is freed at the end.
+   */
   /* Slurp the whole file: we both (maybe) transpile it and keep the text so an
      error can render a source-line caret. `filetext` is the original source
      (Adder or s-expr); `transpiled` (when set) is the generated s-expr that
@@ -5788,7 +5932,8 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
   char *filetext = slurp_stream(fp, &filelen);
   fclose(fp);
   if (!filetext)
-    return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot read '%s'", path);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "load: cannot read '%s'",
+                 path);
   char *transpiled = NULL;
   als_map amap = {0}; /* generated-line → Adder-line, for .adr error carets */
   size_t plen = strlen(path);
@@ -5853,7 +5998,8 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
       }
       /* Reader syntax error: its line is g_reader_line at the failure point. */
       fclose(fp);
-      result = annotate_error_loc(form, g_reader_src, display_line(g_reader_line));
+      result =
+          annotate_error_loc(form, g_reader_src, display_line(g_reader_line));
       goto done;
     }
     exp_t *ret = evaluate(form, env);
@@ -5908,16 +6054,15 @@ static exp_t *write_string_mode(exp_t *e, env_t *env, const char *mode,
   FILE *fp = fopen((char *)exp_text(path), mode);
   if (!fp)
     CLEAN_RETURN_2(path, text,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "%s: cannot open '%s'", (char *)name,
-                         (char *)exp_text(path)));
+                   error(ERROR_ILLEGAL_VALUE, NULL, env, "%s: cannot open '%s'",
+                         (char *)name, (char *)exp_text(path)));
   size_t n = strlen((char *)exp_text(text));
   int ok = (n == 0 || fwrite((char *)exp_text(text), 1, n, fp) == n);
   fclose(fp);
   if (!ok)
     CLEAN_RETURN_2(path, text,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "%s: write failed", (char *)name));
+                   error(ERROR_ILLEGAL_VALUE, NULL, env, "%s: write failed",
+                         (char *)name));
   CLEAN_RETURN_2(path, text, TRUE_EXP);
 }
 
@@ -5983,14 +6128,15 @@ exp_t *writebytescmd(exp_t *e, env_t *env) {
   if (!fp)
     CLEAN_RETURN_2(path, blob,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "write-bytes: cannot open '%s'", (char *)exp_text(path)));
+                         "write-bytes: cannot open '%s'",
+                         (char *)exp_text(path)));
   alc_blob_t *b = (alc_blob_t *)blob->ptr;
   int ok = (!b || b->len == 0 || fwrite(b->bytes, 1, b->len, fp) == b->len);
   fclose(fp);
   if (!ok)
-    CLEAN_RETURN_2(path, blob,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env,
-                         "write-bytes: write failed"));
+    CLEAN_RETURN_2(
+        path, blob,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "write-bytes: write failed"));
   CLEAN_RETURN_2(path, blob, TRUE_EXP);
 }
 
@@ -6187,11 +6333,14 @@ const char doc_require[] =
     "(require \"path\") — load an Alcove module once. \".alc\" is appended if "
     "absent; the file is searched relative to the requiring file, then "
     "$ALCOVE_PATH, then cwd. A \".so\"/\".dylib\" path instead loads a native "
-    "module (dlopen + its alcove_module_init). Already-loaded (or mid-load, for "
-    "cycles) modules are not re-run. Returns t when it loaded, nil when already "
+    "module (dlopen + its alcove_module_init). Already-loaded (or mid-load, "
+    "for "
+    "cycles) modules are not re-run. Returns t when it loaded, nil when "
+    "already "
     "loaded. "
     "(require \"path\" :refer) also binds every name the module's namespace "
-    "defines unqualified; (require \"path\" :refer a b) binds only a and b — so "
+    "defines unqualified; (require \"path\" :refer a b) binds only a and b — "
+    "so "
     "you can call `parse` instead of `json/parse`.";
 exp_t *requirecmd(exp_t *e, env_t *env) {
   if (g_resp_cb_guard) {
@@ -6208,10 +6357,12 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
                                "require: module not found: '%s' (searched "
                                "requiring dir, $ALCOVE_PATH, cwd)",
                                (char *)exp_text(spec)));
-  /* Canonical path is the dedup key (so "a.alc" and "./a.alc" are one module). */
+  /* Canonical path is the dedup key (so "a.alc" and "./a.alc" are one module).
+   */
   char canon[PATH_MAX];
   if (!realpath(found, canon))
-    snprintf(canon, sizeof(canon), "%s", found); /* fall back to the found path */
+    snprintf(canon, sizeof(canon), "%s",
+             found); /* fall back to the found path */
   if (!g_loaded_modules)
     g_loaded_modules = create_dict();
   if (!g_loading_modules)
@@ -6219,7 +6370,8 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
 
   /* Load (unless already loaded / mid-load), recording the module's declared
      namespace so a later :refer works even when it was loaded earlier. The
-     g_loaded_modules value is the ns string, or TRUE_EXP for a ns-less module. */
+     g_loaded_modules value is the ns string, or TRUE_EXP for a ns-less module.
+   */
   const char *module_ns = NULL;
   keyval_t *loaded = set_get_keyval_dict(g_loaded_modules, canon, NULL);
   if (loaded) {
@@ -6254,14 +6406,14 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
     unrefexp(ret);
     /* Record the module's declared namespace (string), or TRUE_EXP if none, so
        a later :refer on this already-loaded module still knows the prefix. */
-    exp_t *nsval = g_last_module_ns
-                       ? make_string(g_last_module_ns,
-                                     (int)strlen(g_last_module_ns))
-                       : TRUE_EXP;
+    exp_t *nsval = g_last_module_ns ? make_string(g_last_module_ns,
+                                                  (int)strlen(g_last_module_ns))
+                                    : TRUE_EXP;
     set_get_keyval_dict(g_loaded_modules, canon, nsval); /* dict refs it */
     if (nsval != TRUE_EXP)
       unrefexp(nsval);
-    module_ns = g_last_module_ns; /* borrowed — stable for the rest of this call */
+    module_ns =
+        g_last_module_ns; /* borrowed — stable for the rest of this call */
   }
 
   /* Optional :refer. `:refer` followed by no names (or only a keyword like
@@ -6400,8 +6552,8 @@ static exp_t *load_native_module(const char *path, const char *spec,
                  path);
   /* ABI guard: if the module declares the embedding-API version it was built
      against, refuse a mismatch here rather than let an incompatible exp_t/env_t
-     layout corrupt silently. A module without the (optional) symbol predates the
-     convention and is loaded as before. */
+     layout corrupt silently. A module without the (optional) symbol predates
+     the convention and is loaded as before. */
   void *abisym = dlsym(h, "alcove_module_abi");
   if (abisym) {
     int (*abi)(void);
@@ -6422,7 +6574,8 @@ static exp_t *load_native_module(const char *path, const char *spec,
   if (rc != 0)
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "require: native module '%s' alcove_module_init failed", path);
-  GEN_BUMP(); /* new builtins registered → invalidate global-resolution caches */
+  GEN_BUMP(); /* new builtins registered → invalidate global-resolution caches
+               */
   return TRUE_EXP;
 #else
   (void)path;
@@ -6434,10 +6587,10 @@ static exp_t *load_native_module(const char *path, const char *spec,
 }
 
 /* The standard-library builtins live in a dedicated #included fragment. */
-#include "builtins_stdlib.h"
 #include "builtins_log.h"
 #include "builtins_os.h"
 #include "builtins_regex.h"
+#include "builtins_stdlib.h"
 
 /* ---------------- Source pretty-printer ----------------
    Used by (source fn) to render a lambda body the way a Lisper would
@@ -6476,9 +6629,9 @@ static int pp_flat_width(exp_t *e) {
   switch (e->type) {
   case EXP_SYMBOL:
   case EXP_STRING:
-    return exp_text(e)
-               ? (int)strlen((char *)exp_text(e)) + (e->type == EXP_STRING ? 2 : 0)
-               : 3;
+    return exp_text(e) ? (int)strlen((char *)exp_text(e)) +
+                             (e->type == EXP_STRING ? 2 : 0)
+                       : 3;
   case EXP_FLOAT:
     return 12; /* approx */
   case EXP_PAIR: {
@@ -6725,8 +6878,7 @@ static void als_stmt(exp_t *x, int ind) { /* statement position */
   }
   if (k > 0) { /* header line + indented child statements */
     int i = 0;
-    for (exp_t *p = x; p && ispair(p) && istrue(p) && i < k;
-         p = p->next, i++) {
+    for (exp_t *p = x; p && ispair(p) && istrue(p) && i < k; p = p->next, i++) {
       if (i)
         putchar(' ');
       als_expr(p->content);
@@ -6770,8 +6922,8 @@ exp_t *sourcecmd(exp_t *e, env_t *env) {
   /* adder rendering: `def NAME (params):` then the body as
      indented statements (no outer parens, `:`-blocks, 'quote). */
   {
-    const char *kw = arg->meta ? (is_macro ? "defmacro" : "def")
-                               : (is_macro ? "mac" : "fn");
+    const char *kw =
+        arg->meta ? (is_macro ? "defmacro" : "def") : (is_macro ? "mac" : "fn");
     printf("\x1B[1;35m%s\x1B[22;39m ", kw);
     if (arg->meta)
       printf("\x1B[36m%s\x1B[39m ", (char *)arg->meta);
@@ -6913,7 +7065,8 @@ typedef enum {
 
 /* A valid binding NAME is a symbol that isn't a keyword. Keywords (:foo) are
    symbols too, but they self-evaluate as values, so a name list like (k :v)
-   must be read as a flat name/value pair, NOT an all-symbol destructure list. */
+   must be read as a flat name/value pair, NOT an all-symbol destructure list.
+ */
 #define IS_LET_NAME(e) (issymbol(e) && ((const char *)exp_text(e))[0] != ':')
 
 static let_shape_t let_classify(exp_t *first) {
@@ -6951,7 +7104,8 @@ static let_shape_t let_classify(exp_t *first) {
 const char doc_let[] =
     "(let (x 5 y 6) body...) or (let ((x 5) (y 6)) body...) — parallel "
     "bindings, local to body. (let x 5 body) — single bare binding. "
-    "(let (a b) listval body) — destructure listval (all-symbol list) into a, b "
+    "(let (a b) listval body) — destructure listval (all-symbol list) into a, "
+    "b "
     "(missing elements get nil).";
 exp_t *letcmd(exp_t *e, env_t *env) {
   int outer_tail = in_tail_position;
@@ -6990,16 +7144,19 @@ exp_t *letcmd(exp_t *e, env_t *env) {
       goto finish;
     }
     ret = EVAL(curval->content, env);
-    if (ret == NULL) ret = NIL_EXP;
-    if (iserror(ret)) goto finish;
+    if (ret == NULL)
+      ret = NIL_EXP;
+    if (iserror(ret))
+      goto finish;
     exp_t *dnames = first, *dvals = ret;
     while (dnames && ispair(dnames) && istrue(dnames)) {
       exp_t *nm = dnames->content;
       int have_val = dvals && ispair(dvals) && istrue(dvals);
-      var2env_bind(exp_text(nm),
-                   refexp(have_val ? dvals->content : NIL_EXP), newenv);
+      var2env_bind(exp_text(nm), refexp(have_val ? dvals->content : NIL_EXP),
+                   newenv);
       dnames = dnames->next;
-      if (have_val) dvals = dvals->next;
+      if (have_val)
+        dvals = dvals->next;
     }
     unrefexp(ret);
     ret = NULL;
@@ -7007,11 +7164,13 @@ exp_t *letcmd(exp_t *e, env_t *env) {
   } else if (shape == LET_FLAT) {
     /* (let (v1 e1 v2 e2 ...) body): parallel — each ei is evaluated in the
        OUTER env, then all are bound. */
-    for (exp_t *p = (first && first->content) ? first : NULL; p && p->content;) {
+    for (exp_t *p = (first && first->content) ? first : NULL;
+         p && p->content;) {
       exp_t *nm = p->content, *vp = p->next;
       CHECK_RESERVED_BIND(nm, ret, "in let", goto finish);
       ret = EVAL(vp->content, env);
-      if (iserror(ret)) goto finish;
+      if (iserror(ret))
+        goto finish;
       var2env_bind(exp_text(nm), ret, newenv);
       ret = NULL;
       p = vp->next;
@@ -7023,7 +7182,8 @@ exp_t *letcmd(exp_t *e, env_t *env) {
       exp_t *pair = p->content, *nm = pair->content;
       CHECK_RESERVED_BIND(nm, ret, "in let", goto finish);
       ret = EVAL(pair->next->content, env);
-      if (iserror(ret)) goto finish;
+      if (iserror(ret))
+        goto finish;
       var2env_bind(exp_text(nm), ret, newenv);
       ret = NULL;
     }
@@ -7040,8 +7200,10 @@ exp_t *letcmd(exp_t *e, env_t *env) {
   while (body->next) {
     in_tail_position = 0;
     ret = EVAL(body->content, newenv);
-    if (iserror(ret)) goto finish;
-    unrefexp(ret); ret = NULL;
+    if (iserror(ret))
+      goto finish;
+    unrefexp(ret);
+    ret = NULL;
     body = body->next;
   }
   in_tail_position = outer_tail;
@@ -7099,8 +7261,10 @@ exp_t *withcmd(exp_t *e, env_t *env) {
         while (curex->next) {
           in_tail_position = 0;
           ret = EVAL(curex->content, newenv);
-          if (iserror(ret)) goto finish;
-          unrefexp(ret); ret = NULL;
+          if (iserror(ret))
+            goto finish;
+          unrefexp(ret);
+          ret = NULL;
           curex = curex->next;
         }
         in_tail_position = outer_tail;
@@ -7155,7 +7319,8 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
         goto finish;
       }
       ret = EVAL(val_node->content, newenv);
-      if (iserror(ret)) goto finish;
+      if (iserror(ret))
+        goto finish;
       var2env_bind(exp_text(var), ret, newenv);
       ret = NULL;
       bcur = val_node->next;
@@ -7164,8 +7329,10 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
     while (body && body->next) {
       in_tail_position = 0;
       ret = EVAL(body->content, newenv);
-      if (iserror(ret)) goto finish;
-      unrefexp(ret); ret = NULL;
+      if (iserror(ret))
+        goto finish;
+      unrefexp(ret);
+      ret = NULL;
       body = body->next;
     }
     in_tail_position = outer_tail;
@@ -7190,7 +7357,8 @@ exp_t *letstar_cmd(exp_t *e, env_t *env) {
     }
     CHECK_RESERVED_BIND(var, ret, "in let*", goto finish);
     ret = EVAL(val_node->content, newenv);
-    if (iserror(ret)) goto finish;
+    if (iserror(ret))
+      goto finish;
     var2env_bind(exp_text(var), ret, newenv);
     ret = NULL;
     cur = val_node->next;
@@ -7378,9 +7546,9 @@ void bytecode_free(bytecode_t *bc) {
 }
 
 /* Source line/col for the instruction at code offset `pc` — the largest loc
-   entry with pc <= the fault offset. Returns 1 and fills the out-params, else 0.
-   Runs only when raising a runtime error (cold), so a linear scan from the end
-   is fine: the table holds one entry per source line of the function. */
+   entry with pc <= the fault offset. Returns 1 and fills the out-params, else
+   0. Runs only when raising a runtime error (cold), so a linear scan from the
+   end is fine: the table holds one entry per source line of the function. */
 static int bc_loc_at(bytecode_t *bc, int pc, int *line, int *col) {
   if (!bc || !bc->locs)
     return 0;
@@ -7418,9 +7586,9 @@ static void emit_i16(compiler_t *c, int16_t v) {
   emit_u8(c, (uint8_t)((v >> 8) & 0xff));
 }
 /* Record "from the current code offset, source position is form e's" into the
-   compiler's pc→loc table — coalescing consecutive forms on the same line so the
-   table stays tiny. Cold (compile time only); the VM never reads it except when
-   raising an error. No-op when the form carries no source position. */
+   compiler's pc→loc table — coalescing consecutive forms on the same line so
+   the table stays tiny. Cold (compile time only); the VM never reads it except
+   when raising an error. No-op when the form carries no source position. */
 static void emit_loc(compiler_t *c, exp_t *e) {
   int line = form_line(e);
   if (c->failed || !line || line == c->last_loc_line)
@@ -7508,8 +7676,8 @@ static void patch_i16(compiler_t *c, int patch, int target);
 static int is_native_op_symbol(exp_t *e) {
   if (!e || !is_ptr(e) || !issymbol(e))
     return 0;
-  static const char *const ops[] = {"+",  "-",  "*",   "/",   "<",   ">",
-                                     "<=", ">=", "is",  "iso", "isnt", "mod"};
+  static const char *const ops[] = {"+",  "-",  "*",  "/",   "<",    ">",
+                                    "<=", ">=", "is", "iso", "isnt", "mod"};
   const char *t = (const char *)exp_text(e);
   for (int i = 0; i < 12; i++)
     if (strcmp(t, ops[i]) == 0)
@@ -7669,9 +7837,9 @@ static void compile_call(compiler_t *c, exp_t *form, int tail) {
      (see body_capture_unsafe): in-place env mutation would otherwise corrupt
      an escaped closure or grow the handler stack unboundedly. When unsafe, we
      keep OP_TAIL_CALL (correct, just 2.9x slower in the let case). */
-  int is_self_tail = tail && c->self_name &&
-                     (c->nlet_depth == 0 || !c->capture_unsafe) &&
-                     issymbol(head) && strcmp(exp_text(head), c->self_name) == 0;
+  int is_self_tail =
+      tail && c->self_name && (c->nlet_depth == 0 || !c->capture_unsafe) &&
+      issymbol(head) && strcmp(exp_text(head), c->self_name) == 0;
   /* Cross-function tail call is safe regardless of nlet_depth:
      OP_TAIL_CALL wholesale releases current env's inline slots. */
   int is_cross_tail = tail && !is_self_tail;
@@ -7841,9 +8009,10 @@ static void compile_assign(compiler_t *c, exp_t *form, int tail) {
    evaluates all values in the enclosing env). The incremental "bind as you go"
    approach would instead make later values see earlier ones (let* semantics) —
    a real AST-vs-VM divergence. Compile all values first (stack: v0..v(n-1)),
-   then pop-bind v(n-1)->slot(n-1) down to v0->slot0, register names, run body. */
+   then pop-bind v(n-1)->slot(n-1) down to v0->slot0, register names, run body.
+ */
 static void compile_parallel_let(compiler_t *c, exp_t **vars, exp_t **vals,
-                                  int n, exp_t *body, int tail) {
+                                 int n, exp_t *body, int tail) {
   int start = c->nslots;
   if (start + n > ENV_INLINE_SLOTS) {
     c->failed = 1;
@@ -7884,7 +8053,8 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
   if (shape == LET_SINGLE) {
     exp_t *var = first;
     exp_t *val = caddr(form);
-    exp_t *body = form->next && form->next->next ? form->next->next->next : NULL;
+    exp_t *body =
+        form->next && form->next->next ? form->next->next->next : NULL;
     if (!body || c->nslots >= ENV_INLINE_SLOTS) {
       c->failed = 1;
       return;
@@ -7925,14 +8095,20 @@ static void compile_let(compiler_t *c, exp_t *form, int tail) {
   exp_t *vars[ENV_INLINE_SLOTS], *vals[ENV_INLINE_SLOTS];
   int n = 0;
   for (exp_t *p = (first && first->content) ? first : NULL; p && p->content;) {
-    if (n >= ENV_INLINE_SLOTS) { c->failed = 1; return; }
+    if (n >= ENV_INLINE_SLOTS) {
+      c->failed = 1;
+      return;
+    }
     if (shape == LET_CLOJURE) {
-      vars[n] = p->content->content;       /* (name val) */
+      vars[n] = p->content->content; /* (name val) */
       vals[n] = p->content->next->content;
       p = p->next;
     } else {
-      vars[n] = p->content;                /* name val name val */
-      if (!p->next) { c->failed = 1; return; }
+      vars[n] = p->content; /* name val name val */
+      if (!p->next) {
+        c->failed = 1;
+        return;
+      }
       vals[n] = p->next->content;
       p = p->next->next;
     }
@@ -8041,8 +8217,8 @@ static void compile_when_unless(compiler_t *c, exp_t *form, int tail,
   emit_i16(c, 0);
   /* Fall-through path = cond truthy. For `when` that runs the body; for
      `unless` it yields nil. The false-branch target is the opposite. */
-  exp_t *run = negate ? NULL : body;   /* truthy path */
-  exp_t *skip = negate ? body : NULL;  /* falsey path */
+  exp_t *run = negate ? NULL : body;  /* truthy path */
+  exp_t *skip = negate ? body : NULL; /* falsey path */
   if (run)
     compile_body_seq(c, run, tail);
   else {
@@ -8405,46 +8581,73 @@ static int compile_try(compiler_t *c, exp_t *form, int tail) {
 }
 
 /* Special-form ids for compile_expr's head dispatch. The strcmp ladder it used
-   to be is now a sorted-table lookup + switch: one bsearch (log n) instead of up
-   to ~30 sequential strcmps for every call head, and the table is the single
+   to be is now a sorted-table lookup + switch: one bsearch (log n) instead of
+   up to ~30 sequential strcmps for every call head, and the table is the single
    source of the recognized-form name set. SF_NONE → not a compiled special form
    (fall through to op_for_head / the reserved_symbol tier, exactly as a
    non-matching ladder arm did). Multiple spellings can map to one id
    (=/setf → SF_ASSIGN, max/min → SF_MAXMIN). */
 enum sform_id {
-  SF_NONE = 0, SF_IF, SF_TRY, SF_LET, SF_LETSTAR, SF_WITH, SF_WHEN, SF_UNLESS,
-  SF_AND, SF_OR, SF_COND, SF_CASE, SF_FOR, SF_ASSIGN, SF_SETQ, SF_DO, SF_CONS,
-  SF_CAR, SF_CDR, SF_LIST, SF_VEC_REF, SF_VEC_SET, SF_VEC_LEN, SF_VEC,
-  SF_SQRT_INT, SF_LENGTH, SF_ABS, SF_MAXMIN, SF_QUOTE
+  SF_NONE = 0,
+  SF_IF,
+  SF_TRY,
+  SF_LET,
+  SF_LETSTAR,
+  SF_WITH,
+  SF_WHEN,
+  SF_UNLESS,
+  SF_AND,
+  SF_OR,
+  SF_COND,
+  SF_CASE,
+  SF_FOR,
+  SF_ASSIGN,
+  SF_SETQ,
+  SF_DO,
+  SF_CONS,
+  SF_CAR,
+  SF_CDR,
+  SF_LIST,
+  SF_VEC_REF,
+  SF_VEC_SET,
+  SF_VEC_LEN,
+  SF_VEC,
+  SF_SQRT_INT,
+  SF_LENGTH,
+  SF_ABS,
+  SF_MAXMIN,
+  SF_QUOTE
 };
 /* MUST stay sorted by name (bsearch). */
 static const struct {
   const char *name;
   int id;
 } sform_table[] = {
-    {"=", SF_ASSIGN},        {"abs", SF_ABS},      {"and", SF_AND},
-    {"car", SF_CAR},         {"case", SF_CASE},    {"cdr", SF_CDR},
-    {"cond", SF_COND},       {"cons", SF_CONS},    {"do", SF_DO},
-    {"for", SF_FOR},         {"if", SF_IF},        {"length", SF_LENGTH},
-    {"let", SF_LET},         {"let*", SF_LETSTAR}, {"list", SF_LIST},
-    {"max", SF_MAXMIN},      {"min", SF_MAXMIN},   {"or", SF_OR},
-    {"quote", SF_QUOTE},     {"setf", SF_ASSIGN},  {"setq", SF_SETQ},
-    {"sqrt-int", SF_SQRT_INT}, {"try", SF_TRY},    {"unless", SF_UNLESS},
-    {"vec", SF_VEC},         {"vec-len", SF_VEC_LEN}, {"vec-ref", SF_VEC_REF},
-    {"vec-set!", SF_VEC_SET}, {"when", SF_WHEN},   {"with", SF_WITH}};
+    {"=", SF_ASSIGN},          {"abs", SF_ABS},         {"and", SF_AND},
+    {"car", SF_CAR},           {"case", SF_CASE},       {"cdr", SF_CDR},
+    {"cond", SF_COND},         {"cons", SF_CONS},       {"do", SF_DO},
+    {"for", SF_FOR},           {"if", SF_IF},           {"length", SF_LENGTH},
+    {"let", SF_LET},           {"let*", SF_LETSTAR},    {"list", SF_LIST},
+    {"max", SF_MAXMIN},        {"min", SF_MAXMIN},      {"or", SF_OR},
+    {"quote", SF_QUOTE},       {"setf", SF_ASSIGN},     {"setq", SF_SETQ},
+    {"sqrt-int", SF_SQRT_INT}, {"try", SF_TRY},         {"unless", SF_UNLESS},
+    {"vec", SF_VEC},           {"vec-len", SF_VEC_LEN}, {"vec-ref", SF_VEC_REF},
+    {"vec-set!", SF_VEC_SET},  {"when", SF_WHEN},       {"with", SF_WITH}};
 static int sform_cmp(const void *k, const void *e) {
   return strcmp((const char *)k, ((const typeof(sform_table[0]) *)e)->name);
 }
 static int sform_lookup(const char *s) {
-  const void *hit = bsearch(s, sform_table, sizeof sform_table / sizeof sform_table[0],
-                            sizeof sform_table[0], sform_cmp);
+  const void *hit =
+      bsearch(s, sform_table, sizeof sform_table / sizeof sform_table[0],
+              sizeof sform_table[0], sform_cmp);
   return hit ? ((const typeof(sform_table[0]) *)hit)->id : SF_NONE;
 }
 
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (c->failed)
     return;
-  emit_loc(c, e); /* stamp pc→source line for this form (cold; error-path only) */
+  emit_loc(c,
+           e); /* stamp pc→source line for this form (cold; error-path only) */
   /* Tagged fixnum literal: if it fits in int16, inline; else const pool. */
   if (isnumber(e)) {
     int64_t v = FIX_VAL(e);
@@ -8884,12 +9087,12 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
        lambdas (not in reserved_symbol) fall through to compile_call. */
     keyval_t *kv = set_get_keyval_dict(reserved_symbol, (char *)s, NULL);
     if (kv && isinternal(kv->val)) {
-      /* Applicative module builtin (alcove_register_cmd, non-tail-aware): emit a
-         real OP_CALL_GLOBAL so a hot loop calling it isn't a per-call AST
+      /* Applicative module builtin (alcove_register_cmd, non-tail-aware): emit
+         a real OP_CALL_GLOBAL so a hot loop calling it isn't a per-call AST
          tree-walk. Try the fast compile; if an argument won't compile (e.g. a
          (fn ...) literal that would mis-capture this frame, or a const-pool
-         overflow), roll the emit + consts back and fall through to OP_EVAL_AST —
-         identical behavior to before, just for that call. tail=0: a builtin
+         overflow), roll the emit + consts back and fall through to OP_EVAL_AST
+         — identical behavior to before, just for that call. tail=0: a builtin
          call never self-TCOs, and OP_TAIL_CALL rejects non-lambdas. */
       if (kv->val->flags & FLAG_APPLICATIVE) {
         int save_ncode = c->ncode, save_nconsts = c->nconsts;
@@ -8921,7 +9124,8 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
        compiled, exactly as evaluate() does in the tree-walker. Without this the
        compiler emits a call to the macro object, which fails at runtime with
        "not a lambda" (OP_TAIL_CALL/Bytecode call). find_slot() < 0 ensures a
-       local of the same name still shadows the macro, matching lexical lookup. */
+       local of the same name still shadows the macro, matching lexical lookup.
+     */
     if (find_slot(c, (char *)s) < 0 && g_global_env && g_global_env->d) {
       keyval_t *mkv = set_get_keyval_dict(g_global_env->d, (char *)s, NULL);
       if (mkv && mkv->val && ismacro(mkv->val)) {
@@ -8932,7 +9136,8 @@ static void compile_expr(compiler_t *c, exp_t *e, int tail) {
           c->failed = 1;
           return;
         }
-        compile_expr(c, expanded, tail); /* recurses: nested macros expand too */
+        compile_expr(c, expanded,
+                     tail); /* recurses: nested macros expand too */
         unrefexp(expanded);
         return;
       }
@@ -9000,7 +9205,7 @@ int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
   exp_t *body = fn->next->content;
   compiler_t c = {0};
   c.self_name = (const char *)fn->meta; /* may be NULL for anon fn */
-  c.param_hints = param_hints;          /* borrowed; for infix->prefix rewrite */
+  c.param_hints = param_hints; /* borrowed; for infix->prefix rewrite */
   /* One-shot body pre-pass: decide whether the let-body OP_TAIL_SELF
      relaxation is permitted for this whole lambda (order-independent — a
      capturing form anywhere, incl. a let val re-run each iteration, must
@@ -9349,9 +9554,8 @@ static exp_t *vm_arith_tower(char opchar, exp_t *a, exp_t *b, env_t *env) {
    lives only in the cold not-a-function dispatch branch, so hot calls pay
    nothing. Both the AST evaluator and the VM funnel through is_infix_op +
    infix_apply, so the two tiers stay byte-identical (equiv_sweep/jit-fuzz). */
-static const char *const g_infix_names[] = {"+",  "-",  "*",   "/",
-                                            "<",  ">",  "<=",  ">=",
-                                            "is", "iso", "isnt", "mod"};
+static const char *const g_infix_names[] = {
+    "+", "-", "*", "/", "<", ">", "<=", ">=", "is", "iso", "isnt", "mod"};
 #define N_INFIX_OPS ((int)(sizeof g_infix_names / sizeof g_infix_names[0]))
 static exp_t *g_infix_ops[N_INFIX_OPS];
 /* If v is one of the cached binary-operator builtins, return its index in
@@ -9382,7 +9586,8 @@ static exp_t *infix_wrap_value(exp_t *v) {
 /* Apply infix operator (by index) to (head_val, rhs_val): build the real form
    (OP-SYMBOL head rhs) and evaluate it, so the operator's own builtin sees the
    operator SYMBOL in head position (cmpcmd decodes < > <= >= from it) — exactly
-   as a hand-written (op a b) would. head_val/rhs_val borrowed; returns owned. */
+   as a hand-written (op a b) would. head_val/rhs_val borrowed; returns owned.
+ */
 static exp_t *infix_apply(int op_idx, exp_t *head_val, exp_t *rhs_val,
                           env_t *env) {
   exp_t *opsym = make_symbol((char *)g_infix_names[op_idx],
@@ -9395,7 +9600,8 @@ static exp_t *infix_apply(int op_idx, exp_t *head_val, exp_t *rhs_val,
 /* True when `v` is a real function — a builtin (internal) or a lambda/closure —
    i.e. something alc_apply_n can call as `(v a b)`. Used to extend infix beyond
    the fixed operator set: `a f b` -> (f a b) for ANY function f, while leaving
-   strings/dicts (callable only as indexers) and special-form-only values out. */
+   strings/dicts (callable only as indexers) and special-form-only values out.
+ */
 static int infix_is_fn(exp_t *v) {
   return v && is_ptr(v) && (isinternal(v) || islambda(v));
 }
@@ -9478,7 +9684,8 @@ tail_reentry:
 
 /* Map the faulting code offset to its source line/col so the error reports the
    precise failing form (the VM path; cold). error() already cleared g_err_line
-   via the lambda's (absent) line, so a miss leaves the top-level-form fallback. */
+   via the lambda's (absent) line, so a miss leaves the top-level-form fallback.
+ */
 #define RUNTIME_ERR_LOC                                                        \
   do {                                                                         \
     int _el, _ec;                                                              \
@@ -9509,7 +9716,7 @@ tail_reentry:
       unrefexp(stack[_i]);                                                     \
     if (fn_owned)                                                              \
       unrefexp(fn);                                                            \
-    return vm_unwind_handlers(_err, handler_base);                            \
+    return vm_unwind_handlers(_err, handler_base);                             \
   } while (0)
 /* Like RUNTIME_ERR but for an unbound symbol: names the symbol and appends a
    "did you mean 'X'?" hint when a near-match exists. `symexp` is the symbol. */
@@ -9900,10 +10107,10 @@ l_unbind_slot: {
     if (isnumber(a) && isnumber(b)) {                                          \
       int64_t _r = FIX_VAL(a);                                                 \
       if (fix_op_ovf((opchar), &_r, FIX_VAL(b)) || !FIX_FITS(_r))              \
-        RUNTIME_ERR("integer overflow (no implicit float; use a float, "      \
-                    "rational, or decimal)"); /* identical to the AST msg */  \
+        RUNTIME_ERR("integer overflow (no implicit float; use a float, "       \
+                    "rational, or decimal)"); /* identical to the AST msg */   \
       PUSH(MAKE_FIX(_r));                                                      \
-    } else if (isrational(a) || isdecimal(a) || isrational(b) ||              \
+    } else if (isrational(a) || isdecimal(a) || isrational(b) ||               \
                isdecimal(b)) {                                                 \
       /* exact tower: defer to the AST builtin so VM == AST byte-for-byte */   \
       exp_t *_tr = vm_arith_tower((opchar), a, b, env); /* consumes a,b */     \
@@ -9997,7 +10204,7 @@ l_mod: {
       if (!alc_pair_cmp(a, b, &d)) {                                           \
         unrefexp(a);                                                           \
         unrefexp(b);                                                           \
-        RUNTIME_ERR(ERR_COMPARE_INCOMPAT);                               \
+        RUNTIME_ERR(ERR_COMPARE_INCOMPAT);                                     \
       }                                                                        \
       r = d flcmp 0;                                                           \
       unrefexp(a);                                                             \
@@ -10049,8 +10256,10 @@ l_jump: {
   /* loop back-edge (negative offset): the runaway-budget checkpoint */
   if (off < 0) {
     int _b = budget_check();
-    if (_b == 1) RUNTIME_ERR("interrupted: time limit exceeded");
-    if (_b == 2) RUNTIME_ERR("interrupted: memory limit exceeded");
+    if (_b == 1)
+      RUNTIME_ERR("interrupted: time limit exceeded");
+    if (_b == 2)
+      RUNTIME_ERR("interrupted: memory limit exceeded");
   }
   NEXT;
 }
@@ -10092,8 +10301,10 @@ l_tail_self: {
   /* self-tail loop back-edge: the runaway-budget checkpoint */
   {
     int _b = budget_check();
-    if (_b == 1) RUNTIME_ERR("interrupted: time limit exceeded");
-    if (_b == 2) RUNTIME_ERR("interrupted: memory limit exceeded");
+    if (_b == 1)
+      RUNTIME_ERR("interrupted: time limit exceeded");
+    if (_b == 2)
+      RUNTIME_ERR("interrupted: memory limit exceeded");
   }
   NEXT;
 }
@@ -10272,8 +10483,8 @@ l_tail_call: {
       unrefexp(new_fn);
       /* Build error BEFORE potentially freeing fn — error() takes a refexp
          on the id argument, so fn must still be live when it is passed. */
-      exp_t *_tc_err = error(ERROR_ILLEGAL_VALUE, fn, env,
-                             "OP_TAIL_CALL: bad param");
+      exp_t *_tc_err =
+          error(ERROR_ILLEGAL_VALUE, fn, env, "OP_TAIL_CALL: bad param");
       if (fn_owned)
         unrefexp(fn);
       VM_RETURN(_tc_err);
@@ -10307,8 +10518,10 @@ l_tail_call: {
   /* cross-function tail loop back-edge: the runaway-budget checkpoint */
   {
     int _b = budget_check();
-    if (_b == 1) RUNTIME_ERR("interrupted: time limit exceeded");
-    if (_b == 2) RUNTIME_ERR("interrupted: memory limit exceeded");
+    if (_b == 1)
+      RUNTIME_ERR("interrupted: time limit exceeded");
+    if (_b == 2)
+      RUNTIME_ERR("interrupted: memory limit exceeded");
   }
   goto tail_reentry;
 }
@@ -10381,7 +10594,8 @@ l_list: {
       RUNTIME_ERR("Illegal value in " opname);                                 \
   } while (0)
 
-/* Overflow-checked fixnum slot±imm: error rather than wrap or implicit float. */
+/* Overflow-checked fixnum slot±imm: error rather than wrap or implicit float.
+ */
 #define SLOT_FIX_CHECKED(opchar)                                               \
   do {                                                                         \
     int64_t _r = FIX_VAL(a);                                                   \
@@ -10391,12 +10605,12 @@ l_list: {
     PUSH(MAKE_FIX(_r));                                                        \
   } while (0)
 l_slot_add_fix:
-  SLOT_FIX_NUMERIC(SLOT_FIX_CHECKED('+'),
-                   PUSH(make_floatf(da + (double)imm)), "+");
+  SLOT_FIX_NUMERIC(SLOT_FIX_CHECKED('+'), PUSH(make_floatf(da + (double)imm)),
+                   "+");
   NEXT;
 l_slot_sub_fix:
-  SLOT_FIX_NUMERIC(SLOT_FIX_CHECKED('-'),
-                   PUSH(make_floatf(da - (double)imm)), "-");
+  SLOT_FIX_NUMERIC(SLOT_FIX_CHECKED('-'), PUSH(make_floatf(da - (double)imm)),
+                   "-");
   NEXT;
 l_slot_lt_fix:
   SLOT_FIX_NUMERIC(PUSH(FIX_VAL(a) < imm ? TRUE_EXP : NIL_EXP),
@@ -10479,7 +10693,8 @@ l_vec_set: {
     unrefexp(vexp);
     RUNTIME_ERR("vec-set!: bad args");
   }
-  int64_t i = isnumber(iexp) ? FIX_VAL(iexp) : (int64_t)iexp->f; /* float idx truncates */
+  int64_t i = isnumber(iexp) ? FIX_VAL(iexp)
+                             : (int64_t)iexp->f; /* float idx truncates */
   if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(valexp);
     unrefexp(iexp);
@@ -10618,7 +10833,10 @@ l_length: {
   if (xs == NULL || xs == nil_singleton) {
     n = 0;
   } else if (isstring(xs)) {
-    { const char *_t = exp_text(xs); n = _t ? utf8_strlen(_t) : 0; }
+    {
+      const char *_t = exp_text(xs);
+      n = _t ? utf8_strlen(_t) : 0;
+    }
   } else if (ispair(xs)) {
     exp_t *cur = xs;
     while (is_ptr(cur) && cur->type == EXP_PAIR) {
@@ -10656,7 +10874,8 @@ l_length: {
    operand stack holds fn for the duration of this call, so its lifetime
    is already guaranteed — skipping the atomic pair is measurable on
    call-heavy benchmarks. */
-static exp_t *multi_pick(exp_t *clauses, int n); /* defined below, before invoke */
+static exp_t *multi_pick(exp_t *clauses,
+                         int n); /* defined below, before invoke */
 
 static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   /* Multi-arity (defn) reached from compiled code: dispatch on arg count to
@@ -10709,7 +10928,8 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
       return error(ERROR_MISSING_PARAMETER, fn, env,
                    "index: expected exactly 1 arg, got %d", nargs);
     }
-    return container_apply(fn, argv[0], env); /* consumes argv[0]; caller unrefs fn */
+    return container_apply(fn, argv[0],
+                           env); /* consumes argv[0]; caller unrefs fn */
   }
   if (iscont(fn)) {
     /* (k v) reached from compiled code: produce the escape token. */
@@ -10831,7 +11051,8 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
       if (strcmp((char *)exp_text(p->content), ".") == 0) {
         if (!p->next || !p->next->content || !issymbol(p->next->content)) {
           int j;
-          for (j = i; j < nargs; j++) unrefexp(argv[j]);
+          for (j = i; j < nargs; j++)
+            unrefexp(argv[j]);
           destroy_env(newenv);
           return error(ERROR_ILLEGAL_VALUE, fn, env,
                        "rest param: symbol expected after '.'");
@@ -10845,7 +11066,8 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
       }
       if (i >= nargs) {
         int j;
-        for (j = i; j < nargs; j++) unrefexp(argv[j]);
+        for (j = i; j < nargs; j++)
+          unrefexp(argv[j]);
         destroy_env(newenv);
         return error(ERROR_MISSING_PARAMETER, fn, env,
                      "too few arguments to %s",
@@ -10913,10 +11135,12 @@ static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env);
 /* ---- Debugger implementation (see the globals block near bt_clear) --------
    Everything here is reached only when g_debug is set. The debug REPL reads
    commands from stdin and writes to stderr (so it never tangles with the
-   program's own stdout); --debug runs a FILE, leaving stdin free for commands. */
+   program's own stdout); --debug runs a FILE, leaving stdin free for commands.
+ */
 /* A form's line for DISPLAY/breakpoints: form_line() routed through the Adder
-   source map (display_line is identity for Alcove, generated→.adr for Adder), so
-   `bt`/`break <line>` use the line the user actually wrote in both dialects. */
+   source map (display_line is identity for Alcove, generated→.adr for Adder),
+   so `bt`/`break <line>` use the line the user actually wrote in both dialects.
+ */
 static int dbg_disp_line(exp_t *e) {
   int ln = form_line(e);
   return ln ? display_line(ln) : 0;
@@ -10944,9 +11168,9 @@ static inline int dbg_cur(void) {
   int d = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
   return d > 0 ? d - 1 : -1;
 }
-/* True if NAME has a break-on-function set. Checked by invoke_body AFTER args are
-   bound, so the stop lands on the first BODY form (with the callee's params in
-   scope), not on an argument expression evaluated in the caller. */
+/* True if NAME has a break-on-function set. Checked by invoke_body AFTER args
+   are bound, so the stop lands on the first BODY form (with the callee's params
+   in scope), not on an argument expression evaluated in the caller. */
 static int dbg_fn_breakpointed(const char *name) {
   if (!name)
     return 0;
@@ -10976,14 +11200,16 @@ static exp_t *dbg_eval_in_env(const char *src, env_t *env) {
   if (!form || iserror(form))
     r = form ? form : refexp(NIL_EXP);
   else
-    r = evaluate(form, env); /* takes ownership of form (reader gave an owned ref) */
+    r = evaluate(form,
+                 env); /* takes ownership of form (reader gave an owned ref) */
   fclose(s);
   return r ? r : refexp(NIL_EXP); /* always an owned ref — caller unrefs */
 }
 static void dbg_show_backtrace(FILE *out) {
   int top = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
   for (int i = top - 1; i >= 0; i--) {
-    char *fs = g_dbg_frames[i].form ? dbg_value_str(g_dbg_frames[i].form) : NULL;
+    char *fs =
+        g_dbg_frames[i].form ? dbg_value_str(g_dbg_frames[i].form) : NULL;
     int sel = (i == g_dbg_sel);
     fprintf(out, "  %s%c#%d%s %s%-16s%s line %s%d%s   %s%s%s\n",
             dc(sel ? DBGC_SEL : ""), sel ? '*' : ' ', top - 1 - i, dc(DBGC_RST),
@@ -11032,16 +11258,18 @@ static void debug_repl(exp_t *form, env_t *env) {
   g_dbg_sel = cur >= 0 ? cur : 0;
   const char *fn = cur >= 0 ? g_dbg_frames[cur].name : "(top)";
   if (!have_form) {
-    fprintf(stderr,
-            "\n%s-- debugger ready.%s set breakpoints (%sbreak <fn|line>%s), then "
-            "'%sc%s' to run; '%shelp%s' for commands.\n",
-            dc(DBGC_HDR), dc(DBGC_RST), dc(DBGC_FN), dc(DBGC_RST), dc(DBGC_FN),
-            dc(DBGC_RST), dc(DBGC_FN), dc(DBGC_RST));
+    fprintf(
+        stderr,
+        "\n%s-- debugger ready.%s set breakpoints (%sbreak <fn|line>%s), then "
+        "'%sc%s' to run; '%shelp%s' for commands.\n",
+        dc(DBGC_HDR), dc(DBGC_RST), dc(DBGC_FN), dc(DBGC_RST), dc(DBGC_FN),
+        dc(DBGC_RST), dc(DBGC_FN), dc(DBGC_RST));
   } else {
     char *fs = dbg_value_str(form);
     fprintf(stderr, "\n%s-- break in %s%s%s, line %s%d%s:\n   %s%s%s\n",
-            dc(DBGC_HDR), dc(DBGC_FN), fn ? fn : "?", dc(DBGC_RST), dc(DBGC_NUM),
-            dbg_disp_line(form), dc(DBGC_RST), dc(DBGC_FORM), fs, dc(DBGC_RST));
+            dc(DBGC_HDR), dc(DBGC_FN), fn ? fn : "?", dc(DBGC_RST),
+            dc(DBGC_NUM), dbg_disp_line(form), dc(DBGC_RST), dc(DBGC_FORM), fs,
+            dc(DBGC_RST));
     free(fs);
   }
   for (;;) {
@@ -11092,9 +11320,10 @@ static void debug_repl(exp_t *form, env_t *env) {
       int top = g_dbg_depth < ALC_BT_MAX ? g_dbg_depth : ALC_BT_MAX;
       if (idx >= 0 && idx < top)
         g_dbg_sel = top - 1 - idx;
-      fprintf(stderr, "  frame #%d: %s%s%s (line %s%d%s)\n", top - 1 - g_dbg_sel,
-              dc(DBGC_FN), g_dbg_frames[g_dbg_sel].name, dc(DBGC_RST),
-              dc(DBGC_NUM), g_dbg_frames[g_dbg_sel].line, dc(DBGC_RST));
+      fprintf(stderr, "  frame #%d: %s%s%s (line %s%d%s)\n",
+              top - 1 - g_dbg_sel, dc(DBGC_FN), g_dbg_frames[g_dbg_sel].name,
+              dc(DBGC_RST), dc(DBGC_NUM), g_dbg_frames[g_dbg_sel].line,
+              dc(DBGC_RST));
     } else if (DBG_IS("up")) {
       if (g_dbg_sel > 0)
         g_dbg_sel--;
@@ -11154,7 +11383,8 @@ static void debug_repl(exp_t *form, env_t *env) {
       fprintf(stderr,
               "  commands: bt | frame N | up | down | locals | p <expr>\n"
               "            step(s) | next(n) | continue(c) | break <fn|line>\n"
-              "            return <expr> (recover at a break-on-error) | quit(q)\n");
+              "            return <expr> (recover at a break-on-error) | "
+              "quit(q)\n");
     } else {
       fprintf(stderr, "  unknown command '%s' (try 'help')\n", c);
     }
@@ -11169,7 +11399,8 @@ static void debug_repl(exp_t *form, env_t *env) {
 static void dbg_hook(exp_t *e, env_t *env) {
   if (g_dbg_active)
     return; /* re-entrant call from a `p`/locals evaluation — don't stop */
-  int ln = dbg_disp_line(e); /* Adder-mapped, so `break <line>` matches source */
+  int ln =
+      dbg_disp_line(e); /* Adder-mapped, so `break <line>` matches source */
   int cur = dbg_cur();
   if (cur >= 0) {
     g_dbg_frames[cur].env = env;
@@ -11198,8 +11429,7 @@ static exp_t *dbg_error_break(exp_t *err, env_t *env) {
   exp_t *eform = (err->next && is_ptr(err->next) && ispair(err->next))
                      ? err->next
                      : (cur >= 0 ? g_dbg_frames[cur].form : NIL_EXP);
-  env_t *fe =
-      (cur >= 0 && g_dbg_frames[cur].env) ? g_dbg_frames[cur].env : env;
+  env_t *fe = (cur >= 0 && g_dbg_frames[cur].env) ? g_dbg_frames[cur].env : env;
   g_dbg_color = isatty(fileno(stderr));
   fprintf(stderr,
           "\n%s** error raised: %s%s\n   (debugger — bt / locals / p <expr>; "
@@ -11214,46 +11444,55 @@ static exp_t *dbg_error_break(exp_t *err, env_t *env) {
   debug_repl(eform, fe);
   g_dbg_in_error_break = 0;
   if (g_dbg_did_replace)
-    return g_dbg_replace ? g_dbg_replace : refexp(NIL_EXP); /* owned replacement */
+    return g_dbg_replace ? g_dbg_replace
+                         : refexp(NIL_EXP); /* owned replacement */
   return err;
 }
 
-const char doc_break[] =
-    "(break) — drop into the interactive debugger here (gdb-style: bt, frame N, "
-    "locals, p <expr>, step/next/continue, break <fn|line>). Full backtrace and "
-    "source lines require running under `alcove --debug`.";
+const char doc_break[] = "(break) — drop into the interactive debugger here "
+                         "(gdb-style: bt, frame N, "
+                         "locals, p <expr>, step/next/continue, break "
+                         "<fn|line>). Full backtrace and "
+                         "source lines require running under `alcove --debug`.";
 exp_t *breakcmd(exp_t *e, env_t *env) {
   g_track_lines = 1;
   g_debug = 1;
-  debug_repl(e, env); /* e == the (break) call form; alive until we unref below */
+  debug_repl(e,
+             env); /* e == the (break) call form; alive until we unref below */
   unrefexp(e);
   return NIL_EXP;
 }
 
 const char doc_allow_unsafe[] =
-    "(allow-unsafe \"name\") — permanently clear the sandbox restriction on the "
+    "(allow-unsafe \"name\") — permanently clear the sandbox restriction on "
+    "the "
     "named builtin (shell, file ops, ffi-*, load, ...) so it may run from RESP "
-    "client callbacks and under --safe. For trusted init/setup code; allow-unsafe "
-    "is itself sandboxed, so client code can't grant itself access. Returns t, or "
+    "client callbacks and under --safe. For trusted init/setup code; "
+    "allow-unsafe "
+    "is itself sandboxed, so client code can't grant itself access. Returns t, "
+    "or "
     "nil if there is no such builtin.";
 exp_t *allowunsafecmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(name);
   if (!isstring(name) && !issymbol(name))
-    CLEAN_RETURN_1(name, error(ERROR_ILLEGAL_VALUE, e, env,
-                               "allow-unsafe: name must be a string or symbol"));
+    CLEAN_RETURN_1(name,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "allow-unsafe: name must be a string or symbol"));
   keyval_t *kv =
       set_get_keyval_dict(reserved_symbol, (char *)exp_text(name), NULL);
   exp_t *ret = NIL_EXP;
   if (kv && kv->val && isinternal((exp_t *)kv->val)) {
-    ((exp_t *)kv->val)->flags &= ~FLAG_UNSAFE; /* grant: no longer host-escape-gated */
+    ((exp_t *)kv->val)->flags &=
+        ~FLAG_UNSAFE; /* grant: no longer host-escape-gated */
     ret = TRUE_EXP;
   }
   CLEAN_RETURN_1(name, refexp(ret));
 }
 
-/* Thin wrapper: push one backtrace frame around the whole AST invocation, so the
-   many internal return paths need no per-exit bookkeeping. (Cross-function tail
-   calls inside invoke_body reuse the frame and keep this name — a TCO collapse.) */
+/* Thin wrapper: push one backtrace frame around the whole AST invocation, so
+   the many internal return paths need no per-exit bookkeeping. (Cross-function
+   tail calls inside invoke_body reuse the frame and keep this name — a TCO
+   collapse.) */
 exp_t *invoke(exp_t *e, exp_t *fn, env_t *env) {
   bt_push(fn->meta ? (const char *)fn->meta : NULL);
   if (g_debug)
@@ -11311,10 +11550,10 @@ static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env) {
   exp_t *ret = NULL;
   refexp(fn);
   /* Set when we re-enter via a cross-function tail marker (below): the marker's
-     arg nodes already hold EVALUATED values (make_tail_marker pre-evaluated them
-     in the caller's frame), so they must be rebound as-is, never re-evaluated.
-     Re-evaluating a value that happens to be a pair/symbol (e.g. a computed
-     list) would (mis)interpret it as a call. */
+     arg nodes already hold EVALUATED values (make_tail_marker pre-evaluated
+     them in the caller's frame), so they must be rebound as-is, never
+     re-evaluated. Re-evaluating a value that happens to be a pair/symbol (e.g.
+     a computed list) would (mis)interpret it as a call. */
   int marker_args = 0;
 
 tailrec: {
@@ -11474,7 +11713,8 @@ tailrec: {
       unrefexp(e);
       fn = new_fn;
       e = marker;
-      marker_args = 1; /* marker's arg nodes are pre-evaluated — don't re-eval */
+      marker_args =
+          1; /* marker's arg nodes are pre-evaluated — don't re-eval */
       /* cross-function tail loop back-edge (AST tier): runaway-budget
          checkpoint. newenv is already destroyed above; we own fn (new_fn) and
          e (marker). Build the error before unref'ing e (error() refs it). */
@@ -11608,10 +11848,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         const char *_nm = (const char *)exp_text(e);
         const char *_sg = alc_suggest_symbol(_nm, env);
         ret = _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
-                          "Unbound variable %s (did you mean '%s'?)", _nm,
-                          _sg)
-                  : error(ERROR_UNBOUND_VARIABLE, e, env,
-                          "Unbound variable %s", _nm);
+                          "Unbound variable %s (did you mean '%s'?)", _nm, _sg)
+                  : error(ERROR_UNBOUND_VARIABLE, e, env, "Unbound variable %s",
+                          _nm);
         unrefexp(e);
         return ret;
       }
@@ -11780,17 +12019,18 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         } else {
           const char *_nm = (const char *)exp_text(tmpexp);
           const char *_sg = alc_suggest_symbol(_nm, env);
-          ret = _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
-                            "Unbound variable %s (did you mean '%s'?)",
-                            _nm, _sg)
-                    : error(ERROR_UNBOUND_VARIABLE, e, env,
-                            "Unbound variable %s", _nm);
+          ret =
+              _sg ? error(ERROR_UNBOUND_VARIABLE, e, env,
+                          "Unbound variable %s (did you mean '%s'?)", _nm, _sg)
+                  : error(ERROR_UNBOUND_VARIABLE, e, env, "Unbound variable %s",
+                          _nm);
           goto finish;
         }
         /* Unreachable today: every arm of the bound-symbol dispatch above, and
            the unbound-symbol else, transfers control via goto. Kept as a
            defensive fallthrough — if a future dispatch arm omits its goto, this
-           returns the form itself instead of falling off into undefined behavior. */
+           returns the form itself instead of falling off into undefined
+           behavior. */
         ret = e;
         goto finisht;
       } else if (iscallable_container(tmpexp)) {
@@ -11805,8 +12045,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
           ret = tmpexp2;
           goto finish;
         }
-        /* (s op rhs) infix on a literal container head — see ast_container_infix.
-           tmpexp (container) is borrowed from e; tmpexp2 (op) is owned. */
+        /* (s op rhs) infix on a literal container head — see
+           ast_container_infix. tmpexp (container) is borrowed from e; tmpexp2
+           (op) is owned. */
         int lcinfix;
         exp_t *lcifx = ast_container_infix(tmpexp, tmpexp2, e, env, &lcinfix);
         if (lcinfix) {
@@ -11889,15 +12130,17 @@ static char *repl_prompt_str(env_t *env, const char *varname, int idx) {
 /* The post-transform input text of the line currently being evaluated, set in
    repl_eval_text after *input-hook* runs and read by the *output-hook* call in
    repl_eval_print_form. NULL when no line text is available (e.g. the piped
-   non-readline stream loop), where the output hook serializes the form instead. */
+   non-readline stream loop), where the output hook serializes the form instead.
+ */
 static const char *g_repl_input = NULL;
 
-/* Input-transform hook. If `varname` (*input-hook*) is bound to a function, call
-   it with `input` (the source text) and return its STRING result as a fresh
-   malloc'd buffer (caller frees) — the text to evaluate in place of the original.
-   Returns NULL on unset/nil, a non-function, a hook error, or a non-string
-   result, so the caller keeps the original input; a broken hook can't break the
-   REPL. The hook takes one argument (the input string) and returns a string. */
+/* Input-transform hook. If `varname` (*input-hook*) is bound to a function,
+   call it with `input` (the source text) and return its STRING result as a
+   fresh malloc'd buffer (caller frees) — the text to evaluate in place of the
+   original. Returns NULL on unset/nil, a non-function, a hook error, or a
+   non-string result, so the caller keeps the original input; a broken hook
+   can't break the REPL. The hook takes one argument (the input string) and
+   returns a string. */
 static char *repl_hook_transform(env_t *env, const char *varname,
                                  const char *input) {
   if (!env || !env->d || !input)
@@ -11917,7 +12160,8 @@ static char *repl_hook_transform(env_t *env, const char *varname,
 }
 
 #ifdef ALCOVE_READLINE
-#undef ISDIGIT /* char.h defines ISDIGIT as a bitmask; readline redefines it */
+#undef ISDIGIT /* char.h defines ISDIGIT as a bitmask; readline redefines it   \
+                */
 #include <readline/history.h>
 #include <readline/readline.h>
 #include <sys/stat.h> /* chmod(0600) on the persisted history file */
@@ -12047,10 +12291,10 @@ static int rl_paren_depth(const char *s) {
    redisplay. Kept short on purpose — coloring random user-defined
    names would be misleading. */
 static const char *alcove_kw[] = {
-    "def",    "fn",    "if",   "do",   "let", "for", "while", "and",     "or",
-    "not",    "is",    "isnt", "no",   "yes", "t",   "nil",   "cond",    "when",
-    "unless", "quote", "with", "each", "mac", "set", "=",     "setf",
-    " return", NULL};
+    "def",  "fn",  "if",   "do",   "let",    "for",     "while",
+    "and",  "or",  "not",  "is",   "isnt",   "no",      "yes",
+    "t",    "nil", "cond", "when", "unless", "quote",   "with",
+    "each", "mac", "set",  "=",    "setf",   " return", NULL};
 static int alc_is_kw(const char *s, int n) {
   int i;
   for (i = 0; alcove_kw[i]; i++) {
@@ -12208,19 +12452,19 @@ static int alc_cp_width(uint32_t cp) {
       (cp >= 0xFE00 && cp <= 0xFE0F) || /* variation selectors */
       cp == 0x00AD)                     /* soft hyphen */
     return 0;
-  if ((cp >= 0x1100 && cp <= 0x115F) ||  /* Hangul Jamo */
-      (cp >= 0x2E80 && cp <= 0x303E) ||  /* CJK radicals, Kangxi */
-      (cp >= 0x3041 && cp <= 0x33FF) ||  /* Kana .. CJK symbols */
-      (cp >= 0x3400 && cp <= 0x4DBF) ||  /* CJK Ext A */
-      (cp >= 0x4E00 && cp <= 0x9FFF) ||  /* CJK Unified */
-      (cp >= 0xA000 && cp <= 0xA4CF) ||  /* Yi */
-      (cp >= 0xAC00 && cp <= 0xD7A3) ||  /* Hangul syllables */
-      (cp >= 0xF900 && cp <= 0xFAFF) ||  /* CJK compatibility */
-      (cp >= 0xFE30 && cp <= 0xFE4F) ||  /* CJK compatibility forms */
-      (cp >= 0xFF00 && cp <= 0xFF60) ||  /* fullwidth forms */
-      (cp >= 0xFFE0 && cp <= 0xFFE6) ||  /* fullwidth signs */
-      (cp >= 0x1F300 && cp <= 0x1FAFF) ||/* emoji & pictographs */
-      (cp >= 0x20000 && cp <= 0x3FFFD))  /* CJK Ext B+ */
+  if ((cp >= 0x1100 && cp <= 0x115F) ||   /* Hangul Jamo */
+      (cp >= 0x2E80 && cp <= 0x303E) ||   /* CJK radicals, Kangxi */
+      (cp >= 0x3041 && cp <= 0x33FF) ||   /* Kana .. CJK symbols */
+      (cp >= 0x3400 && cp <= 0x4DBF) ||   /* CJK Ext A */
+      (cp >= 0x4E00 && cp <= 0x9FFF) ||   /* CJK Unified */
+      (cp >= 0xA000 && cp <= 0xA4CF) ||   /* Yi */
+      (cp >= 0xAC00 && cp <= 0xD7A3) ||   /* Hangul syllables */
+      (cp >= 0xF900 && cp <= 0xFAFF) ||   /* CJK compatibility */
+      (cp >= 0xFE30 && cp <= 0xFE4F) ||   /* CJK compatibility forms */
+      (cp >= 0xFF00 && cp <= 0xFF60) ||   /* fullwidth forms */
+      (cp >= 0xFFE0 && cp <= 0xFFE6) ||   /* fullwidth signs */
+      (cp >= 0x1F300 && cp <= 0x1FAFF) || /* emoji & pictographs */
+      (cp >= 0x20000 && cp <= 0x3FFFD))   /* CJK Ext B+ */
     return 2;
   return 1;
 }
@@ -12356,7 +12600,7 @@ static char *rl_read_form(int idx) {
       cap = need * 2;
       acc = xrealloc(acc, cap);
     }
-    acc[al] = '\n';                  /* append "\n" + more at the known offset */
+    acc[al] = '\n'; /* append "\n" + more at the known offset */
     memcpy(acc + al + 1, more, ml + 1); /* copies more's NUL too */
     free(more);
   }
@@ -12372,8 +12616,7 @@ static char *rl_read_form(int idx) {
 static int als_line_opens_block(const char *line) {
   char *nc = als_strip_comment(line);
   size_t n = strlen(nc);
-  while (n > 0 && (nc[n - 1] == ' ' || nc[n - 1] == '\t' ||
-                   nc[n - 1] == '\r'))
+  while (n > 0 && (nc[n - 1] == ' ' || nc[n - 1] == '\t' || nc[n - 1] == '\r'))
     nc[--n] = 0;
   int r = (n > 0 && nc[n - 1] == ':');
   free(nc);
@@ -12471,7 +12714,7 @@ static char *als_rl_read_form(int idx) {
      Without this, recalling a multi-line form and hitting Enter would
      submit immediately instead of letting it be extended. */
   int multiline = (rl_paren_depth(acc) > 0) || als_line_opens_block(acc) ||
-                   memchr(acc, '\n', len) != NULL;
+                  memchr(acc, '\n', len) != NULL;
   if (multiline) {
     for (;;) {
       als_pending_indent = als_next_indent(acc);
@@ -12497,7 +12740,7 @@ static char *als_rl_read_form(int idx) {
         cap = need * 2;
         acc = xrealloc(acc, cap);
       }
-      acc[al] = '\n';                  /* append "\n" + more at the known offset */
+      acc[al] = '\n'; /* append "\n" + more at the known offset */
       memcpy(acc + al + 1, more, ml + 1); /* copies more's NUL too */
       free(more);
     }
@@ -12540,11 +12783,12 @@ static int alcove_back_tab(int count, int key) {
   return 0;
 }
 
-/* ---- Debugger tab-completion (readline) ----------------------------------- */
+/* ---- Debugger tab-completion (readline) -----------------------------------
+ */
 static const char *g_dbg_commands[] = {
-    "bt",     "backtrace", "where", "frame", "up",       "down",  "locals",
-    "p",      "print",     "step",  "next",  "continue", "break", "return",
-    "quit",   "help",      NULL};
+    "bt",     "backtrace", "where", "frame", "up",   "down",
+    "locals", "p",         "print", "step",  "next", "continue",
+    "break",  "return",    "quit",  "help",  NULL};
 /* First word: complete a debug command name (empty input lists them all). */
 static char *dbg_cmd_generator(const char *text, int state) {
   static int idx;
@@ -12583,7 +12827,8 @@ static char **dbg_rl_completer(const char *text, int start, int end) {
   (void)end;
   rl_attempted_completion_over = 1; /* never fall back to filename completion */
   if (start == 0)
-    return rl_completion_matches(text, dbg_cmd_generator); /* the command word */
+    return rl_completion_matches(text,
+                                 dbg_cmd_generator); /* the command word */
   const char *b = rl_line_buffer;
   while (*b == ' ' || *b == '\t')
     b++;
@@ -12594,15 +12839,15 @@ static char **dbg_rl_completer(const char *text, int start, int end) {
   return NULL;
 }
 /* Read one debug command on a tty with completion (TAB → commands / symbols).
-   g_dbg_complete_env is the frame whose locals feed symbol completion. Returns a
-   malloc'd, newline-free line (caller frees), or NULL at EOF. */
+   g_dbg_complete_env is the frame whose locals feed symbol completion. Returns
+   a malloc'd, newline-free line (caller frees), or NULL at EOF. */
 static char *dbg_readline_tty(env_t *frame_env) {
   g_dbg_complete_env = frame_env;
   rl_completion_func_t *prev = rl_attempted_completion_function;
   rl_attempted_completion_function = dbg_rl_completer;
   rl_bind_key('\t', rl_complete); /* plain complete, not the REPL's smart-tab */
-  /* One TAB lists the matches when there's no common prefix — so TAB on an empty
-     line shows every command (acts as help). */
+  /* One TAB lists the matches when there's no common prefix — so TAB on an
+     empty line shows every command (acts as help). */
   rl_variable_bind("show-all-if-ambiguous", "on");
   char *l = readline(g_dbg_color ? DBGC_HDR "(dbg)" DBGC_RST " " : "(dbg) ");
   rl_attempted_completion_function = prev;
@@ -12614,7 +12859,8 @@ static char *dbg_readline_tty(env_t *frame_env) {
 #endif /* ALCOVE_READLINE */
 
 /* Read one debug command: readline+completion on a tty, plain getline otherwise
-   (pipes, the test harness, or a no-readline build). Malloc'd line / NULL@EOF. */
+   (pipes, the test harness, or a no-readline build). Malloc'd line / NULL@EOF.
+ */
 static char *dbg_read_command(env_t *frame_env) {
 #ifdef ALCOVE_READLINE
   if (isatty(fileno(stdin)))
@@ -12966,8 +13212,8 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
 }
 
 /* MessagePack codec lives in a dedicated #included fragment. */
-#include "msgpack.h"
 #include "json.h"
+#include "msgpack.h"
 
 /* deque (EXP_LIST) ops live in a dedicated #included fragment. */
 #include "deque.h"
@@ -12997,8 +13243,9 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
    readline's own trailing newline (als_rl_read_form emits one itself), so
    without it -R doubled every line's newline. History FILE load/save stays
    with each caller (the standalone REPL gates it on --no-history). */
-static int g_rl_ready;                  /* tentative def; real one below */
-static void repl_apply_bindings(void);  /* defined with the key-binding helpers */
+static int g_rl_ready; /* tentative def; real one below */
+static void
+repl_apply_bindings(void); /* defined with the key-binding helpers */
 static void repl_readline_setup(env_t *global) {
   /* Honor the terminal's locale so readline treats UTF-8 input as whole
      characters — cursor movement, deletion, and width math operate per
@@ -13347,7 +13594,8 @@ static void oom_recover_reset(void) {
   in_tail_position = 0;
   g_calldepth = 0;
   bt_clear();
-  g_deadline_ms = 0; /* abandon any active with-time-limit / with-memory-limit */
+  g_deadline_ms =
+      0; /* abandon any active with-time-limit / with-memory-limit */
   g_chunk_ceiling = 0;
   g_budget_tick = 0;
   g_resp_cb_guard = 0;
@@ -13403,7 +13651,8 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     g_dbg_evaluating = 1; /* arm break-on-raise only for this top-level form */
     /* OOM recovery point: a failed allocation anywhere under this form longjmps
        back here instead of killing the process. Save/restore the prior jmp_buf
-       so a nested top-level eval (e.g. embedding alcove_eval_string) is safe. */
+       so a nested top-level eval (e.g. embedding alcove_eval_string) is safe.
+     */
     jmp_buf oom_prev;
     int oom_prev_armed = g_oom_armed;
     memcpy(&oom_prev, &g_oom_jmp, sizeof(jmp_buf));
@@ -13438,7 +13687,8 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
       } else
         printf("\x1B[31mOut[\x1B[91m%d\x1B[31m]:\x1B[39m", idx);
       print_node(res);
-      if (iserror(res)) { /* show the offending line + caret under the message */
+      if (iserror(
+              res)) { /* show the offending line + caret under the message */
         render_form_caret(stdout, eln, ecol);
         render_backtrace(stdout);
       }
@@ -13457,7 +13707,8 @@ static int repl_eval_print_form(exp_t *form, env_t *env, int idx, int quiet) {
     fprintf(stderr, "%s\n", (const char *)res->ptr);
     render_form_caret(stderr, eln, ecol);
     render_backtrace(stderr);
-    g_script_error = 1; /* script (file/-e) form errored → main exits non-zero */
+    g_script_error =
+        1; /* script (file/-e) form errored → main exits non-zero */
   }
   /* Output hook: hand (cell-number, input-text, result-value) to *output-hook*
      for capture/logging. Interactive only (fires once per evaluated form, after
@@ -13660,7 +13911,8 @@ int respN_serve(int port, int nthreads) {
 #if ALCOVE_SINGLE_THREADED
   fprintf(stderr,
           "alcove: --threads %d ignored — this build is single-threaded "
-          "(rebuild without ALCOVE_SINGLE_THREADED).\n", nthreads);
+          "(rebuild without ALCOVE_SINGLE_THREADED).\n",
+          nthreads);
   return shard_main(&main_shard, port);
 #else
   if (nthreads > EPOCH_MAX_THREADS) {
@@ -13717,11 +13969,12 @@ int respN_serve(int port, int nthreads) {
      reactor's resp_serve would race on these (TSan-confirmed). */
   resp_serve_shared_init(port);
   /* Spawn workers 1..N-1; main thread runs worker 0. */
-  printf(ALCOVE_PROGNAME
-         ": spawning %d reactor threads on port %d (--threads is EXPERIMENTAL: "
-         "the lock-free keyspace is concurrency-safe, but RESP callbacks must be "
-         "read-only w.r.t. Lisp globals — see docs/multithreading.md)\n",
-         nthreads, port);
+  printf(
+      ALCOVE_PROGNAME
+      ": spawning %d reactor threads on port %d (--threads is EXPERIMENTAL: "
+      "the lock-free keyspace is concurrency-safe, but RESP callbacks must be "
+      "read-only w.r.t. Lisp globals — see docs/multithreading.md)\n",
+      nthreads, port);
   fflush(stdout);
   for (int i = 1; i < nthreads; i++) {
     args[i].sh = shards[i];
@@ -13742,9 +13995,9 @@ int respN_serve(int port, int nthreads) {
     if (tids[i])
       pthread_join(tids[i], NULL);
   }
-  /* All reactors have exited → run the process-global teardown ONCE, here, where
-     it's single-threaded (each reactor skipped it under g_resp_multi to avoid
-     racing the shared port / keyspace / epoch state). */
+  /* All reactors have exited → run the process-global teardown ONCE, here,
+     where it's single-threaded (each reactor skipped it under g_resp_multi to
+     avoid racing the shared port / keyspace / epoch state). */
   resp_serve_shared_teardown();
   for (int i = 1; i < nthreads; i++) {
     free(shards[i]->arena);
@@ -13854,13 +14107,11 @@ static void alcove_try_init_files(env_t *global) {
 /* alcove_init — bring the engine up: the per-type (de)serializers, the immortal
    singletons (nil / t / *done*), and every builtin from lispProcList registered
    into reserved_symbol. Returns the fresh global environment (also published as
-   g_global_env). Call exactly once before reader()/evaluate()/alcove_eval_string().
-   Shared by main() and by C embedders — a host does:
-       #define ALCOVE_NO_MAIN
-       #include "alcove.c"
-       env_t *g = alcove_init();
-       exp_t *r = alcove_eval_string("(+ 1 2)");  // owned; unrefexp when done
-   See examples/embed/ for a worked example. */
+   g_global_env). Call exactly once before
+   reader()/evaluate()/alcove_eval_string(). Shared by main() and by C embedders
+   — a host does: #define ALCOVE_NO_MAIN #include "alcove.c" env_t *g =
+   alcove_init(); exp_t *r = alcove_eval_string("(+ 1 2)");  // owned; unrefexp
+   when done See examples/embed/ for a worked example. */
 env_t *alcove_init(void) {
   /* Idempotent: a second call would leak the first env + reserved_symbol and
      silently drop any builtins registered (via alcove_register_cmd) in between.
@@ -13945,10 +14196,10 @@ env_t *alcove_init(void) {
   for (i = 0; i < N; ++i) {
     set_get_keyval_dict(
         reserved_symbol, lispProcList[i].name,
-        val = make_internal(lispProcList[i].cmd,
-                            lispProcList[i].flags &
-                                (FLAG_TAIL_AWARE | FLAG_APPLICATIVE |
-                                 FLAG_UNSAFE)));
+        val = make_internal(
+            lispProcList[i].cmd,
+            lispProcList[i].flags &
+                (FLAG_TAIL_AWARE | FLAG_APPLICATIVE | FLAG_UNSAFE)));
     unrefexp(val);
   }
   (void)t;
@@ -13969,17 +14220,18 @@ env_t *alcove_init(void) {
   set_get_keyval_dict(global->d, "*readline*", NIL_EXP);
 #endif
   /* REPL prompt hooks: when bound to a function (fn (n) -> string) the REPL
-     calls it to render a prompt for cell n; nil = built-in default. *-in* is the
-     input prompt, *-out* precedes a result, *-cont* is the multi-line
+     calls it to render a prompt for cell n; nil = built-in default. *-in* is
+     the input prompt, *-out* precedes a result, *-cont* is the multi-line
      continuation prompt (the "    ... " before continued lines). Set them in
      .init.alc to customize. See repl_prompt_str(). */
   set_get_keyval_dict(global->d, "*prompt-in*", NIL_EXP);
   set_get_keyval_dict(global->d, "*prompt-out*", NIL_EXP);
   set_get_keyval_dict(global->d, "*prompt-cont*", NIL_EXP);
   /* REPL eval hooks: *input-hook* (fn (input) -> string) rewrites a typed line
-     before it is evaluated; *output-hook* (fn (n input output) ...) observes the
-     (post-transform) input and the result value for capture/logging. nil = off.
-     See repl_hook_transform() and the *output-hook* call in repl_eval_print_form. */
+     before it is evaluated; *output-hook* (fn (n input output) ...) observes
+     the (post-transform) input and the result value for capture/logging. nil =
+     off. See repl_hook_transform() and the *output-hook* call in
+     repl_eval_print_form. */
   set_get_keyval_dict(global->d, "*input-hook*", NIL_EXP);
   set_get_keyval_dict(global->d, "*output-hook*", NIL_EXP);
   /* Make the prompt hooks discoverable via (doc *prompt-in*) and friends. They
@@ -14005,20 +14257,23 @@ env_t *alcove_init(void) {
         {"*input-hook*",
          "*input-hook* — REPL input transform. Bind to (fn (input) -> string); "
          "called with the typed line text and its result replaces what gets "
-         "evaluated (and what *output-hook* sees as input). nil/non-string falls "
+         "evaluated (and what *output-hook* sees as input). nil/non-string "
+         "falls "
          "back to the original. Line-scoped (not the piped stream path)."},
         {"*output-hook*",
-         "*output-hook* — REPL capture hook. Bind to (fn (n input output) ...); "
+         "*output-hook* — REPL capture hook. Bind to (fn (n input output) "
+         "...); "
          "called after each interactive eval with the cell number, the "
-         "(post-transform) input string, and the result value (errors passed as "
+         "(post-transform) input string, and the result value (errors passed "
+         "as "
          "the error value). Return ignored — for transcripts/logging."},
     };
     if (!user_doc)
       user_doc = create_dict();
     for (int i = 0; i < (int)(sizeof pdocs / sizeof pdocs[0]); i++)
-      set_get_keyval_dict(user_doc, (char *)pdocs[i].name,
-                          make_string((char *)pdocs[i].doc,
-                                      (int)strlen(pdocs[i].doc)));
+      set_get_keyval_dict(
+          user_doc, (char *)pdocs[i].name,
+          make_string((char *)pdocs[i].doc, (int)strlen(pdocs[i].doc)));
   }
   return global;
 }
@@ -14052,11 +14307,14 @@ exp_t *alcove_eval_string(const char *src) {
       fclose(stream);
       return form; /* parse error — caller checks iserror */
     }
-    bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form) */
+    bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form)
+                 */
     /* OOM recovery point (see repl_eval_print_form): a failed allocation under
        this form longjmps back here, yielding a catchable error to the embedder
-       instead of killing the host. Save/restore the prior jmp_buf for nesting. */
-    exp_t *volatile r; /* volatile: assigned across setjmp/longjmp (-Wclobbered) */
+       instead of killing the host. Save/restore the prior jmp_buf for nesting.
+     */
+    exp_t *volatile r; /* volatile: assigned across setjmp/longjmp (-Wclobbered)
+                        */
     jmp_buf oom_prev;
     int oom_prev_armed = g_oom_armed;
     memcpy(&oom_prev, &g_oom_jmp, sizeof(jmp_buf));
@@ -14230,7 +14488,8 @@ int main(int argc, char *argv[]) {
         g_safe_mode = 1;
       } else if (strcmp(argv[src], "--interpret") == 0) {
         /* Force the AST tree-walker (no bytecode compile) — differential
-           testing vs the default compiled path. No TCO; keep recursion bounded. */
+           testing vs the default compiled path. No TCO; keep recursion bounded.
+         */
         g_no_compile = 1;
       } else if (strcmp(argv[src], "--no-line-info") == 0) {
         /* Disable the reader's per-form line/col stamping. Tracking is parse-
@@ -14347,7 +14606,8 @@ int main(int argc, char *argv[]) {
   if (auto_load) {
     int loaded = loaddb_from_file_path(global, alcove_db_path);
     if (loaded > 0)
-      printf(ALCOVE_PROGNAME ": auto-loaded %d entries from %s (use --noload to "
+      printf(ALCOVE_PROGNAME
+             ": auto-loaded %d entries from %s (use --noload to "
              "skip)\n",
              loaded, alcove_db_path);
   }
@@ -14474,7 +14734,8 @@ int main(int argc, char *argv[]) {
 
   /* Debugger startup prompt (gdb's `(gdb)` before `run`): set breakpoints, then
      `c` to run (or `s` to step from the start). Applies to both a file and the
-     interactive REPL; breakpoints / (break) then stop with fully live frames. */
+     interactive REPL; breakpoints / (break) then stop with fully live frames.
+   */
   if (g_debug)
     debug_repl(NIL_EXP, global);
 
@@ -14648,7 +14909,8 @@ __attribute__((used)) int alcove_web_eval(const char *src) {
       unrefexp(stre);
       break;
     }
-    bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form) */
+    bt_clear(); /* per-top-level-form capture scope (see repl_eval_print_form)
+                 */
     exp_t *strf = evaluate(stre, g_global_env);
     if (strf) {
       /* Match the script-execution convention: don't echo nil results.

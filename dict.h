@@ -113,8 +113,8 @@ static int is_fully_dumpable(exp_t *e, int depth) {
     dict_t *sd = (dict_t *)e->ptr;
     if (sd)
       DICT_FOREACH(sd, k, 0, 0)
-        if (!is_fully_dumpable(k->val, depth + 1))
-          return 0;
+    if (!is_fully_dumpable(k->val, depth + 1))
+      return 0;
     return 1;
   }
   if (islist(e)) {

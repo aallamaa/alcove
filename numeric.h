@@ -194,7 +194,8 @@ static inline double exact_to_double(exp_t *e) {
 }
 
 /* Three-way compare of two exact values without overflow (i128 cross-multiply).
-   Returns -1, 0, +1. Denominators are positive, so the sign is the cross diff. */
+   Returns -1, 0, +1. Denominators are positive, so the sign is the cross diff.
+ */
 static inline int rat_cmp(exp_t *a, exp_t *b) {
   int64_t an, ad, bn, bd;
   exact_parts(a, &an, &ad);
@@ -269,7 +270,7 @@ static inline double dec_to_double(exp_t *e) {
 }
 
 /* Parse [+-]?digits[.digits] (no exponent). Returns owned decimal or NULL with
-   *over: 1 = too many digits, 3 = malformed. len bytes at s. */
+ *over: 1 = too many digits, 3 = malformed. len bytes at s. */
 static exp_t *dec_parse(const char *s, size_t len, int *over) {
   *over = 0;
   size_t i = 0;
@@ -394,7 +395,7 @@ static int dec_cmp(alc_dec_t *a, alc_dec_t *b) {
 }
 
 /* op '+','-','*','/' on two decimal exp_t. Returns owned decimal or NULL with
-   *over: 1 overflow (exceeds bounds), 2 divide-by-zero. */
+ *over: 1 overflow (exceeds bounds), 2 divide-by-zero. */
 static exp_t *dec_binop(char op, exp_t *a, exp_t *b, int *over) {
   *over = 0;
   alc_dec_t *da = (alc_dec_t *)a->ptr, *db = (alc_dec_t *)b->ptr;
