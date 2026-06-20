@@ -578,16 +578,39 @@ static int header_hn(const node *x) {
   int ha = header_arity(head_tok(x));
   return (ha >= 0 && x->n > ha) ? ha : 0;
 }
-/* Should this header form BREAK its body across indented lines (vs inline
-   `head: body`)? Yes when wider than WIDTH, >1 body form, a body form is itself
-   a header form, or it's the if-family (elif/else need an open block). */
-static int wants_break(const node *x, int col, int hn) {
+/* Should this header form BREAK its body across indented lines, INDEPENDENT of
+   width? Yes for the if-family (elif/else need an open block), >1 body form, or a
+   body form that is itself a header (nested if/for/...). The width test is done
+   separately by emit_form on the ACTUAL `header: body` candidate, so the two
+   passes agree (avoids inline_width(x) — the paren form — disagreeing with the
+   emitted line and causing a format/idempotency flip-flop). */
+static int wants_break(const node *x, int hn) {
   if (is_if_family(head_tok(x))) return 1;
   if (x->n - hn > 1) return 1;
-  if (col + inline_width(x) > WIDTH) return 1;
   for (int k = hn; k < x->n; k++)
     if (x->kid[k]->is_list && header_hn(x->kid[k])) return 1;
   return 0;
+}
+
+/* Emit a form in STATEMENT position (top level / a block child) onto one line:
+   the Adder idiom drops the outer parens of a call — `(assert "x" 1 1)` becomes
+   `assert "x" 1 1` — while nested forms (the args) keep theirs via emit_inline.
+   `(foo)` with no args becomes `foo()` (no-arg call sugar), NOT bare `foo`
+   (which would read as a variable, not a 0-arg call). Literals (vec/set/map/
+   quote), atoms, and source-glued calls keep their own surface form. */
+static void emit_stmt_line(const node *x, buf *o) {
+  if (is_infix_assign(x)) { /* (= a b) -> a = b */
+    emit_inline(x->kid[1], o); buf_puts(o, " = "); emit_inline(x->kid[2], o); return;
+  }
+  if (x->is_list && x->open == '(' && !x->call && !x->vec && !x->set && !x->map) {
+    if (x->n == 0) { buf_puts(o, "()"); return; }
+    if (x->n == 1 && !x->kid[0]->is_list) { /* (foo) -> foo() no-arg call */
+      emit_inline(x->kid[0], o); buf_puts(o, "()"); return;
+    }
+    emit_seq(x->kid, 0, x->n, o); /* head args... — outer parens dropped */
+    return;
+  }
+  emit_inline(x, o); /* atom / literal / glued call / quote: as-is */
 }
 
 /* emit one form at indentation `col`, choosing inline vs `:`-block. */
@@ -597,11 +620,9 @@ static void emit_form(const node *x, int col, buf *o) {
   if (x->lead) put_comment_block(x->lead, col, o);
 
   int hn = header_hn(x);
-  if (hn == 0) { /* plain form: one inline line */
+  if (hn == 0) { /* plain form: one inline statement line */
     put_indent(o, col);
-    if (is_infix_assign(x)) { /* statement-level (= a b) -> a = b */
-      emit_inline(x->kid[1], o); buf_puts(o, " = "); emit_inline(x->kid[2], o);
-    } else emit_inline(x, o);
+    emit_stmt_line(x, o);
     if (x->trail) { buf_putc(o, ' '); buf_puts(o, x->trail); }
     buf_putc(o, '\n');
     return;
@@ -619,13 +640,20 @@ static void emit_form(const node *x, int col, buf *o) {
     buf_putc(o, '\n'); free(hdr.p); return;
   }
 
-  if (!wants_break(x, col, bodyfrom) &&
+  if (!wants_break(x, bodyfrom) &&
       !x->kid[bodyfrom]->lead && !x->kid[bodyfrom]->trail) {
-    /* inline `header: body` (single short body form) */
-    put_indent(o, col); buf_puts(o, hdr.p); buf_puts(o, ": ");
-    emit_inline(x->kid[bodyfrom], o);
-    if (x->trail) { buf_putc(o, ' '); buf_puts(o, x->trail); }
-    buf_putc(o, '\n'); free(hdr.p); return;
+    /* Try inline `header: body`. Measure the ACTUAL candidate (header + ": " +
+       statement-style body) so the inline/break decision is stable across passes
+       and matches what we emit. Fits in WIDTH -> inline; else fall through. */
+    buf cand; buf_init(&cand);
+    buf_puts(&cand, hdr.p); buf_puts(&cand, ": ");
+    emit_stmt_line(x->kid[bodyfrom], &cand);
+    if (col + cand.len <= WIDTH) {
+      put_indent(o, col); buf_puts(o, cand.p);
+      if (x->trail) { buf_putc(o, ' '); buf_puts(o, x->trail); }
+      buf_putc(o, '\n'); free(cand.p); free(hdr.p); return;
+    }
+    free(cand.p);
   }
 
   put_indent(o, col); buf_puts(o, hdr.p); buf_putc(o, ':');
