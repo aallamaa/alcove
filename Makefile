@@ -210,14 +210,28 @@ alcove-with-metrics:
 adder-with-metrics:
 	$(MAKE) adder JIT_FLAGS="$(JIT_FLAGS) -DALCOVE_METRICS"
 
-# Adder build: the full JIT runtime + the .adr front end, emitted
-# as the local adder binary. adder.c #includes alcove.c.
+# Adder build: the full JIT runtime + the .adr front end, emitted as the local
+# adder binary. adder.c #includes alcove.c; adfmt.c (the `adder fmt` formatter)
+# is a SEPARATE TU linked in (-DADFMT_NO_MAIN suppresses its standalone main) so
+# its generic helpers don't collide with the engine's.
 adder:
 ifeq ($(JIT_OK),)
 	@echo "warning: no JIT backend for $(ARCH); building bytecode-only."
 endif
-	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -o adder  adder.c $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -DADFMT_NO_MAIN -c adfmt.c -o adfmt.o
+	$(CC) -Wall -W $(SAFE_FLAGS) -O3 $(MARCH) $(JIT_FLAGS) -o adder  adder.c adfmt.o $(RL_FLAGS) $(FFI_FLAGS) -lm $(FFI_LIBS) $(RL_LIBS)
 	$(print_dep_hints)
+
+# Standalone formatter binary (handy for piping; `adder fmt` is the shipped CLI).
+adfmt:
+	$(CC) -Wall -W $(SAFE_FLAGS) -O2 -o adfmt adfmt.c
+
+# Adder-formatter gate: the formatter must be meaning-preserving (transpiling
+# original vs formatted through adr.h yields identical s-exprs) + idempotent over
+# the .adr corpus, and convert an Alcove s-expr file to indented Adder. See
+# tools/adfmt_test.sh. (Distinct from `fmt-check`, the C clang-format gate.)
+adfmt-test: adder
+	sh tools/adfmt_test.sh
 
 # Regenerate test.adr from test.alc (shared engine suite, transpiled via
 # alc2adr.py) + test_adder_extra.adr (adder-syntax-only tests). Keeps the
@@ -809,4 +823,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan obs-test coverage alcove-with-metrics adder-with-metrics install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

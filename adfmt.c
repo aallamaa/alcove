@@ -416,9 +416,9 @@ static void put_comment_block(const char *lead, int col, buf *o) {
 /* render a block form's HEADER (kids 0..hdr_n) into `hdr`, normalizing a
    def/fn header to `def name(params)` / `fn(params)` regardless of whether the
    source glued the params. Returns the body-start index. */
-static int emit_block_header(const node *x, buf *hdr) {
+static int emit_block_header(const node *x, buf *hdr, int hn_in) {
   const char *h = head_tok(x);
-  int hn = x->hdr_n > 0 ? x->hdr_n : x->n;
+  int hn = hn_in > 0 ? hn_in : (x->hdr_n > 0 ? x->hdr_n : x->n);
   /* head line was itself a glued call: fn(params): / fn(): / name(args): —
      render head(args) (kid[0] + the call args up to the header boundary). */
   if (x->call) {
@@ -451,13 +451,52 @@ static int emit_block_header(const node *x, buf *hdr) {
   return hn;
 }
 
+/* How many leading kids of a form with this head are the "header" (signature /
+   condition / binding); the rest are the indentable body. -1 = not a body form.
+   Ported from alc2adr.py's HEADER_ARITY so a FLAT s-expr (an Alcove file, or an
+   inlined Adder form) converts to indented Adder when it's wide enough to read
+   better. Block rule re-appends the body children in order, so it round-trips. */
+static int header_arity(const char *h) {
+  if (!h) return -1;
+  struct { const char *n; int a; } t[] = {
+    {"def",3},{"defn",3},{"defc",3},{"defmacro",3},{"macro",3},{"mac",3},
+    {"fn",2},{"lambda",2},{"with",2},{"each",2},{"let",3},{"let*",3},
+    {"if",2},{"when",2},{"unless",2},{"while",2},{"for",4},{"case",2},{"do",1},{0,0}};
+  for (int k = 0; t[k].n; k++) if (!strcmp(h, t[k].n)) return t[k].a;
+  return -1;
+}
+
+/* A form's header arity (kids before the body) when it is a body-bearing form
+   that should render with Adder header sugar (`head …: body`) — whether inline
+   or broken. Returns 0 for a plain form (rendered as one inline expression). A
+   source `:`-block, or a flat paren form whose head is in HEADER_ARITY with at
+   least one body kid, qualifies. */
+static int header_hn(const node *x) {
+  if (x->block) return x->hdr_n > 0 ? x->hdr_n : x->n;
+  if (!x->is_list || x->open != '(' || x->call) return 0;
+  int ha = header_arity(head_tok(x));
+  return (ha >= 0 && x->n > ha) ? ha : 0;
+}
+/* Should this header form BREAK its body across indented lines (vs inline
+   `head: body`)? Yes when wider than WIDTH, >1 body form, a body form is itself
+   a header form, or it's the if-family (elif/else need an open block). */
+static int wants_break(const node *x, int col, int hn) {
+  if (is_if_family(head_tok(x))) return 1;
+  if (x->n - hn > 1) return 1;
+  if (col + inline_width(x) > WIDTH) return 1;
+  for (int k = hn; k < x->n; k++)
+    if (x->kid[k]->is_list && header_hn(x->kid[k])) return 1;
+  return 0;
+}
+
 /* emit one form at indentation `col`, choosing inline vs `:`-block. */
 static void emit_form(const node *x, int col, buf *o) {
   if (x->open == 'C') { put_comment_block(x->lead, col, o); return; } /* comment-only */
   if (x->blank) buf_putc(o, '\n');
   if (x->lead) put_comment_block(x->lead, col, o);
 
-  if (!x->block) { /* plain form: one inline line */
+  int hn = header_hn(x);
+  if (hn == 0) { /* plain form: one inline line */
     put_indent(o, col);
     if (is_infix_assign(x)) { /* statement-level (= a b) -> a = b */
       emit_inline(x->kid[1], o); buf_puts(o, " = "); emit_inline(x->kid[2], o);
@@ -467,16 +506,13 @@ static void emit_form(const node *x, int col, buf *o) {
     return;
   }
 
-  /* block form: header from hdr_n, body = the remaining (indented) kids. */
+  /* header form: render `head …` then either inline `: body` or a broken block. */
   buf hdr; buf_init(&hdr);
-  int bodyfrom = emit_block_header(x, &hdr);
-  int nbody = x->n - bodyfrom;
+  int bodyfrom = emit_block_header(x, &hdr, hn);
 
-  /* keep it inline when small: `header: body` for a single short body form —
-     but NEVER for the if-family (elif/else must attach to an open block). */
-  size_t inline_w = col + hdr.len + 2 + (nbody == 1 ? inline_width(x->kid[bodyfrom]) : 999);
-  if (nbody == 1 && !is_if_family(head_tok(x)) && !x->kid[bodyfrom]->block &&
-      !x->kid[bodyfrom]->lead && !x->kid[bodyfrom]->trail && inline_w <= WIDTH) {
+  if (!wants_break(x, col, bodyfrom) &&
+      !x->kid[bodyfrom]->lead && !x->kid[bodyfrom]->trail) {
+    /* inline `header: body` (single short body form) */
     put_indent(o, col); buf_puts(o, hdr.p); buf_puts(o, ": ");
     emit_inline(x->kid[bodyfrom], o);
     if (x->trail) { buf_putc(o, ' '); buf_puts(o, x->trail); }
@@ -498,17 +534,82 @@ char *adder_format(const char *src) {
   return o.p;
 }
 
-/* ------------------------------------------------------------------- main */
-int main(int argc, char **argv) {
-  /* read stdin or argv[1] */
+/* ----------------------------------------------------------------- CLI ----
+ * Shared by the standalone `adfmt` binary and the `adder fmt` subcommand.
+ *   adfmt [opts] [files...]      no files / "-"  -> stdin -> stdout
+ *   --write / -w   format files IN PLACE (default for files is stdout)
+ *   --check        exit 1 if any file is not already formatted (CI); no writes
+ *   --infix        emit operator infix (n < 0) — readable but deopts hot loops
+ *   --diff         print a unified-ish before/after marker per changed file
+ */
+static char *read_all(FILE *f) {
   buf in; buf_init(&in);
-  FILE *f = stdin;
-  if (argc > 1 && strcmp(argv[1], "-")) { f = fopen(argv[1], "rb"); if (!f) { perror(argv[1]); return 2; } }
   char tmp[4096]; size_t r;
   while ((r = fread(tmp, 1, sizeof tmp, f)) > 0) buf_putn(&in, tmp, r);
-  if (f != stdin) fclose(f);
-  char *out = adder_format(in.p);
-  fputs(out, stdout);
-  free(out); free(in.p);
-  return 0;
+  return in.p;
 }
+
+static int adfmt_usage(FILE *o) {
+  fputs(
+"usage: adder fmt [options] [files...]\n"
+"  (no files, or \"-\")   read stdin, write formatted Adder to stdout\n"
+"  files...              read each file\n"
+"options:\n"
+"  -w, --write           rewrite each file in place (else print to stdout)\n"
+"      --check           exit non-zero if any file isn't already formatted\n"
+"                        (prints the unformatted paths; makes no changes)\n"
+"      --infix           use operator infix `(n < 0)` (NB: deoptimizes hot\n"
+"                        loops — the compiler can't fuse a runtime-infix cmp)\n"
+"  -h, --help            this help\n", o);
+  return 2;
+}
+
+int adfmt_cli_main(int argc, char **argv) {
+  int write_inplace = 0, check = 0, nfiles = 0;
+  const char *files[4096];
+  for (int i = 1; i < argc; i++) {
+    const char *a = argv[i];
+    if (!strcmp(a, "-w") || !strcmp(a, "--write")) write_inplace = 1;
+    else if (!strcmp(a, "--check")) check = 1;
+    else if (!strcmp(a, "--infix")) g_infix_ops = 1;
+    else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { adfmt_usage(stdout); return 0; }
+    else if (a[0] == '-' && a[1] && strcmp(a, "-")) { fprintf(stderr, "adfmt: unknown option %s\n", a); return adfmt_usage(stderr); }
+    else if (nfiles < (int)(sizeof files / sizeof *files)) files[nfiles++] = a;
+  }
+
+  /* stdin -> stdout when no real files given */
+  if (nfiles == 0 || (nfiles == 1 && !strcmp(files[0], "-"))) {
+    if (write_inplace || check) { fputs("adfmt: --write/--check need file arguments\n", stderr); return 2; }
+    char *src = read_all(stdin);
+    char *out = adder_format(src);
+    fputs(out, stdout);
+    free(out); free(src);
+    return 0;
+  }
+
+  int rc = 0;
+  for (int i = 0; i < nfiles; i++) {
+    FILE *f = fopen(files[i], "rb");
+    if (!f) { perror(files[i]); rc = 2; continue; }
+    char *src = read_all(f); fclose(f);
+    char *out = adder_format(src);
+    int changed = strcmp(src, out) != 0;
+    if (check) {
+      if (changed) { printf("%s\n", files[i]); rc = 1; }
+    } else if (write_inplace) {
+      if (changed) {
+        FILE *w = fopen(files[i], "wb");
+        if (!w) { perror(files[i]); rc = 2; }
+        else { fputs(out, w); fclose(w); fprintf(stderr, "formatted %s\n", files[i]); }
+      }
+    } else {
+      fputs(out, stdout);
+    }
+    free(out); free(src);
+  }
+  return rc;
+}
+
+#ifndef ADFMT_NO_MAIN
+int main(int argc, char **argv) { return adfmt_cli_main(argc, argv); }
+#endif

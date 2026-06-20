@@ -102,3 +102,5 @@ examples/autograd/mnist/
 json_test
 json_fuzz
 msgpack_fuzz
+adfmt
+adfmt.o

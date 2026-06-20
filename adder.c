@@ -20,4 +20,14 @@
 #include "alcove.c"
 #undef main
 
-int main(int argc, char *argv[]) { return alcove_real_main(argc, argv); }
+/* `adder fmt` — the Adder source formatter, compiled as its own TU (adfmt.c,
+   built with -DADFMT_NO_MAIN so it exports no main) and linked in. Dispatched
+   before the interpreter starts, so it shares the adder binary without touching
+   the runtime path. */
+int adfmt_cli_main(int argc, char **argv);
+
+int main(int argc, char *argv[]) {
+  if (argc > 1 && !strcmp(argv[1], "fmt"))
+    return adfmt_cli_main(argc - 1, argv + 1); /* shift so files start at argv[1] */
+  return alcove_real_main(argc, argv);
+}
