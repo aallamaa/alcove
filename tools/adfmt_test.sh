@@ -32,8 +32,8 @@ $CC -O2 -I. -o "$D/sx" "$D/sx.c" 2>"$D/err" || { echo "  probe build failed:"; c
 fail=0
 check() { # $1 = file
   f=$1
-  "$ADDER" fmt "$f" > "$D/f1" 2>/dev/null
-  "$ADDER" fmt "$D/f1" > "$D/f2" 2>/dev/null
+  "$ADDER" fmt --no-infix "$f" > "$D/f1" 2>/dev/null
+  "$ADDER" fmt --no-infix "$D/f1" > "$D/f2" 2>/dev/null
   "$D/sx" "$f"     > "$D/a" 2>/dev/null
   "$D/sx" "$D/f1"  > "$D/b" 2>/dev/null
   if ! diff -q "$D/a" "$D/b" >/dev/null 2>&1; then
@@ -60,11 +60,22 @@ check "$D/in.alc"
 # adr.h s-expr oracle can't read .alc (;;-comments), so we compare RUN RESULTS.
 if [ -f test.alc ] && [ -x ./alcove ]; then
   echo "== whole-suite alcove->adder eval equivalence (test.alc) =="
-  "$ADDER" fmt test.alc > "$D/test_conv.adr" 2>/dev/null
+  "$ADDER" fmt --no-infix test.alc > "$D/test_conv.adr" 2>/dev/null
   o=$(./alcove test.alc 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep "TEST RESULT")
   c=$("$ADDER" "$D/test_conv.adr" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep "TEST RESULT")
-  if [ -n "$o" ] && [ "$o" = "$c" ]; then echo "  OK — $c (identical to alcove)";
+  if [ -n "$o" ] && [ "$o" = "$c" ]; then echo "  OK — $c (identical to alcove, --no-infix)";
   else echo "  MISMATCH: alcove='$o' vs adder-formatted='$c'"; fail=1; fi
+
+  # Infix mode (default): correctness-preserving — NO assert may report a wrong
+  # VALUE. The only allowed differences are jit-meta asserts (compiled?/jit?),
+  # since an unhinted-param comparison can lose JIT fusion. So we require: zero
+  # failures whose name isn't a jit assertion.
+  echo "== infix mode is value-correct (only jit-meta asserts may differ) =="
+  "$ADDER" fmt test.alc > "$D/ti.adr" 2>/dev/null
+  badval=$("$ADDER" "$D/ti.adr" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+           | grep ": Failed" | grep -ivE "jit |compiled|forsum|listsum|sieve" | head)
+  if [ -z "$badval" ]; then echo "  OK — no value-wrong asserts under infix";
+  else echo "  INFIX CORRUPTS VALUES:"; echo "$badval" | sed 's/^/    /'; fail=1; fi
 fi
 
 if [ "$fail" = 0 ]; then echo "==> ADFMT PASSED"; exit 0; fi

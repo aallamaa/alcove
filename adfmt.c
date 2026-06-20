@@ -448,13 +448,13 @@ static int is_infix_assign(const node *x) {
   return x->is_list && !x->call && x->n == 3 && !x->kid[0]->is_list &&
          x->kid[0]->tok && !strcmp(x->kid[0]->tok, "=");
 }
-/* NOTE on operator infix `(n < 0)` / `(n is 0)`: it reads better, but adr.h does
-   NOT lower it (unlike `a = b`), so it stays a RUNTIME infix dispatch and the
-   compiler can't fuse it into the SLOT_<cmp>_FIX superinstruction the JIT loop
-   matcher needs — it deoptimizes hot loops (verified: +117 jit-loop test fails).
-   So it's deliberately NOT applied here. A future `--infix` opt-in could enable
-   it for code where readability outweighs loop perf. */
-static int g_infix_ops = 0; /* off: operator infix would deopt hot loops */
+/* Operator infix `(n < 0)` / `(n is 0)` / `(a + b)` reads better than prefix and
+   is CORRECTNESS-preserving (the runtime infix dispatch and AST/VM agree). The
+   only cost: a comparison on an UNHINTED param in a hot numeric tail loop won't
+   fuse into the SLOT_<cmp>_FIX superinstruction the JIT loop matcher wants, so
+   that loop stays on the (correct, slower) VM path — recover it by giving the
+   param a `:int` hint. On by default; `--no-infix` keeps strict prefix. */
+static int g_infix_ops = 1;
 static int is_infix_op(const char *s) {
   if (!g_infix_ops || !s) return 0;
   static const char *ops[] = {"<",">","<=",">=","is","iso","+","-","*","/","mod",0};
@@ -602,6 +602,10 @@ static void emit_stmt_line(const node *x, buf *o) {
   if (is_infix_assign(x)) { /* (= a b) -> a = b */
     emit_inline(x->kid[1], o); buf_puts(o, " = "); emit_inline(x->kid[2], o); return;
   }
+  if (is_infix_op_form(x)) { /* (op a b) -> a op b (no outer parens at stmt level) */
+    emit_inline(x->kid[1], o); buf_putc(o, ' '); buf_puts(o, x->kid[0]->tok);
+    buf_putc(o, ' '); emit_inline(x->kid[2], o); return;
+  }
   if (x->is_list && x->open == '(' && !x->call && !x->vec && !x->set && !x->map) {
     if (x->n == 0) { buf_puts(o, "()"); return; }
     if (x->n == 1 && !x->kid[0]->is_list) { /* (foo) -> foo() no-arg call */
@@ -695,8 +699,9 @@ static int adfmt_usage(FILE *o) {
 "  -w, --write           rewrite each file in place (else print to stdout)\n"
 "      --check           exit non-zero if any file isn't already formatted\n"
 "                        (prints the unformatted paths; makes no changes)\n"
-"      --infix           use operator infix `(n < 0)` (NB: deoptimizes hot\n"
-"                        loops — the compiler can't fuse a runtime-infix cmp)\n"
+"      --no-infix        keep prefix `(< n 0)` (default emits infix `(n < 0)`,\n"
+"                        which reads better; only cost is an unhinted numeric\n"
+"                        hot loop won't JIT-fuse — add an :int hint to recover)\n"
 "  -h, --help            this help\n", o);
   return 2;
 }
@@ -716,6 +721,7 @@ int adfmt_cli_main(int argc, char **argv) {
     if (!strcmp(a, "-w") || !strcmp(a, "--write")) write_inplace = 1;
     else if (!strcmp(a, "--check")) check = 1;
     else if (!strcmp(a, "--infix")) g_infix_ops = 1;
+    else if (!strcmp(a, "--no-infix")) g_infix_ops = 0;
     else if (!strcmp(a, "--alcove")) force_alcove = 1;
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { adfmt_usage(stdout); return 0; }
     else if (a[0] == '-' && a[1] && strcmp(a, "-")) { fprintf(stderr, "adfmt: unknown option %s\n", a); return adfmt_usage(stderr); }
