@@ -191,38 +191,6 @@ static void read_forms(lex *r, char term, node *out) {
   }
 }
 
-/* ------------------------------------------------------- comment splitting
- * Return the byte offset of the start of a line-comment in `line`, or -1.
- * Recognizes `#` (Adder) and `;` (Alcove `;;`) comments. Skips #\, #[, #{,
- * #b" and anything inside a "..." string. */
-static int comment_at(const char *line) {
-  int in_str = 0; size_t i = 0, n = strlen(line);
-  while (i < n) {
-    char c = line[i];
-    if (in_str) {
-      if (c == '\\') { i += 2; continue; }
-      if (c == '"') in_str = 0;
-      i++; continue;
-    }
-    if (c == '"') { in_str = 1; i++; continue; }
-    if (c == ';') return (int)i; /* alcove ';;' (and ';') line comment */
-    if (c == '#') {
-      char d = i + 1 < n ? line[i + 1] : 0;
-      if (d == '\\') { /* #\X char literal — skip #, \, and the whole codepoint */
-        i += 2;
-        if (i < n) { unsigned char l = (unsigned char)line[i];
-          i += l >= 0xF0 ? 4 : l >= 0xE0 ? 3 : l >= 0xC0 ? 2 : 1; }
-        continue;
-      }
-      if (d == '[' || d == '{' ||
-          (d == 'b' && i + 2 < n && line[i + 2] == '"')) { i += 2; continue; }
-      return (int)i;
-    }
-    i++;
-  }
-  return -1;
-}
-
 /* a line that "opens a block": ends with ':' (not inside a string/paren). */
 static int opens_block(const char *body) {
   size_t n = strlen(body);
@@ -323,7 +291,7 @@ static node *parse(const char *src) {
        s-expr (an .alc file) reads as a single form. The first physical line's
        comment is kept; continuation-line comments are dropped (rare in practice). */
     buf codeb; buf_init(&codeb);
-    int depth = 0, in_str = 0, cpos = -1, first_indent = -1, any = 0;
+    int depth = 0, in_str = 0, first_indent = -1, any = 0;
     char *comment = NULL;
     while (i <= slen) {
       size_t j = i; while (j < slen && src[j] != '\n') j++;
@@ -502,7 +470,6 @@ static void emit_inline(const node *x, buf *o) {
   if (x->open == 'L') { emit_seq(x->kid, 0, x->n, o); return; } /* bare line */
   buf_putc(o, '('); emit_seq(x->kid, 0, x->n, o); buf_putc(o, ')');
 }
-static size_t inline_width(const node *x) { buf t; buf_init(&t); emit_inline(x, &t); size_t w = t.len; free(t.p); return w; }
 
 static void emit_form(const node *x, int col, buf *o);
 static void put_indent(buf *o, int col) { for (int k = 0; k < col; k++) buf_putc(o, ' '); }

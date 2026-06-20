@@ -12350,13 +12350,14 @@ static char *rl_read_form(int idx) {
     putchar('\n'); /* same fix for continuation lines */
     if (!more)
       break;
-    size_t need = strlen(acc) + strlen(more) + 2;
+    size_t al = strlen(acc), ml = strlen(more);
+    size_t need = al + ml + 2;
     if (need > cap) {
       cap = need * 2;
       acc = xrealloc(acc, cap);
     }
-    strcat(acc, "\n");
-    strcat(acc, more);
+    acc[al] = '\n';                  /* append "\n" + more at the known offset */
+    memcpy(acc + al + 1, more, ml + 1); /* copies more's NUL too */
     free(more);
   }
   if (acc[0])
@@ -12490,13 +12491,14 @@ static char *als_rl_read_form(int idx) {
         free(more); /* whitespace-only line + balanced parens -> submit */
         break;
       }
-      size_t need = strlen(acc) + strlen(more) + 2;
+      size_t al = strlen(acc), ml = strlen(more);
+      size_t need = al + ml + 2;
       if (need > cap) {
         cap = need * 2;
         acc = xrealloc(acc, cap);
       }
-      strcat(acc, "\n");
-      strcat(acc, more);
+      acc[al] = '\n';                  /* append "\n" + more at the known offset */
+      memcpy(acc + al + 1, more, ml + 1); /* copies more's NUL too */
       free(more);
     }
   }
