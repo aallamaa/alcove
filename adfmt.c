@@ -93,13 +93,18 @@ static void freenode(node *x) {
  * One line's code text -> a flat list of surface forms. Brackets nest; every
  * token is kept verbatim (no true->t, no infix/call lowering). Call sugar
  * f(args) is recorded as a `call` group so the printer reproduces it. */
+/* Set when the input is Alcove s-expr (a .alc file or --alcove): enables the
+   multi-statement-per-line split. Adder input keeps adr.h's grouping. */
+static int g_alcove_mode = 0;
+
 typedef struct { const char *s; size_t i, n; } lex;
 
 static int is_delim(char c) {
-  return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '[' ||
-         c == ']' || c == '{' || c == '}' || c == '"' || c == '\'' ||
-         c == '`' || c == ',';
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(' ||
+         c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+         c == '"' || c == '\'' || c == '`' || c == ',';
 }
+static int is_ws(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 static node *read_one(lex *r);
 static void read_forms(lex *r, char term, node *out);
 
@@ -159,16 +164,23 @@ static node *read_one(lex *r) {
 static void read_forms(lex *r, char term, node *out) {
   int sep_comma = (term == '}'); /* commas separate map/set entries */
   for (;;) {
-    while (r->i < r->n && (r->s[r->i] == ' ' || r->s[r->i] == '\t' ||
+    while (r->i < r->n && (is_ws(r->s[r->i]) ||
                            (sep_comma && r->s[r->i] == ',')))
       r->i++;
     if (r->i >= r->n) return;
     char c = r->s[r->i];
     if (term && c == term) { r->i++; return; }
     node *f = read_one(r);
-    /* name/result glued to '(' : a CALL `f(args)`. fn(params)/def-headers are
-       also call groups here — the printer renders the glued sugar uniformly. */
-    while (f && r->i < r->n && r->s[r->i] == '(') { /* f(a)(b) and (expr)(a) chains */
+    /* name/result glued to '(' : a CALL `f(args)`. Chains only when the head is
+       a SYMBOL atom (an identifier) or an already-glued call result. NOT a string
+       literal (`"s"(x)` is two forms — a string then a call), and NOT a bare
+       paren-list (`(a)(b)` is two forms — the Alcove packing — while a true chain
+       `name(a)(b)` has f->call set). Keeps glued runs like
+       `"msg"(get …)` and `(vec-set! v 0 x)(vec-set! v 1 y)` correctly separated. */
+    while (f && r->i < r->n && r->s[r->i] == '(' &&
+           ((!f->is_list && f->tok && f->tok[0] != '"' &&
+             !(f->tok[0] >= '0' && f->tok[0] <= '9')) ||
+            (f->is_list && f->call))) {
       r->i++;
       node *call = mk_list('('); call->call = 1;
       push(call, f);              /* head (atom name or a prior result list) */
@@ -180,8 +192,9 @@ static void read_forms(lex *r, char term, node *out) {
 }
 
 /* ------------------------------------------------------- comment splitting
- * Return the byte offset of the start of a `#` line-comment in `line`, or -1.
- * Skips #\, #[, #{, #b" and anything inside a "..." string. */
+ * Return the byte offset of the start of a line-comment in `line`, or -1.
+ * Recognizes `#` (Adder) and `;` (Alcove `;;`) comments. Skips #\, #[, #{,
+ * #b" and anything inside a "..." string. */
 static int comment_at(const char *line) {
   int in_str = 0; size_t i = 0, n = strlen(line);
   while (i < n) {
@@ -192,6 +205,7 @@ static int comment_at(const char *line) {
       i++; continue;
     }
     if (c == '"') { in_str = 1; i++; continue; }
+    if (c == ';') return (int)i; /* alcove ';;' (and ';') line comment */
     if (c == '#') {
       char d = i + 1 < n ? line[i + 1] : 0;
       if (d == '\\') { /* #\X char literal — skip #, \, and the whole codepoint */
@@ -231,6 +245,45 @@ static int inline_colon(const char *body) {
   return -1;
 }
 
+/* Scan one physical line, appending its CODE (comment removed) to `out` and
+   updating the running bracket depth and in-string state. `*cpos` is set to the
+   byte offset (within `line`) of any line comment, or -1. Handles `;`/`#`
+   comments, "..." strings (across lines via *in_str), and #\X / #[ / #{ / #b"
+   literals so their chars aren't miscounted. The running state lets a paren
+   form spanning several physical lines be assembled correctly. */
+static void scan_line(const char *line, buf *out, int *depth, int *in_str, int *cpos) {
+  size_t n = strlen(line), i = 0;
+  *cpos = -1;
+  for (; i < n; i++) {
+    char c = line[i];
+    if (*in_str) {
+      buf_putc(out, c);
+      if (c == '\\' && i + 1 < n) { buf_putc(out, line[++i]); continue; }
+      if (c == '"') *in_str = 0;
+      continue;
+    }
+    if (c == ';') { *cpos = (int)i; return; }
+    if (c == '#') {
+      char d = i + 1 < n ? line[i + 1] : 0;
+      if (d == '\\') { /* #\X — emit # \ and the whole codepoint */
+        buf_putc(out, c); buf_putc(out, d); i += 2;
+        if (i < n) { unsigned char l = (unsigned char)line[i];
+          int k = l >= 0xF0 ? 4 : l >= 0xE0 ? 3 : l >= 0xC0 ? 2 : 1;
+          while (k-- > 0 && i < n) buf_putc(out, line[i++]); }
+        i--; continue;
+      }
+      if (d == '[' || d == '{' || (d == 'b' && i + 2 < n && line[i + 2] == '"')) {
+        buf_putc(out, c); continue; /* #-literal: keep, brackets counted normally */
+      }
+      *cpos = (int)i; return; /* # comment */
+    }
+    if (c == '"') { *in_str = 1; buf_putc(out, c); continue; }
+    if (c == '(' || c == '[' || c == '{') (*depth)++;
+    else if (c == ')' || c == ']' || c == '}') { if (*depth > 0) (*depth)--; }
+    buf_putc(out, c);
+  }
+}
+
 /* parse one code line's text into the node it denotes (lone atom -> value;
    lone list -> as-is; many -> a synthetic call list). */
 static node *line_node(const char *text) {
@@ -238,6 +291,15 @@ static node *line_node(const char *text) {
   node *forms = mk_list('('); forms->open = 'L'; /* 'L' = bare line list */
   read_forms(&r, 0, forms);
   if (forms->n == 1) { node *only = forms->kid[0]; forms->kid[0] = NULL; freenode(forms); return only; }
+  /* ALCOVE INPUT ONLY: multiple top-level forms ALL parenthesized are separate
+     statements packed on one line (`(a) (b) (c)`). In ADDER the same surface is a
+     defn clause `(params) (body)` or an infix expr `(a) + (b)` — both kept grouped
+     by adr.h's "many -> (f …)" rule — so this split is gated to .alc input. */
+  if (g_alcove_mode && forms->n > 1) {
+    int all_lists = 1;
+    for (int k = 0; k < forms->n; k++) if (!forms->kid[k]->is_list) { all_lists = 0; break; }
+    if (all_lists) { forms->open = 'M'; return forms; }
+  }
   return forms;
 }
 
@@ -255,21 +317,48 @@ static node *parse(const char *src) {
 
   size_t i = 0, slen = strlen(src);
   while (i <= slen) {
-    size_t j = i; while (j < slen && src[j] != '\n') j++;
-    char *raw = xstrndup(src + i, j - i);
-    i = j + 1;
-    /* strip trailing \r */
-    size_t rl = strlen(raw); while (rl && (raw[rl-1] == '\r')) raw[--rl] = 0;
-
-    int cpos = comment_at(raw);
-    char *code = cpos < 0 ? xstrndup(raw, strlen(raw)) : xstrndup(raw, cpos);
-    char *comment = cpos < 0 ? NULL : xstrndup(raw + cpos, strlen(raw + cpos));
-    /* trim code both ends */
-    int indent = 0; while (code[indent] == ' ' || code[indent] == '\t') indent++;
-    char *body = xstrndup(code + indent, strlen(code + indent));
-    for (size_t k = strlen(body); k && (body[k-1]==' '||body[k-1]=='\t'); ) body[--k] = 0;
-    /* trim trailing ws from comment */
-    if (comment) for (size_t k = strlen(comment); k && (comment[k-1]==' '||comment[k-1]=='\t'); ) comment[--k] = 0;
+    /* Read one LOGICAL form: a physical line, plus any continuation lines while
+       the bracket depth is unbalanced or we're inside a string. scan_line
+       strips comments and tracks (depth,in_str) across the join, so a multi-line
+       s-expr (an .alc file) reads as a single form. The first physical line's
+       comment is kept; continuation-line comments are dropped (rare in practice). */
+    buf codeb; buf_init(&codeb);
+    int depth = 0, in_str = 0, cpos = -1, first_indent = -1, any = 0;
+    char *comment = NULL;
+    while (i <= slen) {
+      size_t j = i; while (j < slen && src[j] != '\n') j++;
+      char *raw = xstrndup(src + i, j - i);
+      i = j + 1;
+      size_t rl = strlen(raw); while (rl && raw[rl-1] == '\r') raw[--rl] = 0;
+      if (first_indent < 0) { int ind = 0; while (raw[ind]==' '||raw[ind]=='\t') ind++; first_indent = ind; }
+      size_t pre = codeb.len;
+      int lc = -1;
+      scan_line(raw, &codeb, &depth, &in_str, &lc);
+      if (lc >= 0 && comment == NULL) { /* keep first line's comment, as Adder `#` */
+        const char *cm = raw + lc;
+        int s = 0; while (cm[s] == ';' || cm[s] == '#') s++; /* skip the marker run */
+        while (cm[s] == ' ' || cm[s] == '\t') s++;           /* and one gap */
+        buf cb; buf_init(&cb); buf_puts(&cb, "# "); buf_puts(&cb, cm + s);
+        for (size_t k = cb.len; k && (cb.p[k-1]==' '||cb.p[k-1]=='\t'); ) cb.p[--k]=0;
+        comment = cb.p; /* owned */
+      }
+      free(raw);
+      if (codeb.len > pre) any = 1; /* this line contributed code */
+      /* Multi-line accumulation is ALCOVE-only: real .alc s-exprs span lines.
+         Adder is line-based exactly like adr.h — each physical line is its own
+         form, and an unclosed paren auto-closes at EOL (line_node's reader does
+         this), so `(do #!comment` becomes `(do)`, matching adr.h. */
+      if ((depth <= 0 && !in_str) || !g_alcove_mode) break;
+      buf_putc(&codeb, '\n'); /* keep newline between continued lines */
+      if (i > slen) break;    /* unterminated form at EOF: take what we have */
+    }
+    char *code = codeb.p; /* owned (buf) */
+    int indent = first_indent < 0 ? 0 : first_indent;
+    /* trim code: leading indent already known; build trimmed body */
+    char *cstart = code; { int k = 0; while (cstart[k]==' '||cstart[k]=='\t') k++; cstart += k; }
+    char *body = xstrndup(cstart, strlen(cstart));
+    for (size_t k = strlen(body); k && is_ws(body[k-1]); ) body[--k] = 0;
+    (void)any;
 
     if (body[0] == 0) {
       if (comment) {            /* full-line comment -> pending lead block */
@@ -278,7 +367,7 @@ static node *parse(const char *src) {
       } else {                  /* blank line */
         pend_blank = 1;
       }
-      free(raw); free(code); free(comment); free(body);
+      free(code); free(comment); free(body);
       continue;
     }
 
@@ -310,12 +399,24 @@ static node *parse(const char *src) {
 
     /* indentation nesting: pop to parents shallower than this line */
     while (sp > 0 && indent <= ind_stack[sp - 1]) sp--;
-    if (sp > 0) push(node_stack[sp - 1], nd); else push(roots, nd);
+    node *parent_list = sp > 0 ? node_stack[sp - 1] : roots;
+    if (nd->open == 'M') { /* multiple statements packed on one line: split them */
+      for (int k = 0; k < nd->n; k++) {
+        node *child = nd->kid[k];
+        if (k == 0) { child->lead = nd->lead; nd->lead = NULL; child->blank = nd->blank; }
+        if (k == nd->n - 1) { child->trail = nd->trail; nd->trail = NULL; }
+        push(parent_list, child);
+      }
+      nd->n = 0; freenode(nd); /* shell only — children re-homed */
+      free(code); free(comment); free(body);
+      continue;
+    }
+    push(parent_list, nd);
 
     if ((block || icolon < 0 ? block : 0) && sp < MAXD) {
       ind_stack[sp] = indent; node_stack[sp] = nd; sp++;
     }
-    free(raw); free(code); free(comment); free(body);
+    free(code); free(comment); free(body);
   }
   /* trailing comment block with no following form -> a comment-only root */
   if (pend.len) { node *c = mk_list('C'); c->lead = xstrndup(pend.p, pend.len); push(roots, c); }
@@ -510,6 +611,14 @@ static void emit_form(const node *x, int col, buf *o) {
   buf hdr; buf_init(&hdr);
   int bodyfrom = emit_block_header(x, &hdr, hn);
 
+  /* A header with NO body kid (e.g. `def f():` with nothing indented under it,
+     or a malformed form): emit the header line alone — never index past kid[]. */
+  if (bodyfrom >= x->n) {
+    put_indent(o, col); buf_puts(o, hdr.p); buf_putc(o, ':');
+    if (x->trail) { buf_putc(o, ' '); buf_puts(o, x->trail); }
+    buf_putc(o, '\n'); free(hdr.p); return;
+  }
+
   if (!wants_break(x, col, bodyfrom) &&
       !x->kid[bodyfrom]->lead && !x->kid[bodyfrom]->trail) {
     /* inline `header: body` (single short body form) */
@@ -564,14 +673,22 @@ static int adfmt_usage(FILE *o) {
   return 2;
 }
 
+/* An Alcove input file: a .alc extension, or forced with --alcove. Enables the
+   multi-statement-per-line split (and `;;`/`#` comments work in both modes). */
+static int is_alcove_path(const char *p) {
+  size_t n = strlen(p);
+  return n >= 4 && !strcmp(p + n - 4, ".alc");
+}
+
 int adfmt_cli_main(int argc, char **argv) {
-  int write_inplace = 0, check = 0, nfiles = 0;
+  int write_inplace = 0, check = 0, nfiles = 0, force_alcove = 0;
   const char *files[4096];
   for (int i = 1; i < argc; i++) {
     const char *a = argv[i];
     if (!strcmp(a, "-w") || !strcmp(a, "--write")) write_inplace = 1;
     else if (!strcmp(a, "--check")) check = 1;
     else if (!strcmp(a, "--infix")) g_infix_ops = 1;
+    else if (!strcmp(a, "--alcove")) force_alcove = 1;
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { adfmt_usage(stdout); return 0; }
     else if (a[0] == '-' && a[1] && strcmp(a, "-")) { fprintf(stderr, "adfmt: unknown option %s\n", a); return adfmt_usage(stderr); }
     else if (nfiles < (int)(sizeof files / sizeof *files)) files[nfiles++] = a;
@@ -580,6 +697,7 @@ int adfmt_cli_main(int argc, char **argv) {
   /* stdin -> stdout when no real files given */
   if (nfiles == 0 || (nfiles == 1 && !strcmp(files[0], "-"))) {
     if (write_inplace || check) { fputs("adfmt: --write/--check need file arguments\n", stderr); return 2; }
+    g_alcove_mode = force_alcove;
     char *src = read_all(stdin);
     char *out = adder_format(src);
     fputs(out, stdout);
@@ -591,6 +709,7 @@ int adfmt_cli_main(int argc, char **argv) {
   for (int i = 0; i < nfiles; i++) {
     FILE *f = fopen(files[i], "rb");
     if (!f) { perror(files[i]); rc = 2; continue; }
+    g_alcove_mode = force_alcove || is_alcove_path(files[i]);
     char *src = read_all(f); fclose(f);
     char *out = adder_format(src);
     int changed = strcmp(src, out) != 0;

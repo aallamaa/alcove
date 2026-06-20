@@ -54,5 +54,18 @@ echo "== alcove s-expr -> indented Adder round-trips =="
 printf '(def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(def m () (prn (fib 10)))\n' > "$D/in.alc"
 check "$D/in.alc"
 
+# Whole-suite Alcove->Adder eval gate: formatting test.alc to Adder and running
+# it must produce byte-identical test output to running the original under
+# alcove (every assert preserved). This is the strongest end-to-end check — the
+# adr.h s-expr oracle can't read .alc (;;-comments), so we compare RUN RESULTS.
+if [ -f test.alc ] && [ -x ./alcove ]; then
+  echo "== whole-suite alcove->adder eval equivalence (test.alc) =="
+  "$ADDER" fmt test.alc > "$D/test_conv.adr" 2>/dev/null
+  o=$(./alcove test.alc 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep "TEST RESULT")
+  c=$("$ADDER" "$D/test_conv.adr" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep "TEST RESULT")
+  if [ -n "$o" ] && [ "$o" = "$c" ]; then echo "  OK — $c (identical to alcove)";
+  else echo "  MISMATCH: alcove='$o' vs adder-formatted='$c'"; fail=1; fi
+fi
+
 if [ "$fail" = 0 ]; then echo "==> ADFMT PASSED"; exit 0; fi
 echo "==> ADFMT FAILED"; exit 1
