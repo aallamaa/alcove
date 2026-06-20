@@ -89,10 +89,14 @@ pretty-printer, the debugger, the REPL editing builtins, and `main`.
 | `builtins_log.h` | observability: error codes (`error-code`), logfmt logging, opt-in metrics |
 | `builtins_os.h` | OS/scripting floor: env vars, shell-out, filesystem |
 | `builtins_regex.h` | POSIX ERE builtins |
+| `pp.h` | Source pretty-printer (both Alcove and Adder dialects) |
 | `builtins_control.h` | control-flow builtins: `cond`, `match`, generators |
+| `compiler.h` | bytecode VM disassembly and location helpers |
 | `jit_common.h` | JIT runtime glue: W^X mmap, gcache trampolines, shape-matcher helpers |
 | `jit_arm64.h` | arm64 JIT backend: encoders + shape matchers (selected by `__aarch64__`) |
 | `jit_amd64.h` | amd64 JIT backend: encoders + shape matchers (selected by `__x86_64__`) |
+| `compiler_impl.h` | Core compiler emit helpers, AST-to-bytecode compiler, VM execution dispatch loop |
+| `debugger.h` | Debugger implementation and tab-completion (readline) |
 | `builtins_dict.h` | Lisp-value hash-map (`EXP_DICT`) builtins |
 | `set.h` | hash-set (`EXP_SET`): canonical key encoder + ops |
 | `hamt.h` | persistent map (HAMT / `EXP_HAMT`): nodes, ops, builtins |
@@ -102,6 +106,7 @@ pretty-printer, the debugger, the REPL editing builtins, and `main`.
 | `blob.h` | binary-safe byte blob (`EXP_BLOB`) ops |
 | `epoch.c` | epoch-based reclamation for the lock-free keyspace |
 | `lfkv.c` | lock-free keyspace implementation |
+| `repl_builtins.h` | Lisp-facing REPL editing, diagnostics (check-syntax), and key-binding builtins |
 | `resp.c` | RESP2 (Redis protocol) server; `--threads` multi-reactor |
 
 Other TUs (NOT included into alcove.c): `mpsc.h` (MPSC queue, used by resp under
