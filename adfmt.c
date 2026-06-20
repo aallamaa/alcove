@@ -449,12 +449,15 @@ static int is_infix_assign(const node *x) {
          x->kid[0]->tok && !strcmp(x->kid[0]->tok, "=");
 }
 /* Operator infix `(n < 0)` / `(n is 0)` / `(a + b)` reads better than prefix and
-   is CORRECTNESS-preserving (the runtime infix dispatch and AST/VM agree). The
-   only cost: a comparison on an UNHINTED param in a hot numeric tail loop won't
-   fuse into the SLOT_<cmp>_FIX superinstruction the JIT loop matcher wants, so
-   that loop stays on the (correct, slower) VM path — recover it by giving the
-   param a `:int` hint. On by default; `--no-infix` keeps strict prefix. */
-static int g_infix_ops = 1;
+   computes the same VALUES, but it is NOT free: an unhinted-param comparison
+   (`(n < 0)` with a plain `n`) can't fuse into the SLOT_<cmp>_FIX superinstruction
+   the JIT wants, so that function stays on the (correct, slower) VM path and
+   `(jit? f)` flips to nil. That observably changes JIT-introspection — which is
+   why it is OPT-IN (`--infix`), not the default: `adder fmt file` preserves the
+   exact compiled/JIT behavior of the input. The real fix for free-and-default
+   infix is a compiler change (make `(A op B)` unconditionally infix so the
+   fusion always applies); until then, default off. */
+static int g_infix_ops = 0;
 static int is_infix_op(const char *s) {
   if (!g_infix_ops || !s) return 0;
   static const char *ops[] = {"<",">","<=",">=","is","iso","+","-","*","/","mod",0};
