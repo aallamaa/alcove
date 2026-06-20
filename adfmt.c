@@ -463,8 +463,8 @@ static int is_infix_op(const char *s) {
 }
 static int g_quoted = 0; /* set while emitting inside a quote/quasiquote */
 static int is_infix_op_form(const node *x) {
-  return !g_quoted && x->is_list && !x->call && x->open == '(' && x->n == 3 &&
-         !x->kid[0]->is_list && is_infix_op(x->kid[0]->tok);
+  return !g_quoted && x->is_list && !x->call && (x->open == '(' || x->open == 'L') &&
+         x->n == 3 && !x->kid[0]->is_list && is_infix_op(x->kid[0]->tok);
 }
 
 static void emit_inline(const node *x, buf *o);
