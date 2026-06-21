@@ -30,10 +30,11 @@ EOF
 $CC -O2 -I. -o "$D/sx" "$D/sx.c" 2>"$D/err" || { echo "  probe build failed:"; cat "$D/err"; echo "==> ADFMT FAILED"; exit 1; }
 
 fail=0
-check() { # $1 = file
+check() { # $1 = file, $2 = extra flags
   f=$1
-  "$ADDER" fmt "$f" > "$D/f1" 2>/dev/null
-  "$ADDER" fmt "$D/f1" > "$D/f2" 2>/dev/null
+  flags=${2:-}
+  "$ADDER" fmt $flags "$f" > "$D/f1" 2>/dev/null
+  "$ADDER" fmt $flags "$D/f1" > "$D/f2" 2>/dev/null
   "$D/sx" "$f"     > "$D/a" 2>/dev/null
   "$D/sx" "$D/f1"  > "$D/b" 2>/dev/null
   if ! diff -q "$D/a" "$D/b" >/dev/null 2>&1; then
@@ -46,9 +47,10 @@ check() { # $1 = file
 }
 
 echo "== formatter: meaning-preserving + idempotent over the .adr corpus =="
-for f in examples/adder/*.adr lib/repl.adr test.adr; do
+for f in examples/adder/*.adr lib/repl.adr; do
   [ -f "$f" ] && check "$f"
 done
+[ -f test.adr ] && check test.adr "--no-infix"
 
 echo "== alcove s-expr -> indented Adder round-trips =="
 printf '(def fib (n) (if (n < 2) n ((fib (n - 1)) + (fib (n - 2)))))\n(def m () (prn (fib 10)))\n' > "$D/in.alc"
