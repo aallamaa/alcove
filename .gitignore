@@ -104,3 +104,6 @@ json_fuzz
 msgpack_fuzz
 adfmt
 adfmt.o
+
+# Claude Code local runtime state (session locks, local settings, worktrees)
+.claude/
