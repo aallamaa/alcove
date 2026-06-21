@@ -144,9 +144,9 @@ static exp_t *compile_infix_rewrite(compiler_t *c, exp_t *e) {
     noncallable = 1; /* numeric literal */
   else if (a && is_ptr(a) && issymbol(a)) {
     int slot = find_slot(c, (char *)exp_text(a));
-    if (slot >= 0 && slot < c->nparams && c->param_hints &&
-        c->param_hints[slot] != TYPE_HINT_NONE)
-      noncallable = 1; /* hint-typed param is a known value, never a function */
+    if (slot >= 0)
+      noncallable = 1; /* local variable or parameter is a known value, never a
+                          function */
   }
   if (!noncallable)
     return NULL;

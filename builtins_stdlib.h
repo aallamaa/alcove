@@ -3415,3 +3415,64 @@ const char doc_stringpadright[] =
 exp_t *stringpadrightcmd(exp_t *e, env_t *env) {
   return alc_string_pad(e, env, 0, "string-pad-right");
 }
+
+const char doc_takewhile[] = "(take-while pred xs) — return list of elements "
+                             "of xs until (pred x) returns nil/false.";
+exp_t *takewhilecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(pred, xs);
+  if (!xs || !ispair(xs)) {
+    CLEAN_RETURN_2(pred, xs, refexp(NIL_EXP));
+  }
+  exp_t *head = NULL, *tail = NULL;
+  exp_t *curr = xs;
+  while (curr && ispair(curr) && curr->content) {
+    exp_t *arg_node = make_node(refexp(curr->content));
+    exp_t *call = make_node(refexp(pred));
+    call->next = arg_node;
+    exp_t *res = EVAL(call, env);
+    if (iserror(res)) {
+      unrefexp(head);
+      CLEAN_RETURN_2(pred, xs, res);
+    }
+    int ok = istrue(res);
+    unrefexp(res);
+    if (!ok) {
+      break;
+    }
+    list_append_owned(&head, &tail, refexp(curr->content));
+    curr = curr->next;
+  }
+  CLEAN_RETURN_2(pred, xs, head ? head : refexp(NIL_EXP));
+}
+
+const char doc_dropwhile[] =
+    "(drop-while pred xs) — return list of elements of xs starting from the "
+    "first element for which (pred x) is nil/false.";
+exp_t *dropwhilecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(pred, xs);
+  if (!xs || !ispair(xs)) {
+    CLEAN_RETURN_2(pred, xs, refexp(NIL_EXP));
+  }
+  exp_t *curr = xs;
+  while (curr && ispair(curr) && curr->content) {
+    exp_t *arg_node = make_node(refexp(curr->content));
+    exp_t *call = make_node(refexp(pred));
+    call->next = arg_node;
+    exp_t *res = EVAL(call, env);
+    if (iserror(res)) {
+      CLEAN_RETURN_2(pred, xs, res);
+    }
+    int ok = istrue(res);
+    unrefexp(res);
+    if (!ok) {
+      break;
+    }
+    curr = curr->next;
+  }
+  exp_t *head = NULL, *tail = NULL;
+  while (curr && ispair(curr) && curr->content) {
+    list_append_owned(&head, &tail, refexp(curr->content));
+    curr = curr->next;
+  }
+  CLEAN_RETURN_2(pred, xs, head ? head : refexp(NIL_EXP));
+}

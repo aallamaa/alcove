@@ -13,46 +13,43 @@
 ns repl
 
 # ---- session state -------------------------------------------------
-(= repl/results (list))     # newest-first ring of result VALUES
-(= repl/cells   (list))     # newest-first (n input output) triples (transcript/notebook)
-(= repl/stats   (hash-map)) # "evals" / "errors" counters (mutated via assoc!)
-(= repl/last-ok t)          # did the previous eval avoid erroring? (drives prompt color)
-(= repl/transcript nil)     # path | nil — append every (in => out) here
-(= repl/errlog     nil)     # path | nil — append only erroring forms here
+repl/results = (list) # newest-first ring of result VALUES
+repl/cells = (list) # newest-first (n input output) triples (transcript/notebook)
+repl/stats = (hash-map) # "evals" / "errors" counters (mutated via assoc!)
+repl/last-ok = t # did the previous eval avoid erroring? (drives prompt color)
+repl/transcript = nil # path | nil — append every (in => out) here
+repl/errlog = nil # path | nil — append only erroring forms here
 
 # ---- ANSI helpers --------------------------------------------------
 # repl/ansi: raw color, for text alcove prints itself (results, prompt-out).
-def repl/ansi(code s):
-  (str "\x1B[" code "m" s "\x1B[0m")
+def repl/ansi(code s): str "\x1B[" code "m" s "\x1B[0m"
 # repl/pansi: color for a READLINE prompt (*prompt-in*/*prompt-cont*). The
 # color escapes MUST be wrapped in \x01..\x02 (readline's RL_PROMPT_START/END
 # _IGNORE) so readline counts them as zero-width — otherwise it miscounts the
 # prompt, and on redraw/wrap can truncate the trailing reset, leaving the
 # terminal stuck in the prompt's color (the "everything red after an error" bug).
-def repl/pansi(code s):
-  (str "\x01\x1B[" code "m\x02" s "\x01\x1B[0m\x02")
+def repl/pansi(code s): str "\x01\x1B[" code "m\x02" s "\x01\x1B[0m\x02"
 
 # ---- result ring ---------------------------------------------------
-def repl/count():
-  (length repl/cells)
-def repl/last(k):           # k steps back from newest: repl/last(1) = most recent
-  (nth (- k 1) repl/results)
-def repl/out(n):            # by absolute cell number n
-  (nth (- (repl/count) n) repl/results)
+def repl/count(): length repl/cells
+def repl/last(k): nth (k - 1) repl/results # k steps back from newest: repl/last(1) = most recent
+def repl/out(n): nth ((repl/count) - n) repl/results # by absolute cell number n
 
 # ---- metrics -------------------------------------------------------
 def repl/bump(output):
-  (assoc! repl/stats "evals" (+ 1 (or (get repl/stats "evals") 0)))
+  assoc! repl/stats "evals" (1 + (or (get repl/stats "evals") 0))
   if (error? output):
-    (assoc! repl/stats "errors" (+ 1 (or (get repl/stats "errors") 0)))
+    assoc! repl/stats "errors" (1 + (or (get repl/stats "errors") 0))
 def repl/hud():
-  (str "evals=" (or (get repl/stats "evals") 0) " errors=" (or (get repl/stats "errors") 0) " ring=" (length repl/results))
+  str "evals=" (or (get repl/stats "evals") 0) " errors=" (or (get repl/stats "errors") 0) " ring=" (length repl/results)
 
 # Safe stringify: errors PROPAGATE through normal calls like (str x), so a bare
 # (str an-error) would re-raise and abort the hook. error?/error-message don't
 # propagate — branch on them.
 def repl/show(v):
-  (if (error? v) (str "Error: " (error-message v)) (str v))
+  if (error? v):
+    str "Error: " (error-message v)
+    str v
 
 # ---- the shared output hook (record + ring + status + log + stats) -
 # `output` is a bound PARAM here, so it's an inert value even when it's an
@@ -60,79 +57,75 @@ def repl/show(v):
 # STRING in cells: a stored error re-arms when later returned by nth, so the
 # notebook/transcript must never re-stringify it downstream.
 def repl/on-output(n input output):
-  (= repl/cells (cons (list n input (repl/show output)) repl/cells))
-  (= repl/results (cons output repl/results))
-  (= repl/last-ok (no (error? output)))
-  (repl/bump output)
+  repl/cells = (cons (list n input (repl/show output)) repl/cells)
+  repl/results = (cons output repl/results)
+  repl/last-ok = (no (error? output))
+  repl/bump output
   if repl/transcript:
-    (append-string repl/transcript (str "In[" n "]: " input "\nOut[" n "]: " (repl/show output) "\n"))
+    append-string repl/transcript (str "In[" n "]: " input "\nOut[" n "]: " (repl/show output) "\n")
   if (and repl/errlog (error? output)):
-    (append-string repl/errlog (str "In[" n "]: " input " => " (repl/show output) "\n"))
+    append-string repl/errlog (str "In[" n "]: " input " => " (repl/show output) "\n")
 
 # ---- prompt (green when last eval was ok, red after an error) ------
-def repl/prompt-in(n):            # readline prompt -> pansi (zero-width-marked)
-  (repl/pansi (if repl/last-ok "92" "91") (str (dialect) " [" n "]> "))
-def repl/prompt-out(n):           # printed by alcove, not readline -> raw ansi
-  (repl/ansi "90" (str "[" n "]= "))
+def repl/prompt-in(n): # readline prompt -> pansi (zero-width-marked)
+  repl/pansi (if repl/last-ok "92" "91") (str (dialect) " [" n "]> ")
+def repl/prompt-out(n): repl/ansi "90" (str "[" n "]= ") # printed by alcove, not readline -> raw ansi
 
 # ---- notebook export (markdown) ------------------------------------
 def repl/export-md(path):
   with (out "# REPL session\n\n"):
     each cell (reverse repl/cells):
-      (= out (str out "```\nIn[" (nth 0 cell) "]: " (nth 1 cell) "\nOut: " (nth 2 cell) "\n```\n\n"))
-    (write-string path out)
+      out = (str out "```\nIn[" (nth 0 cell) "]: " (nth 1 cell) "\nOut: " (nth 2 cell) "\n```\n\n")
+    write-string path out
     path
 
 # ---- line-editing helpers ------------------------------------------
-def repl/boundary?(c):            # is c a token separator? (named char literals
-  (string-contains? " \t()[]{}\"'" (str c)) # like #\space aren't supported, so test membership)
-def repl/token-start(line p):     # index where the symbol ending at p begins
+def repl/boundary?(c): # is c a token separator? (named char literals
+  string-contains? " \t()[]{}\"'" (str c) # like #\space aren't supported, so test membership)
+def repl/token-start(line p): # index where the symbol ending at p begins
   with (i p):
-    while (and (> i 0) (no (repl/boundary? (line (- i 1))))):
-      (= i (- i 1))
+    while (and (i > 0) (no (repl/boundary? (line (i - 1))))): i = (i - 1)
     i
-def repl/token-before-point():    # the symbol the cursor sits at the end of
+def repl/token-before-point(): # the symbol the cursor sits at the end of
   with (line (repl-line) p (repl-point)):
-    (substr line (repl/token-start line p) p)
+    substr line (repl/token-start line p) p
 
 # ---- editing actions (call inside a bind-key handler) --------------
-def repl/complete():              # complete the token before point (first match)
+def repl/complete(): # complete the token before point (first match)
   with (tok (repl/token-before-point)):
     with (cands (repl-completions tok)):
-      if (and cands (> (length cands) 0)):
-        (repl-insert (substr (nth 0 cands) (length tok) (length (nth 0 cands))))
-def repl/kill-to-eol():
-  (repl-delete (repl-point) (repl-end))
-def repl/doc-here():              # docs for the symbol under the cursor
+      if (and cands ((length cands) > 0)):
+        repl-insert (substr (nth 0 cands) (length tok) (length (nth 0 cands)))
+def repl/kill-to-eol(): repl-delete (repl-point) (repl-end)
+def repl/doc-here(): # docs for the symbol under the cursor
   with (tok (repl/token-before-point)):
     # NB: `if cond:` with TWO body lines is Arc-style (if cond THEN ELSE), so a
     # two-statement then-branch must be one (do ...) or the 2nd line becomes the
     # ELSE. apply (not (doc tok)) so tok's string VALUE is documented, not "tok".
-    (if (> (length tok) 0) (do (prn "") (apply doc (list tok))))
-    (repl-refresh)
+    if ((length tok) > 0):
+      do:
+        prn ""
+        apply doc (list tok)
+    repl-refresh()
 def repl/show-hud():
-  (prn "")
-  (prn (repl/hud))
-  (repl-refresh)
-def repl/snippet(text):           # insert literal text at the cursor
-  (repl-insert text)
+  prn ""
+  prn (repl/hud)
+  repl-refresh()
+def repl/snippet(text): repl-insert text # insert literal text at the cursor
 
 # ---- installers ----------------------------------------------------
 def repl/install-prompt():
-  (setf *prompt-in* repl/prompt-in)
-  (setf *prompt-out* repl/prompt-out)
-def repl/install-output():
-  (setf *output-hook* repl/on-output)
-def repl/transcript-to(path):
-  (= repl/transcript path)
-def repl/errlog-to(path):
-  (= repl/errlog path)
+  setf *prompt-in* repl/prompt-in
+  setf *prompt-out* repl/prompt-out
+def repl/install-output(): setf *output-hook* repl/on-output
+def repl/transcript-to(path): repl/transcript = path
+def repl/errlog-to(path): repl/errlog = path
 def repl/install-editing():
-  (bind-key "tab" repl/complete)
-  (bind-key "C-k" repl/kill-to-eol)
-  (bind-key "M-d" repl/doc-here)
-  (bind-key "C-o" repl/show-hud)
+  bind-key "tab" repl/complete
+  bind-key "C-k" repl/kill-to-eol
+  bind-key "M-d" repl/doc-here
+  bind-key "C-o" repl/show-hud
 def repl/install-all():
-  (repl/install-prompt)
-  (repl/install-output)
-  (repl/install-editing)
+  repl/install-prompt()
+  repl/install-output()
+  repl/install-editing()

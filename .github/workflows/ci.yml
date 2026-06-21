@@ -33,6 +33,8 @@ jobs:
             echo "::group::$t-test"; make $t-test; echo "::endgroup::"
           done
           echo "::group::adr-test"; make adr-test; echo "::endgroup::"
+      - name: Formatter verification (make adfmt-test)
+        run: make adfmt-test
       - name: MPSC primitive under ThreadSanitizer
         # The lock-free MPSC queue backing RESP --threads. gcc ships libtsan on
         # ubuntu-latest, so build+run directly and FAIL the job on any race or

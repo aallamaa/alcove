@@ -1,34 +1,34 @@
+
 # ====================================================================
 # GENERATED FILE - do not edit by hand.
-#   regenerate with:  make gen-test-adr   (or python3 gen_test_adr.py)
+# regenerate with:  make gen-test-adr   (or python3 gen_test_adr.py)
 # Source of truth:
-#   test.alc             - shared engine tests (transpiled via alc2adr.py)
-#   test_adder_extra.adr - adder-syntax-only tests (spliced before the
-#                          TEST RESULT summary)
+# test.alc             - shared engine tests (transpiled via alc2adr.py)
+# test_adder_extra.adr - adder-syntax-only tests (spliced before the
+# TEST RESULT summary)
 # Editing this file directly will be overwritten on the next regen.
 # ====================================================================
-
 setf _test_pass 0
 
 setf _test_fail 0
 
-defmacro assert (txt a b):
-  quasiquote (do (pr (unquote txt)) (try (if (iso (unquote a) (unquote b)) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m")) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
+defmacro assert(txt a b):
+  quasiquote (do (pr (unquote txt)) (try (if ((unquote a) iso (unquote b)) (do (setf _test_pass (_test_pass + 1)) (prn "\t: \x1B[92mPassed\x1B[39m")) (do (setf _test_fail (_test_fail + 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))) (fn (e) (setf _test_fail (_test_fail + 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
-defmacro refute (txt a b):
-  quasiquote (do (pr (unquote txt)) (try (if (iso (unquote a) (unquote b)) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m")) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
+defmacro refute(txt a b):
+  quasiquote (do (pr (unquote txt)) (try (if ((unquote a) iso (unquote b)) (do (setf _test_fail (_test_fail + 1)) (prn "\t: \x1B[91mFailed\x1B[39m")) (do (setf _test_pass (_test_pass + 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))) (fn (e) (setf _test_fail (_test_fail + 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
-defmacro assert-true (txt x):
-  quasiquote (do (pr (unquote txt)) (try (if (unquote x) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m")) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
+defmacro assert-true(txt x):
+  quasiquote (do (pr (unquote txt)) (try (if (unquote x) (do (setf _test_pass (_test_pass + 1)) (prn "\t: \x1B[92mPassed\x1B[39m")) (do (setf _test_fail (_test_fail + 1)) (prn "\t: \x1B[91mFailed\x1B[39m"))) (fn (e) (setf _test_fail (_test_fail + 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
-defmacro assert-false (txt x):
-  quasiquote (do (pr (unquote txt)) (try (if (unquote x) (do (setf _test_fail (+ _test_fail 1)) (prn "\t: \x1B[91mFailed\x1B[39m")) (do (setf _test_pass (+ _test_pass 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))) (fn (e) (setf _test_fail (+ _test_fail 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
+defmacro assert-false(txt x):
+  quasiquote (do (pr (unquote txt)) (try (if (unquote x) (do (setf _test_fail (_test_fail + 1)) (prn "\t: \x1B[91mFailed\x1B[39m")) (do (setf _test_pass (_test_pass + 1)) (prn "\t: \x1B[92mPassed\x1B[39m"))) (fn (e) (setf _test_fail (_test_fail + 1)) (prn (str "\t: \x1B[91mERRORED: " (error-message e) "\x1B[39m")))))
 
 assert "This will Pass" 1 1
 
 refute "assert detects inequality" 1 0
 
-assert "addition" 3 (+ 1 2)
+assert "addition" 3 (1 + 2)
 
 assert " (+) is 0" 0 (+)
 
@@ -42,93 +42,93 @@ assert "int * empty is 1" (*) 1
 
 assert "int / exact" (/ 100 5 2) 10
 
-assert "int / truncates" (/ 7 2) 3
+assert "int / truncates" (7 / 2) 3
 
-assert "int / neg truncates" (/ -7 2) -3
+assert "int / neg truncates" (-7 / 2) -3
 
-assert "int + negatives" (+ -3 -4) -7
+assert "int + negatives" (-3 + -4) -7
 
-assert "int * negative" (* -2 3) -6
+assert "int * negative" (-2 * 3) -6
 
-assert "mod positive" (mod 17 5) 2
+assert "mod positive" (17 mod 5) 2
 
-assert "mod neg dividend" (mod -7 3) -1
+assert "mod neg dividend" (-7 mod 3) -1
 
-assert "mod neg divisor" (mod 7 -3) 1
+assert "mod neg divisor" (7 mod -3) 1
 
-assert "mod exact 0" (mod 9 3) 0
+assert "mod exact 0" (9 mod 3) 0
 
-assert "float +" (+ 1.5 2.5) 4.0
+assert "float +" (1.5 + 2.5) 4.0
 
-assert "float -" (- 5.5 2.0) 3.5
+assert "float -" (5.5 - 2.0) 3.5
 
-assert "float *" (* 1.5 2.0) 3.0
+assert "float *" (1.5 * 2.0) 3.0
 
-assert "float /" (/ 7.0 2.0) 3.5
+assert "float /" (7.0 / 2.0) 3.5
 
 assert "float + chain" (+ 0.5 0.5 0.5 0.5) 2.0
 
-assert "mixed + -> float" (+ 1 2.5) 3.5
+assert "mixed + -> float" (1 + 2.5) 3.5
 
-assert "mixed * -> float" (* 2 0.5) 1.0
+assert "mixed * -> float" (2 * 0.5) 1.0
 
-assert "mixed - -> float" (- 5 2.5) 2.5
+assert "mixed - -> float" (5 - 2.5) 2.5
 
-assert "mixed / -> float" (/ 7.0 2) 3.5
+assert "mixed / -> float" (7.0 / 2) 3.5
 
-assert "float mod" (mod 7.5 2.0) 1.5
+assert "float mod" (7.5 mod 2.0) 1.5
 
-assert "lt int true" (< 1 2) t
+assert "lt int true" (1 < 2) t
 
-assert "lt int false" (< 2 1) nil
+assert "lt int false" (2 < 1) nil
 
-assert "gt int" (> 3 2) t
+assert "gt int" (3 > 2) t
 
-assert "le equal" (<= 2 2) t
+assert "le equal" (2 <= 2) t
 
-assert "ge false" (>= 2 3) nil
+assert "ge false" (2 >= 3) nil
 
-assert "lt float" (< 1.5 2.5) t
+assert "lt float" (1.5 < 2.5) t
 
-assert "lt mixed int<float" (< 1 1.5) t
+assert "lt mixed int<float" (1 < 1.5) t
 
-assert "lt mixed float<int" (< 2.5 3) t
+assert "lt mixed float<int" (2.5 < 3) t
 
-assert "gt mixed float>int" (> 2.5 2) t
+assert "gt mixed float>int" (2.5 > 2) t
 
-assert "le float equal" (<= 2.0 2.0) t
+assert "le float equal" (2.0 <= 2.0) t
 
-assert "is fixnum eq" (is 5 5) t
+assert "is fixnum eq" (5 is 5) t
 
-assert "is fixnum neq" (is 5 6) nil
+assert "is fixnum neq" (5 is 6) nil
 
-assert "is fixnum vs float" (is 5 5.0) nil
+assert "is fixnum vs float" (5 is 5.0) nil
 
-assert "is char eq" (is #\a #\a) t
+assert "is char eq" (#\a is #\a) t
 
-assert "is char neq" (is #\a #\b) nil
+assert "is char neq" (#\a is #\b) nil
 
-assert "is symbol eq" (is 'a 'a) t
+assert "is symbol eq" ('a is 'a) t
 
-assert "is nil" (is nil nil) t
+assert "is nil" (nil is nil) t
 
-assert "is t" (is t t) t
+assert "is t" (t is t) t
 
-assert "is string by content" (is "x" "x") t
+assert "is string by content" ("x" is "x") t
 
-assert "is distinct pairs" (is (list 1) (list 1)) nil
+assert "is distinct pairs" ((list 1) is (list 1)) nil
 
-assert "iso fixnum vs float" (iso 5 5.0) nil
+assert "iso fixnum vs float" (5 iso 5.0) nil
 
-assert "iso float eq" (iso 1.5 1.5) t
+assert "iso float eq" (1.5 iso 1.5) t
 
-assert "iso list deep" (iso (list 1 (list 2 3)) (list 1 (list 2 3))) t
+assert "iso list deep" ((list 1 (list 2 3)) iso (list 1 (list 2 3))) t
 
-assert "iso vector deep" (iso (vector 1 2 3) (vector 1 2 3)) t
+assert "iso vector deep" ((vector 1 2 3) iso (vector 1 2 3)) t
 
-assert "iso string" (iso "ab" "ab") t
+assert "iso string" ("ab" iso "ab") t
 
-assert "iso unequal list" (iso (list 1 2) (list 1 3)) nil
+assert "iso unequal list" ((list 1 2) iso (list 1 3)) nil
 
 assert "abs neg" (abs -5) 5
 
@@ -235,11 +235,11 @@ assert "vec-ref OOB errors" (try (vec-ref (vec 3 0) 9) (fn (e) 'oob)) 'oob
 
 assert "vec-ref neg errors" (try (vec-ref (vec 3 0) -1) (fn (e) 'neg)) 'neg
 
-assert "map" (map (fn (x) (* x x)) (list 1 2 3)) (list 1 4 9)
+assert "map" (map (fn (x) (x * x)) (list 1 2 3)) (list 1 4 9)
 
 assert "map empty" (map (fn (x) x) (list)) nil
 
-assert "filter" (filter (fn (x) (> x 1)) (list 1 2 3)) (list 2 3)
+assert "filter" (filter (fn (x) (x > 1)) (list 1 2 3)) (list 2 3)
 
 assert "reduce" (reduce + 0 (list 1 2 3 4)) 10
 
@@ -259,11 +259,11 @@ assert "range exclusive end" (range 0 3) (list 0 1 2)
 
 assert "nth" (nth 1 (list 10 20 30)) 20
 
-assert "map vector" (map (fn (x) (* x x)) (vector 1 2 3)) (list 1 4 9)
+assert "map vector" (map (fn (x) (x * x)) (vector 1 2 3)) (list 1 4 9)
 
 assert "map string" (map (fn (c) c) "ab") (list #\a #\b)
 
-assert "filter vector" (filter (fn (x) (> x 2)) (vector 1 2 3 4)) (list 3 4)
+assert "filter vector" (filter (fn (x) (x > 2)) (vector 1 2 3 4)) (list 3 4)
 
 assert "reduce vector" (reduce + 0 (vector 1 2 3 4)) 10
 
@@ -291,12 +291,12 @@ assert "nth flexible order" (nth (vector 10 20 30) 2) 30
 
 assert "nth out of range" (nth 9 (vector 1 2)) nil
 
-assert "map deque" (let (q (deque)) (push-right! q 1) (push-right! q 2) (map (fn (x) (* x 10)) q)):
+assert "map deque" (let (q (deque)) (push-right! q 1) (push-right! q 2) (map (fn (x) (x * 10)) q)):
   list 10 20
 
 assert "seq set members" (sort (seq (set 3 1 2))) (list 1 2 3)
 
-assert "map over set" (sort (map (fn (x) (* x x)) (set 1 2 3))) (list 1 4 9)
+assert "map over set" (sort (map (fn (x) (x * x)) (set 1 2 3))) (list 1 4 9)
 
 assert "reduce over set" (reduce + 0 (set 1 2 3 4)) 10
 
@@ -306,15 +306,14 @@ assert "seq dict count" (length (seq (hash-map "a" 1 "b" 2))) 2
 
 assert "seq hamt entry" (seq (hamt "a" 1)) (list (list "a" 1))
 
-assert "reduce over hamt" (reduce (fn (acc kv) (+ acc (nth 1 kv))) 0 (hamt "a" 10 "b" 20)):
+assert "reduce over hamt" (reduce (fn (acc kv) (acc + (nth 1 kv))) 0 (hamt "a" 10 "b" 20)):
   30
 
 assert "conj list prepend" (conj (list 2 3) 1) (list 1 2 3)
 
 assert "conj list variadic" (conj (list 3) 2 1) (list 1 2 3)
 
-assert "conj vector mutates" (let (v (vector 1 2)) (conj v 3) v):
-  vector 1 2 3
+assert "conj vector mutates" (let (v (vector 1 2)) (conj v 3) v): vector 1 2 3
 
 assert "conj set" (sort (seq (conj (set 1 2) 3))) (list 1 2 3)
 
@@ -347,7 +346,7 @@ assert "type-of list" (type-of (list 1)) 'list
 
 assert "type-of vector" (type-of (vector 1)) 'vector
 
-assert "type-of error" (type-of (try (/ 1 0) (fn (e) e))) 'error
+assert "type-of error" (type-of (try (1 / 0) (fn (e) e))) 'error
 
 assert "defstruct keyword field rejects" (error? (defstruct kkbad :x)) t
 
@@ -383,43 +382,43 @@ defmethod tgreet :hi (x) "hi!"
 
 assert "defmethod keyword disp" (tgreet :hi) "hi!"
 
-assert "iso dict same" (iso (hash-map "a" 1 "b" 2) (hash-map "b" 2 "a" 1)) t
+assert "iso dict same" ((hash-map "a" 1 "b" 2) iso (hash-map "b" 2 "a" 1)) t
 
-assert "iso dict diff val" (iso (hash-map "a" 1) (hash-map "a" 2)) nil
+assert "iso dict diff val" ((hash-map "a" 1) iso (hash-map "a" 2)) nil
 
-assert "iso dict diff size" (iso (hash-map "a" 1) (hash-map "a" 1 "b" 2)) nil
+assert "iso dict diff size" ((hash-map "a" 1) iso (hash-map "a" 1 "b" 2)) nil
 
-assert "iso dict deep" (iso (hash-map "a" (list 1 2)) (hash-map "a" (list 1 2))):
+assert "iso dict deep" ((hash-map "a" (list 1 2)) iso (hash-map "a" (list 1 2))):
   t
 
-assert "iso dict empty" (iso (hash-map) (hash-map)) t
+assert "iso dict empty" ((hash-map) iso (hash-map)) t
 
-assert "iso set same" (iso (set 1 2 3) (set 3 2 1)) t
+assert "iso set same" ((set 1 2 3) iso (set 3 2 1)) t
 
-assert "iso set diff" (iso (set 1 2) (set 1 2 3)) nil
+assert "iso set diff" ((set 1 2) iso (set 1 2 3)) nil
 
-assert "iso set diff member" (iso (set 1 2 3) (set 1 2 9)) nil
+assert "iso set diff member" ((set 1 2 3) iso (set 1 2 9)) nil
 
-assert "is dict not identity" (is (hash-map "a" 1) (hash-map "a" 1)) nil
+assert "is dict not identity" ((hash-map "a" 1) is (hash-map "a" 1)) nil
 
 defstruct isopt x y
 
-assert "iso struct by content" (iso (isopt 1 2) (isopt 1 2)) t
+assert "iso struct by content" ((isopt 1 2) iso (isopt 1 2)) t
 
-assert "iso struct diff" (iso (isopt 1 2) (isopt 1 9)) nil
+assert "iso struct diff" ((isopt 1 2) iso (isopt 1 9)) nil
 
-assert "iso cyclic dict bails" (let (a (hash-map) b (hash-map)) (assoc! a "s" a) (assoc! b "s" b) (iso a b)):
+assert "iso cyclic dict bails" (let (a (hash-map) b (hash-map)) (assoc! a "s" a) (assoc! b "s" b) (a iso b)):
   nil
 
-assert "iso cyclic vec bails" (let (a (vector) b (vector)) (vec-push! a a) (vec-push! b b) (iso a b)):
+assert "iso cyclic vec bails" (let (a (vector) b (vector)) (vec-push! a a) (vec-push! b b) (a iso b)):
   nil
 
-def _deepbuild (n acc):
-  if (is n 0):
+def _deepbuild(n acc):
+  if (n is 0):
     acc
-    _deepbuild (- n 1) (list acc)
+    _deepbuild (n - 1) (list acc)
 
-assert "iso deep nested ok" (iso (_deepbuild 400 (list)) (_deepbuild 400 (list))):
+assert "iso deep nested ok" ((_deepbuild 400 (list)) iso (_deepbuild 400 (list))):
   t
 
 assert "conj bad map entry err" (error? (conj (hash-map) 5)) t
@@ -437,7 +436,7 @@ assert "sort" (sort (list 3 1 2)) (list 1 2 3)
 
 assert "int truncates" (int 3.9) 3
 
-assert "float of int" (iso (float 3) 3.0) t
+assert "float of int" ((float 3) iso 3.0) t
 
 assert "number? int" (number? 5) t
 
@@ -457,15 +456,15 @@ assert "null? empty list" (null? (list)) t
 
 assert "null? non-empty" (null? (list 1)) nil
 
-assert "try catches div0" (try (/ 1 0) (fn (e) 'caught)) 'caught
+assert "try catches div0" (try (1 / 0) (fn (e) 'caught)) 'caught
 
 assert "try passes value" (try 42 (fn (e) 'x)) 42
 
-assert "error? on caught" (error? (try (/ 1 0) (fn (e) e))) t
+assert "error? on caught" (error? (try (1 / 0) (fn (e) e))) t
 
 assert "error? on plain" (error? 5) nil
 
-assert "try catches mod0" (try (mod 5 0) (fn (e) 'mz)) 'mz
+assert "try catches mod0" (try (5 mod 0) (fn (e) 'mz)) 'mz
 
 assert "inner let shadows" (let x 1 (let x 2 x)) 2
 
@@ -473,23 +472,23 @@ assert "outer let restored" (let x 1 (do (let x 2 x) x)) 1
 
 assert "let shadows param" ((fn (x) (let x 9 x)) 5) 9
 
-assert "let* sequential" (let* (a 1 b (+ a 1)) (+ a b)) 3
+assert "let* sequential" (let* (a 1 b (a + 1)) (a + b)) 3
 
-assert "with multi-binding" (with (a 2 b 3) (* a b)) 6
+assert "with multi-binding" (with (a 2 b 3) (a * b)) 6
 
-assert "let flat single" (let (x 5) (+ x 1)) 6
+assert "let flat single" (let (x 5) (x + 1)) 6
 
-assert "let flat multi" (let (a 1 b 2) (+ a b)) 3
+assert "let flat multi" (let (a 1 b 2) (a + b)) 3
 
-assert "let flat compound val" (let (m (- 9 1)) m) 8
+assert "let flat compound val" (let (m (9 - 1)) m) 8
 
 assert "let flat keyword val" (let (k :v) k) :v
 
 assert "let flat kw + more" (let (k :v n 3) (list k n)) (list :v 3)
 
-assert "let clojure pairs" (let ((x 5) (y 6)) (+ x y)) 11
+assert "let clojure pairs" (let ((x 5) (y 6)) (x + y)) 11
 
-assert "let clojure single" (let ((x 41)) (+ x 1)) 42
+assert "let clojure single" (let ((x 41)) (x + 1)) 42
 
 assert "let empty bindings" (let () 42) 42
 
@@ -504,30 +503,27 @@ assert "let clojure compiled" ((fn (x) (let ((x 10) (y x)) (list x y))) 1):
 assert "with parallel compiled" ((fn (x) (with (x 10 y x) (list x y))) 1):
   list 10 1
 
-assert "let destructure kept" (let (a b) (list 1 2) (+ a b)) 3
+assert "let destructure kept" (let (a b) (list 1 2) (a + b)) 3
 
-assert "let flat multi-body" (let (x 5) (+ x 1) (* x 2)) 10
+assert "let flat multi-body" (let (x 5) (x + 1) (x * 2)) 10
 
-def _let_loop (n):
-  let (m (- n 1)) (if (< n 1) :done (_let_loop m))
+def _let_loop(n): let (m (n - 1)) (if (n < 1) :done (_let_loop m))
 
 assert "let-body deep TCO" (_let_loop 200000) :done
 
 assert "mutate let slot" (let x 10 (do (setf x 20) x)) 20
 
-def e0d-shadow (v):
-  let v 7:
-    reverse (list v v)
+def e0d-shadow(v):
+  let v 7: reverse (list v v)
 
 assert "compiled shadow+EVAL_AST" (e0d-shadow 0) (list 7 7)
 
-def e0d-adder (n):
-  fn (x):
-    + x n
+def e0d-adder(n):
+  fn(x): x + n
 
 assert "closure captures param" ((e0d-adder 100) 5) 105
 
-defc e0d-find (n) (each x (list 1 2 3 4) (if (is x n) (return 'found))) 'no
+defc e0d-find (n) (each x (list 1 2 3 4) (if (x is n) (return 'found))) 'no
 
 assert "defc return from each hit" (e0d-find 3) 'found
 
@@ -543,8 +539,7 @@ assert "arity too many" (error? (try ((fn (a b) a) 1 2 3) (fn (er) er))) t
 
 assert "arity too many 0-arg" (error? (try ((fn () 0) 1) (fn (er) er))) t
 
-def arity-g (x y):
-  + x y
+def arity-g(x y): x + y
 
 assert "arity msg names fn" (try (arity-g 1 2 3) (fn (er) (string-contains? (error-message er) "arguments to arity-g"))):
   t
@@ -662,12 +657,11 @@ assert "(= (car x) 'z) -> z" (setf (car x) 'z) 'z
 
 assert "and x -> (z b)" x '(z b)
 
-def average (x y):
-  / (+ x y) 2
+def average(x y): (x + y) / 2
 
 assert "(average 2 4) -> 3" (average 2 4) 3
 
-assert "((fn (x y) (/ (+ x y) 2)) 2 4) -> 3" ((fn (x y) (/ (+ x y) 2)) 2 4) 3
+assert "((fn (x y) (/ (+ x y) 2)) 2 4) -> 3" ((fn (x y) ((x + y) / 2)) 2 4) 3
 
 assert "(\"foo\" 0) -> #\\f" ("foo" 0) #\f
 
@@ -677,93 +671,87 @@ assert "(= (s 0) #\m) ->#\m " (setf (s 0) #\m) #\m
 
 assert " s -> moo" s "moo"
 
-assert "(let x 1 (+ x (* x 2))) -> 3" (let x 1 (+ x (* x 2))) 3
+assert "(let x 1 (+ x (* x 2))) -> 3" (let x 1 (x + (x * 2))) 3
 
-assert "(with (x 3 y 4)\n       (sqrt (+ (expt x 2) (expt y 2)))) \n       -> 5" (with (x 3 y 4) (sqrt (+ (expt x 2) (expt y 2)))):
+assert "(with (x 3 y 4)\n       (sqrt (+ (expt x 2) (expt y 2)))) \n       -> 5" (with (x 3 y 4) (sqrt ((expt x 2) + (expt y 2)))):
   5.0
 
 assert "(if (odd 1) 'a 'b) -> a" (if (odd 1) 'a 'b) 'a
 
 assert "(if (odd 2) 'a 'b) -> b" (if (odd 2) 'a 'b) 'b
 
-def mylen (xs):
+def mylen(xs):
   if (no xs):
     0
-    + 1 (mylen (cdr xs))
+    1 + (mylen (cdr xs))
 
 assert "mylen nil -> 0" (mylen nil) 0
 
 assert "(mylen '(a b)) -> 2 " (mylen '(a b)) 2
 
-assert "(is 'a 'a) -> t" (is 'a 'a) t
+assert "(is 'a 'a) -> t" ('a is 'a) t
 
-assert "(is interned-string interned-string) -> t" (is "foo" "foo") t
+assert "(is interned-string interned-string) -> t" ("foo" is "foo") t
 
-assert "(let x (list 'a) (is x x)) -> t" (let x (list 'a) (is x x)) t
+assert "(let x (list 'a) (is x x)) -> t" (let x (list 'a) (x is x)) t
 
-assert "(is (list 'a) (list 'a)) -> nil" (is (list 'a) (list 'a)) nil
+assert "(is (list 'a) (list 'a)) -> nil" ((list 'a) is (list 'a)) nil
 
-assert "(iso (list 'a) (list 'a)) ->t" (iso (list 'a) (list 'a)) t
+assert "(iso (list 'a) (list 'a)) ->t" ((list 'a) iso (list 'a)) t
 
 assert "(let x 'a (in x 'a 'b 'c)) -> t" (let x 'a (in x 'a 'b 'c)) t
 
-def runforsum (n):
+def runforsum(n):
   let s 0:
-    for i 1 n:
-      setf s (+ s 1)
+    for i 1 n: setf s (s + 1)
 
 assert "first  (runforsum 5) -> 5" (runforsum 5) 5
 
 assert "second (runforsum 5) -> 5" (runforsum 5) 5
 
-assert "anon-fn arith" ((fn (x y) (+ (* x 2) y)) 3 4) 10
+assert "anon-fn arith" ((fn (x y) ((x * 2) + y)) 3 4) 10
 
-def dbl (x):
-  + x x
+def dbl(x): x + x
 
 assert "AST calls compiled" (let x 7 (dbl x)) 14
 
-def sumtwo (a b):
-  + a b
+def sumtwo(a b): a + b
 
 assert "compiled call chain" (sumtwo (dbl 5) (dbl 6)) 22
 
-def seven (a b c d e f g):
-  + a (+ b (+ c (+ d (+ e (+ f g)))))
+def seven(a b c d e f g): a + (b + (c + (d + (e + (f + g)))))
 
 assert "7 params spill" (seven 1 2 3 4 5 6 7) 28
 
-assert "vm < returns t" (< 3 5) t
+assert "vm < returns t" (3 < 5) t
 
-assert "vm < returns nil" (< 5 3) nil
+assert "vm < returns nil" (5 < 3) nil
 
-def vmerr (x):
-  / x 0
+def vmerr(x): x / 0
 
 vmerr 5
 
 assert "recovery after VM error" 42 42
 
-def inc (n):
-  setf n (+ n 1)
+def inc(n): setf n (n + 1)
 
 assert "(= param val) returns val" (inc 5) 6
 
-assert "let basic" (let x 3 (+ x 4)) 7
+assert "let basic" (let x 3 (x + 4)) 7
 
-assert "let uses caller scope" ((fn (y) (let x 10 (+ x y))) 5) 15
+assert "let uses caller scope" ((fn (y) (let x 10 (x + y))) 5) 15
 
 assert "nested let shadows" (let x 1 (let x 2 x)) 2
 
-assert "let multi-body" (let x 5 (+ x 1) (+ x 10)) 15
+assert "let multi-body" (let x 5 (x + 1) (x + 10)) 15
 
-assert "let destructuring" (let (a b) (list 1 2) (+ a b)) 3
+assert "let destructuring" (let (a b) (list 1 2) (a + b)) 3
 
-assert "let* sequential" (let* (a 1 b (* a 10)) (+ a b)) 11
+assert "let* sequential" (let* (a 1 b (a * 10)) (a + b)) 11
 
-assert "let* multi-body" (let* (x 5) (+ x 1) (+ x 10)) 15
+assert "let* multi-body" (let* (x 5) (x + 1) (x + 10)) 15
 
-assert "let* flat legacy" (let* x 1 y 2 (+ x y)) 3
+assert "let* flat legacy" (let* x 1 y 2 (x + y)) 3
 
 assert "when multi-body" (when t 1 2 3) 3
 
@@ -773,32 +761,30 @@ assert "unless multi-body" (unless nil 1 2 3) 3
 
 assert "unless true -> nil" (unless t 99) nil
 
-def tco-let (n):
-  if (is n 0):
+def tco-let(n):
+  if (n is 0):
     'ok
-    let m (- n 1):
-      tco-let m
+    let m (n - 1): tco-let m
 
-def tco-lets (n):
-  if (is n 0):
+def tco-lets(n):
+  if (n is 0):
     'ok
-    let* (m (- n 1)) (tco-lets m)
+    let* (m (n - 1)) (tco-lets m)
 
-def tco-with (n):
-  if (is n 0):
+def tco-with(n):
+  if (n is 0):
     'ok
-    with (m (- n 1)):
-      tco-with m
+    with (m (n - 1)): tco-with m
 
-def tco-when (n):
-  if (is n 0):
+def tco-when(n):
+  if (n is 0):
     'ok
     when t:
-      tco-when (- n 1)
+      tco-when (n - 1)
 
-def tco-unless (n):
-  unless (is n 0):
-    tco-unless (- n 1)
+def tco-unless(n):
+  unless (n is 0):
+    tco-unless (n - 1)
 
 assert "tco through let" (tco-let 1000000) 'ok
 
@@ -810,24 +796,23 @@ assert "tco through when" (tco-when 1000000) 'ok
 
 assert "tco through unless" (tco-unless 1000000) nil
 
-def tco-and (n a):
-  if (< n 1):
+def tco-and(n a):
+  if (n < 1):
     a
-    and t (tco-and (- n 1) (+ a 1))
+    and t (tco-and (n - 1) (a + 1))
 
-def tco-or (n a):
-  if (< n 1):
+def tco-or(n a):
+  if (n < 1):
     a
-    or nil (tco-or (- n 1) (+ a 1))
+    or nil (tco-or (n - 1) (a + 1))
 
-def tco-cond (n a):
-  cond (< n 1) a t (tco-cond (- n 1) (+ a 1))
+def tco-cond(n a): cond (n < 1) a t (tco-cond (n - 1) (a + 1))
 
-def tco-case (n a):
+def tco-case(n a):
   case n:
     0
     a
-    tco-case (- n 1) (+ a 1)
+    tco-case (n - 1) (a + 1)
 
 assert "tco through and" (tco-and 1000000 0) 1000000
 
@@ -837,36 +822,35 @@ assert "tco through cond" (tco-cond 1000000 0) 1000000
 
 assert "tco through case" (tco-case 1000000 0) 1000000
 
-def tco-builtin (n a):
-  if (< n 1):
+def tco-builtin(n a):
+  if (n < 1):
     a
-    tco-builtin (- n 1) (max a 1)
+    tco-builtin (n - 1) (max a 1)
 
-def tco-let-builtin (n a):
+def tco-let-builtin(n a):
   let b (abs a):
-    if (< n 1):
+    if (n < 1):
       b
-      tco-let-builtin (- n 1) (+ a 1)
+      tco-let-builtin (n - 1) (a + 1)
 
 assert "tco around builtin (max)" (tco-builtin 1000000 5) 5
 
 assert "tco around let-builtin" (tco-let-builtin 1000000 0) 1000000
 
-def rev-let (xs):
-  let ys xs:
-    reverse ys
+def rev-let(xs):
+  let ys xs: reverse ys
 
 assert "compiled reverse of let-local" (rev-let (list 1 2 3)) (list 3 2 1)
 
-def is-cd (n):
-  if (is n 0):
+def is-cd(n):
+  if (n is 0):
     'ok
-    is-cd (- n 1)
+    is-cd (n - 1)
 
-def is-cdn (n):
-  if (is n 0):
+def is-cdn(n):
+  if (n is 0):
     n
-    is-cdn (- n 1)
+    is-cdn (n - 1)
 
 assert "is-fused tail loop (const base)" (is-cd 1000000) 'ok
 
@@ -874,23 +858,23 @@ assert "is-fused tail loop (slot base)" (is-cdn 1000000) 0
 
 assert "is fixnum vs equal fixnum" (is-cdn 0) 0
 
-assert "is 5 5.0 → nil (no float coerce)" (is 5 5.0) nil
+assert "is 5 5.0 → nil (no float coerce)" (5 is 5.0) nil
 
-assert "is 5 5   → t" (is 5 5) t
+assert "is 5 5   → t" (5 is 5) t
 
-def is-ack (m n):
-  if (is m 0):
-    + n 1
-    if (is n 0):
-      is-ack (- m 1) 1
-      is-ack (- m 1) (is-ack m (- n 1))
+def is-ack(m n):
+  if (m is 0):
+    n + 1
+    if (n is 0):
+      is-ack (m - 1) 1
+      is-ack (m - 1) (is-ack m (n - 1))
 
 assert "is-fused ackermann (jit shape)" (is-ack 3 6) 509
 
-def _nontail_sum (n):
-  if (< n 1):
+def _nontail_sum(n):
+  if (n < 1):
     0
-    + n (_nontail_sum (- n 1))
+    n + (_nontail_sum (n - 1))
 
 assert "deep non-tail recursion → catchable error, not segfault" (try (_nontail_sum 1000000) (fn (e) (error? e))):
   t
@@ -900,31 +884,28 @@ assert "stack-overflow error message" (try (_nontail_sum 1000000) (fn (e) (strin
 
 assert "shallow non-tail recursion still computes" (_nontail_sum 100) 5050
 
-def _tail_sum (n acc):
-  if (< n 1):
+def _tail_sum(n acc):
+  if (n < 1):
     acc
-    _tail_sum (- n 1) (+ acc 1)
+    _tail_sum (n - 1) (acc + 1)
 
 assert "deep tail recursion unaffected by the guard" (_tail_sum 2000000 0):
   2000000
 
-assert "with-time-limit: fast thunk returns its value" (with-time-limit 1000 (fn () (+ 2 3))):
+assert "with-time-limit: fast thunk returns its value" (with-time-limit 1000 (fn () (2 + 3))):
   5
 
 assert "with-time-limit: runaway (while t) → catchable interrupt" (try (with-time-limit 30 (fn () (while t 1))) (fn (e) (string-contains? (error-message e) "interrupted"))):
   t
 
-def _spin (n):
-  _spin (+ n 1)
+def _spin(n): _spin (n + 1)
 
 assert "with-time-limit: runaway self-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_spin 0))) (fn (e) (error? e))):
   t
 
-def _ev2 (n):
-  _od2 n
+def _ev2(n): _od2 n
 
-def _od2 (n):
-  _ev2 n
+def _od2(n): _ev2 n
 
 assert "with-time-limit: mutual-tail recursion → catchable interrupt" (try (with-time-limit 30 (fn () (_ev2 0))) (fn (e) (error? e))):
   t
@@ -932,8 +913,7 @@ assert "with-time-limit: mutual-tail recursion → catchable interrupt" (try (wi
 assert "with-memory-limit: bounded work returns its value" (with-memory-limit 10000000 (fn () (reduce + 0 (range 1 101)))):
   5050
 
-def _grow (acc):
-  _grow (cons 1 acc)
+def _grow(acc): _grow (cons 1 acc)
 
 assert "with-memory-limit: runaway accumulation → catchable memory interrupt" (try (with-memory-limit 2000000 (fn () (_grow nil))) (fn (e) (string-contains? (error-message e) "memory limit"))):
   t
@@ -947,28 +927,28 @@ assert "truthy set (1 -1 0.5 \"x\" (1) [1])" (map (fn (x) (if x 1 0)) (list 1 -1
 assert "arguments evaluate left-to-right" (let (s "") (do ((fn (a b c) nil) (setf s (str s "a")) (setf s (str s "b")) (setf s (str s "c"))) s)):
   "abc"
 
-assert "error? t on a captured error" (error? (try (/ 1 0) (fn (e) e))) t
+assert "error? t on a captured error" (error? (try (1 / 0) (fn (e) e))) t
 
-assert "error re-arms when surfaced by nth" (error? (nth (list (try (/ 1 0) (fn (e) e)) 2) 0)):
+assert "error re-arms when surfaced by nth" (error? (nth (list (try (1 / 0) (fn (e) e)) 2) 0)):
   t
 
 assert "error? nil on a normal value" (error? 42) nil
 
-assert "int+int = int" (type-of (+ 1 2)) 'int
+assert "int+int = int" (type-of (1 + 2)) 'int
 
-assert "int+float = float" (type-of (+ 1 2.0)) 'float
+assert "int+float = float" (type-of (1 + 2.0)) 'float
 
-assert "int+rational = rational" (type-of (+ 1 1/2)) 'rational
+assert "int+rational = rational" (type-of (1 + 1/2)) 'rational
 
-assert "int+decimal = decimal" (type-of (+ 1 (decimal "1.5"))) 'decimal
+assert "int+decimal = decimal" (type-of (1 + (decimal "1.5"))) 'decimal
 
-assert "rational+float = float (contagion)" (type-of (+ 1/2 2.0)) 'float
+assert "rational+float = float (contagion)" (type-of (1/2 + 2.0)) 'float
 
-assert "decimal+float refuses" (error? (+ (decimal "1") 2.0)) t
+assert "decimal+float refuses" (error? ((decimal "1") + 2.0)) t
 
-assert "decimal+rational refuses" (error? (+ (decimal "1") 1/2)) t
+assert "decimal+rational refuses" (error? ((decimal "1") + 1/2)) t
 
-assert "integer overflow is an error" (error? (* 1152921504606846975 1000000000)):
+assert "integer overflow is an error" (error? (1152921504606846975 * 1000000000)):
   t
 
 assert "infix (1 + 2) = 3" (1 + 2) 3
@@ -983,46 +963,45 @@ setf _h0 (nth (heap-stats) 1)
 
 repeat 500 (let (x (list 1 2 3)) (length x))
 
-setf _noncyc (- (nth (heap-stats) 1) _h0)
+setf _noncyc ((nth (heap-stats) 1) - _h0)
 
 setf _h1 (nth (heap-stats) 1)
 
 repeat 500 (let (v (vector 1)) (vec-set! v 0 v))
 
-setf _cyc (- (nth (heap-stats) 1) _h1)
+setf _cyc ((nth (heap-stats) 1) - _h1)
 
-assert "non-cyclic workload barely grows live cells" (< _noncyc 100) t
+assert "non-cyclic workload barely grows live cells" (_noncyc < 100) t
 
-assert "(heap-stats) detects a reference-cycle leak (cyclic >> acyclic)" (> _cyc (+ _noncyc 400)):
+assert "(heap-stats) detects a reference-cycle leak (cyclic >> acyclic)" (_cyc > (_noncyc + 400)):
   t
 
-def ts-let (n acc):
-  let s (+ acc n):
-    if (is n 0):
+def ts-let(n acc):
+  let s (acc + n):
+    if (n is 0):
       s
-      ts-let (- n 1) s
+      ts-let (n - 1) s
 
-def ts-lets (n acc):
-  let* (a (+ acc n)) (if (is n 0) a (ts-lets (- n 1) a))
+def ts-lets(n acc): let* (a (acc + n)) (if (n is 0) a (ts-lets (n - 1) a))
 
-def ts-with (n acc):
-  with (s (+ acc n)):
-    if (is n 0):
+def ts-with(n acc):
+  with (s (acc + n)):
+    if (n is 0):
       s
-      ts-with (- n 1) s
+      ts-with (n - 1) s
 
-def ts-nest (n acc):
+def ts-nest(n acc):
   let a 1:
     let b 1:
-      if (is n 0):
+      if (n is 0):
         acc
-        ts-nest (- n 1) (+ acc a b)
+        ts-nest (n - 1) (+ acc a b)
 
-def ts-multi (n acc):
+def ts-multi(n acc):
   with (p 1 q 2 r 3):
-    if (is n 0):
+    if (n is 0):
       acc
-      ts-multi (- n 1) (+ acc p q r)
+      ts-multi (n - 1) (+ acc p q r)
 
 assert "tail-self let (small)" (ts-let 100 0) 5050
 
@@ -1044,28 +1023,28 @@ assert "tail-self nested let (1e6)" (ts-nest 1000000 0) 2000000
 
 assert "tail-self multi-bind (1e6)" (ts-multi 1000000 0) 6000000
 
-def ts-cap (n acc):
+def ts-cap(n acc):
   let s n:
-    if (is n 0):
+    if (n is 0):
       cons (fn () s) acc
-      ts-cap (- n 1) (cons (fn () s) acc)
+      ts-cap (n - 1) (cons (fn () s) acc)
 
 assert "tail-self bail on capture" (map (fn (g) (g)) (ts-cap 3 ())):
   list 0 1 2 3
 
-def ts-eval (n acc):
-  let s (car (reverse (cons (+ acc 1) ()))):
-    if (is n 0):
+def ts-eval(n acc):
+  let s (car (reverse (cons (acc + 1) ()))):
+    if (n is 0):
       s
-      ts-eval (- n 1) s
+      ts-eval (n - 1) s
 
 assert "tail-self w/ eval-ast body" (ts-eval 1000000 0) 1000001
 
-assert "with 2 bindings" (with (a 3 b 4) (+ a b)) 7
+assert "with 2 bindings" (with (a 3 b 4) (a + b)) 7
 
 assert "with shadows" (let a 1 (with (a 9) a)) 9
 
-assert "with multi-body" (with (a 3 b 4) (+ a 1) (+ a b)) 7
+assert "with multi-body" (with (a 3 b 4) (a + 1) (a + b)) 7
 
 assert "= into let slot" (let c 10 (setf c 20) c) 20
 
@@ -1076,45 +1055,42 @@ assert "setf place car" (do (setf sf2 (list 1 2)) (setf (car sf2) 9) sf2):
 
 assert "setf into let slot" (let c 10 (setf c 20) c) 20
 
-def setf-acc (n a):
-  if (is n 0):
+def setf-acc(n a):
+  if (n is 0):
     a
     do:
-      setf a (+ a n)
-      setf-acc (- n 1) a
+      setf a (a + n)
+      setf-acc (n - 1) a
 
 assert "setf compiled accumulator" (setf-acc 100 0) 5050
 
-def lastsq (n):
-  for i 1 n:
-    * i i
+def lastsq(n):
+  for i 1 n: i * i
 
 assert "for returns last body val" (lastsq 5) 25
 
-def forempty (n):
-  for i 5 1:
-    * n n
+def forempty(n):
+  for i 5 1: n * n
 
 assert "for empty range nil" (forempty 7) nil
 
-def fsum (n):
+def fsum(n):
   let s 0:
-    for i 1 n:
-      setf s (+ s i)
+    for i 1 n: setf s (s + i)
 
 assert "compiled fsum 10 -> 55" (fsum 10) 55
 
 assert "compiled fsum 100 -> 5050" (fsum 100) 5050
 
-def even? (n):
-  if (< n 1):
+def even?(n):
+  if (n < 1):
     t
-    odd? (- n 1)
+    odd? (n - 1)
 
-def odd? (n):
-  if (< n 1):
+def odd?(n):
+  if (n < 1):
     nil
-    even? (- n 1)
+    even? (n - 1)
 
 assert "mutual even? 1000" (even? 1000) t
 
@@ -1122,36 +1098,31 @@ assert "mutual odd? 1001" (odd? 1001) t
 
 assert "mutual deep 100k" (even? 100000) t
 
-def consit (a b):
-  cons a b
+def consit(a b): cons a b
 
-assert "vm cons returns pair" (iso (consit 1 (list 2 3)) (list 1 2 3)) t
+assert "vm cons returns pair" ((consit 1 (list 2 3)) iso (list 1 2 3)) t
 
-def carit (xs):
-  car xs
+def carit(xs): car xs
 
-def cdrit (xs):
-  cdr xs
+def cdrit(xs): cdr xs
 
 assert "vm car" (carit (list 10 20 30)) 10
 
-assert "vm cdr iso" (iso (cdrit (list 10 20 30)) (list 20 30)) t
+assert "vm cdr iso" ((cdrit (list 10 20 30)) iso (list 20 30)) t
 
-def listit (a b c):
-  list a b (* c 2)
+def listit(a b c): list a b (c * 2)
 
-assert "vm list 3" (iso (listit 1 2 5) (list 1 2 10)) t
+assert "vm list 3" ((listit 1 2 5) iso (list 1 2 10)) t
 
-def myrev (xs acc):
+def myrev(xs acc):
   if (no xs):
     acc
     myrev (cdr xs) (cons (car xs) acc)
 
-assert "vm tail-recursive reverse" (iso (myrev (list 1 2 3 4 5) (list)) (list 5 4 3 2 1)):
+assert "vm tail-recursive reverse" ((myrev (list 1 2 3 4 5) (list)) iso (list 5 4 3 2 1)):
   t
 
-def addone (n):
-  + n 1
+def addone(n): n + 1
 
 assert "JIT addone fix" (addone 41) 42
 
@@ -1159,16 +1130,15 @@ addone 'sym
 
 assert "JIT addone after deopt" (addone 100) 101
 
-def idheap (x):
-  x
+def idheap(x): x
 
 assert "JIT identity heap string safe" (idheap "hello") "hello"
 
-assert "JIT identity heap list safe" (iso (idheap (list 1 2)) (list 1 2)) t
+assert "JIT identity heap list safe" ((idheap (list 1 2)) iso (list 1 2)) t
 
-def cdn (n):
-  if (> n 0):
-    cdn (- n 1)
+def cdn(n):
+  if (n > 0):
+    cdn (n - 1)
     n
 
 assert "JIT loop fix to 0" (cdn 1000) 0
@@ -1177,17 +1147,16 @@ cdn 'sym
 
 assert "JIT loop after deopt" (cdn 500) 0
 
-def jitbuild (i n acc):
-  if (> i n):
+def jitbuild(i n acc):
+  if (i > n):
     acc
-    jitbuild (+ i 1) n (cons i acc)
+    jitbuild (i + 1) n (cons i acc)
 
 assert "JIT build inc cons" (jitbuild 1 5 (list)) (list 5 4 3 2 1)
 
 assert "JIT build keeps acc" (jitbuild 1 3 (list 'z)) (list 3 2 1 'z)
 
-def addb (a b):
-  + b 1
+def addb(a b): b + 1
 
 assert "JIT addb slot1 fix" (addb 'ignored 41) 42
 
@@ -1195,8 +1164,7 @@ addb 0 'sym
 
 assert "JIT addb slot1 after deopt" (addb 0 100) 101
 
-def doublen (n):
-  * n 2
+def doublen(n): n * 2
 
 assert "JIT doublen fix" (doublen 21) 42
 
@@ -1204,21 +1172,19 @@ doublen 'sym
 
 assert "JIT doublen after deopt" (doublen 100) 200
 
-def triplen (n):
-  * n 3
+def triplen(n): n * 3
 
 assert "JIT triplen 0" (triplen 0) 0
 
-assert "JIT triplen negative K" ((fn (n) (* n -4)) 7) -28
+assert "JIT triplen negative K" ((fn (n) (n * -4)) 7) -28
 
-def addbump (x):
-  + x 1
+def addbump(x): x + 1
 
-def lpcall (k):
-  if (> k 0):
+def lpcall(k):
+  if (k > 0):
     do:
       addbump 99
-      lpcall (- k 1)
+      lpcall (k - 1)
     k
 
 assert "JIT loop+call to 0" (lpcall 100) 0
@@ -1227,10 +1193,10 @@ lpcall 'sym
 
 assert "JIT loop+call after deopt" (lpcall 50) 0
 
-def jfib (n):
-  if (< n 2):
+def jfib(n):
+  if (n < 2):
     n
-    + (jfib (- n 1)) (jfib (- n 2))
+    (jfib (n - 1)) + (jfib (n - 2))
 
 assert "JIT fib base 0" (jfib 0) 0
 
@@ -1246,9 +1212,8 @@ jfib 'sym
 
 assert "JIT fib after deopt" (jfib 15) 610
 
-def make-adder (n):
-  fn (x):
-    + x n
+def make-adder(n):
+  fn(x): x + n
 
 setf add5 (make-adder 5)
 
@@ -1258,10 +1223,9 @@ assert "closure: add5 100" (add5 100) 105
 
 assert "closure: add10 100" (add10 100) 110
 
-def make-counter (dummy):
+def make-counter(dummy):
   let n 0:
-    fn (d):
-      setf n (+ n 1)
+    fn(d): setf n (n + 1)
 
 setf ca (make-counter 0)
 
@@ -1277,22 +1241,20 @@ assert "closure: counter ca = 4" (ca 0) 4
 
 assert "closure: counter cb = 1" (cb 0) 1
 
-def f2 (n):
+def f2(n):
   let m 10:
-    fn (d):
-      + n m
+    fn(d): n + m
 
 assert "closure: nested let cap" ((f2 5) 0) 15
 
-def zhello ():
-  + 1 2
+def zhello(): 1 + 2
 
 assert "0-arg def returns 3" (zhello) 3
 
-def mk-counter ():
+def mk-counter():
   let n 0:
-    fn ():
-      setf n (+ n 1)
+    fn():
+      setf n (n + 1)
       n
 
 setf zc1 (mk-counter)
@@ -1309,8 +1271,8 @@ assert "0-arg closure indep zc2" (zc2) 1
 
 setf gctr 0
 
-def bump-g ():
-  setf gctr (+ gctr 1)
+def bump-g():
+  setf gctr (gctr + 1)
   gctr
 
 bump-g()
@@ -1321,16 +1283,15 @@ assert "global reflects mutation" gctr 2
 
 setf gsf 10
 
-def bump-sf ():
-  setf gsf (+ gsf 5)
+def bump-sf():
+  setf gsf (gsf + 5)
   gsf
 
 assert "compiled setf mutates global" (bump-sf) 15
 
-def make-mul (n):
+def make-mul(n):
   do:
-    def muln (x):
-      * x n
+    def muln(x): x * n
     muln
 
 setf m3 (make-mul 3)
@@ -1345,13 +1306,12 @@ assert "cycle: m3 valid after m4" (m3 5) 15
 
 setf g-mul (make-mul 7)
 
-def churn (k):
-  if (is k 0):
+def churn(k):
+  if (k is 0):
     0
     do:
-      def tmp (x):
-        + x 1
-      + (tmp 1) (churn (- k 1))
+      def tmp(x): x + 1
+      (tmp 1) + (churn (k - 1))
 
 churn 50
 
@@ -1359,29 +1319,28 @@ assert "cycle: g-mul survives churn" (g-mul 6) 42
 
 assert "cycle: churn 5 = 10" (churn 5) 10
 
-def parity (n):
+def parity(n):
   do:
-    def ev (k):
-      if (is k 0):
+    def ev(k):
+      if (k is 0):
         t
-        od (- k 1)
-    def od (k):
-      if (is k 0):
+        od (k - 1)
+    def od(k):
+      if (k is 0):
         nil
-        ev (- k 1)
+        ev (k - 1)
     ev n
 
 assert "cycle: local mutual even 10" (parity 10) t
 
 refute "cycle: local mutual odd 7" (parity 7) t
 
-def usemac (k):
+def usemac(k):
   do:
-    defmacro m1 (x):
-      list '+ x 1
-    if (is k 0):
+    defmacro m1(x): list '+ x 1
+    if (k is 0):
       0
-      + (m1 k) (usemac (- k 1))
+      (m1 k) + (usemac (k - 1))
 
 assert "cycle: macro-in-fn usemac 4" (usemac 4) 14
 
@@ -1393,16 +1352,16 @@ if (ffi?):
     setf ffi-slen (ffi-fn "" "strlen" "long" "string")
     assert "ffi libc strlen" (ffi-slen "hello") 5
     setf ffi-ap2 (ffi-fn "" "alc_ffi_selftest_apply2" "long" "ptr" "long" "long")
-    setf ffi-mul-cb (ffi-callback "long" (list "long" "long") (fn (a b) (* a b)))
+    setf ffi-mul-cb (ffi-callback "long" (list "long" "long") (fn (a b) (a * b)))
     assert "ffi callback mul" (ffi-ap2 ffi-mul-cb 6 7) 42
     setf ffi-sm (ffi-fn "" "alc_ffi_selftest_sum_map" "long" "ptr" "long")
-    setf ffi-sq-cb (ffi-callback "long" (list "long") (fn (x) (* x x)))
+    setf ffi-sq-cb (ffi-callback "long" (list "long") (fn (x) (x * x)))
     assert "ffi callback in C loop" (ffi-sm ffi-sq-cb 10) 285
     setf ffi-bias 1000
-    setf ffi-bias-cb (ffi-callback "long" (list "long") (fn (x) (+ x ffi-bias)))
+    setf ffi-bias-cb (ffi-callback "long" (list "long") (fn (x) (x + ffi-bias)))
     assert "ffi closure callback" (ffi-sm ffi-bias-cb 3) 3003
     setf ffi-apd (ffi-fn "" "alc_ffi_selftest_apply_d" "double" "ptr" "double")
-    setf ffi-dbl-cb (ffi-callback "double" (list "double") (fn (x) (* x 2.0)))
+    setf ffi-dbl-cb (ffi-callback "double" (list "double") (fn (x) (x * 2.0)))
     assert "ffi double callback" (ffi-apd ffi-dbl-cb 20.5) 41.0
     setf FP (ffi-struct "double" "double")
     assert "ffi struct pack/unpack" (ffi-unpack FP (ffi-pack FP 7.5 8.5)):
@@ -1489,10 +1448,10 @@ setf hbig (hamt)
 
 setf _hi 0
 
-while (< _hi 300):
+while (_hi < 300):
   do:
-    setf hbig (hamt-assoc hbig _hi (* _hi _hi))
-    setf _hi (+ _hi 1)
+    setf hbig (hamt-assoc hbig _hi (_hi * _hi))
+    setf _hi (_hi + 1)
 
 assert "hamt big count" (hamt-count hbig) 300
 
@@ -1527,24 +1486,23 @@ assert "hamt-merge a unchanged" (hamt-get hma "y") 2
 
 assert "hamt-merge empty rhs" (hamt-count (hamt-merge hma (hamt))) 2
 
-assert "hamt iso same diff-order" (iso (hamt "a" 1 "b" 2) (hamt "b" 2 "a" 1)):
+assert "hamt iso same diff-order" ((hamt "a" 1 "b" 2) iso (hamt "b" 2 "a" 1)): t
+
+refute "hamt iso diff value" ((hamt "a" 1) iso (hamt "a" 2)) t
+
+refute "hamt iso diff count" ((hamt "a" 1) iso (hamt "a" 1 "b" 2)) t
+
+assert "hamt iso empty" ((hamt) iso (hamt)) t
+
+assert "hamt iso after assoc" ((hamt-assoc (hamt "a" 1) "b" 2) iso (hamt "a" 1 "b" 2)):
   t
 
-refute "hamt iso diff value" (iso (hamt "a" 1) (hamt "a" 2)) t
-
-refute "hamt iso diff count" (iso (hamt "a" 1) (hamt "a" 1 "b" 2)) t
-
-assert "hamt iso empty" (iso (hamt) (hamt)) t
-
-assert "hamt iso after assoc" (iso (hamt-assoc (hamt "a" 1) "b" 2) (hamt "a" 1 "b" 2)):
+assert "hamt iso deep value" ((hamt "k" (list 1 2)) iso (hamt "k" (list 1 2))):
   t
 
-assert "hamt iso deep value" (iso (hamt "k" (list 1 2)) (hamt "k" (list 1 2))):
-  t
+refute "hamt is is identity" ((hamt "a" 1) is (hamt "a" 1)) t
 
-refute "hamt is is identity" (is (hamt "a" 1) (hamt "a" 1)) t
-
-assert "call/cc no escape" (call/cc (fn (k) (+ 1 2))) 3
+assert "call/cc no escape" (call/cc (fn (k) (1 + 2))) 3
 
 assert "call/cc escape value" (call/cc (fn (k) (k 42) 999)) 42
 
@@ -1556,21 +1514,19 @@ assert "call/cc escape nil" (call/cc (fn (k) (k nil))) nil
 
 assert "call/cc escape in tail" (call/cc (fn (k) (k 7))) 7
 
-assert "call/cc loop early-exit" (call/cc (fn (return) (do (setf _cci 0) (while (< _cci 100) (do (if (> (* _cci _cci) 50) (return _cci)) (setf _cci (+ _cci 1)))) -1))):
+assert "call/cc loop early-exit" (call/cc (fn (return) (do (setf _cci 0) (while (_cci < 100) (do (if ((_cci * _cci) > 50) (return _cci)) (setf _cci (_cci + 1)))) -1))):
   8
 
-def _ccprod (xs f):
+def _ccprod(xs f):
   if (no xs):
     1
-    if (is (car xs) 0):
+    if ((car xs) is 0):
       f 0
-      * (car xs) (_ccprod (cdr xs) f)
+      (car xs) * (_ccprod (cdr xs) f)
 
-assert "call/cc escape recursion" (call/cc (fn (k) (_ccprod '(1 2 0 4 5) k))):
-  0
+assert "call/cc escape recursion" (call/cc (fn (k) (_ccprod '(1 2 0 4 5) k))): 0
 
-assert "call/cc product no escape" (call/cc (fn (k) (_ccprod '(1 2 3 4) k))):
-  24
+assert "call/cc product no escape" (call/cc (fn (k) (_ccprod '(1 2 3 4) k))): 24
 
 assert "call/cc escape from map" (call/cc (fn (k) (map (fn (x) (k x)) '(5 6 7)))):
   5
@@ -1578,22 +1534,19 @@ assert "call/cc escape from map" (call/cc (fn (k) (map (fn (x) (k x)) '(5 6 7)))
 assert "call/cc closure escape" (call/cc (fn (k) (_ccprod '(1 0 9) (fn (v) (k 77))))):
   77
 
-assert "call/cc nested outer" (call/cc (fn (k) (+ 1 (call/cc (fn (j) (k 99)))))):
+assert "call/cc nested outer" (call/cc (fn (k) (1 + (call/cc (fn (j) (k 99)))))):
   99
 
 assert "call/cc bad arg errors" (try (call/cc 5) (fn (e) 'caught)) 'caught
 
-def _mkadd (n):
-  fn (x):
-    + x n
+def _mkadd(n):
+  fn(x): x + n
 
-def _applyit (g):
-  g 5
+def _applyit(g): g 5
 
 assert "closure tail-call captures" (_applyit (_mkadd 100)) 105
 
-def _applyop (op a b):
-  op a b
+def _applyop(op a b): op a b
 
 assert "tail-call a builtin operand +" (_applyop + 3 4) 7
 
@@ -1601,17 +1554,16 @@ assert "tail-call a builtin operand *" (_applyop * 6 7) 42
 
 assert "tail-call a builtin operand is" (_applyop is 5 5) t
 
-assert "tail-call builtin non-tail" (+ (_applyop - 10 3) 100) 107
+assert "tail-call builtin non-tail" ((_applyop - 10 3) + 100) 107
 
-def _redop (op acc xs):
+def _redop(op acc xs):
   if (no xs):
     acc
     _redop op (op acc (car xs)) (cdr xs)
 
 assert "recur with builtin operand" (_redop + 0 (list 1 2 3 4 5)) 15
 
-def _tcall (g x):
-  g x
+def _tcall(g x): g x
 
 assert "tail-call a string (index)" (_tcall "hello" 1) #\e
 
@@ -1619,18 +1571,15 @@ assert "tail-call a vector (index)" (_tcall (vector 10 20 30) 2) 30
 
 assert "tail-call a dict (key lookup)" (_tcall (hash-map "k" 9) "k") 9
 
-assert "tail-call a lambda" (_tcall (fn (n) (* n n)) 6) 36
+assert "tail-call a lambda" (_tcall (fn (n) (n * n)) 6) 36
 
 assert "tail-call an escape cont" (call/cc (fn (k) (_tcall k 77))) 77
 
-def _ix1 ():
-  1 + 2
+def _ix1(): 1 + 2
 
-def _ix2 (a b):
-  a + b
+def _ix2(a b): a + b
 
-def _ix3 (n):
-  n < 1
+def _ix3(n): n < 1
 
 assert "infix literal +" (_ix1) 3
 
@@ -1656,14 +1605,13 @@ assert "non-callable 2-arg errors" (error? (5 6)) t
 
 assert "nil head errors" (error? (nil 1)) t
 
-def _isq (x :int):
-  x * x
+def _isq(x :int): x * x
 
 assert "hinted infix compiles" (compiled? _isq) t
 
 assert "hinted infix value" (_isq 7) 49
 
-def _ifib (n :int):
+def _ifib(n :int):
   if (n < 2):
     n
     (_ifib (n - 1)) + (_ifib (n - 2))
@@ -1672,38 +1620,38 @@ assert "hinted infix fib compiles" (compiled? _ifib) t
 
 assert "hinted infix fib value" (_ifib 10) 55
 
-assert "subform-head infix" (((fn (x) (* x 2)) 3) + ((fn (y) (+ y 1)) 4)) 11
+assert "subform-head infix" (((fn (x) (x * 2)) 3) + ((fn (y) (y + 1)) 4)) 11
 
-def _myfold (op acc xs):
+def _myfold(op acc xs):
   if (no xs):
     acc
     _myfold op (op acc (car xs)) (cdr xs)
 
 assert "operator passed to user HOF" (_myfold + 0 (list 1 2 3 4)) 10
 
-def _cc_find (pred xs):
+def _cc_find(pred xs):
   call/cc (fn (return) (do (def go (ys) (if (no ys) nil (if (pred ys) (return (car ys)) (go (cdr ys))))) (go xs)))
 
-assert "cc find-first hit" (_cc_find (fn (l) (> (car l) 3)) '(1 2 5 0 9)) 5
+assert "cc find-first hit" (_cc_find (fn (l) ((car l) > 3)) '(1 2 5 0 9)) 5
 
-assert "cc find-first miss" (_cc_find (fn (l) (> (car l) 99)) '(1 2 3)) nil
+assert "cc find-first miss" (_cc_find (fn (l) ((car l) > 99)) '(1 2 3)) nil
 
-def _cc_sdiv (a b k):
-  if (is b 0):
+def _cc_sdiv(a b k):
+  if (b is 0):
     k 'div0
-    / a b
+    a / b
 
 assert "cc safe-div ok" (call/cc (fn (k) (_cc_sdiv 10 2 k))) 5
 
 assert "cc safe-div bail" (call/cc (fn (k) (_cc_sdiv 10 0 k))) 'div0
 
-def _cc_pair (n target):
-  call/cc (fn (found) (do (setf _i 1) (while (<= _i n) (do (setf _j 1) (while (<= _j n) (do (if (is (+ _i _j) target) (found (list _i _j))) (setf _j (+ _j 1)))) (setf _i (+ _i 1)))) nil))
+def _cc_pair(n target):
+  call/cc (fn (found) (do (setf _i 1) (while (_i <= n) (do (setf _j 1) (while (_j <= n) (do (if ((_i + _j) is target) (found (list _i _j))) (setf _j (_j + 1)))) (setf _i (_i + 1)))) nil))
 
 assert "cc nested-loop break" (_cc_pair 5 7) (list 2 5)
 
-def _cc_clamp (x lo hi):
-  call/cc (fn (ret) (do (if (< x lo) (ret lo)) (if (> x hi) (ret hi)) x))
+def _cc_clamp(x lo hi):
+  call/cc (fn (ret) (do (if (x < lo) (ret lo)) (if (x > hi) (ret hi)) x))
 
 assert "cc clamp mid" (_cc_clamp 5 0 10) 5
 
@@ -1711,27 +1659,27 @@ assert "cc clamp low" (_cc_clamp -3 0 10) 0
 
 assert "cc clamp high" (_cc_clamp 99 0 10) 10
 
-def _cc_sumnn (xs):
-  call/cc (fn (bail) (do (def go (ys acc) (if (no ys) acc (if (< (car ys) 0) (bail 0) (go (cdr ys) (+ acc (car ys)))))) (go xs 0)))
+def _cc_sumnn(xs):
+  call/cc (fn (bail) (do (def go (ys acc) (if (no ys) acc (if ((car ys) < 0) (bail 0) (go (cdr ys) (acc + (car ys)))))) (go xs 0)))
 
 assert "cc sum nonneg ok" (_cc_sumnn '(3 4 5)) 12
 
 assert "cc sum nonneg bail" (_cc_sumnn '(3 -1 5)) 0
 
-assert "cc nested outer" (call/cc (fn (o) (+ 1 (call/cc (fn (i) (o 100)))))):
+assert "cc nested outer" (call/cc (fn (o) (1 + (call/cc (fn (i) (o 100)))))):
   100
 
-assert "cc nested inner" (call/cc (fn (o) (+ 1 (call/cc (fn (i) (i 100)))))):
+assert "cc nested inner" (call/cc (fn (o) (1 + (call/cc (fn (i) (i 100)))))):
   101
 
-assert "cc escape from map" (call/cc (fn (k) (do (map (fn (x) (if (> x 2) (k x))) '(1 2 3 4)) -1))):
+assert "cc escape from map" (call/cc (fn (k) (do (map (fn (x) (if (x > 2) (k x))) '(1 2 3 4)) -1))):
   3
 
 assert "cc payload list" (call/cc (fn (k) (k (list 1 2 3)))) (list 1 2 3)
 
-assert "cc ignored k" (call/cc (fn (k) (* 6 7))) 42
+assert "cc ignored k" (call/cc (fn (k) (6 * 7))) 42
 
-defc dc-clamp (x lo hi) (if (< x lo) (return lo)) (if (> x hi) (return hi)) x
+defc dc-clamp (x lo hi) (if (x < lo) (return lo)) (if (x > hi) (return hi)) x
 
 assert "defc clamp mid" (dc-clamp 5 0 10) 5
 
@@ -1741,29 +1689,29 @@ assert "defc clamp high" (dc-clamp 99 0 10) 10
 
 defc dc-find (pred xs) (each x xs (if (pred x) (return x))) nil
 
-assert "defc find hit" (dc-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
+assert "defc find hit" (dc-find (fn (n) (n > 3)) (list 1 2 5 0 9)) 5
 
-assert "defc find miss" (dc-find (fn (n) (> n 99)) (list 1 2 3)) nil
+assert "defc find miss" (dc-find (fn (n) (n > 99)) (list 1 2 3)) nil
 
-defc dc-sumnn (xs):
+defc dc-sumnn(xs):
   let s 0:
     do:
       each x:
         xs
-        if (< x 0):
+        if (x < 0):
           return 0
-        setf s (+ s x)
+        setf s (s + x)
       s
 
 assert "defc sum nonneg ok" (dc-sumnn (list 3 4 5)) 12
 
 assert "defc sum nonneg bail" (dc-sumnn (list 3 -1 5)) 0
 
-defc dc-noesc (x) (+ x 1)
+defc dc-noesc (x) (x + 1)
 
 assert "defc no escape" (dc-noesc 10) 11
 
-defc dc-zero (n) (if (is n 0) (return 0)) (* n n)
+defc dc-zero (n) (if (n is 0) (return 0)) (n * n)
 
 assert "defc return 0 (falsy)" (dc-zero 0) 0
 
@@ -1783,8 +1731,7 @@ assert "msgpack neg fixint" (msgpack-decode (msgpack-encode -5)) -5
 
 assert "msgpack int16" (msgpack-decode (msgpack-encode -1000)) -1000
 
-assert "msgpack uint32" (msgpack-decode (msgpack-encode 1000000000)):
-  1000000000
+assert "msgpack uint32" (msgpack-decode (msgpack-encode 1000000000)): 1000000000
 
 assert "msgpack int64" (msgpack-decode (msgpack-encode 5000000000)) 5000000000
 
@@ -1803,16 +1750,16 @@ assert "msgpack str8 path" (msgpack-decode (msgpack-encode "01234567890123456789
 
 assert "msgpack char->int" (msgpack-decode (msgpack-encode #\A)) 65
 
-assert "msgpack list" (iso (msgpack-decode (msgpack-encode (list 1 2 3))) (list 1 2 3)):
+assert "msgpack list" ((msgpack-decode (msgpack-encode (list 1 2 3))) iso (list 1 2 3)):
   t
 
-assert "msgpack list mixed" (iso (msgpack-decode (msgpack-encode (list 1 "a" nil t))) (list 1 "a" nil t)):
+assert "msgpack list mixed" ((msgpack-decode (msgpack-encode (list 1 "a" nil t))) iso (list 1 "a" nil t)):
   t
 
-assert "msgpack nested" (iso (msgpack-decode (msgpack-encode (list 1 (list 2 3) "x"))) (list 1 (list 2 3) "x")):
+assert "msgpack nested" ((msgpack-decode (msgpack-encode (list 1 (list 2 3) "x"))) iso (list 1 (list 2 3) "x")):
   t
 
-assert "msgpack blob" (iso (msgpack-decode (msgpack-encode (string->blob "ab"))) (string->blob "ab")):
+assert "msgpack blob" ((msgpack-decode (msgpack-encode (string->blob "ab"))) iso (string->blob "ab")):
   t
 
 setf _mpd (msgpack-decode (msgpack-encode (hash-map "a" 1 "b" 2)))
@@ -1833,7 +1780,7 @@ assert "msgpack encode bad" (try (msgpack-encode (fn (x) x)) (fn (e) 'caught)):
 assert "msgpack decode non-blob" (try (msgpack-decode 5) (fn (e) 'caught)):
   'caught
 
-assert "mod 17 5" (mod 17 5) 2
+assert "mod 17 5" (17 mod 5) 2
 
 assert "abs -42" (abs -42) 42
 
@@ -1845,10 +1792,9 @@ assert "length list" (length (list 1 2 3 4 5)) 5
 
 assert "nth 2 list" (nth 2 (list 10 20 30 40)) 30
 
-assert "reverse" (iso (reverse (list 1 2 3)) (list 3 2 1)) t
+assert "reverse" ((reverse (list 1 2 3)) iso (list 3 2 1)) t
 
-assert "append two lists" (iso (append (list 1 2) (list 3 4)) (list 1 2 3 4)):
-  t
+assert "append two lists" ((append (list 1 2) (list 3 4)) iso (list 1 2 3 4)): t
 
 assert "number? fixnum" (number? 42) t
 
@@ -1864,34 +1810,33 @@ assert "fn? builtin" (fn? +) t
 
 assert "fn? non-fn" (fn? 42) nil
 
-assert "map square" (iso (map (fn (x) (* x x)) (list 1 2 3)) (list 1 4 9)) t
+assert "map square" ((map (fn (x) (x * x)) (list 1 2 3)) iso (list 1 4 9)) t
 
-assert "filter > 2" (iso (filter (fn (x) (> x 2)) (list 1 2 3 4)) (list 3 4)):
-  t
+assert "filter > 2" ((filter (fn (x) (x > 2)) (list 1 2 3 4)) iso (list 3 4)): t
 
-assert "reduce sum" (reduce (fn (a b) (+ a b)) 0 (list 1 2 3 4 5)) 15
+assert "reduce sum" (reduce (fn (a b) (a + b)) 0 (list 1 2 3 4 5)) 15
 
-assert "apply 3 args" (apply (fn (a b c) (+ a (+ b c))) (list 10 20 30)) 60
+assert "apply 3 args" (apply (fn (a b c) (a + (b + c))) (list 10 20 30)) 60
 
-assert "any? has match" (any? (fn (x) (> x 3)) (list 1 2 3 4)) t
+assert "any? has match" (any? (fn (x) (x > 3)) (list 1 2 3 4)) t
 
-assert "any? no match" (any? (fn (x) (> x 100)) (list 1 2 3)) nil
+assert "any? no match" (any? (fn (x) (x > 100)) (list 1 2 3)) nil
 
-assert "any? empty" (any? (fn (x) (> x 0)) (list)) nil
+assert "any? empty" (any? (fn (x) (x > 0)) (list)) nil
 
-assert "all? all match" (all? (fn (x) (> x 0)) (list 1 2 3)) t
+assert "all? all match" (all? (fn (x) (x > 0)) (list 1 2 3)) t
 
-assert "all? one fails" (all? (fn (x) (> x 0)) (list 1 0 3)) nil
+assert "all? one fails" (all? (fn (x) (x > 0)) (list 1 0 3)) nil
 
-assert "all? empty" (all? (fn (x) (> x 0)) (list)) t
+assert "all? empty" (all? (fn (x) (x > 0)) (list)) t
 
-def jit-sieve-fn (i n):
-  def jit-sieve-up (j acc):
-    if (> j n):
+def jit-sieve-fn(i n):
+  def jit-sieve-up(j acc):
+    if (j > n):
       acc
-      if (any? (fn (d) (is (mod j d) 0)) acc):
-        jit-sieve-up (+ j 1) acc
-        jit-sieve-up (+ j 1) (cons j acc)
+      if (any? (fn (d) ((j mod d) is 0)) acc):
+        jit-sieve-up (j + 1) acc
+        jit-sieve-up (j + 1) (cons j acc)
   length (jit-sieve-up i (list))
 
 assert "any?-in-recursion: π(100)" (jit-sieve-fn 2 100) 25
@@ -1906,10 +1851,10 @@ assert "if 2-arg true" (if 1 'yes) 'yes
 
 assert "if 2-arg false -> nil" (if nil 'yes) nil
 
-def compiled-if-ladder (x):
-  if (is x 1):
+def compiled-if-ladder(x):
+  if (x is 1):
     'one
-    is x 2
+    x is 2
     'two
     'other
 
@@ -1937,8 +1882,7 @@ setf ridx 4
 
 assert "string read by var, computed idx" (sread ridx) #\e
 
-def sget (s n):
-  s n
+def sget(s n): s n
 
 assert "string read inside def body" (sget "hello" 1) #\e
 
@@ -1954,17 +1898,17 @@ assert "inline/heap concat" (string-append "abcdefg" "h") "abcdefgh"
 
 assert "inline str index mutate" (let s "hello" (setf (s 0) #\J) s) "Jello"
 
-assert "inline sym eq self" (is 'abcdefg 'abcdefg) t
+assert "inline sym eq self" ('abcdefg is 'abcdefg) t
 
-assert "heap sym eq self" (is 'abcdefgh 'abcdefgh) t
+assert "heap sym eq self" ('abcdefgh is 'abcdefgh) t
 
-assert "inline vs heap sym differ" (is 'abcdefg 'abcdefgh) nil
+assert "inline vs heap sym differ" ('abcdefg is 'abcdefgh) nil
 
 assert "inline keyword self-eval" :short :short
 
 assert "keyword as compiled body" ((fn () :hello)) :hello
 
-assert "keyword as fn return tail" ((fn () (+ 1 1) :done)) :done
+assert "keyword as fn return tail" ((fn () (1 + 1) :done)) :done
 
 assert "keyword in if branch (fn)" ((fn (x) (if x :yes :no)) 1) :yes
 
@@ -1990,26 +1934,23 @@ assert "exp-flags inline bit (64)" (exp-flags 'abc) 64
 
 assert "exp-flags heap sym (0)" (exp-flags 'abcdefgh) 0
 
-def itest-add (x):
-  + x 1
+def itest-add(x): x + 1
 
 assert "compiled? simple fn" (compiled? itest-add) t
 
-def itest-zero ():
-  5
+def itest-zero(): 5
 
 assert "compiled? 0-arg fn" (compiled? itest-zero) t
 
-def itest-mk ():
+def itest-mk():
   let n 0:
-    fn ():
-      setf n (+ n 1)
+    fn():
+      setf n (n + 1)
       n
 
 assert "compiled? mutating closure" (compiled? (itest-mk)) t
 
-def itest-rest xs:
-  car xs
+def itest-rest xs: car xs
 
 assert "compiled? rest-param is nil" (compiled? itest-rest) nil
 
@@ -2017,150 +1958,144 @@ assert "compiled? non-fn is nil" (compiled? 42) nil
 
 assert "jit? non-fn is nil" (jit? 42) nil
 
-assert "jit? implies compiled?" (if (jit? itest-add) (compiled? itest-add) t):
-  t
+assert "jit? implies compiled?" (if (jit? itest-add) (compiled? itest-add) t): t
 
 setf _jit_on (jit? itest-add)
 
-defmacro assert-jits (label f):
+defmacro assert-jits(label f):
   quasiquote (assert (unquote label) (if _jit_on (jit? (unquote f)) (no (jit? (unquote f)))) t)
 
-def jc-const ():
-  42
+def jc-const(): 42
 
-def jc-add (s):
-  + s 7
+def jc-add(s): s + 7
 
-def jc-mul (s):
-  * s 7
+def jc-mul(s): s * 7
 
-def jc-lt (n):
-  if (< n 1000):
-    jc-lt (+ n 1)
+def jc-lt(n):
+  if (n < 1000):
+    jc-lt (n + 1)
     n
 
-def jc-le (n):
-  if (<= n 1000):
-    jc-le (+ n 1)
+def jc-le(n):
+  if (n <= 1000):
+    jc-le (n + 1)
     n
 
-def jc-gt (n):
-  if (> n 0):
-    jc-gt (- n 1)
+def jc-gt(n):
+  if (n > 0):
+    jc-gt (n - 1)
     n
 
-def jc-ge (n):
-  if (>= n 1):
-    jc-ge (- n 1)
+def jc-ge(n):
+  if (n >= 1):
+    jc-ge (n - 1)
     n
 
-def jc-eqcd (n):
-  if (is n 0):
+def jc-eqcd(n):
+  if (n is 0):
     n
-    jc-eqcd (- n 1)
+    jc-eqcd (n - 1)
 
-def jc-equp (n):
-  if (is n 100):
+def jc-equp(n):
+  if (n is 100):
     n
-    jc-equp (+ n 5)
+    jc-equp (n + 5)
 
-def jc-wide (n):
-  if (< n 5000000):
-    jc-wide (+ n 1)
+def jc-wide(n):
+  if (n < 5000000):
+    jc-wide (n + 1)
     n
 
-def jc-fact (n):
-  if (< n 2):
+def jc-fact(n):
+  if (n < 2):
     1
-    * n (jc-fact (- n 1))
+    n * (jc-fact (n - 1))
 
-def jc-fib (n):
-  if (< n 2):
+def jc-fib(n):
+  if (n < 2):
     n
-    + (jc-fib (- n 1)) (jc-fib (- n 2))
+    (jc-fib (n - 1)) + (jc-fib (n - 2))
 
-def jc-ack (m n):
-  if (is m 0):
-    + n 1
-    if (is n 0):
-      jc-ack (- m 1) 1
-      jc-ack (- m 1) (jc-ack m (- n 1))
+def jc-ack(m n):
+  if (m is 0):
+    n + 1
+    if (n is 0):
+      jc-ack (m - 1) 1
+      jc-ack (m - 1) (jc-ack m (n - 1))
 
-def jc-tak (x y z):
-  if (no (< y x)):
+def jc-tak(x y z):
+  if (no (y < x)):
     z
-    jc-tak (jc-tak (- x 1) y z) (jc-tak (- y 1) z x) (jc-tak (- z 1) x y)
+    jc-tak (jc-tak (x - 1) y z) (jc-tak (y - 1) z x) (jc-tak (z - 1) x y)
 
-def jc-loopcall (k):
-  if (> k 0):
+def jc-loopcall(k):
+  if (k > 0):
     do:
       jc-fact 19
-      jc-loopcall (- k 1)
+      jc-loopcall (k - 1)
     k
 
-def jc-forsum (n):
+def jc-forsum(n):
   let s 0:
-    for i 1 n:
-      setf s (+ s 1)
+    for i 1 n: setf s (s + 1)
 
-def jc-build (i n acc):
-  if (> i n):
+def jc-build(i n acc):
+  if (i > n):
     acc
-    jc-build (+ i 1) n (cons i acc)
+    jc-build (i + 1) n (cons i acc)
 
-def jc-markfrom (step j n marks):
-  if (> j n):
+def jc-markfrom(step j n marks):
+  if (j > n):
     nil
     do:
       vec-set! marks j nil
-      jc-markfrom step (+ j step) n marks
+      jc-markfrom step (j + step) n marks
 
-def jc-countprimes (i n marks acc):
-  if (> i n):
+def jc-countprimes(i n marks acc):
+  if (i > n):
     acc
-    jc-countprimes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc)
+    jc-countprimes (i + 1) n marks (if (vec-ref marks i) (acc + 1) acc)
 
-def jc-isprime (acc i):
+def jc-isprime(acc i):
   if (no acc):
     t
-    if (is (mod i (car acc)) 0):
+    if ((i mod (car acc)) is 0):
       nil
       jc-isprime (cdr acc) i
 
-def jc-primes (i n acc):
-  if (> i n):
+def jc-primes(i n acc):
+  if (i > n):
     acc
     if (jc-isprime acc i):
-      jc-primes (+ i 1) n (cons i acc)
-      jc-primes (+ i 1) n acc
+      jc-primes (i + 1) n (cons i acc)
+      jc-primes (i + 1) n acc
 
-def jc-safe (c qs offset):
+def jc-safe(c qs offset):
   if (no qs):
     t
-    if (is c (car qs)):
+    if (c is (car qs)):
       nil
-      if (is (+ c offset) (car qs)):
+      if ((c + offset) is (car qs)):
         nil
-        if (is (- c offset) (car qs)):
+        if ((c - offset) is (car qs)):
           nil
-          jc-safe c (cdr qs) (+ offset 1)
+          jc-safe c (cdr qs) (offset + 1)
 
-def jc-divides (a b):
-  is (mod a b) 0
+def jc-divides(a b): (a mod b) is 0
 
-def jc-facc-add (n acc):
-  if (< n 100000):
-    jc-facc-add (+ n 1) (+ acc 0.5)
+def jc-facc-add(n acc):
+  if (n < 100000):
+    jc-facc-add (n + 1) (acc + 0.5)
     acc
 
-def jc-facc-sub (n acc):
-  if (< n 100000):
-    jc-facc-sub (+ n 1) (- acc 0.5)
+def jc-facc-sub(n acc):
+  if (n < 100000):
+    jc-facc-sub (n + 1) (acc - 0.5)
     acc
 
-def jc-facc-mul (n acc):
-  if (< n 40000):
-    jc-facc-mul (+ n 1) (* acc 2.0)
+def jc-facc-mul(n acc):
+  if (n < 40000):
+    jc-facc-mul (n + 1) (acc * 2.0)
     acc
 
 assert-jits "jit leaf: (fn () K)" jc-const
@@ -2237,9 +2172,9 @@ assert "jit predicate-cons result" (length (jc-primes 2 50 (list))) 15
 
 assert "jit float-acc result" (jc-facc-add 0 0.0) 50000.0
 
-assert "jit float-acc is float" (iso (jc-facc-add 0 0) 50000.0) t
+assert "jit float-acc is float" ((jc-facc-add 0 0) iso 50000.0) t
 
-assert "jit float-acc 0-iter int" (iso (jc-facc-add 200000 7) 7) t
+assert "jit float-acc 0-iter int" ((jc-facc-add 200000 7) iso 7) t
 
 assert "jit float-acc mul (2 iters)" (jc-facc-mul 39998 1.0) 4.0
 
@@ -2251,10 +2186,10 @@ assert "substr middle" (substr "abcdef" 1 4) "bcd"
 
 assert "substr clamps bounds" (substr "abc" -4 99) "abc"
 
-assert "string-split literal" (iso (string-split "a,b,c" ",") (list "a" "b" "c")):
+assert "string-split literal" ((string-split "a,b,c" ",") iso (list "a" "b" "c")):
   t
 
-assert "string-split empty sep" (iso (string-split "abc" "") (list "a" "b" "c")):
+assert "string-split empty sep" ((string-split "abc" "") iso (list "a" "b" "c")):
   t
 
 assert "string-join" (string-join (list "a" "b" "c") ":") "a:b:c"
@@ -2273,15 +2208,15 @@ assert "utf8 length 4-byte emoji" (length "a😀b") 3
 
 assert "utf8 length mixed" (length "héllo世界😀") 8
 
-assert "utf8 index ascii head" (is ("héllo" 0) #\h) t
+assert "utf8 index ascii head" (("héllo" 0) is #\h) t
 
-assert "utf8 index 2-byte cp" (is ("héllo" 1) #\é) t
+assert "utf8 index 2-byte cp" (("héllo" 1) is #\é) t
 
-assert "utf8 index past 2-byte" (is ("héllo" 4) #\o) t
+assert "utf8 index past 2-byte" (("héllo" 4) is #\o) t
 
-assert "utf8 index 3-byte cp" (is ("你好世界" 2) #\世) t
+assert "utf8 index 3-byte cp" (("你好世界" 2) is #\世) t
 
-assert "utf8 index 4-byte cp" (is ("a😀b" 1) #\😀) t
+assert "utf8 index 4-byte cp" (("a😀b" 1) is #\😀) t
 
 assert "utf8 index out of range" (error? ("héllo" 5)) t
 
@@ -2291,16 +2226,16 @@ assert "utf8 substr CJK" (substr "你好世界" 1 3) "好世"
 
 assert "utf8 string-index codepoint" (string-index "héllo" "llo") 2
 
-assert "utf8 split empty by cp" (iso (string-split "a世b" "") (list "a" "世" "b")):
+assert "utf8 split empty by cp" ((string-split "a世b" "") iso (list "a" "世" "b")):
   t
 
-assert "utf8 char literal iso" (iso #\é #\é) t
+assert "utf8 char literal iso" (#\é iso #\é) t
 
 assert "utf8 char->str 2-byte" (str #\é) "é"
 
 assert "utf8 char->str 4-byte" (str #\😀) "😀"
 
-assert "utf8 char code preserved" (is #\世 #\世) t
+assert "utf8 char code preserved" (#\世 is #\世) t
 
 setf u8mut "héllo"
 
@@ -2334,9 +2269,9 @@ forget 'u8str
 
 loaddb "/tmp/alcove-test-utf8.db"
 
-assert "utf8 persist 4-byte char" (iso u8char #\😀) t
+assert "utf8 persist 4-byte char" (u8char iso #\😀) t
 
-assert "utf8 persist mixed string" (iso u8str "héllo世界😀") t
+assert "utf8 persist mixed string" (u8str iso "héllo世界😀") t
 
 assert "utf8 persist string length" (length u8str) 8
 
@@ -2357,7 +2292,7 @@ assert "file-exists? nil" (file-exists? "/tmp/alcove-test-missing-file.txt"):
 
 assert "read-string" (read-string "/tmp/alcove-test-file.txt") "one\ntwo\n"
 
-assert "read-lines" (iso (read-lines "/tmp/alcove-test-file.txt") (list "one" "two")):
+assert "read-lines" ((read-lines "/tmp/alcove-test-file.txt") iso (list "one" "two")):
   t
 
 assert "write-bytes returns t" (write-bytes "/tmp/alcove-test-file.bin" (string->blob "abc")):
@@ -2383,8 +2318,7 @@ write-string "/tmp/alcove-test-mod.alc" "(ns tmod)\n(def hi (n) (str \"hi:\" n))
 
 assert "require returns t first time" (require "/tmp/alcove-test-mod.alc") t
 
-assert "require returns nil if loaded" (require "/tmp/alcove-test-mod.alc"):
-  nil
+assert "require returns nil if loaded" (require "/tmp/alcove-test-mod.alc"): nil
 
 assert "module def is namespace-qualified" (tmod/hi 5) "hi:5"
 
@@ -2472,8 +2406,7 @@ assert "set supports scalar types" (and (set-has? smore 3.14) (set-has? smore #\
 
 setf sbig (set)
 
-for i 0 255:
-  set-add! sbig i
+for i 0 255: set-add! sbig i
 
 assert "set rehash count" (count sbig) 256
 
@@ -2483,8 +2416,7 @@ assert "set rehash list count" (length (set->list sbig)) 256
 
 setf sbig2 (set)
 
-for i 128 383:
-  set-add! sbig2 i
+for i 128 383: set-add! sbig2 i
 
 assert "set rehash union count" (count (set-union sbig sbig2)) 384
 
@@ -2527,7 +2459,7 @@ assert "hamt persistence string key" (hamt-get persisted-hamt "a") 1
 
 assert "hamt persistence float key" (hamt-get persisted-hamt 3.14) 'pi
 
-assert "hamt persistence nested val" (iso (hamt-get persisted-hamt "nums") (list 10 20)):
+assert "hamt persistence nested val" ((hamt-get persisted-hamt "nums") iso (list 10 20)):
   t
 
 forget 'persisted-hamt
@@ -2562,10 +2494,9 @@ setf ps-set (set 1 2 3)
 
 setf ps-hamt (hamt "p" 1 "q" 2)
 
-setf ps-lam (fn (a b) (+ a b))
+setf ps-lam (fn (a b) (a + b))
 
-defmacro ps-mac (x):
-  list 'quote x
+defmacro ps-mac(x): list 'quote x
 
 persist 'ps-num
 
@@ -2645,17 +2576,17 @@ assert "persist string" ps-str "héllo世"
 
 assert "persist symbol" ps-sym 'somesym
 
-assert "persist char" (iso ps-chr #\Z) t
+assert "persist char" (ps-chr iso #\Z) t
 
-assert "persist blob" (iso ps-blob (string->blob "bytes")) t
+assert "persist blob" (ps-blob iso (string->blob "bytes")) t
 
-assert "persist pair" (iso ps-pair (cons 1 2)) t
+assert "persist pair" (ps-pair iso (cons 1 2)) t
 
-assert "persist cons-list" (iso ps-list (list 1 2 3)) t
+assert "persist cons-list" (ps-list iso (list 1 2 3)) t
 
-assert "persist vector" (iso ps-vec (vector 1 2 3)) t
+assert "persist vector" (ps-vec iso (vector 1 2 3)) t
 
-assert "persist GEN vector" (iso ps-genvec (vector nil t "s" 9)) t
+assert "persist GEN vector" (ps-genvec iso (vector nil t "s" 9)) t
 
 assert "persist nested vec set" (set-has? (vec-ref ps-nest 0) 3) t
 
@@ -2665,7 +2596,7 @@ assert "persist nested vec deque" (count (get (vec-ref ps-nest 1) "k")) 2
 
 assert "persist nested vec hamt" (hamt-get (vec-ref ps-nest 2) "z") 9
 
-assert "persist nested vec list" (iso (vec-ref ps-nest 3) (list 1 (vector "x"))):
+assert "persist nested vec list" ((vec-ref ps-nest 3) iso (list 1 (vector "x"))):
   t
 
 assert "persist deque count" (count ps-deque) 3
@@ -2744,8 +2675,7 @@ loaddb 42
 
 assert "after bad loaddb arg: recovery" 1 1
 
-def _test_fn_for_inspect (x):
-  * x x
+def _test_fn_for_inspect(x): x * x
 
 assert "inspect nil-return" (no (inspect 42)) t
 
@@ -2763,11 +2693,11 @@ assert "(- 5) negates" (- 5) -5
 
 assert "(- a b c)" (- 10 1 2 3) 4
 
-assert "(/ a b)" (/ 12 3) 4
+assert "(/ a b)" (12 / 3) 4
 
 assert "(/ a b c)" (/ 60 3 5) 4
 
-assert "mod" (mod 10 3) 1
+assert "mod" (10 mod 3) 1
 
 assert "abs neg" (abs -7) 7
 
@@ -2803,60 +2733,56 @@ assert "sqrt-int negative → 0" (sqrt-int -1) 0
 
 assert "sqrt-int large" (sqrt-int 1000000) 1000
 
-assert "mod float operands" (mod 7.0 2.5) 2.0
+assert "mod float operands" (7.0 mod 2.5) 2.0
 
-assert "mod int/float mixed" (mod 7 2.5) 2.0
+assert "mod int/float mixed" (7 mod 2.5) 2.0
 
-assert "< mixed int/float" (< 1 1.5) t
+assert "< mixed int/float" (1 < 1.5) t
 
-assert "> mixed int/float" (> 2.5 2) t
+assert "> mixed int/float" (2.5 > 2) t
 
-assert "comparisons: float=float" (<= 1.0 1.0) t
+assert "comparisons: float=float" (1.0 <= 1.0) t
 
 assert "odd t" (odd 3) t
 
 assert "odd nil" (odd 4) nil
 
-def ta-f (x :int):
-  * x 2
+def ta-f(x :int): x * 2
 
 assert "type hint: param" (ta-f 5) 10
 
-def ta-g (a :f64 b :f64):
-  + a b
+def ta-g(a :f64 b :f64): a + b
 
 assert "type hint: two params" (ta-g 1.5 2.5) 4.0
 
-def ta-h (x :int):
+def ta-h(x :int):
   :f64
-  + x 1
+  x + 1
 
 assert "type hint: return type" (ta-h 4) 5
 
-def ta-r (a :int . more):
-  + a (count more)
+def ta-r(a :int . more): a + (count more)
 
 assert "type hint: with rest param" (ta-r 10 1 2) 12
 
-def ta-cd (n :int acc :int):
-  if (is n 0):
+def ta-cd(n :int acc :int):
+  if (n is 0):
     acc
-    ta-cd (- n 1) (+ acc 1)
+    ta-cd (n - 1) (acc + 1)
 
 assert "type hint: deep recursion keeps TCO" (ta-cd 200000 0) 200000
 
-assert "type hint: fn param" ((fn (x :int) (* x 3)) 4) 12
+assert "type hint: fn param" ((fn (x :int) (x * 3)) 4) 12
 
-defn ta-sq ((x :int) (* x x))
+defn ta-sq ((x :int) (x * x))
 
 assert "type hint: defn explicit" (ta-sq 6) 36
 
-defn ta-dbl (x :int (* x 2))
+defn ta-dbl (x :int (x * 2))
 
 assert "type hint: defn leading-sym" (ta-dbl 8) 16
 
-def ta-novel (x):
-  * x x
+def ta-novel(x): x * x
 
 assert "no hint: unchanged" (ta-novel 7) 49
 
@@ -2908,44 +2834,41 @@ assert "<= chained equal ok" (<= 1 2 2 3) t
 
 assert ">= chained equal ok" (>= 5 4 4 3) t
 
-assert "string cmp <" (< "abc" "abd") t
+assert "string cmp <" ("abc" < "abd") t
 
-assert "char cmp <" (< #\a #\b) t
+assert "char cmp <" (#\a < #\b) t
 
-assert "char cmp =>" (>= #\b #\a) t
+assert "char cmp =>" (#\b >= #\a) t
 
-def compiled-lt3 (a b c):
-  < a b c
+def compiled-lt3(a b c): < a b c
 
 assert "compiled chained < ok" (compiled-lt3 1 2 3) t
 
 assert "compiled chained < break" (compiled-lt3 1 3 2) nil
 
-def compiled-slt (a b):
-  < a b
+def compiled-slt(a b): a < b
 
 assert "compiled string cmp <" (compiled-slt "abc" "abd") t
 
-def compiled-clt (a b):
-  < a b
+def compiled-clt(a b): a < b
 
 assert "compiled char cmp <" (compiled-clt #\a #\b) t
 
-assert "is symbol" (is 'a 'a) t
+assert "is symbol" ('a is 'a) t
 
-assert "is fixnum" (is 5 5) t
+assert "is fixnum" (5 is 5) t
 
-assert "is char" (is #\x #\x) t
+assert "is char" (#\x is #\x) t
 
-assert "is mixed types -> nil" (is 5 'a) nil
+assert "is mixed types -> nil" (5 is 'a) nil
 
-assert "iso list" (iso '(1 2) '(1 2)) t
+assert "iso list" ('(1 2) iso '(1 2)) t
 
-assert "iso unequal list" (iso '(1 2) '(1 3)) nil
+assert "iso unequal list" ('(1 2) iso '(1 3)) nil
 
-assert "iso nested" (iso '((a) (b c)) '((a) (b c))) t
+assert "iso nested" ('((a) (b c)) iso '((a) (b c))) t
 
-assert "iso strings" (iso "foo" "foo") t
+assert "iso strings" ("foo" iso "foo") t
 
 assert "in match first" (in 'a 'a 'b 'c) t
 
@@ -2973,44 +2896,42 @@ assert "if ladder fallback" (if nil 1 nil 2 nil 3 99) 99
 
 assert "if no fallback no match" (if nil 1 nil 2) nil
 
-def evenc? (n):
-  case (mod n 2):
+def evenc?(n):
+  case (n mod 2):
     0
     t
     nil
 
-def evensum (n acc):
-  if (< n 1):
+def evensum(n acc):
+  if (n < 1):
     acc
-    evensum (- n 1) (if (evenc? n) (+ acc n) acc)
+    evensum (n - 1) (if (evenc? n) (acc + n) acc)
 
 assert "case+if mutual: sum evens 100" (evensum 100 0) 2550
 
-def whenchain (n):
-  when (> n 0):
-    whenchain (- n 1)
+def whenchain(n):
+  when (n > 0):
+    whenchain (n - 1)
 
 assert "when tail-rec deep" (whenchain 1000) nil
 
-def andchain (n):
-  and (> n 0) (andchain (- n 1))
+def andchain(n): and (n > 0) (andchain (n - 1))
 
 assert "and tail-rec to nil" (andchain 1000) nil
 
-def orchain (n acc):
-  or (is n 0) (orchain (- n 1) (+ acc 1))
+def orchain(n acc): or (n is 0) (orchain (n - 1) (acc + 1))
 
 assert "or tail-rec returns t" (orchain 1000 0) t
 
 assert "let shadow inner" (let x 10 (let x 20 x)) 20
 
-assert "let inner doesn't leak" (let x 10 (let y 5 (+ x y))) 15
+assert "let inner doesn't leak" (let x 10 (let y 5 (x + y))) 15
 
-assert "with two bindings" (with (a 3 b 4) (+ a b)) 7
+assert "with two bindings" (with (a 3 b 4) (a + b)) 7
 
 assert "with three bindings" (with (a 1 b 2 c 3) (+ a b c)) 6
 
-assert "let-in-call binding" ((fn (x) (let y 1 (+ x y))) 5) 6
+assert "let-in-call binding" ((fn (x) (let y 1 (x + y))) 5) 6
 
 assert "length empty" (length nil) 0
 
@@ -3018,8 +2939,7 @@ assert "length 3" (length (list 1 2 3)) 3
 
 assert "length list w/ nil" (length (list nil)) 1
 
-def lenof (x):
-  length x
+def lenof(x): length x
 
 assert "length string in compiled body" (lenof "abc") 3
 
@@ -3037,19 +2957,17 @@ assert "nth out-of-range -> nil" (nth 99 (list 'a 'b 'c)) nil
 
 assert "reverse empty -> nil" (reverse nil) nil
 
-assert "reverse 3" (iso (reverse (list 1 2 3)) (list 3 2 1)) t
+assert "reverse 3" ((reverse (list 1 2 3)) iso (list 3 2 1)) t
 
 assert "append nil nil" (append nil nil) nil
 
-assert "append empty cons" (iso (append nil (list 1)) (list 1)) t
+assert "append empty cons" ((append nil (list 1)) iso (list 1)) t
 
-assert "append two non-empty" (iso (append (list 1) (list 2 3)) (list 1 2 3)):
-  t
+assert "append two non-empty" ((append (list 1) (list 2 3)) iso (list 1 2 3)): t
 
-assert "append three" (iso (append (list 1) (list 2) (list 3)) (list 1 2 3)) t
+assert "append three" ((append (list 1) (list 2) (list 3)) iso (list 1 2 3)) t
 
-defmacro caught (e):
-  quasiquote (error? (unquote e))
+defmacro caught(e): quasiquote (error? (unquote e))
 
 assert "nth on int → error obj" (caught (nth 0 5)) t
 
@@ -3067,16 +2985,15 @@ assert "append on int → error obj" (caught (append (list 1) 99)) t
 
 assert "reverse on int → error obj" (caught (reverse 7)) t
 
-def double (x):
-  * x 2
+def double(x): x * 2
 
-assert "map basic" (iso (map double (list 1 2 3)) (list 2 4 6)) t
+assert "map basic" ((map double (list 1 2 3)) iso (list 2 4 6)) t
 
 assert "map empty" (map double nil) nil
 
-assert "filter odd" (iso (filter odd (list 1 2 3 4 5)) (list 1 3 5)) t
+assert "filter odd" ((filter odd (list 1 2 3 4 5)) iso (list 1 3 5)) t
 
-assert "filter all-pass" (iso (filter (fn (x) t) (list 1 2)) (list 1 2)) t
+assert "filter all-pass" ((filter (fn (x) t) (list 1 2)) iso (list 1 2)) t
 
 assert "filter all-fail" (filter (fn (x) nil) (list 1 2)) nil
 
@@ -3115,8 +3032,7 @@ assert "vec n=0 ok" (vec-len (vec 0 nil)) 0
 
 assert "vec n too large -> error" (caught (vec (** 2 50) 0)) t
 
-def compiled-mkvec (n):
-  vec n 0
+def compiled-mkvec(n): vec n 0
 
 assert "compiled vec n too large -> error" (caught (compiled-mkvec (** 2 50))):
   t
@@ -3173,8 +3089,7 @@ setf sx "abc"
 
 assert "string-set OOB -> error" (caught (setf (sx 99) #\Z)) t
 
-def need3 (a b c):
-  + a b c
+def need3(a b c): + a b c
 
 assert "correct arity" (need3 1 2 3) 6
 
@@ -3182,18 +3097,16 @@ assert "too few args -> error" (caught (need3 1 2)) t
 
 assert "too many args -> error" (caught (need3 1 2 3 4)) t
 
-def tail-arity-target (a b):
-  b
+def tail-arity-target(a b): b
 
-def tail-arity-few (x):
-  tail-arity-target x
+def tail-arity-few(x): tail-arity-target x
 
 tail-arity-few 9
 
 assert "tail call wrong arity recovers" 42 42
 
-def self-tail-few (a b):
-  if (< a 1):
+def self-tail-few(a b):
+  if (a < 1):
     b
     self-tail-few 0
 
@@ -3201,19 +3114,19 @@ self-tail-few 1 42
 
 assert "self-tail wrong arity recovers" 42 42
 
-def recfib (n):
-  if (< n 2):
+def recfib(n):
+  if (n < 2):
     n
-    + (recfib (- n 1)) (recfib (- n 2))
+    (recfib (n - 1)) + (recfib (n - 2))
 
 assert "recfib 10" (recfib 10) 55
 
 assert "recfib 20" (recfib 20) 6765
 
-def recfact (n):
-  if (< n 2):
+def recfact(n):
+  if (n < 2):
     1
-    * n (recfact (- n 1))
+    n * (recfact (n - 1))
 
 assert "recfact 5" (recfact 5) 120
 
@@ -3221,12 +3134,12 @@ assert "recfact 10" (recfact 10) 3628800
 
 assert "recfact 12" (recfact 12) 479001600
 
-def recack (m n):
-  if (is m 0):
-    + n 1
-    if (is n 0):
-      recack (- m 1) 1
-      recack (- m 1) (recack m (- n 1))
+def recack(m n):
+  if (m is 0):
+    n + 1
+    if (n is 0):
+      recack (m - 1) 1
+      recack (m - 1) (recack m (n - 1))
 
 assert "ack(2,3) = 9" (recack 2 3) 9
 
@@ -3234,22 +3147,21 @@ assert "ack(3,3) = 61" (recack 3 3) 61
 
 assert "ack(3,5) = 253" (recack 3 5) 253
 
-def rectak (x y z):
-  if (no (< y x)):
+def rectak(x y z):
+  if (no (y < x)):
     z
-    rectak (rectak (- x 1) y z) (rectak (- y 1) z x) (rectak (- z 1) x y)
+    rectak (rectak (x - 1) y z) (rectak (y - 1) z x) (rectak (z - 1) x y)
 
 assert "tak(8 4 0) = 1" (rectak 8 4 0) 1
 
 assert "tak(6 3 1) = 3" (rectak 6 3 1) 3
 
-def helperA (n):
-  - n 1
+def helperA(n): n - 1
 
-def myfib2 (n):
-  if (< n 2):
+def myfib2(n):
+  if (n < 2):
     n
-    + (helperA (- n 1)) (helperA (- n 2))
+    (helperA (n - 1)) + (helperA (n - 2))
 
 assert "JIT shape match w/ other callee 10" (myfib2 10) 15
 
@@ -3281,16 +3193,15 @@ setf xs1 (list 1 2 3)
 
 setf (car xs1) 'A
 
-assert "= (car x) replaces head" (iso xs1 '(A 2 3)) t
+assert "= (car x) replaces head" (xs1 iso '(A 2 3)) t
 
 setf xs2 (list 1 2 3)
 
 setf (cdr xs2) (list 99)
 
-assert "= (cdr x) replaces tail" (iso xs2 '(1 99)) t
+assert "= (cdr x) replaces tail" (xs2 iso '(1 99)) t
 
-defmacro my-when (c body):
-  quasiquote (if (unquote c) (unquote body) nil)
+defmacro my-when(c body): quasiquote (if (unquote c) (unquote body) nil)
 
 assert "macro my-when t" (my-when t 42) 42
 
@@ -3300,10 +3211,9 @@ assert "eval quoted" (eval '(+ 2 3)) 5
 
 assert "apply +" (apply + (list 1 2 3 4)) 10
 
-assert "apply list" (iso (apply list (list 1 2 3)) (list 1 2 3)) t
+assert "apply list" ((apply list (list 1 2 3)) iso (list 1 2 3)) t
 
-def noleak-local (x):
-  setf noleak-y x
+def noleak-local(x): setf noleak-y x
 
 assert "function-local assignment returns value" (noleak-local 10) 10
 
@@ -3311,15 +3221,13 @@ setq setq-top 1
 
 assert "setq top-level creates binding" setq-top 1
 
-def setq-create (x):
-  setq setq-created x
+def setq-create(x): setq setq-created x
 
 assert "setq in fn returns value" (setq-create 10) 10
 
 assert "setq in fn creates top-level" setq-created 10
 
-def setq-update (x):
-  setq setq-top x
+def setq-update(x): setq setq-top x
 
 setq-update 20
 
@@ -3332,7 +3240,7 @@ assert "setq updates local shadow" (let setq-shadow 2 (do (setq setq-shadow 3) s
 
 assert "setq local shadow preserves top-level" setq-shadow 1
 
-def setq-param (x):
+def setq-param(x):
   do:
     setq x 11
     x
@@ -3341,7 +3249,7 @@ assert "setq updates function param" (setq-param 5) 11
 
 setq setq-a 1 setq-b 2
 
-assert "setq multiple pairs" (+ setq-a setq-b) 3
+assert "setq multiple pairs" (setq-a + setq-b) 3
 
 forget 'setq-top
 
@@ -3353,10 +3261,10 @@ forget 'setq-a
 
 forget 'setq-b
 
-def counter-mk ():
+def counter-mk():
   setf cnt 0
-  def counter-inc ():
-    setf cnt (+ cnt 1)
+  def counter-inc():
+    setf cnt (cnt + 1)
     cnt
 
 setf counter (counter-mk)
@@ -3393,11 +3301,9 @@ forget 'rt
 
 setf persist_scope 42
 
-let persist_scope 99:
-  persist 'persist_scope
+let persist_scope 99: persist 'persist_scope
 
-assert "persist in local scope marks top-level" (ispersistent 'persist_scope):
-  t
+assert "persist in local scope marks top-level" (ispersistent 'persist_scope): t
 
 savedb "/tmp/alcove-test-persist-scope.db"
 
@@ -3409,40 +3315,39 @@ loaddb "/tmp/alcove-test-persist-scope.db"
 
 assert "local shadow was not saved" persist_scope 42
 
-let persist_scope 99:
-  unpersist 'persist_scope
+let persist_scope 99: unpersist 'persist_scope
 
 assert "unpersist in local scope clears top-level" (ispersistent 'persist_scope):
   nil
 
 forget 'persist_scope
 
-def countdownr (n):
-  if (< n 1):
+def countdownr(n):
+  if (n < 1):
     'done
-    countdownr (- n 1)
+    countdownr (n - 1)
 
 assert "countdown 1k tail-rec" (countdownr 1000) 'done
 
 assert "countdown 100k tail-rec" (countdownr 100000) 'done
 
-def evenq (n):
-  if (< n 1):
+def evenq(n):
+  if (n < 1):
     t
-    oddq (- n 1)
+    oddq (n - 1)
 
-def oddq (n):
-  if (< n 1):
+def oddq(n):
+  if (n < 1):
     nil
-    evenq (- n 1)
+    evenq (n - 1)
 
 assert "evenq 10000" (evenq 10000) t
 
 assert "oddq 10001" (oddq 10001) t
 
-assert "char literal" (is #\A #\A) t
+assert "char literal" (#\A is #\A) t
 
-assert "char from string" (is ("foo" 0) #\f) t
+assert "char from string" (("foo" 0) is #\f) t
 
 assert "(list) is nil" (list) nil
 
@@ -3454,7 +3359,7 @@ assert "(do)" (do) nil
 
 setf mutbuf "hello"
 
-def upcase-first (s):
+def upcase-first(s):
   setf (s 0) #\H
   s
 
@@ -3468,49 +3373,42 @@ assert "end-of-suite sentinel" 'reached 'reached
 
 setf sread6 "abcdef"
 
-def t6_sget1 (n):
-  sread6 n
+def t6_sget1(n): sread6 n
 
 assert "ticket6: var-string in def body" (t6_sget1 2) #\c
 
-def t6_sget2 (s n):
-  s n
+def t6_sget2(s n): s n
 
 assert "ticket6: passed-string in def" (t6_sget2 "hello" 1) #\e
 
-def t6_sget3 (n):
-  let _ 1:
-    sread6 n
+def t6_sget3(n):
+  let _ 1: sread6 n
 
 assert "ticket6: var-string in let body" (t6_sget3 4) #\e
 
-def t6_lit (n):
-  "abcdef" n
+def t6_lit(n): "abcdef" n
 
 assert "ticket6: literal string in def" (t6_lit 3) #\d
 
-def t6_mix (n):
+def t6_mix(n):
   let a (sread6 n):
-    let b (sread6 (+ n 1)):
-      a
+    let b (sread6 (n + 1)): a
 
 assert "ticket6: mixed reads in def" (t6_mix 0) #\a
 
 setf acc7 0
 
 for y 0 2:
-  for x 0 1:
-    setf acc7 (+ acc7 1)
-  setf acc7 (+ acc7 100)
+  for x 0 1: setf acc7 (acc7 + 1)
+  setf acc7 (acc7 + 100)
 
-assert "ticket7: nested for, multi-form outer body" acc7 (+ (* 3 2) (* 3 100))
+assert "ticket7: nested for, multi-form outer body" acc7 ((3 * 2) + (3 * 100))
 
 setf log7 (list)
 
 for i 1 3:
   setf log7 (cons (list 'in i) log7)
-  for j 1 2:
-    setf log7 (cons (list 'inner i j) log7)
+  for j 1 2: setf log7 (cons (list 'inner i j) log7)
   setf log7 (cons (list 'out i) log7)
 
 assert "ticket7: outer body forms after nested for run" (length log7) 12
@@ -3519,25 +3417,25 @@ setf n7 0
 
 for k 1 5:
   prn ""
-  setf n7 (+ n7 1)
+  setf n7 (n7 + 1)
 
 assert "ticket7: for after a NIL-returning builtin" n7 5
 
 setf s8a 0
 
 do:
-  setf s8a (+ s8a 1)
-  setf s8a (+ s8a 10)
-  setf s8a (+ s8a 100)
+  setf s8a (s8a + 1)
+  setf s8a (s8a + 10)
+  setf s8a (s8a + 100)
 
 assert "ticket8: do with mid-list comment" s8a 111
 
 setf s8b 0
 
-def f8 ():
-  setf s8b (+ s8b 1)
-  setf s8b (+ s8b 10)
-  setf s8b (+ s8b 100)
+def f8():
+  setf s8b (s8b + 1)
+  setf s8b (s8b + 10)
+  setf s8b (s8b + 100)
 
 f8()
 
@@ -3545,8 +3443,7 @@ assert "ticket8: def body with comment" s8b 111
 
 setf s8c 0
 
-def f8c ():
-  setf s8c (+ s8c 1)
+def f8c(): setf s8c (s8c + 1)
 
 f8c()
 
@@ -3554,71 +3451,61 @@ assert "ticket8: leading comment in def body" s8c 1
 
 setf s8d 0
 
-def f8d ():
-  let _ 1:
-    setf s8d (+ s8d 1)
+def f8d():
+  let _ 1: setf s8d (s8d + 1)
 
 f8d()
 
 assert "ticket8: comment inside let inside def" s8d 1
 
-def step8 ():
+def step8():
   pr ""
   pr ""
-  for i 1 3:
-    pr ""
+  for i 1 3: pr ""
 
 step8()
 
 assert "ticket8: arkanoid-shaped step" 'ok 'ok
 
-def alc001b-lit ():
-  42
+def alc001b-lit(): 42
 
 assert "alcove-001 B: def with literal body" (alc001b-lit) 42
 
-def alc001b-nil ():
-  nil
+def alc001b-nil(): nil
 
 assert "alcove-001 B: def with nil body" (alc001b-nil) nil
 
-def alc001b-sym (x):
-  x
+def alc001b-sym(x): x
 
 assert "alcove-001 B: def with bare-symbol body" (alc001b-sym 7) 7
 
 assert "alcove-001 B: anon fn with literal body" ((fn () 99)) 99
 
-def alc001a-pollute (a b c d e f):
-  + a b c d e f
+def alc001a-pollute(a b c d e f): + a b c d e f
 
 alc001a-pollute 1 2 3 4 5 6
 
-def alc001a-let ():
+def alc001a-let():
   let x 1:
     let y 2:
-      let z 3:
-        + x y z
+      let z 3: + x y z
 
 assert "alcove-001 A: nested let after pollution" (alc001a-let) 6
 
-def alc001a-with ():
-  with (p 10 q 20 r 30):
-    + p q r
+def alc001a-with():
+  with (p 10 q 20 r 30): + p q r
 
 assert "alcove-001 A: with after pollution" (alc001a-with) 60
 
-def alc001a-for ():
+def alc001a-for():
   let s 0:
-    for i 1 5:
-      setf s (+ s i)
+    for i 1 5: setf s (s + i)
     s
 
 assert "alcove-001 A: for-body after pollution" (alc001a-for) 15
 
-def alc001a-outer (m):
-  let n 100:
-    + m n
+def alc001a-outer(m):
+  let n 100: m + n
 
 assert "alcove-001 A: outer-symbol lookup through let body" (alc001a-outer 7):
   107
@@ -3635,30 +3522,28 @@ assert "alcove-002: (when t 42) -> 42" (when t 42) 42
 
 assert "alcove-002: (when t 1 2 3) -> 3" (when t 1 2 3) 3
 
-assert "alcove-002: (when t (+ 1 2)) -> 3" (when t (+ 1 2)) 3
+assert "alcove-002: (when t (+ 1 2)) -> 3" (when t (1 + 2)) 3
 
 assert "alcove-002: (when nil 42) -> nil" (when nil 42) nil
 
-def alc002-helper (n):
-  n
+def alc002-helper(n): n
 
-def alc002-and-leak ():
+def alc002-and-leak():
   when t:
     and (alc002-helper nil) 7
 
 assert "alcove-002: tail-leak through (and) earlier arg" (alc002-and-leak) nil
 
-def alc002-or-leak ():
+def alc002-or-leak():
   when t:
     or (alc002-helper nil) 7
 
 assert "alcove-002: tail-leak through (or) earlier arg" (alc002-or-leak) 7
 
-def vec->list (v):
+def vec->list(v):
   let xs (list):
     do:
-      for i 0 (- (vec-len v) 1):
-        setf xs (cons (vec-ref v i) xs)
+      for i 0 ((vec-len v) - 1): setf xs (cons (vec-ref v i) xs)
       reverse xs
 
 setf vd-a (vec 4 0)
@@ -3719,13 +3604,11 @@ assert "vec-dot: orthogonal vecs" (vec-dot e1 e2) 0.0
 
 setf ax-y (vec 4 0)
 
-for i 0 3:
-  vec-set! ax-y i 10
+for i 0 3: vec-set! ax-y i 10
 
 setf ax-x (vec 4 0)
 
-for i 0 3:
-  vec-set! ax-x i (+ i 1)
+for i 0 3: vec-set! ax-x i (i + 1)
 
 vec-axpy! ax-y 3 ax-x
 
@@ -3764,7 +3647,7 @@ setf ax-y4 (vec 2 1)
 
 setf ax-x4 (vec 2 1)
 
-assert "vec-axpy!: returns y" (iso (vec-axpy! ax-y4 1 ax-x4) ax-y4) t
+assert "vec-axpy!: returns y" ((vec-axpy! ax-y4 1 ax-x4) iso ax-y4) t
 
 setf sc-v (vec 4 0)
 
@@ -3794,13 +3677,11 @@ assert "vec-scale!: halving" (vec->list sc-v2) (list 1.0 2.0 4.0)
 
 setf ad-y (vec 4 0)
 
-for i 0 3:
-  vec-set! ad-y i (+ i 1)
+for i 0 3: vec-set! ad-y i (i + 1)
 
 setf ad-x (vec 4 0)
 
-for i 0 3:
-  vec-set! ad-x i (* i 10)
+for i 0 3: vec-set! ad-x i (i * 10)
 
 vec-add! ad-y ad-x
 
@@ -3810,8 +3691,7 @@ setf cl-cnt (vec 5 0.0)
 
 setf cl-src (vec 5 0.0)
 
-for i 0 4:
-  vec-set! cl-src i (* i 1.0)
+for i 0 4: vec-set! cl-src i (i * 1.0)
 
 vec-count-le! cl-cnt cl-src 2.0
 
@@ -3822,7 +3702,7 @@ assert "vec-count-le!: masked increment" (vec->list cl-cnt):
 
 setf cl-n (vec 2 0.0)
 
-vec-set! cl-n 0 (* 1.0e308 1.0e308)
+vec-set! cl-n 0 (1.0e308 * 1.0e308)
 
 vec-set! cl-n 1 1.0
 
@@ -3836,8 +3716,7 @@ setf fl-v (vec 5 99)
 
 vec-fill! fl-v -1.5
 
-assert "vec-fill!: float fill" (vec->list fl-v):
-  list -1.5 -1.5 -1.5 -1.5 -1.5
+assert "vec-fill!: float fill" (vec->list fl-v): list -1.5 -1.5 -1.5 -1.5 -1.5
 
 setf rl-v (vec 5 0)
 
@@ -3933,8 +3812,7 @@ vec-set! cp-src 3 40
 
 vec-copy! cp-dst cp-src
 
-assert "vec-copy!: contents match source" (vec->list cp-dst):
-  list 10 20 30 40
+assert "vec-copy!: contents match source" (vec->list cp-dst): list 10 20 30 40
 
 vec-set! cp-src 0 999
 
@@ -3952,7 +3830,7 @@ setf grad-d (vec 3 0)
 
 vec-copy! grad-d grad-probs
 
-vec-set! grad-d 1 (- (vec-ref grad-d 1) 1.0)
+vec-set! grad-d 1 ((vec-ref grad-d 1) - 1.0)
 
 assert "tensor combo: softmax-CE gradient" (vec->list grad-d):
   list 0.25 -0.5 0.25
@@ -4093,7 +3971,7 @@ setf ts-b (vec 3 2.0)
 assert "vec-sub!: elementwise" (do (vec-sub! ts-a ts-b) (vec->list ts-a)):
   list 3.0 3.0 3.0
 
-assert "vec-mul!: returns target" (do (setf m1 (vec 2 4.0)) (is (vec-mul! m1 (vec 2 1.0)) m1)):
+assert "vec-mul!: returns target" (do (setf m1 (vec 2 4.0)) ((vec-mul! m1 (vec 2 1.0)) is m1)):
   t
 
 assert "vec-sum: float" (vec-sum (vec 4 2.5)) 10.0
@@ -4143,11 +4021,11 @@ vec-set! sm 2 3.0
 
 vec-softmax! sm
 
-assert-true "vec-softmax!: sums to ~1" (< (abs (- (vec-sum sm) 1.0)) 0.0000001)
+assert-true "vec-softmax!: sums to ~1" ((abs ((vec-sum sm) - 1.0)) < 0.0000001)
 
-assert-true "vec-softmax!: order preserved" (< (vec-ref sm 0) (vec-ref sm 2))
+assert-true "vec-softmax!: order preserved" ((vec-ref sm 0) < (vec-ref sm 2))
 
-assert-true "vec-softmax!: stable on large inputs (no overflow)" (do (setf big (vec 2 0)) (vec-set! big 0 1000.0) (vec-set! big 1 1001.0) (vec-softmax! big) (< (abs (- (vec-sum big) 1.0)) 0.0000001))
+assert-true "vec-softmax!: stable on large inputs (no overflow)" (do (setf big (vec 2 0)) (vec-set! big 0 1000.0) (vec-set! big 1 1001.0) (vec-softmax! big) ((abs ((vec-sum big) - 1.0)) < 0.0000001))
 
 assert "vec-mul!: promotes int vec" (do (setf iv (vec 3 2)) (vec-mul! iv (vec 3 3)) (vec-ref iv 0)):
   6.0
@@ -4164,10 +4042,10 @@ setf mvA (vec 6 0)
 
 setf mvi 0
 
-while (< mvi 6):
+while (mvi < 6):
   do:
-    vec-set! mvA mvi (float (+ mvi 1))
-    setf mvi (+ mvi 1)
+    vec-set! mvA mvi (float (mvi + 1))
+    setf mvi (mvi + 1)
 
 setf mvY (mat-vec mvA (vec 3 1.0))
 
@@ -4237,7 +4115,7 @@ setf vfbB (string->blob "ABC")
 
 setf vfbV (vec 3 0.0)
 
-assert "vec-from-blob!: returns v" (is (vec-from-blob! vfbV vfbB 0) vfbV) t
+assert "vec-from-blob!: returns v" ((vec-from-blob! vfbV vfbB 0) is vfbV) t
 
 assert "vec-from-blob!: v[0]" (vec-ref vfbV 0) 65.0
 
@@ -4303,10 +4181,10 @@ setf nsA (vec 6 0)
 
 setf nsi 0
 
-while (< nsi 6):
+while (nsi < 6):
   do:
-    vec-set! nsA nsi (float (+ nsi 1))
-    setf nsi (+ nsi 1)
+    vec-set! nsA nsi (float (nsi + 1))
+    setf nsi (nsi + 1)
 
 setf nsB (vec 3 1.0)
 
@@ -4369,8 +4247,7 @@ assert "sqrt-int: recovers after type error" 42 42
 
 setf dq4 (vec 0 nil)
 
-for i 0 99:
-  vec-push! dq4 i
+for i 0 99: vec-push! dq4 i
 
 assert "vec-push!: 100 pushes length" (vec-len dq4) 100
 
@@ -4384,7 +4261,7 @@ for i 0 49:
   do:
     vec-push! dq5 i
     vec-shift! dq5
-    vec-push! dq5 (+ i 1000)
+    vec-push! dq5 (i + 1000)
 
 assert "vec-push!/shift! alternation" (vec-len dq5) 50
 
@@ -4432,7 +4309,7 @@ assert "blob?: list" (blob? (list 1)) nil
 
 assert "blob literal: type" (blob? (string->blob "test")) t
 
-assert "blob literal: value" (iso (string->blob "test") (string->blob "test")):
+assert "blob literal: value" ((string->blob "test") iso (string->blob "test")):
   t
 
 assert "blob literal: escaped \"" (blob->string (string->blob "a\"b")) "a\"b"
@@ -4553,217 +4430,212 @@ assert "dict?: no args" (dict?) nil
 
 assert "deque?: no args" (deque?) nil
 
-def bm-fib (n):
-  if (< n 2):
+def bm-fib(n):
+  if (n < 2):
     n
-    + (bm-fib (- n 1)) (bm-fib (- n 2))
+    (bm-fib (n - 1)) + (bm-fib (n - 2))
 
 assert "bench fib 33" (bm-fib 33) 3524578
 
-def bm-fact (n):
-  if (< n 2):
+def bm-fact(n):
+  if (n < 2):
     1
-    * n (bm-fact (- n 1))
+    n * (bm-fact (n - 1))
 
 assert "bench fact 19" (bm-fact 19) 121645100408832000
 
-def bm-countdown (n):
-  if (> n 0):
-    bm-countdown (- n 1)
+def bm-countdown(n):
+  if (n > 0):
+    bm-countdown (n - 1)
     n
 
 assert "bench countdown 1000" (bm-countdown 1000) 0
 
-def bm-ack (m n):
-  if (is m 0):
-    + n 1
-    if (is n 0):
-      bm-ack (- m 1) 1
-      bm-ack (- m 1) (bm-ack m (- n 1))
+def bm-ack(m n):
+  if (m is 0):
+    n + 1
+    if (n is 0):
+      bm-ack (m - 1) 1
+      bm-ack (m - 1) (bm-ack m (n - 1))
 
 assert "bench ackermann 3 7" (bm-ack 3 7) 1021
 
-def bm-forsum (n):
+def bm-forsum(n):
   let s 0:
-    for i 1 n:
-      setf s (+ s 1)
+    for i 1 n: setf s (s + 1)
 
 assert "bench forsum 1000000" (bm-forsum 1000000) 1000000
 
-def bm-build (i n acc):
-  if (> i n):
+def bm-build(i n acc):
+  if (i > n):
     acc
-    bm-build (+ i 1) n (cons i acc)
+    bm-build (i + 1) n (cons i acc)
 
-assert "bench listsum 1..100000" (reduce (fn (a b) (+ a b)) 0 (bm-build 1 100000 (list))):
+assert "bench listsum 1..100000" (reduce (fn (a b) (a + b)) 0 (bm-build 1 100000 (list))):
   5000050000
 
-def nq-safe? (c qs offset):
+def nq-safe?(c qs offset):
   if (no qs):
     t
-    if (is c (car qs)):
+    if (c is (car qs)):
       nil
-      if (is (+ c offset) (car qs)):
+      if ((c + offset) is (car qs)):
         nil
-        if (is (- c offset) (car qs)):
+        if ((c - offset) is (car qs)):
           nil
-          nq-safe? c (cdr qs) (+ offset 1)
+          nq-safe? c (cdr qs) (offset + 1)
 
-def nq-try-cols (n c qs row-acc):
-  if (> c n):
+def nq-try-cols(n c qs row-acc):
+  if (c > n):
     row-acc
-    nq-try-cols n (+ c 1):
+    nq-try-cols n (c + 1):
       qs
       if (nq-safe? c qs 1):
-        + row-acc (nq-solve n (cons c qs))
+        row-acc + (nq-solve n (cons c qs))
         row-acc
 
-def nq-solve (n qs):
-  if (is (length qs) n):
+def nq-solve(n qs):
+  if ((length qs) is n):
     1
     nq-try-cols n 1 qs 0
 
 assert "bench nqueens 10" (nq-solve 10 (list)) 724
 
-def nqv-safe? (col qs row offset):
-  if (>= offset row):
+def nqv-safe?(col qs row offset):
+  if (offset >= row):
     t
-    if (is col (vec-ref qs offset)):
+    if (col is (vec-ref qs offset)):
       nil
-      if (is (- col (- row offset)) (vec-ref qs offset)):
+      if ((col - (row - offset)) is (vec-ref qs offset)):
         nil
-        if (is (+ col (- row offset)) (vec-ref qs offset)):
+        if ((col + (row - offset)) is (vec-ref qs offset)):
           nil
-          nqv-safe? col qs row (+ offset 1)
+          nqv-safe? col qs row (offset + 1)
 
-def nqv-try-cols (n row col qs acc):
-  if (>= col n):
+def nqv-try-cols(n row col qs acc):
+  if (col >= n):
     acc
     if (nqv-safe? col qs row 0):
       do:
         vec-set! qs row col
-        nqv-try-cols n row (+ col 1) qs (+ acc (nqv-solve n (+ row 1) qs))
-      nqv-try-cols n row (+ col 1) qs acc
+        nqv-try-cols n row (col + 1) qs (acc + (nqv-solve n (row + 1) qs))
+      nqv-try-cols n row (col + 1) qs acc
 
-def nqv-solve (n row qs):
-  if (>= row n):
+def nqv-solve(n row qs):
+  if (row >= n):
     1
     nqv-try-cols n row 0 qs 0
 
 assert "bench nqueens-vec 10" (nqv-solve 10 0 (vec 10 0)) 724
 
-def sv-is-prime-given (acc i):
+def sv-is-prime-given(acc i):
   if (no acc):
     t
-    if (is (mod i (car acc)) 0):
+    if ((i mod (car acc)) is 0):
       nil
       sv-is-prime-given (cdr acc) i
 
-def sv-primes-up-to (i n acc):
-  if (> i n):
+def sv-primes-up-to(i n acc):
+  if (i > n):
     acc
     if (sv-is-prime-given acc i):
-      sv-primes-up-to (+ i 1) n (cons i acc)
-      sv-primes-up-to (+ i 1) n acc
+      sv-primes-up-to (i + 1) n (cons i acc)
+      sv-primes-up-to (i + 1) n acc
 
 assert "bench sieve up to 5000" (length (sv-primes-up-to 2 5000 (list))) 669
 
-def sf-mark-composites (i n marks):
-  if (> (* i i) n):
+def sf-mark-composites(i n marks):
+  if ((i * i) > n):
     nil
     do:
       if (vec-ref marks i):
-        sf-mark-from i (* i i) n marks
+        sf-mark-from i (i * i) n marks
         nil
-      sf-mark-composites (+ i 1) n marks
+      sf-mark-composites (i + 1) n marks
 
-def sf-mark-from (step j n marks):
-  if (> j n):
+def sf-mark-from(step j n marks):
+  if (j > n):
     nil
     do:
       vec-set! marks j nil
-      sf-mark-from step (+ j step) n marks
+      sf-mark-from step (j + step) n marks
 
-def sf-count-primes (i n marks acc):
-  if (> i n):
+def sf-count-primes(i n marks acc):
+  if (i > n):
     acc
-    sf-count-primes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc)
+    sf-count-primes (i + 1) n marks (if (vec-ref marks i) (acc + 1) acc)
 
 setf sf-n 100000
 
-setf sf-marks (vec (+ sf-n 1) t)
+setf sf-marks (vec (sf-n + 1) t)
 
 sf-mark-composites 2 sf-n sf-marks
 
-assert "bench sieve-fast up to 100000" (sf-count-primes 2 sf-n sf-marks 0):
-  9592
+assert "bench sieve-fast up to 100000" (sf-count-primes 2 sf-n sf-marks 0): 9592
 
-def bm-tak (x y z):
-  if (no (< y x)):
+def bm-tak(x y z):
+  if (no (y < x)):
     z
-    bm-tak (bm-tak (- x 1) y z) (bm-tak (- y 1) z x) (bm-tak (- z 1) x y)
+    bm-tak (bm-tak (x - 1) y z) (bm-tak (y - 1) z x) (bm-tak (z - 1) x y)
 
 assert "bench tak 24 16 8" (bm-tak 24 16 8) 9
 
-def bm-faccadd (n acc):
-  if (< n 100000):
-    bm-faccadd (+ n 1) (+ acc 0.5)
+def bm-faccadd(n acc):
+  if (n < 100000):
+    bm-faccadd (n + 1) (acc + 0.5)
     acc
 
-def bm-faccsub (n acc):
-  if (< n 100000):
-    bm-faccsub (+ n 1) (- acc 0.5)
+def bm-faccsub(n acc):
+  if (n < 100000):
+    bm-faccsub (n + 1) (acc - 0.5)
     acc
 
-def bm-faccmul (n acc):
-  if (< n 64):
-    bm-faccmul (+ n 1) (* acc 2.0)
+def bm-faccmul(n acc):
+  if (n < 64):
+    bm-faccmul (n + 1) (acc * 2.0)
     acc
 
 assert "facc add (float seed)" (bm-faccadd 0 0.0) 50000.0
 
 assert "facc add (int seed)" (bm-faccadd 0 0) 50000.0
 
-assert "facc add result is float" (iso (bm-faccadd 0 0) 50000.0) t
+assert "facc add result is float" ((bm-faccadd 0 0) iso 50000.0) t
 
-assert "facc add result not int" (iso (bm-faccadd 0 0) 50000) nil
+assert "facc add result not int" ((bm-faccadd 0 0) iso 50000) nil
 
 assert "facc sub" (bm-faccsub 0 0.0) -50000.0
 
 assert "facc mul" (bm-faccmul 0 1.0) (** 2.0 64)
 
-assert "facc 0-iter int seed" (iso (bm-faccadd 200000 7) 7) t
+assert "facc 0-iter int seed" ((bm-faccadd 200000 7) iso 7) t
 
-assert "facc 0-iter int not flt" (iso (bm-faccadd 200000 7) 7.0) nil
+assert "facc 0-iter int not flt" ((bm-faccadd 200000 7) iso 7.0) nil
 
-assert "facc 0-iter float seed" (iso (bm-faccadd 200000 7.5) 7.5) t
+assert "facc 0-iter float seed" ((bm-faccadd 200000 7.5) iso 7.5) t
 
 assert "facc negative seed" (bm-faccadd 0 -25000.0) 25000.0
 
 setf wh-n 0
 
-while (< wh-n 5):
-  setf wh-n (+ wh-n 1)
+while (wh-n < 5): setf wh-n (wh-n + 1)
 
 assert "while counts to 5" wh-n 5
 
 setf wh-x 10
 
-while nil:
-  setf wh-x 0
+while nil: setf wh-x 0
 
 assert "while nil-cond never runs" wh-x 10
 
 setf wh-last 0
 
-while (< wh-last 3):
-  setf wh-last (+ wh-last 1)
+while (wh-last < 3): setf wh-last (wh-last + 1)
 
 assert "while final value" wh-last 3
 
 setf rep-n 0
 
-repeat 4 (setf rep-n (+ rep-n 1))
+repeat 4 (setf rep-n (rep-n + 1))
 
 assert "repeat 4 increments" rep-n 4
 
@@ -4775,7 +4647,7 @@ setf each-sum 0
 
 each x:
   list 10 20 30
-  setf each-sum (+ each-sum x)
+  setf each-sum (each-sum + x)
 
 assert "each list sum" each-sum 60
 
@@ -4807,30 +4679,25 @@ setf each-nilelt 0
 
 each x:
   list nil 5
-  setf each-nilelt (+ each-nilelt 1)
+  setf each-nilelt (each-nilelt + 1)
 
 assert "each over nil element" each-nilelt 2
 
-def tc-takes (x):
-  x
+def tc-takes(x): x
 
-def tc-caller ():
+def tc-caller():
   do:
-    fn (q):
-      q
+    fn(q): q
     tc-takes (list (list 1 2) (list 3 4))
 
-assert "tail-call computed list arg" (iso (tc-caller) (list (list 1 2) (list 3 4))):
+assert "tail-call computed list arg" ((tc-caller) iso (list (list 1 2) (list 3 4))):
   t
 
-def bt-c ():
-  backtrace()
+def bt-c(): backtrace()
 
-def bt-b ():
-  car (cons (bt-c) 0)
+def bt-b(): car (cons (bt-c) 0)
 
-def bt-a ():
-  car (cons (bt-b) 0)
+def bt-a(): car (cons (bt-b) 0)
 
 setf _bt (bt-a)
 
@@ -4850,8 +4717,8 @@ assert "case no match no default" (case 9 1 "one" 2 "two") nil
 
 assert "case string key" (case "b" "a" 1 "b" 2 "c" 3) 2
 
-def classify (n):
-  case (mod n 3):
+def classify(n):
+  case (n mod 3):
     0
     "div3"
     1
@@ -4878,7 +4745,7 @@ assert "double-not identity" (~ (~ -5)) -5
 
 setf rnd (random 100)
 
-assert "random in [0,100)" (and (>= rnd 0) (< rnd 100)) t
+assert "random in [0,100)" (and (rnd >= 0) (rnd < 100)) t
 
 assert "random 0 → 0" (random 0) 0
 
@@ -4886,11 +4753,9 @@ assert "random returns fixnum" (number? (random 1000)) t
 
 assert "random no-arg is fixnum" (number? (random)) t
 
-defmacro mx-double (x):
-  list '* 2 x
+defmacro mx-double(x): list '* 2 x
 
-defmacro mx-swap (a b):
-  list 'list b a
+defmacro mx-swap(a b): list 'list b a
 
 setf mx-res (macroexpand-1 '(mx-double 7))
 
@@ -4900,7 +4765,7 @@ assert "macroexpand-1 arg1" (car (cdr mx-res)) 2
 
 assert "macroexpand-1 arg2" (car (cdr (cdr mx-res))) 7
 
-assert "macroexpand-1 non-macro" (iso (macroexpand-1 '(+ 1 2)) '(+ 1 2)) t
+assert "macroexpand-1 non-macro" ((macroexpand-1 '(+ 1 2)) iso '(+ 1 2)) t
 
 assert "macroexpand-1 gives form" (pair? (macroexpand-1 '(mx-swap a b))) t
 
@@ -4950,7 +4815,7 @@ setf ks2 (keys hm2)
 
 setf vs2 (vals hm2)
 
-assert "keys/vals aligned" (is (get hm2 (car ks2)) (car vs2)) t
+assert "keys/vals aligned" ((get hm2 (car ks2)) is (car vs2)) t
 
 setf hs (hash-set 1 2 3 2 1)
 
@@ -5047,21 +4912,21 @@ assert "apply min" (apply min (list 3 1 4 1 5)) 1
 
 assert "apply str" (apply str (list "a" "b" "c")) "abc"
 
-assert "apply list" (iso (apply list (list 1 2 3)) (list 1 2 3)) t
+assert "apply list" ((apply list (list 1 2 3)) iso (list 1 2 3)) t
 
-assert "map empty list" (iso (map (fn (x) x) nil) nil) t
+assert "map empty list" ((map (fn (x) x) nil) iso nil) t
 
-assert "map identity" (iso (map (fn (x) x) (list 1 2 3)) (list 1 2 3)) t
+assert "map identity" ((map (fn (x) x) (list 1 2 3)) iso (list 1 2 3)) t
 
-assert "map square" (iso (map (fn (x) (* x x)) (list 2 3)) (list 4 9)) t
+assert "map square" ((map (fn (x) (x * x)) (list 2 3)) iso (list 4 9)) t
 
 assert "filter all-pass" (length (filter odd (list 1 3 5))) 3
 
-assert "filter all-fail" (iso (filter odd (list 2 4 6)) nil) t
+assert "filter all-fail" ((filter odd (list 2 4 6)) iso nil) t
 
-assert "filter empty" (iso (filter odd nil) nil) t
+assert "filter empty" ((filter odd nil) iso nil) t
 
-assert "filter one-pass" (iso (filter (fn (x) (> x 3)) (list 1 2 3 4 5)) (list 4 5)):
+assert "filter one-pass" ((filter (fn (x) (x > 3)) (list 1 2 3 4 5)) iso (list 4 5)):
   t
 
 assert "reduce sum" (reduce + 0 (list 1 2 3 4 5)) 15
@@ -5090,9 +4955,9 @@ assert "do returns last" do-ret 42
 
 assert "let inner shadows outer" (let x 99 (let x 1 x)) 1
 
-assert "let outer visible after inner" (let x 5 (let y 10 (+ x y))) 15
+assert "let outer visible after inner" (let x 5 (let y 10 (x + y))) 15
 
-assert "with multiple bindings" (with (a 3 b 4) (+ (* a a) (* b b))) 25
+assert "with multiple bindings" (with (a 3 b 4) ((a * a) + (b * b))) 25
 
 assert "string-append empty" (string-append) ""
 
@@ -5120,13 +4985,13 @@ assert "str of float" (str 1.5) "1.5"
 
 assert "str of nil" (str nil) "nil"
 
-assert "integer division truncates" (/ 7 2) 3
+assert "integer division truncates" (7 / 2) 3
 
-assert "float division" (/ 7.0 2) 3.5
+assert "float division" (7.0 / 2) 3.5
 
-assert "mod positive" (mod 10 3) 1
+assert "mod positive" (10 mod 3) 1
 
-assert "mod negative dividend" (mod -7 3) -1
+assert "mod negative dividend" (-7 mod 3) -1
 
 assert "abs of zero" (abs 0) 0
 
@@ -5176,29 +5041,29 @@ assert "nth 2 list" (nth 2 (list 10 20 30)) 30
 
 assert "nth out-of-range nil" (nth 5 (list 1 2 3)) nil
 
-assert "reverse nil" (iso (reverse nil) nil) t
+assert "reverse nil" ((reverse nil) iso nil) t
 
-assert "reverse one" (iso (reverse (list 1)) (list 1)) t
+assert "reverse one" ((reverse (list 1)) iso (list 1)) t
 
-assert "append nil nil" (iso (append nil nil) nil) t
+assert "append nil nil" ((append nil nil) iso nil) t
 
 assert "char? char" (char? #\a) t
 
 assert "char? int" (char? 65) nil
 
-assert "char=char" (is #\a #\a) t
+assert "char=char" (#\a is #\a) t
 
-assert "char<>char" (is #\a #\b) nil
+assert "char<>char" (#\a is #\b) nil
 
-assert "is same fixnum" (is 42 42) t
+assert "is same fixnum" (42 is 42) t
 
-assert "is same string ptr" (is "hi" "hi") t
+assert "is same string ptr" ("hi" is "hi") t
 
-assert "iso equal strings" (iso "hi" "hi") t
+assert "iso equal strings" ("hi" iso "hi") t
 
-assert "iso equal lists" (iso (list 1 2) (list 1 2)) t
+assert "iso equal lists" ((list 1 2) iso (list 1 2)) t
 
-assert "iso nil nil" (iso nil nil) t
+assert "iso nil nil" (nil iso nil) t
 
 assert "isnt" (isnt 1 2) t
 
@@ -5266,8 +5131,7 @@ assert ">> neg / sign-ext" (>> -8 1) -4
 
 setf tv (vec 5 0)
 
-for i 0 4:
-  vec-set! tv i (* i i)
+for i 0 4: vec-set! tv i (i * i)
 
 assert "vec-set!/ref loop" (vec-ref tv 4) 16
 
@@ -5297,7 +5161,7 @@ assert "vec-pop returns last" pv 40
 
 assert "vec-pop shrinks" (vec-len tv2) 3
 
-/ 1 0
+1 / 0
 
 assert "recovery after div-by-zero" 1 1
 
@@ -5313,9 +5177,9 @@ car 42
 
 assert "recovery after car-non-pair" 1 1
 
-assert "hex escape \\x09 = tab" (is "\x09" "\x09") t
+assert "hex escape \\x09 = tab" ("\x09" is "\x09") t
 
-assert "hex escape \\x0f = \\x0F" (iso "\x0f" "\x0F") t
+assert "hex escape \\x0f = \\x0F" ("\x0f" iso "\x0F") t
 
 assert "hex escape \\x39 = 9" (blob-ref (string->blob "\x39") 0) 57
 
@@ -5323,7 +5187,7 @@ assert "hex escape \\x19" (blob-len (string->blob "\x19")) 1
 
 assert "hex escape \\xff" (blob-len (string->blob "\xff")) 1
 
-def _anon_persist (fn (x) (* x x))
+def _anon_persist (fn (x) (x * x))
 
 savedb "/tmp/alcove-bugfix-dump.db"
 
@@ -5355,7 +5219,7 @@ assert "(- 5) still works" (- 5) -5
 
 assert "(- -5) still works" (- -5) 5
 
-assert "deeply nested parse ok" (+ (+ (+ 1 2) (+ 3 4)) (+ (+ 5 6) (+ 7 8))) 36
+assert "deeply nested parse ok" (((1 + 2) + (3 + 4)) + ((5 + 6) + (7 + 8))) 36
 
 setf _ushift_v (vec 3 0)
 
@@ -5401,16 +5265,16 @@ assert "load string roundtrip" _saved_str "hello"
 
 assert "load number roundtrip" _saved_num 42
 
-assert "load float roundtrip" (iso _saved_float 3.14) t
+assert "load float roundtrip" (_saved_float iso 3.14) t
 
 assert "sqrt-int large fixnum" (sqrt-int 1152921504606846975) 1073741823
 
 assert "sqrt-int perfect square" (sqrt-int 1073741824) 32768
 
-assert "sqrt-int near max correct" (* (sqrt-int 1152921504606846975) (sqrt-int 1152921504606846975)):
+assert "sqrt-int near max correct" ((sqrt-int 1152921504606846975) * (sqrt-int 1152921504606846975)):
   1152921502459363329
 
-assert "normal refcount still works" (+ 1 2) 3
+assert "normal refcount still works" (1 + 2) 3
 
 setf _tmp_str "guard test"
 
@@ -5418,21 +5282,21 @@ setf _tmp_str nil
 
 assert "string unrefexp ok" 1 1
 
-assert "round" (iso (round 2.6) 3.0) t
+assert "round" ((round 2.6) iso 3.0) t
 
-assert "floor" (iso (floor 2.9) 2.0) t
+assert "floor" ((floor 2.9) iso 2.0) t
 
-assert "ceil" (iso (ceil 2.1) 3.0) t
+assert "ceil" ((ceil 2.1) iso 3.0) t
 
-assert "truncate toward zero" (iso (truncate -2.7) -2.0) t
+assert "truncate toward zero" ((truncate -2.7) iso -2.0) t
 
-assert "log 1 = 0" (iso (log 1.0) 0.0) t
+assert "log 1 = 0" ((log 1.0) iso 0.0) t
 
-assert "sin 0 = 0" (iso (sin 0.0) 0.0) t
+assert "sin 0 = 0" ((sin 0.0) iso 0.0) t
 
-assert "cos 0 = 1" (iso (cos 0.0) 1.0) t
+assert "cos 0 = 1" ((cos 0.0) iso 1.0) t
 
-assert "float coerces int" (iso (float 5) 5.0) t
+assert "float coerces int" ((float 5) iso 5.0) t
 
 assert "int truncates float" (int 3.9) 3
 
@@ -5447,31 +5311,31 @@ assert "fmt rejects '*' (no UB)" (fmt "{:*d}" 5) "{:*d}"
 
 assert "fmt rejects embedded %" (fmt "{:d%d}" 5) "{:d%d}"
 
-assert "quasiquote unquote" (iso (quasiquote (1 (unquote (+ 1 1)) 3)) (list 1 2 3)):
+assert "quasiquote unquote" ((quasiquote (1 (unquote (1 + 1)) 3)) iso (list 1 2 3)):
   t
 
 setf _qsplice (list 2 3)
 
-assert "quasiquote splice" (iso (quasiquote (1 (unquote-splicing _qsplice) 4)) (list 1 2 3 4)):
+assert "quasiquote splice" ((quasiquote (1 (unquote-splicing _qsplice) 4)) iso (list 1 2 3 4)):
   t
 
-assert "sort default" (iso (sort (list 3 1 2)) (list 1 2 3)) t
+assert "sort default" ((sort (list 3 1 2)) iso (list 1 2 3)) t
 
-assert "sort-by key-fn" (iso (sort-by (fn (x) (- 0 x)) (list 1 2 3)) (list 3 2 1)):
+assert "sort-by key-fn" ((sort-by (fn (x) (0 - x)) (list 1 2 3)) iso (list 3 2 1)):
   t
 
-assert "take n" (iso (take 2 (list 1 2 3 4)) (list 1 2)) t
+assert "take n" ((take 2 (list 1 2 3 4)) iso (list 1 2)) t
 
-assert "drop n" (iso (drop 2 (list 1 2 3 4)) (list 3 4)) t
+assert "drop n" ((drop 2 (list 1 2 3 4)) iso (list 3 4)) t
 
-assert "range start end" (iso (range 0 4) (list 0 1 2 3)) t
+assert "range start end" ((range 0 4) iso (list 0 1 2 3)) t
 
-assert "range with step" (iso (range 0 6 2) (list 0 2 4)) t
+assert "range with step" ((range 0 6 2) iso (list 0 2 4)) t
 
-assert "zip stops at shorter" (iso (zip (list 1 2) (list 3 4)) (list (list 1 3) (list 2 4))):
+assert "zip stops at shorter" ((zip (list 1 2) (list 3 4)) iso (list (list 1 3) (list 2 4))):
   t
 
-assert "flatten nested" (iso (flatten (list 1 (list 2 (list 3)))) (list 1 2 3)):
+assert "flatten nested" ((flatten (list 1 (list 2 (list 3)))) iso (list 1 2 3)):
   t
 
 assert "list? proper list" (list? (list 1 2)) t
@@ -5482,7 +5346,7 @@ assert "gensym is a symbol" (symbol? (gensym)) t
 
 assert "with-gensyms binds symbols" (with-gensyms (a b) (symbol? a)) t
 
-assert "with-gensyms names distinct" (with-gensyms (a b) (is a b)) nil
+assert "with-gensyms names distinct" (with-gensyms (a b) (a is b)) nil
 
 assert "string-contains? hit" (string-contains? "hello world" "world") t
 
@@ -5492,27 +5356,25 @@ assert "string-index" (string-index "hello" "ll") 2
 
 assert "string-replace all" (string-replace "a-b-c" "-" "+") "a+b+c"
 
-assert "error? on error value" (error? (/ 1 0)) t
+assert "error? on error value" (error? (1 / 0)) t
 
 assert "error? on non-error" (error? 5) nil
 
-assert "error-message is a string" (string? (error-message (/ 1 0))) t
+assert "error-message is a string" (string? (error-message (1 / 0))) t
 
-assert "try passes value through" (try (+ 1 2) (fn (e) 99)) 3
+assert "try passes value through" (try (1 + 2) (fn (e) 99)) 3
 
-assert "try catches + runs handler" (try (/ 1 0) (fn (e) 'caught)) 'caught
+assert "try catches + runs handler" (try (1 / 0) (fn (e) 'caught)) 'caught
 
-def restfn-all args:
-  args
+def restfn-all args: args
 
-assert "rest: bare-symbol collects" (iso (restfn-all 1 2 3) (list 1 2 3)) t
+assert "rest: bare-symbol collects" ((restfn-all 1 2 3) iso (list 1 2 3)) t
 
-def restfn-dot (a . more):
-  more
+def restfn-dot(a . more): more
 
-assert "rest: dotted after fixed" (iso (restfn-dot 1 2 3) (list 2 3)) t
+assert "rest: dotted after fixed" ((restfn-dot 1 2 3) iso (list 2 3)) t
 
-assert "rest: anon fn bare-symbol" (iso ((fn xs xs) 7 8) (list 7 8)) t
+assert "rest: anon fn bare-symbol" (((fn xs xs) 7 8) iso (list 7 8)) t
 
 setf _vp (vec 3 0)
 
@@ -5546,8 +5408,7 @@ assert "vec-push! cap2 boundary" (vec-len _vp2) 4
 
 setf _vpm (vec 1 0)
 
-for i 1 50:
-  vec-push! _vpm i
+for i 1 50: vec-push! _vpm i
 
 assert "vec-push! many: length" (vec-len _vpm) 51
 
@@ -5567,12 +5428,11 @@ vec-push! _vs 8
 
 vec-push! _vs 9
 
-assert "vec-push! after shifts" (vec-ref _vs (- (vec-len _vs) 1)) 9
+assert "vec-push! after shifts" (vec-ref _vs ((vec-len _vs) - 1)) 9
 
 setf _vu (vec 2 0)
 
-for i 1 30:
-  vec-unshift! _vu i
+for i 1 30: vec-unshift! _vu i
 
 assert "vec-unshift! grows (len)" (vec-len _vu) 32
 
@@ -5594,25 +5454,24 @@ assert "cons keeps 0 cdr" (cdr (cons 1 0)) 0
 
 assert "cons keeps empty-str cdr" (cdr (cons 1 "")) ""
 
-assert "cons nil cdr -> proper list" (iso (cons 1 nil) (list 1)) t
+assert "cons nil cdr -> proper list" ((cons 1 nil) iso (list 1)) t
 
-assert "cons list cdr -> prepend" (iso (cons 1 (list 2 3)) (list 1 2 3)) t
+assert "cons list cdr -> prepend" ((cons 1 (list 2 3)) iso (list 1 2 3)) t
 
 assert "cons improper pair car" (car (cons 4 5)) 4
 
-assert "iso equal vectors" (iso (vector 1 2 3) (vector 1 2 3)) t
+assert "iso equal vectors" ((vector 1 2 3) iso (vector 1 2 3)) t
 
-assert "iso vectors differ" (iso (vector 1 2 3) (vector 1 2 4)) nil
+assert "iso vectors differ" ((vector 1 2 3) iso (vector 1 2 4)) nil
 
-assert "iso vectors length differ" (iso (vector 1 2) (vector 1 2 3)) nil
+assert "iso vectors length differ" ((vector 1 2) iso (vector 1 2 3)) nil
 
-assert "iso nested vectors" (iso (vector (vector 1) (vector 2)) (vector (vector 1) (vector 2))):
+assert "iso nested vectors" ((vector (vector 1) (vector 2)) iso (vector (vector 1) (vector 2))):
   t
 
-assert "iso vector inside list" (iso (list (vector 1 2)) (list (vector 1 2))):
-  t
+assert "iso vector inside list" ((list (vector 1 2)) iso (list (vector 1 2))): t
 
-assert "is (identity) on vectors is nil" (is (vector 1 2) (vector 1 2)) nil
+assert "is (identity) on vectors is nil" ((vector 1 2) is (vector 1 2)) nil
 
 assert "lambda is truthy" (if (fn (x) x) 'y 'n) 'y
 
@@ -5628,7 +5487,7 @@ assert "str of improper pair" (str (cons 1 2)) "(1 . 2)"
 
 assert "str of nested vector" (str (vector (list 2 3))) "#[(2 3)]"
 
-assert "str of vector is deterministic" (iso (str (vector 9 8)) (str (vector 9 8))):
+assert "str of vector is deterministic" ((str (vector 9 8)) iso (str (vector 9 8))):
   t
 
 setf _rt_dict (hash-map "a" 1 "b" 2 :kw 3)
@@ -5665,7 +5524,7 @@ assert "deque roundtrip count" (count _rt_deque) 3
 
 assert "nested dict->deque roundtrip" (str (get _rt_nested "q")) "(1 2)"
 
-assert "nested dict->vec roundtrip" (iso (get _rt_nested "v") (vector 5 6)) t
+assert "nested dict->vec roundtrip" ((get _rt_nested "v") iso (vector 5 6)) t
 
 setf _rt_vd (vector (hash-map "x" 9))
 
@@ -5695,25 +5554,22 @@ loaddb "/tmp/alcove-dumploss-test.db"
 
 assert "savedb keeps good var despite bad nested" _sd_good 777
 
-assert "try handler computes from error" (string-contains? (try (/ 1 0) (fn (e) (str "E:" (error-message e)))) "E:"):
+assert "try handler computes from error" (string-contains? (try (1 / 0) (fn (e) (str "E:" (error-message e)))) "E:"):
   t
 
-assert "try finally runs, returns body" (try (+ 2 3) (fn (e) -1) 0) 5
+assert "try finally runs, returns body" (try (2 + 3) (fn (e) -1) 0) 5
 
-assert "try finally runs, returns handler" (try (/ 1 0) (fn (e) 42) 0) 42
+assert "try finally runs, returns handler" (try (1 / 0) (fn (e) 42) 0) 42
 
-assert "try nil handler propagates error" (error? (try (/ 1 0) nil)) t
+assert "try nil handler propagates error" (error? (try (1 / 0) nil)) t
 
 setf _tc 0
 
-def _tc_reset ():
-  setf _tc 0
+def _tc_reset(): setf _tc 0
 
-def _tc_bump ():
-  setf _tc (+ _tc 1)
+def _tc_bump(): setf _tc (_tc + 1)
 
-def _tc_count ():
-  _tc
+def _tc_count(): _tc
 
 assert "call/cc escapes through try" (call/cc (fn (k) (try (k 42) (fn (e) 99)))):
   42
@@ -5725,109 +5581,102 @@ _tc_reset()
 assert "call/cc escape runs finally" (do (call/cc (fn (k) (try (k 5) (fn (e) 99) (_tc_bump)))) (_tc_count)):
   1
 
-def _try_deep (n a):
-  try (if (< n 1) a (_try_deep (- n 1) (+ a 1))) (fn (e) -1)
+def _try_deep(n a): try (if (n < 1) a (_try_deep (n - 1) (a + 1))) (fn (e) -1)
 
 assert "deep try-per-level 1e6" (_try_deep 1000000 0) 1000000
 
-def _try_catch (n):
-  try (if (< n 1) (/ 1 0) (_try_catch (- n 1))) (fn (e) n)
+def _try_catch(n): try (if (n < 1) (1 / 0) (_try_catch (n - 1))) (fn (e) n)
 
 assert "deep try catch innermost" (_try_catch 5) 0
 
 assert "deep try catch innermost big" (_try_catch 100000) 0
 
-def _try_lvl (n):
-  try (if (< n 1) (/ 1 0) (_try_lvl (- n 1))) (fn (e) n) nil
+def _try_lvl(n): try (if (n < 1) (1 / 0) (_try_lvl (n - 1))) (fn (e) n) nil
 
 assert "tail-try handler sees own n" (_try_lvl 3) 0
 
 _tc_reset()
 
-def _try_finc (n):
-  try (if (< n 1) 0 (_try_finc (- n 1))) (fn (e) -1) (_tc_bump)
+def _try_finc(n): try (if (n < 1) 0 (_try_finc (n - 1))) (fn (e) -1) (_tc_bump)
 
 assert "tail-try finally runs n times" (do (_try_finc 4) (_tc_count)) 5
 
 _tc_reset()
 
-def _try_fin2 (n):
-  try (if (< n 1) (/ 1 0) (_try_fin2 (- n 1))) (fn (e) 0) (_tc_bump)
+def _try_fin2(n):
+  try (if (n < 1) (1 / 0) (_try_fin2 (n - 1))) (fn (e) 0) (_tc_bump)
 
 assert "tail-try finally on caught" (do (_try_fin2 4) (_tc_count)) 5
 
 _tc_reset()
 
-def _try_reraise (n):
-  try (if (< n 1) (/ 1 0) (_try_reraise (- n 1))) nil (_tc_bump)
+def _try_reraise(n):
+  try (if (n < 1) (1 / 0) (_try_reraise (n - 1))) nil (_tc_bump)
 
 assert "tail-try reraise propagates" (error? (_try_reraise 3)) t
 
 assert "tail-try reraise ran finally" (_tc_count) 4
 
-def _try_hraise (n):
-  if (is n 0):
-    try (/ 1 0) (fn (e) (/ 1 0))
-    try (_try_hraise (- n 1)) (fn (e) 'outer-caught)
+def _try_hraise(n):
+  if (n is 0):
+    try (1 / 0) (fn (e) (1 / 0))
+    try (_try_hraise (n - 1)) (fn (e) 'outer-caught)
 
 assert "tail-try handler-error caught next-out" (_try_hraise 2) 'outer-caught
 
-assert "filter on (cdr 1-elem) = empty" (filter (fn (x) (> x 3)) (cdr (list 6))):
+assert "filter on (cdr 1-elem) = empty" (filter (fn (x) (x > 3)) (cdr (list 6))):
   nil
 
 assert "map on (cdr 1-elem) = empty" (map (fn (x) x) (cdr (list 6))) nil
 
-assert "reduce on (cdr 1-elem) = init" (reduce (fn (a x) (+ a x)) 7 (cdr (list 6))):
+assert "reduce on (cdr 1-elem) = init" (reduce (fn (a x) (a + x)) 7 (cdr (list 6))):
   7
 
-assert "any? on (cdr 1-elem) = nil" (any? (fn (x) (> x 3)) (cdr (list 6))) nil
+assert "any? on (cdr 1-elem) = nil" (any? (fn (x) (x > 3)) (cdr (list 6))) nil
 
-assert "all? on (cdr 1-elem) = t" (all? (fn (x) (> x 3)) (cdr (list 6))) t
+assert "all? on (cdr 1-elem) = t" (all? (fn (x) (x > 3)) (cdr (list 6))) t
 
 assert "sort-by on (cdr 1-elem) = empty" (sort-by (fn (x) x) (cdr (list 6))):
   nil
 
-def rec-filt (xs):
+def rec-filt(xs):
   if (no xs):
     list()
-    cons (car xs) (rec-filt (filter (fn (x) (> x 3)) (cdr xs)))
+    cons (car xs) (rec-filt (filter (fn (x) (x > 3)) (cdr xs)))
 
-assert "filter inside recursion" (iso (rec-filt (list 5 1 6 2 7)) (list 5 6 7)):
+assert "filter inside recursion" ((rec-filt (list 5 1 6 2 7)) iso (list 5 6 7)):
   t
 
 assert "filter missing list errors" (error? (filter (fn (x) x))) t
 
 assert "reduce missing list errors" (error? (reduce (fn (a x) a) 0)) t
 
-def hb-id (x):
-  x
+def hb-id(x): x
 
 assert "do: value after identity call" (do (hb-id 1) 42) 42
 
-def hb-g (x):
-  x
+def hb-g(x): x
 
-def hb-rec (i):
-  if (> i 3):
+def hb-rec(i):
+  if (i > 3):
     i
     do:
       hb-g 5
-      hb-rec (+ i 1)
+      hb-rec (i + 1)
 
 assert "do: call then tail recurse" (hb-rec 1) 4
 
-def hb-rec2 (i):
-  if (> i 3):
+def hb-rec2(i):
+  if (i > 3):
     i
     do:
-      any? (fn (d) (is d 0)) (list 1)
-      hb-rec2 (+ i 1)
+      any? (fn (d) (d is 0)) (list 1)
+      hb-rec2 (i + 1)
 
 assert "do: any? then tail recurse" (hb-rec2 1) 4
 
-def cl-adder (n):
-  fn (x):
-    + x n
+def cl-adder(n):
+  fn(x): x + n
 
 setf cl-add5 (cl-adder 5)
 
@@ -5839,7 +5688,7 @@ assert "closure: captures n=9" (cl-add9 7) 16
 
 assert "closure: instances independent" (cl-add5 100) 105
 
-def cl-late ():
+def cl-late():
   let n 1:
     let f (fn () n):
       do:
@@ -5848,9 +5697,8 @@ def cl-late ():
 
 assert "closure: free var post-capture mutation" ((cl-late)) 99
 
-def cl-cell ():
-  let n 10:
-    list (fn () n) (fn (v) (setf n v))
+def cl-cell():
+  let n 10: list (fn () n) (fn (v) (setf n v))
 
 setf cl-pair (cl-cell)
 
@@ -5864,18 +5712,17 @@ cl-set 77
 
 assert "closure: shared cell after set" (cl-get) 77
 
-def cl-mk3 (a):
-  fn (b):
-    fn (c2):
-      + a b c2
+def cl-mk3(a):
+  fn(b):
+    fn(c2): + a b c2
 
 assert "closure: triple-nested" (((cl-mk3 1) 2) 3) 6
 
-def cl-counter ():
+def cl-counter():
   let k 0:
-    fn ():
+    fn():
       do:
-        setf k (+ k 1)
+        setf k (k + 1)
         k
 
 setf cl-c1 (cl-counter)
@@ -5905,23 +5752,21 @@ assert "for reserved var errors" (error? (for time 1 3 time)) t
 
 assert "destructuring reserved errors" (error? (fn ((str x)) x)) t
 
-assert "non-reserved fn param ok" ((fn (cnt) (+ cnt 1)) 41) 42
+assert "non-reserved fn param ok" ((fn (cnt) (cnt + 1)) 41) 42
 
-assert "non-reserved let ok" (let lst 5 (+ lst 1)) 6
+assert "non-reserved let ok" (let lst 5 (lst + 1)) 6
 
-assert "non-reserved with ok" (with (a 2 b 3) (+ a b)) 5
+assert "non-reserved with ok" (with (a 2 b 3) (a + b)) 5
 
-assert "non-reserved for ok" (let s 0 (for i 1 4 (setf s (+ s i))) s) 10
+assert "non-reserved for ok" (let s 0 (for i 1 4 (setf s (s + i))) s) 10
 
-def dp-add (x (y 10)):
-  + x y
+def dp-add(x (y 10)): x + y
 
 assert "default used when omitted" (dp-add 1) 11
 
 assert "default overridden by arg" (dp-add 1 2) 3
 
-def dp-chain (a (b (+ a 1)) (c 0)):
-  list a b c
+def dp-chain(a (b (a + 1)) (c 0)): list a b c
 
 assert "default refs earlier param" (dp-chain 5) (list 5 6 0)
 
@@ -5929,13 +5774,13 @@ assert "defaults partially supplied" (dp-chain 5 100) (list 5 100 0)
 
 assert "all args supplied" (dp-chain 5 100 200) (list 5 100 200)
 
-assert "anon fn default" ((fn (x (y 5)) (* x y)) 3) 15
+assert "anon fn default" ((fn (x (y 5)) (x * y)) 3) 15
 
 assert "default string value" ((fn ((s "hi")) s)) "hi"
 
-assert "destructuring still works" ((fn ((a b)) (+ a b)) (list 3 4)) 7
+assert "destructuring still works" ((fn ((a b)) (a + b)) (list 3 4)) 7
 
-assert "default param fn not compiled" (compiled? (fn (x (y 1)) (+ x y))) nil
+assert "default param fn not compiled" (compiled? (fn (x (y 1)) (x + y))) nil
 
 assert "reserved default-name errors" (error? (fn (a (list 5)) a)) t
 
@@ -5949,7 +5794,7 @@ assert "double-paren default binds" ((fn ((x 10)) x)) 10
 
 assert "double-paren default override" ((fn ((x 10)) x) 7) 7
 
-def ds-greet (who):
+def ds-greet(who):
   "Greets WHO."
   str "hi " who
 
@@ -5957,8 +5802,7 @@ assert "docstring stored" (docstring 'ds-greet) "Greets WHO."
 
 assert "docstring body intact" (ds-greet "x") "hi x"
 
-def ds-lone ():
-  "i-am-the-return"
+def ds-lone(): "i-am-the-return"
 
 assert "lone string is body not doc" (ds-lone) "i-am-the-return"
 
@@ -5966,9 +5810,9 @@ assert "lone string has no docstring" (docstring 'ds-lone) nil
 
 assert "docstring of undocumented" (docstring 'ds-lone) nil
 
-def ds-def (x (y 2)):
+def ds-def(x (y 2)):
   "doc + defaults"
-  + x y
+  x + y
 
 assert "docstring with defaults" (docstring 'ds-def) "doc + defaults"
 
@@ -5976,7 +5820,7 @@ assert "doc+default body works" (ds-def 5) 7
 
 assert "docstring of unknown is nil" (docstring 'no-such-fn-xyz) nil
 
-defn dfn-area ((r) (* r r)) ((w h) (* w h))
+defn dfn-area ((r) (r * r)) ((w h) (w * h))
 
 assert "defn dispatch arity 1" (dfn-area 5) 25
 
@@ -5988,16 +5832,15 @@ assert "defn fixed clause wins" (dfn-v 1) (list 'one 1)
 
 assert "defn variadic clause" (dfn-v 1 2 3) (list 'many 1 (list 2 3))
 
-defn dfn-cnt ((n) (dfn-cnt n 0)):
-  (n acc) (if (is n 0) acc (dfn-cnt (- n 1) (+ acc 1)))
+defn dfn-cnt((n) (dfn-cnt n 0)):
+  (n acc) (if (n is 0) acc (dfn-cnt (n - 1) (acc + 1)))
 
 assert "defn recursion across clauses" (dfn-cnt 5) 5
 
 assert "defn no matching clause errors" (try (dfn-area 1 2 3) (fn (e) 'caught)):
   'caught
 
-def dfn-call (n):
-  dfn-area n
+def dfn-call(n): dfn-area n
 
 assert "defn called from compiled fn" (dfn-call 7) 49
 
@@ -6007,13 +5850,13 @@ assert "defn empty-params clause" (dfn-empty) 'zero
 
 assert "defn is callable/truthy" (if dfn-area t nil) t
 
-defn dfn-ls (r (* r r)) (w h (* w h))
+defn dfn-ls (r (r * r)) (w h (w * h))
 
 assert "defn leading-symbol arity 1" (dfn-ls 5) 25
 
 assert "defn leading-symbol arity 2" (dfn-ls 4 6) 24
 
-defn dfn-mix ((r) (* r 2)) (w h (+ w h))
+defn dfn-mix ((r) (r * 2)) (w h (w + h))
 
 assert "defn mixed clause forms 1" (dfn-mix 5) 10
 
@@ -6056,8 +5899,7 @@ assert "blob byte o" (_ci_b 1) 111
 
 assert "blob literal head" ((string->blob "Hi") 1) 105
 
-def _ci_get (c i):
-  c i
+def _ci_get(c i): c i
 
 assert "compiled index: string" (_ci_get "abc" 2) #\c
 
@@ -6095,8 +5937,7 @@ assert "set callable non-member nil" (_ci_set 9) nil
 
 assert "hamt literal head" ((hamt "k" 99) "k") 99
 
-def _ci_lookup (m k):
-  m k
+def _ci_lookup(m k): m k
 
 assert "compiled keyed: dict" (_ci_lookup _ci_d "b") 2
 
@@ -6110,7 +5951,7 @@ assert "eq different fixnum" (eq 3 4) nil
 
 assert "eq? alias works" (eq? 'a 'a) t
 
-assert "eq matches is" (eq (eq 5 5) (is 5 5)) t
+assert "eq matches is" (eq (eq 5 5) (5 is 5)) t
 
 assert "eq same string content" (eq "hi" "hi") t
 
@@ -6178,7 +6019,7 @@ assert "band = bit-and" (band 12 10) 8
 
 assert-true "now-ms is a number" (number? (now-ms))
 
-assert-true "now-ms is monotonic non-decreasing" (do (setf _t0 (now-ms)) (sleep-ms 2) (>= (now-ms) _t0))
+assert-true "now-ms is monotonic non-decreasing" (do (setf _t0 (now-ms)) (sleep-ms 2) ((now-ms) >= _t0))
 
 assert "string-buf default space" (string-buf 4) "    "
 
@@ -6216,8 +6057,7 @@ assert "setenv->getenv round-trip" (do (setenv "ALCOVE_TEST_ENV_ZZ" "v1") (geten
 
 assert "getenv unset -> nil" (getenv "ALCOVE_NO_SUCH_VAR_ZZ") nil
 
-assert "getenv unset -> default" (getenv "ALCOVE_NO_SUCH_VAR_ZZ" "dflt"):
-  "dflt"
+assert "getenv unset -> default" (getenv "ALCOVE_NO_SUCH_VAR_ZZ" "dflt"): "dflt"
 
 assert "getenv non-string name errors" (error? (try (getenv 42) (fn (e) e))) t
 
@@ -6227,7 +6067,7 @@ assert "eprn returns nil, prints to stderr only" (eprn) nil
 
 assert "read-line is registered" (type-of read-line) 'fn
 
-assert "#! comments to end of line" (do #!/usr/bin/env alcove 42) 42
+assert "#! comments to end of line" (do) # !/usr/bin/env alcove 42) 42
 
 setf _osd "/tmp/alcove-test-osdir"
 
@@ -6242,8 +6082,7 @@ assert "file-info size" (get (file-info (string-concat _osd "/sub/x.txt")) "size
 
 assert "file-info dir flag" (get (file-info _osd) "dir?") t
 
-assert "file-info mtime is a number" (number? (get (file-info _osd) "mtime")):
-  t
+assert "file-info mtime is a number" (number? (get (file-info _osd) "mtime")): t
 
 assert "file-info missing -> nil" (file-info (string-concat _osd "/nope")) nil
 
@@ -6272,11 +6111,10 @@ assert "delete-file missing errors" (error? (try (delete-file (string-concat _os
 assert "group-by buckets in order" (get (group-by odd (range 0 5)) "nil"):
   list 0 2 4
 
-assert "group-by key is (str (f x))" (get (group-by (fn (x) (* x 10)) (list 1 2)) "10"):
+assert "group-by key is (str (f x))" (get (group-by (fn (x) (x * 10)) (list 1 2)) "10"):
   list 1
 
-assert "group-by over vector" (get (group-by odd (vector 1 2 3)) "t"):
-  list 1 3
+assert "group-by over vector" (get (group-by odd (vector 1 2 3)) "t"): list 1 3
 
 assert "frequencies" (get (frequencies (list "a" "b" "a" "a")) "a") 3
 
@@ -6340,6 +6178,54 @@ assert "string-pad counts codepoints" (length (string-pad-left "é" 3)) 3
 
 assert "string-pad longer unchanged" (string-pad-left "abcdef" 3) "abcdef"
 
+assert "dir-exists? t" (dir-exists? "/tmp") t
+
+assert "dir-exists? nil" (dir-exists? "/tmp/alcove-missing-dir-xyz") nil
+
+assert "path-join simple" (path-join "a" "b" "c") "a/b/c"
+
+assert "path-join slashes" (path-join "/a/" "/b/" "/c") "/a/b/c"
+
+assert "path-join empty" (path-join "a" "") "a"
+
+assert "path-dirname root" (path-dirname "/a") "/"
+
+assert "path-dirname normal" (path-dirname "/a/b/c") "/a/b"
+
+assert "path-dirname local" (path-dirname "a") "."
+
+assert "path-basename normal" (path-basename "/a/b/c") "c"
+
+assert "path-basename local" (path-basename "a") "a"
+
+assert "resolve-host returns list of IPs" (and (pair? (resolve-host "localhost")) (string? (car (resolve-host "localhost")))):
+  t
+
+assert "tcp-connect invalid port errors" (error? (try (tcp-connect "127.0.0.1" 9999) (fn (e) e))):
+  t
+
+assert "tcp-send bad fd errors" (error? (try (tcp-send "not-an-fd" "data") (fn (e) e))):
+  t
+
+assert "tcp-recv bad fd errors" (error? (try (tcp-recv "not-an-fd" 10) (fn (e) e))):
+  t
+
+assert "tcp-close bad fd errors" (error? (try (tcp-close "not-an-fd") (fn (e) e))):
+  t
+
+assert "format-time default now string" (string? (format-time)) t
+
+assert "format-time epoch" (format-time 0 "%Y-%m-%d") "1970-01-01"
+
+assert "parse-time epoch" (parse-time "%Y-%m-%d" "1970-01-01") 0
+
+assert "parse-time roundtrip" (parse-time "%Y-%m-%d %H:%M:%S" (format-time 100000 "%Y-%m-%d %H:%M:%S")):
+  100000
+
+assert "take-while odd" ((take-while odd (list 1 3 5 6 7)) iso (list 1 3 5)) t
+
+assert "drop-while odd" ((drop-while odd (list 1 3 5 6 7)) iso (list 6 7)) t
+
 assert "re-match full + groups" (re-match "([a-z]+)-([0-9]+)" "see abc-42"):
   list "abc-42" "abc" "42"
 
@@ -6370,7 +6256,7 @@ assert "re-replace" (re-replace "[0-9]+" "a1b22c" "#") "a#b#c"
 
 assert "re-replace literal (no backrefs)" (re-replace "a" "aa" "$0") "$0$0"
 
-if (is (platform) 'linux):
+if ((platform) is 'linux):
   assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-"):
     "-a-b-c-"
   assert-true "re-replace empty pattern errors (BSD libc)" (error? (try (re-replace "" "abc" "-") (fn (e) e)))
@@ -6393,14 +6279,14 @@ assert "re utf8 bytes pass through" (re-match "é(.)" "éx") (list "éx" "x")
 assert "re cache survives many patterns" (do (each p (list "a" "b" "c" "d" "e" "f" "g" "h" "i" "j") (re-match p "abcdefghij")) (re-match "a" "xa")):
   list "a"
 
-assert "builtins is a big list" (> (length (builtins)) 300) t
+assert "builtins is a big list" ((length (builtins)) > 300) t
 
-assert "builtins contains map" (any? (fn (s) (iso s "map")) (builtins)) t
+assert "builtins contains map" (any? (fn (s) (s iso "map")) (builtins)) t
 
-assert "globals sees a fresh def" (do (setf _introspect-zz 1) (any? (fn (s) (iso s "_introspect-zz")) (globals))):
+assert "globals sees a fresh def" (do (setf _introspect-zz 1) (any? (fn (s) (s iso "_introspect-zz")) (globals))):
   t
 
-assert "globals sees *args*" (any? (fn (s) (iso s "*args*")) (globals)) t
+assert "globals sees *args*" (any? (fn (s) (s iso "*args*")) (globals)) t
 
 assert "docstring of a builtin" (string? (docstring map)) t
 
@@ -6419,8 +6305,7 @@ assert "check-syntax non-string errors" (error? (try (check-syntax 5) (fn (e) e)
 
 assert "read-stdin registered" (type-of read-stdin) 'fn
 
-def _dflt (a (b 10) (c (+ 1 2))):
-  list a b c
+def _dflt(a (b 10) (c (1 + 2))): list a b c
 
 assert "default params: all defaulted" (_dflt 1) (list 1 10 3)
 
@@ -6441,8 +6326,7 @@ assert "json decode object" (get (json-decode "{\"k\": 42}") "k") 42
 
 assert "json decode nested" (json-decode "[1, [2, [3]]]"):
   list 1:
-    list 2:
-      list 3
+    list 2: list 3
 
 assert "json decode true" (json-decode "true") t
 
@@ -6454,7 +6338,7 @@ assert "json decode float" (json-decode "2.5") 2.5
 
 assert "json decode exponent" (json-decode "1e3") 1000.0
 
-assert "json decode int stays fixnum" (is (json-decode "7") 7) t
+assert "json decode int stays fixnum" ((json-decode "7") is 7) t
 
 assert "json decode unicode escape" (json-decode "\"\\u00e9\"") "é"
 
@@ -6474,7 +6358,7 @@ assert "json leading zero errors" (error? (try (json-decode "01") (fn (e) e))):
 assert "json encode blob errors" (error? (try (json-encode (make-blob 3)) (fn (e) e))):
   t
 
-assert "json encode inf errors" (error? (try (json-encode (/ 1.0 0.0)) (fn (e) e))):
+assert "json encode inf errors" (error? (try (json-encode (1.0 / 0.0)) (fn (e) e))):
   t
 
 assert "base64 encode" (base64-encode "Many hands make light work."):
@@ -6508,7 +6392,7 @@ setf _sh-ok (no (error? (try (shell "true") (fn (e) e))))
 
 if _sh-ok:
   do:
-    assert "shell captures stdout" (get (shell (if (is (platform) 'linux) "echo -n hi" "printf hi")) "out"):
+    assert "shell captures stdout" (get (shell (if ((platform) is 'linux) "echo -n hi" "printf hi")) "out"):
       "hi"
     assert "shell exit 0" (get (shell "true") "exit") 0
     assert "shell exit code" (get (shell "exit 7") "exit") 7
@@ -6518,18 +6402,16 @@ if _sh-ok:
 
 ns nstest
 
-def nsfn (x):
-  * x 2
+def nsfn(x): x * 2
 
-defn nsmulti ((x) x) ((x y) (+ x y))
+defn nsmulti ((x) x) ((x y) (x + y))
 
-defmacro nsmac (x):
-  list '+ x 1
+defmacro nsmac(x): list '+ x 1
 
-def nscount (n acc):
-  if (is n 0):
+def nscount(n acc):
+  if (n is 0):
     acc
-    nstest/nscount (- n 1) (+ acc 1)
+    nstest/nscount (n - 1) (acc + 1)
 
 ns()
 
@@ -6543,40 +6425,33 @@ assert "ns qualified self-call + TCO" (nstest/nscount 100000 0) 100000
 
 assert-true "ns bare name unbound after clear" (error? (try nsfn (fn (e) e)))
 
-assert "ns cleared: plain def not prefixed" (do (def nsplain () 5) (nsplain)):
-  5
+assert "ns cleared: plain def not prefixed" (do (def nsplain () 5) (nsplain)): 5
 
 assert-true "ns explicit slash not double-qualified" (do (ns nstest) (def nstest/already () 1) (ns) (no (error? (try (nstest/already) (fn (e) e)))))
 
-defmacro m-inc (x):
-  quasiquote (setf (unquote x) (+ (unquote x) 1))
+defmacro m-inc(x): quasiquote (setf (unquote x) ((unquote x) + 1))
 
-def use-mac-tail (n):
-  m-inc n
+def use-mac-tail(n): m-inc n
 
 assert "macro expands in compiled tail" (use-mac-tail 5) 6
 
-def use-mac-nontail (n):
+def use-mac-nontail(n):
   m-inc n
-  * n 10
+  n * 10
 
 assert "macro expands in compiled body" (use-mac-nontail 5) 60
 
-defmacro m-dbl (x):
-  quasiquote (* (unquote x) 2)
+defmacro m-dbl(x): quasiquote ((unquote x) * 2)
 
-defmacro m-add3 (x):
-  quasiquote (+ (unquote x) 3)
+defmacro m-add3(x): quasiquote ((unquote x) + 3)
 
-def use-nested (n):
-  m-add3 (m-dbl n)
+def use-nested(n): m-add3 (m-dbl n)
 
 assert "nested macros in compiled body" (use-nested 5) 13
 
-def mk-counter ():
+def mk-counter():
   let c 0:
-    fn ():
-      m-inc c
+    fn(): m-inc c
 
 setf the-counter (mk-counter)
 
@@ -6584,28 +6459,25 @@ assert "macro in compiled closure tail #1" (the-counter) 1
 
 assert "macro in compiled closure tail #2" (the-counter) 2
 
-defmacro shadowme (x):
-  quasiquote (+ (unquote x) 1000)
+defmacro shadowme(x): quasiquote ((unquote x) + 1000)
 
-def shadow-test (shadowme):
-  shadowme 5
+def shadow-test(shadowme): shadowme 5
 
-assert "local shadows macro name" (shadow-test (fn (x) (* x 2))) 10
+assert "local shadows macro name" (shadow-test (fn (x) (x * 2))) 10
 
-def caught? (thunk):
-  error? (try (thunk) (fn (e) e))
+def caught?(thunk): error? (try (thunk) (fn (e) e))
 
-assert-true "+ overflow errors" (caught? (fn () (+ 1152921504606846975 1)))
+assert-true "+ overflow errors" (caught? (fn () (1152921504606846975 + 1)))
 
-assert-true "* overflow errors" (caught? (fn () (* 1000000000000 1000000000000)))
+assert-true "* overflow errors" (caught? (fn () (1000000000000 * 1000000000000)))
 
-assert-true "- underflow errors" (caught? (fn () (- -1152921504606846976 1)))
+assert-true "- underflow errors" (caught? (fn () (-1152921504606846976 - 1)))
 
 assert-true "unary negate overflow" (caught? (fn () (- -1152921504606846976)))
 
-assert "near-max + still ok" (+ 1152921504606846974 1) 1152921504606846975
+assert "near-max + still ok" (1152921504606846974 + 1) 1152921504606846975
 
-assert "product in range ok" (* 1000000000 1000000000) 1000000000000000000
+assert "product in range ok" (1000000000 * 1000000000) 1000000000000000000
 
 assert-true "expt overflow errors" (caught? (fn () (expt 2 80)))
 
@@ -6615,29 +6487,28 @@ assert "expt float base ok" (expt 2.0 80) (** 2.0 80)
 
 assert "max fixnum literal ok" 1152921504606846975 1152921504606846975
 
-assert "int + float stays float" (+ 1152921504606846975 1.0):
+assert "int + float stays float" (1152921504606846975 + 1.0):
   1.152921504606847e18
 
-def jfact (n):
-  if (< n 2):
+def jfact(n):
+  if (n < 2):
     1
-    * n (jfact (- n 1))
+    n * (jfact (n - 1))
 
 assert-true "JIT factorial overflow" (caught? (fn () (jfact 25)))
 
 assert "JIT factorial in range" (jfact 10) 3628800
 
-def tfib (n a b):
-  if (is n 0):
+def tfib(n a b):
+  if (n is 0):
     a
-    tfib (- n 1) b (+ a b)
+    tfib (n - 1) b (a + b)
 
 assert-true "tail-fib add overflow" (caught? (fn () (tfib 91 0 1)))
 
 assert "tail-fib in range" (tfib 30 0 1) 832040
 
-def jmul (x):
-  * x 7
+def jmul(x): x * 7
 
 assert-true "JIT leaf-mul overflow" (caught? (fn () (jmul 1000000000000000000)))
 
@@ -6647,17 +6518,13 @@ assert "rational literal" 1/3 (rational 1 3)
 
 assert "rational reduces" (rational 2 4) 1/2
 
-def _radd (a b):
-  + a b
+def _radd(a b): a + b
 
-def _rsub (a b):
-  - a b
+def _rsub(a b): a - b
 
-def _rmul (a b):
-  * a b
+def _rmul(a b): a * b
 
-def _rdiv (a b):
-  / a b
+def _rdiv(a b): a / b
 
 assert "compiled + on rationals" (_radd (rational 1 3) (rational 1 6)) 1/2
 
@@ -6690,21 +6557,21 @@ assert-false "rational? on int" (rational? 5)
 
 assert-false "rational? on float" (rational? 0.5)
 
-assert "rat + rat" (+ 1/3 1/6) 1/2
+assert "rat + rat" (1/3 + 1/6) 1/2
 
-assert "rat + int" (+ 1/3 1) 4/3
+assert "rat + int" (1/3 + 1) 4/3
 
-assert "int + rat (order)" (+ 1 1/3) 4/3
+assert "int + rat (order)" (1 + 1/3) 4/3
 
-assert "rat - rat collapses" (- 7/2 1/2) 3
+assert "rat - rat collapses" (7/2 - 1/2) 3
 
-assert "rat * int collapses" (* 2/3 3) 2
+assert "rat * int collapses" (2/3 * 3) 2
 
-assert "rat * rat" (* 2/3 3/4) 1/2
+assert "rat * rat" (2/3 * 3/4) 1/2
 
-assert "rat / int" (/ 1/3 2) 1/6
+assert "rat / int" (1/3 / 2) 1/6
 
-assert "rat / rat -> int" (/ 2/3 2/3) 1
+assert "rat / rat -> int" (2/3 / 2/3) 1
 
 assert "unary minus rat" (- 1/3) (rational -1 3)
 
@@ -6714,27 +6581,27 @@ assert "variadic mixed fold" (+ 1 1/2 1/2 1) 3
 
 assert "long exact fold" (+ 1/7 1/7 1/7 1/7 1/7 1/7 1/7) 1
 
-assert "rat + float -> float" (+ 1/4 0.25) 0.5
+assert "rat + float -> float" (1/4 + 0.25) 0.5
 
-assert "float + rat -> float" (+ 0.5 1/2) 1.0
+assert "float + rat -> float" (0.5 + 1/2) 1.0
 
-assert "rat * float -> float" (* 1/2 4.0) 2.0
+assert "rat * float -> float" (1/2 * 4.0) 2.0
 
-assert-true "rat < rat exact" (< 1/3 1/2)
+assert-true "rat < rat exact" (1/3 < 1/2)
 
-assert-false "rat < rat false" (< 1/2 1/3)
+assert-false "rat < rat false" (1/2 < 1/3)
 
-assert-true "rat <= equal" (<= 2/4 1/2)
+assert-true "rat <= equal" (2/4 <= 1/2)
 
-assert-true "rat > int" (> 3/2 1)
+assert-true "rat > int" (3/2 > 1)
 
-assert-true "rat vs float compare" (< 1/3 0.34)
+assert-true "rat vs float compare" (1/3 < 0.34)
 
 assert-true "rat chained compare" (< 1/4 1/3 1/2)
 
-assert-true "is reduces both sides" (is 2/4 1/2)
+assert-true "is reduces both sides" (2/4 is 1/2)
 
-assert-true "iso on rationals" (iso 1/3 1/3)
+assert-true "iso on rationals" (1/3 iso 1/3)
 
 refute "distinct rationals" 1/3 1/4
 
@@ -6750,11 +6617,11 @@ assert "numerator carries sign" (numerator -3/4) -3
 
 assert "rational set dedups" (count (set 1/3 2/3 1/3)) 2
 
-assert-true "rat overflow errors" (error? (try (* (rational 1 1000000000) (rational 1 1000000000000)) (fn (e) e)))
+assert-true "rat overflow errors" (error? (try ((rational 1 1000000000) * (rational 1 1000000000000)) (fn (e) e)))
 
 assert-true "rat ctor div by zero errors" (error? (try (rational 1 0) (fn (e) e)))
 
-assert-true "rat / 0 errors" (error? (try (/ 1/3 0) (fn (e) e)))
+assert-true "rat / 0 errors" (error? (try (1/3 / 0) (fn (e) e)))
 
 assert-true "slashed name is a symbol" (error? (try foo/bar (fn (e) e)))
 
@@ -6774,48 +6641,48 @@ assert-false "decimal? on float" (decimal? 1.5)
 
 assert-false "decimal? on int" (decimal? 5)
 
-assert "decimal add is exact" (+ 0.1m 0.2m) 0.3m
+assert "decimal add is exact" (0.1m + 0.2m) 0.3m
 
-assert "decimal sub is exact" (- 10.00m 0.01m) 9.99m
+assert "decimal sub is exact" (10.00m - 0.01m) 9.99m
 
-assert "decimal * int" (* 1.5m 2) 3m
+assert "decimal * int" (1.5m * 2) 3m
 
-assert "decimal * decimal" (* 0.2m 0.3m) 0.06m
+assert "decimal * decimal" (0.2m * 0.3m) 0.06m
 
-assert "decimal / exact" (/ 1m 8m) 0.125m
+assert "decimal / exact" (1m / 8m) 0.125m
 
-assert "decimal / int" (/ 1.5m 3) 0.5m
+assert "decimal / int" (1.5m / 3) 0.5m
 
-assert "int + decimal (order)" (+ 2 0.5m) 2.5m
+assert "int + decimal (order)" (2 + 0.5m) 2.5m
 
 assert "decimal unary minus" (- 1.5m) -1.5m
 
 assert "decimal variadic fold" (+ 0.1m 0.1m 0.1m) 0.3m
 
-assert "decimal division rounds" (* (/ 10m 3m) 3m):
+assert "decimal division rounds" ((10m / 3m) * 3m):
   decimal "9.9999999999999999999999999999"
 
-assert-true "decimal < decimal" (< 0.1m 0.2m)
+assert-true "decimal < decimal" (0.1m < 0.2m)
 
-assert-false "decimal < false" (< 0.2m 0.1m)
+assert-false "decimal < false" (0.2m < 0.1m)
 
-assert-true "decimal <= equal scale" (<= 1.50m 1.5m)
+assert-true "decimal <= equal scale" (1.50m <= 1.5m)
 
-assert-true "decimal vs int compare" (< 1.5m 2)
+assert-true "decimal vs int compare" (1.5m < 2)
 
-assert-true "is normalizes decimals" (is 1.50m 1.5m)
+assert-true "is normalizes decimals" (1.50m is 1.5m)
 
 refute "distinct decimals" 1.5m 1.6m
 
-assert-true "decimal + float errors" (error? (try (+ 1.5m 0.5) (fn (e) e)))
+assert-true "decimal + float errors" (error? (try (1.5m + 0.5) (fn (e) e)))
 
-assert-true "float + decimal errors" (error? (try (+ 0.5 1.5m) (fn (e) e)))
+assert-true "float + decimal errors" (error? (try (0.5 + 1.5m) (fn (e) e)))
 
-assert-true "decimal + rational errors" (error? (try (+ 1.5m 1/2) (fn (e) e)))
+assert-true "decimal + rational errors" (error? (try (1.5m + 1/2) (fn (e) e)))
 
-assert-true "decimal overflow errors" (error? (try (* (decimal "100000000000000") (decimal "100000000000000000")) (fn (e) e)))
+assert-true "decimal overflow errors" (error? (try ((decimal "100000000000000") * (decimal "100000000000000000")) (fn (e) e)))
 
-assert-true "decimal / 0 errors" (error? (try (/ 1m 0m) (fn (e) e)))
+assert-true "decimal / 0 errors" (error? (try (1m / 0m) (fn (e) e)))
 
 assert-true "decimal from float refused" (error? (try (decimal 1.5) (fn (e) e)))
 
@@ -6823,7 +6690,7 @@ assert "decimal set dedups" (count (set 1.50m 1.5m 2.5m)) 2
 
 assert-true "dialect is a symbol" (symbol? (dialect))
 
-assert-true "dialect alcove or adder" (or (is (dialect) 'alcove) (is (dialect) 'adder))
+assert-true "dialect alcove or adder" (or ((dialect) is 'alcove) ((dialect) is 'adder))
 
 setf *prompt-in* (fn (n) "x")
 
@@ -6854,7 +6721,7 @@ setf *output-hook* nil
 when *readline*:
   assert "bind-key returns t" (bind-key "S-tab" (fn () nil)) t
   assert "bind-key nil handler ok" (bind-key "C-q" nil) t
-  assert-true "repl-completions finds builtins" (> (length (repl-completions "plat")) 0)
+  assert-true "repl-completions finds builtins" ((length (repl-completions "plat")) > 0)
 
 assert "repl-line empty off-line" (repl-line) ""
 
@@ -6880,16 +6747,14 @@ assert "infix fn: string var lhs" (_ifx-s starts-with? "t") t
 
 assert "infix fn: string var miss" (_ifx-s starts-with? "x") nil
 
-def _ifx-add2 (a b):
-  + a b
+def _ifx-add2(a b): a + b
 
 assert "infix fn: user fn" (3 _ifx-add2 4) 7
 
-assert "infix: normal call intact" (map (fn (x) (* x 2)) (list 1 2 3)):
+assert "infix: normal call intact" (map (fn (x) (x * 2)) (list 1 2 3)):
   list 2 4 6
 
-def _ifx-c (a):
-  a starts-with? "t"
+def _ifx-c(a): a starts-with? "t"
 
 assert "infix fn: compiled body" (_ifx-c "test") t
 
@@ -6897,13 +6762,13 @@ assert "infix fn: compiled body miss" (_ifx-c "xyz") nil
 
 assert "container index still works" ("abcd" 1) #\b
 
-assert "error-code div-by-zero" (error-code (try (/ 1 0) (fn (e) e))):
+assert "error-code div-by-zero" (error-code (try (1 / 0) (fn (e) e))):
   'div-by-zero
 
 assert "error-code unbound-variable" (error-code (try (_no_such_fn_zzz 1) (fn (e) e))):
   'unbound-variable
 
-assert "error-code illegal-value (+ num str)" (error-code (try (+ 1 "x") (fn (e) e))):
+assert "error-code illegal-value (+ num str)" (error-code (try (1 + "x") (fn (e) e))):
   'illegal-value
 
 assert "error-code missing-parameter (bad arity)" (error-code (try ((fn (a b) a) 1) (fn (e) e))):
@@ -6913,7 +6778,7 @@ assert "error-code of a non-error is nil" (error-code 42) nil
 
 assert "error-code of nil is nil" (error-code nil) nil
 
-assert-true "error-code never re-raises" (is (error-code (try (/ 1 0) (fn (e) e))) 'div-by-zero)
+assert-true "error-code never re-raises" ((error-code (try (1 / 0) (fn (e) e))) is 'div-by-zero)
 
 assert "log-level default is :info" (log-level) :info
 
@@ -6935,7 +6800,6 @@ set-log-level :info
 
 assert "log-level restored to :info" (log-level) :info
 
-
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.
 #
@@ -6949,89 +6813,88 @@ assert "log-level restored to :info" (log-level) :info
 # assert / _test_pass / _test_fail are already defined by the transpiled
 # preamble that precedes this block.
 # ====================================================================
-
-assert "with colon-body pythagorean" (with (x 3 y 4) (sqrt (+ (expt x 2) (expt y 2)))):
+assert "with colon-body pythagorean" (with (x 3 y 4) (sqrt ((expt x 2) + (expt y 2)))):
   5.0
 
 # defc plus inline colon-body — the body nests correctly whether
 # parenthesized or not (regression for the colon-leak bug).
-defc adr-clamp (x lo hi):
-  if (< x lo): (return lo)
-  if (> x hi): return hi
+defc adr-clamp(x lo hi):
+  if (x < lo):
+    return lo
+  if (x > hi):
+    return hi
   x
 assert "defc inline clamp hi" (adr-clamp 99 0 10) 10
 assert "defc inline clamp lo" (adr-clamp -3 0 10) 0
 assert "defc inline clamp mid" (adr-clamp 5 0 10) 5
-defc adr-find (pred xs):
-  each x xs: (if (pred x) (return x))
+defc adr-find(pred xs):
+  each x xs:
+    if (pred x):
+      return x
   nil
-assert "defc inline find hit" (adr-find (fn (n) (> n 3)) (list 1 2 5 0 9)) 5
-assert "defc inline find miss" (adr-find (fn (n) (> n 9)) (list 1 2 3)) nil
+assert "defc inline find hit" (adr-find (fn (n) (n > 3)) (list 1 2 5 0 9)) 5
+assert "defc inline find miss" (adr-find (fn (n) (n > 9)) (list 1 2 3)) nil
 
 # if / elif / else -> Arc-style flat cond. elif/else must align with the `if`
 # they extend (same indent column); each is appended to the same if node.
-def adr-grade (n):
-  if (>= n 90):
+def adr-grade(n):
+  if (n >= 90):
     'A
-  elif (>= n 80):
+  elif (n >= 80):
     'B
-  elif (>= n 70):
+  elif (n >= 70):
     'C
   else:
     'F
 assert "if/elif/else first arm" (adr-grade 95) 'A
-assert "if/elif/else 2nd arm"   (adr-grade 85) 'B
-assert "if/elif/else 3rd arm"   (adr-grade 72) 'C
-assert "if/elif/else else arm"  (adr-grade 50) 'F
+assert "if/elif/else 2nd arm" (adr-grade 85) 'B
+assert "if/elif/else 3rd arm" (adr-grade 72) 'C
+assert "if/elif/else else arm" (adr-grade 50) 'F
 
 # def name():  — Python-style zero-param def with NO space before the empty
 # parens. The empty-call sugar must not turn `name()` into `(name)` in the
 # def-name position (regression for "missing name or name not a lambda").
-def no-space-zero():
-  42
+def no-space-zero(): 42
 assert "def name(): zero params" (no-space-zero) 42
 
 # def with params, no space, still defines correctly.
-def no-space-params(a b):
-  + a b
-assert "def name(a b): params"   (no-space-params 3 4) 7
+def no-space-params(a b): a + b
+assert "def name(a b): params" (no-space-params 3 4) 7
 
 # the make-counter shape end to end: a no-space def whose closure tail calls a
 # user macro — exercises both the def-name sugar and compile-time macroexpansion.
 defmacro adr-pp (n) `(= ,n (+ ,n 1))
 def adr-make-counter():
   with (n 0):
-    fn():               # fn() — keyword glued to its OWN empty param list
-      adr-pp n
+    fn(): adr-pp n # fn() — keyword glued to its OWN empty param list
 setf adr-c (adr-make-counter)
 assert "no-space def + fn() + macro closure #1" (adr-c) 1
 assert "no-space def + fn() + macro closure #2" (adr-c) 2
 
 # fn () with a space still reads the same.
-def adr-mk2 ():
+def adr-mk2():
   with (n 0):
-    fn ():
-      adr-pp n
+    fn(): adr-pp n
 setf adr-c2 (adr-mk2)
 assert "spaced fn () closure" (adr-c2) 1
 
 # a real no-arg CALL (not after a binder) is still (name).
-def adr-ret7 (): 7
+def adr-ret7(): 7
 assert "no-arg call after binder vs call" (adr-ret7) 7
 
 # infix assignment: `lhs = rhs` -> (= lhs rhs), Python-style, alongside the
 # prefix `= place val`. A multi-token RHS wraps: `a = + b c` -> (= a (+ b c)).
-= adr-iv 5
-adr-iv = (* adr-iv 10)
-assert "infix = reassign"        adr-iv 50
+adr-iv = 5
+adr-iv = (adr-iv * 10)
+assert "infix = reassign" adr-iv 50
 adr-iv = + 1 2
 assert "infix = multi-token rhs" adr-iv 3
-= adr-sv "test"
+adr-sv = "test"
 adr-sv = "toto"
 assert "infix = on a string var" adr-sv "toto"
 # prefix `= place val` (= as the FIRST form) is unchanged
-= adr-iv 7
-assert "prefix = still works"    adr-iv 7
+adr-iv = 7
+assert "prefix = still works" adr-iv 7
 
 # ====================================================================
 # Call sugar (spec §6): `name(args)` reads as (name args) for ANY arity, not
@@ -7039,45 +6902,47 @@ assert "prefix = still works"    adr-iv 7
 # a PARAMETER LIST, so headers are unaffected. (Glued parens on a binding-list
 # form like let((..)) are NOT supported — use the spaced `let (..)`.)
 # ====================================================================
-def adr-add2 (a b): (+ a b)
-def adr-z (): 99
+def adr-add2(a b): a + b
+def adr-z(): 99
 # call WITH arguments via glued parens (the form HEAD could not express)
-assert "call sugar: args"            adr-add2(3 4) 7
+assert "call sugar: args" adr-add2(3 4) 7
 # nested call sugar
-assert "call sugar: nested"          adr-add2(adr-add2(1 2) 3) 6
+assert "call sugar: nested" adr-add2(adr-add2(1 2) 3) 6
 # no-arg call via glued parens: name() -> (name)
-assert "call sugar: no-arg ()"       adr-z() 99
+assert "call sugar: no-arg ()" adr-z() 99
 # builtins reached through the sugar
-assert "call sugar: builtin list"    list(1 2 3) (list 1 2 3)
-assert "call sugar: builtin car"     car(list(10 20)) 10
+assert "call sugar: builtin list" list(1 2 3) (list 1 2 3)
+assert "call sugar: builtin car" car(list(10 20)) 10
 # function-like special forms through the sugar
-assert "call sugar: and"             and(t t) t
-assert "call sugar: or"              or(nil 5) 5
+assert "call sugar: and" and(t t) t
+assert "call sugar: or" or(nil 5) 5
 # infix = with a call-sugar RHS: adr-iv = adr-add2(8 9) -> (= adr-iv (adr-add2 8 9))
 adr-iv = adr-add2(8 9)
 assert "infix = with call-sugar rhs" adr-iv 17
 # binder exception: glued params stay a param list, name then callable via sugar
 defmacro adr-m2 (x) `(+ ,x 1)
 assert "defmacro glued header + call" adr-m2(41) 42
-macro adr-when2 (c body): `(if ,c ,body nil)
-assert "macro glued header + call"   adr-when2(t 7) 7
-setf adr-sqr (fn(x) (* x x))         # fn self-binder: fn(x) is a param list
-assert "fn(x) self-binder param"     adr-sqr(7) 49
+macro adr-when2(c body): `(if ,c ,body nil)
+assert "macro glued header + call" adr-when2(t 7) 7
+setf adr-sqr (fn(x) (x * x)) # fn self-binder: fn(x) is a param list
+assert "fn(x) self-binder param" adr-sqr(7) 49
 # idiomatic spaced let still works (regression guard)
-assert "spaced let binding-list"     (let ((x 10) (y 20)) (+ x y)) 30
+assert "spaced let binding-list" (let ((x 10) (y 20)) (x + y)) 30
 
 # Chained call sugar (currying): f(a)(b) -> ((f a) b). Each '(' that follows a
 # ')' with NO whitespace re-heads the call; a space/newline breaks the chain.
-def adr-adder (a): [_ + a]
-assert "chained f(a)(b) curries"     adr-adder(10)(5) 15
-def adr-add3 (a): (fn (b) (fn (c) (+ a (+ b c))))
-assert "chained triple f(a)(b)(c)"   adr-add3(1)(2)(3) 6
-def adr-mkinc (): [_ + 1]
-assert "chained empty-first f()(x)"  adr-mkinc()(41) 42
+def adr-adder(a): [_ + a]
+assert "chained f(a)(b) curries" adr-adder(10)(5) 15
+def adr-add3(a):
+  fn(b):
+    fn(c): a + (b + c)
+assert "chained triple f(a)(b)(c)" adr-add3(1)(2)(3) 6
+def adr-mkinc(): [_ + 1]
+assert "chained empty-first f()(x)" adr-mkinc()(41) 42
 # adjacency: a SPACE before '(' must NOT chain — it stays a separate form
-assert "spaced f(a) (b) not chained" (iso (quote adr-adder(10) (5)) (quote (adr-adder 10))) t
+assert "spaced f(a) (b) not chained" ((quote adr-adder(10) (5)) iso (quote (adr-adder 10))) t
 # plain (single) call sugar still reads as one call, not a chain
-assert "single call sugar unchanged" (iso (quote adr-add2(3 4)) (quote (adr-add2 3 4))) t
+assert "single call sugar unchanged" ((quote adr-add2(3 4)) iso (quote (adr-add2 3 4))) t
 
 # ====================================================================
 # Arc-lambda `[body...]` -> (fn (_) (body...)), implicit param `_`. The
@@ -7086,11 +6951,11 @@ assert "single call sugar unchanged" (iso (quote adr-add2(3 4)) (quote (adr-add2
 # `adr-sq = [* _ _]` becomes a zero-arg call of the lambda.
 # ====================================================================
 adr-sq = [* _ _]
-assert "arc-lambda infix bind"       (adr-sq 7) 49
-assert "arc-lambda no extra parens"  ([+ _ 10] 5) 15
-assert "arc-lambda as map arg"       (map [+ _ 1] (list 1 2 3)) (list 2 3 4)
-assert "arc-lambda multi-form body"  ([do (+ _ 1) (* _ 2)] 4) 8
+assert "arc-lambda infix bind" (adr-sq 7) 49
+assert "arc-lambda no extra parens" ([+ _ 10] 5) 15
+assert "arc-lambda as map arg" (map [+ _ 1] (list 1 2 3)) (list 2 3 4)
+assert "arc-lambda multi-form body" ([do (_ + 1) (_ * 2)] 4) 8
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 
-exit (if (> _test_fail 0) 1 0)
+exit (if (_test_fail > 0) 1 0)

@@ -16,6 +16,12 @@
 
 */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -803,6 +809,23 @@ lispProc lispProcList[] = {
     LISPCMD_APP("check-syntax", checksyntaxcmd, doc_checksyntax),
     LISPCMD_UNSAFE("read-stdin", readstdincmd, doc_readstdin),
     LISPCMD("flush", flushcmd, doc_flush),
+    /* File I/O & Filesystem */
+    LISPCMD("dir-exists?", direxistspcmd, doc_direxistsp),
+    LISPCMD("path-join", pathjoincmd, doc_pathjoin),
+    LISPCMD("path-dirname", pathdirnamecmd, doc_pathdirname),
+    LISPCMD("path-basename", pathbasenamecmd, doc_pathbasename),
+    /* Networking */
+    LISPCMD_UNSAFE("resolve-host", resolvehostcmd, doc_resolvehost),
+    LISPCMD_UNSAFE("tcp-connect", tcpconnectcmd, doc_tcpconnect),
+    LISPCMD_UNSAFE("tcp-send", tcpsendcmd, doc_tcpsend),
+    LISPCMD_UNSAFE("tcp-recv", tcprecvcmd, doc_tcprecv),
+    LISPCMD_UNSAFE("tcp-close", tcpclosecmd, doc_tcpclose),
+    /* Date & Time */
+    LISPCMD("format-time", formattimecmd, doc_formattime),
+    LISPCMD("parse-time", parsetimecmd, doc_parsetime),
+    /* Sequence / Itertools */
+    LISPCMD("take-while", takewhilecmd, doc_takewhile),
+    LISPCMD("drop-while", dropwhilecmd, doc_dropwhile),
     /* FFI */
     LISPCMD("ffi?", ffipcmd, doc_ffip),
     LISPCMD_UNSAFE("ffi-fn", ffifncmd, doc_ffifn),

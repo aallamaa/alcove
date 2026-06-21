@@ -656,12 +656,10 @@ static int is_infix_assign(const node *x) {
    (`(n < 0)` with a plain `n`) can't fuse into the SLOT_<cmp>_FIX
    superinstruction the JIT wants, so that function stays on the (correct,
    slower) VM path and
-   `(jit? f)` flips to nil. That observably changes JIT-introspection — which is
-   why it is OPT-IN (`--infix`), not the default: `adder fmt file` preserves the
-   exact compiled/JIT behavior of the input. The real fix for free-and-default
-   infix is a compiler change (make `(A op B)` unconditionally infix so the
-   fusion always applies); until then, default off. */
-static int g_infix_ops = 0;
+   `(jit? f)` flips to nil. That observably changes JIT-introspection.
+   We resolved this by making `(A op B)` unconditionally infix at the compiler
+   level for any local slots, so --infix is now the default. */
+static int g_infix_ops = 1;
 static int is_infix_op(const char *s) {
   if (!g_infix_ops || !s)
     return 0;

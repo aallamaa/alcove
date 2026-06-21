@@ -122,6 +122,11 @@ exp_t *allowunsafecmd(exp_t *e, env_t *env);
 extern const char doc_getenv[], doc_setenv[], doc_epr[], doc_eprn[],
     doc_readline[], doc_deletefile[], doc_renamefile[], doc_makedir[],
     doc_listdir[], doc_fileinfo[], doc_shell[];
+extern const char doc_direxistsp[];
+extern const char doc_pathjoin[], doc_pathdirname[], doc_pathbasename[];
+extern const char doc_resolvehost[], doc_tcpconnect[], doc_tcpsend[],
+    doc_tcprecv[], doc_tcpclose[];
+extern const char doc_formattime[], doc_parsetime[];
 exp_t *getenvcmd(exp_t *e, env_t *env);
 exp_t *setenvcmd(exp_t *e, env_t *env);
 exp_t *eprcmd(exp_t *e, env_t *env);
@@ -133,6 +138,17 @@ exp_t *makedircmd(exp_t *e, env_t *env);
 exp_t *listdircmd(exp_t *e, env_t *env);
 exp_t *fileinfocmd(exp_t *e, env_t *env);
 exp_t *shellcmd(exp_t *e, env_t *env);
+exp_t *direxistspcmd(exp_t *e, env_t *env);
+exp_t *pathjoincmd(exp_t *e, env_t *env);
+exp_t *pathdirnamecmd(exp_t *e, env_t *env);
+exp_t *pathbasenamecmd(exp_t *e, env_t *env);
+exp_t *resolvehostcmd(exp_t *e, env_t *env);
+exp_t *tcpconnectcmd(exp_t *e, env_t *env);
+exp_t *tcpsendcmd(exp_t *e, env_t *env);
+exp_t *tcprecvcmd(exp_t *e, env_t *env);
+exp_t *tcpclosecmd(exp_t *e, env_t *env);
+exp_t *formattimecmd(exp_t *e, env_t *env);
+exp_t *parsetimecmd(exp_t *e, env_t *env);
 
 /* json.h */
 extern const char doc_jsonencode[], doc_jsondecode[];
@@ -173,6 +189,7 @@ extern const char doc_groupby[], doc_frequencies[], doc_partition[],
     doc_interleave[], doc_maxby[], doc_minby[], doc_startswith[],
     doc_endswith[], doc_stringrepeat[], doc_stringpadleft[],
     doc_stringpadright[];
+extern const char doc_takewhile[], doc_dropwhile[];
 exp_t *groupbycmd(exp_t *e, env_t *env);
 exp_t *frequenciescmd(exp_t *e, env_t *env);
 exp_t *partitioncmd(exp_t *e, env_t *env);
@@ -184,6 +201,8 @@ exp_t *endswithcmd(exp_t *e, env_t *env);
 exp_t *stringrepeatcmd(exp_t *e, env_t *env);
 exp_t *stringpadleftcmd(exp_t *e, env_t *env);
 exp_t *stringpadrightcmd(exp_t *e, env_t *env);
+exp_t *takewhilecmd(exp_t *e, env_t *env);
+exp_t *dropwhilecmd(exp_t *e, env_t *env);
 
 /* builtins_regex.h — POSIX ERE */
 extern const char doc_rematch[], doc_refind[], doc_refindall[], doc_rereplace[],

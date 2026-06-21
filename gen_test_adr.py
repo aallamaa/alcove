@@ -56,6 +56,16 @@ def main():
               + "".join(lines[:idx])
               + "\n" + extra + "\n"
               + "".join(lines[idx:]))
+    # Format the merged output using the adder formatter
+    adder_bin = os.path.join(ROOT, "adder")
+    if os.path.exists(adder_bin) and os.access(adder_bin, os.X_OK):
+        try:
+            formatted = subprocess.run(
+                [adder_bin, "fmt"],
+                input=merged, capture_output=True, text=True, check=True).stdout
+            merged = formatted
+        except Exception as ex:
+            print(f"Warning: formatting test.adr failed: {ex}")
     with open(out, "w") as f:
         f.write(merged)
     print(f"gen_test_adr: wrote {out} ({merged.count(chr(10))} lines)")

@@ -51,7 +51,7 @@ for f in examples/adder/*.adr lib/repl.adr test.adr; do
 done
 
 echo "== alcove s-expr -> indented Adder round-trips =="
-printf '(def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(def m () (prn (fib 10)))\n' > "$D/in.alc"
+printf '(def fib (n) (if (n < 2) n ((fib (n - 1)) + (fib (n - 2)))))\n(def m () (prn (fib 10)))\n' > "$D/in.alc"
 check "$D/in.alc"
 
 # Whole-suite Alcove->Adder eval gate: formatting test.alc to Adder and running

@@ -104,6 +104,11 @@ exp_t *readlinecmd(exp_t *e, env_t *env) {
 #include <errno.h>
 #include <sys/stat.h>
 #ifndef ALCOVE_WEB
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #endif
 
@@ -307,4 +312,381 @@ exp_t *flushcmd(exp_t *e, env_t *env) {
   unrefexp(e);
   fflush(stdout);
   return NIL_EXP;
+}
+
+const char doc_direxistsp[] =
+    "(dir-exists? path) — t if path exists and is a directory, nil otherwise.";
+exp_t *direxistspcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(p);
+  REQUIRE_TYPE(p, isstring, CLEAN_RETURN_1(p, _alc_e), ERROR_ILLEGAL_VALUE,
+               NULL, env, "dir-exists?: path must be a string");
+  struct stat st;
+  int res = (stat((const char *)exp_text(p), &st) == 0 && S_ISDIR(st.st_mode))
+                ? 1
+                : 0;
+  CLEAN_RETURN_1(p, refexp(res ? TRUE_EXP : NIL_EXP));
+}
+
+const char doc_pathjoin[] = "(path-join a b ...) — join path components using "
+                            "a single slash separator.";
+exp_t *pathjoincmd(exp_t *e, env_t *env) {
+  size_t cap = 64, len = 0;
+  char *buf = memalloc(cap, 1);
+  int first = 1;
+  for (exp_t *cur = cdr(e); cur; cur = cur->next) {
+    exp_t *val = EVAL(cur->content, env);
+    if (iserror(val)) {
+      free(buf);
+      unrefexp(e);
+      return val;
+    }
+    if (!isstring(val)) {
+      unrefexp(val);
+      free(buf);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "path-join: arguments must be strings");
+    }
+    const char *s = (const char *)exp_text(val);
+    size_t sl = strlen(s);
+    if (sl > 0) {
+      if (!first && len > 0 && buf[len - 1] != '/' && s[0] != '/') {
+        if (len + 1 >= cap) {
+          cap *= 2;
+          buf = xrealloc(buf, cap);
+        }
+        buf[len++] = '/';
+      }
+      size_t start_offset = 0;
+      if (len > 0 && buf[len - 1] == '/' && s[0] == '/') {
+        start_offset = 1;
+      }
+      if (len + sl - start_offset + 1 >= cap) {
+        cap = (len + sl + 1) * 2;
+        buf = xrealloc(buf, cap);
+      }
+      memcpy(buf + len, s + start_offset, sl - start_offset);
+      len += sl - start_offset;
+      first = 0;
+    }
+    unrefexp(val);
+  }
+  buf[len] = 0;
+  exp_t *ret = make_string_take(buf, (int)len);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_pathdirname[] = "(path-dirname path) — directory component of "
+                               "path (everything before the last slash).";
+exp_t *pathdirnamecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(p);
+  REQUIRE_TYPE(p, isstring, CLEAN_RETURN_1(p, _alc_e), ERROR_ILLEGAL_VALUE,
+               NULL, env, "path-dirname: path must be a string");
+  const char *path = (const char *)exp_text(p);
+  const char *last_slash = strrchr(path, '/');
+  if (!last_slash) {
+    CLEAN_RETURN_1(p, make_string((char *)".", 1));
+  }
+  if (last_slash == path) {
+    CLEAN_RETURN_1(p, make_string((char *)"/", 1));
+  }
+  size_t len = (size_t)(last_slash - path);
+  CLEAN_RETURN_1(p, make_string((char *)path, (int)len));
+}
+
+const char doc_pathbasename[] = "(path-basename path) — filename component of "
+                                "path (everything after the last slash).";
+exp_t *pathbasenamecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(p);
+  REQUIRE_TYPE(p, isstring, CLEAN_RETURN_1(p, _alc_e), ERROR_ILLEGAL_VALUE,
+               NULL, env, "path-basename: path must be a string");
+  const char *path = (const char *)exp_text(p);
+  const char *last_slash = strrchr(path, '/');
+  if (!last_slash) {
+    CLEAN_RETURN_1(p, refexp(p));
+  }
+  const char *base = last_slash + 1;
+  CLEAN_RETURN_1(p, make_string((char *)base, (int)strlen(base)));
+}
+
+const char doc_resolvehost[] = "(resolve-host hostname) — resolve hostname to "
+                               "a list of IP address strings (IPv4/IPv6).";
+exp_t *resolvehostcmd(exp_t *e, env_t *env) {
+#ifdef ALCOVE_WEB
+  (void)env;
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "resolve-host: not available in the web build");
+#else
+  EVAL_ARG_1(hostexp);
+  REQUIRE_TYPE(hostexp, isstring, CLEAN_RETURN_1(hostexp, _alc_e),
+               ERROR_ILLEGAL_VALUE, NULL, env,
+               "resolve-host: hostname must be a string");
+  const char *hostname = (const char *)exp_text(hostexp);
+  struct addrinfo hints, *res, *p;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  int status = getaddrinfo(hostname, NULL, &hints, &res);
+  if (status != 0) {
+    CLEAN_RETURN_1(hostexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env, "resolve-host: %s: %s",
+                         hostname, gai_strerror(status)));
+  }
+  exp_t *head = NULL, *tail = NULL;
+  for (p = res; p != NULL; p = p->ai_next) {
+    if (!p->ai_addr)
+      continue;
+    char ipstr[INET6_ADDRSTRLEN];
+    void *addr = NULL;
+    if (p->ai_family == AF_INET) {
+      struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+      addr = &(ipv4->sin_addr);
+    } else if (p->ai_family == AF_INET6) {
+      struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
+      addr = &(ipv6->sin6_addr);
+    } else {
+      continue;
+    }
+    if (!inet_ntop(p->ai_family, addr, ipstr, sizeof(ipstr))) {
+      continue;
+    }
+    int dup = 0;
+    for (exp_t *curr = head; curr && ispair(curr); curr = curr->next) {
+      if (strcmp((const char *)exp_text(curr->content), ipstr) == 0) {
+        dup = 1;
+        break;
+      }
+    }
+    if (!dup) {
+      list_append_owned(&head, &tail,
+                        make_string((char *)ipstr, (int)strlen(ipstr)));
+    }
+  }
+  freeaddrinfo(res);
+  CLEAN_RETURN_1(hostexp, head ? head : refexp(NIL_EXP));
+#endif
+}
+
+const char doc_tcpconnect[] =
+    "(tcp-connect host port) — open a TCP connection to the host on the given "
+    "port. Returns a file descriptor (fixnum).";
+exp_t *tcpconnectcmd(exp_t *e, env_t *env) {
+#ifdef ALCOVE_WEB
+  (void)env;
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "tcp-connect: not available in the web build");
+#else
+  EVAL_ARG_2(hostexp, portexp);
+  if (!isstring(hostexp) || !isnumber(portexp)) {
+    CLEAN_RETURN_2(
+        hostexp, portexp,
+        error(ERROR_ILLEGAL_VALUE, NULL, env,
+              "(tcp-connect host port): string + port number expected"));
+  }
+  const char *host = (const char *)exp_text(hostexp);
+  int64_t port = FIX_VAL(portexp);
+  char port_str[16];
+  snprintf(port_str, sizeof(port_str), "%d", (int)port);
+  struct addrinfo hints, *res;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  int status = getaddrinfo(host, port_str, &hints, &res);
+  if (status != 0) {
+    CLEAN_RETURN_2(hostexp, portexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "tcp-connect: resolve failed: %s",
+                         gai_strerror(status)));
+  }
+  int fd = -1;
+  struct addrinfo *p;
+  for (p = res; p != NULL; p = p->ai_next) {
+    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+    if (fd < 0)
+      continue;
+    if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) {
+      break;
+    }
+    close(fd);
+    fd = -1;
+  }
+  freeaddrinfo(res);
+  if (fd < 0) {
+    CLEAN_RETURN_2(hostexp, portexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "tcp-connect: connect failed: %s", strerror(errno)));
+  }
+  CLEAN_RETURN_2(hostexp, portexp, MAKE_FIX((int64_t)fd));
+#endif
+}
+
+const char doc_tcpsend[] = "(tcp-send fd string) — send string data over the "
+                           "TCP socket. Returns number of bytes sent.";
+exp_t *tcpsendcmd(exp_t *e, env_t *env) {
+#ifdef ALCOVE_WEB
+  (void)env;
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "tcp-send: not available in the web build");
+#else
+  EVAL_ARG_2(fdexp, strexp);
+  if (!isnumber(fdexp) || !isstring(strexp)) {
+    CLEAN_RETURN_2(fdexp, strexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "(tcp-send fd string): integer fd + string expected"));
+  }
+  int fd = (int)FIX_VAL(fdexp);
+  const char *data = (const char *)exp_text(strexp);
+  size_t len = strlen(data);
+  ssize_t sent = send(fd, data, len, 0);
+  if (sent < 0) {
+    CLEAN_RETURN_2(
+        fdexp, strexp,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "tcp-send: %s", strerror(errno)));
+  }
+  CLEAN_RETURN_2(fdexp, strexp, MAKE_FIX((int64_t)sent));
+#endif
+}
+
+const char doc_tcprecv[] = "(tcp-recv fd max-bytes) — receive up to max-bytes "
+                           "from the TCP socket as a string.";
+exp_t *tcprecvcmd(exp_t *e, env_t *env) {
+#ifdef ALCOVE_WEB
+  (void)env;
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "tcp-recv: not available in the web build");
+#else
+  EVAL_ARG_2(fdexp, maxexp);
+  if (!isnumber(fdexp) || !isnumber(maxexp) || FIX_VAL(maxexp) <= 0 ||
+      FIX_VAL(maxexp) > 16 * 1024 * 1024) {
+    CLEAN_RETURN_2(fdexp, maxexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "(tcp-recv fd max-bytes): integer fd + positive "
+                         "max-bytes (<= 16MB) expected"));
+  }
+  int fd = (int)FIX_VAL(fdexp);
+  size_t max_bytes = (size_t)FIX_VAL(maxexp);
+  char *buf = memalloc(max_bytes + 1, 1);
+  ssize_t received = recv(fd, buf, max_bytes, 0);
+  if (received < 0) {
+    free(buf);
+    CLEAN_RETURN_2(
+        fdexp, maxexp,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "tcp-recv: %s", strerror(errno)));
+  }
+  exp_t *ret = make_string_take(buf, (int)received);
+  CLEAN_RETURN_2(fdexp, maxexp, ret);
+#endif
+}
+
+const char doc_tcpclose[] =
+    "(tcp-close fd) — close the TCP connection file descriptor. Returns t.";
+exp_t *tcpclosecmd(exp_t *e, env_t *env) {
+#ifdef ALCOVE_WEB
+  (void)env;
+  unrefexp(e);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env,
+               "tcp-close: not available in the web build");
+#else
+  EVAL_ARG_1(fdexp);
+  if (!isnumber(fdexp)) {
+    CLEAN_RETURN_1(fdexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                "tcp-close: fd must be an integer"));
+  }
+  int fd = (int)FIX_VAL(fdexp);
+  close(fd);
+  CLEAN_RETURN_1(fdexp, refexp(TRUE_EXP));
+#endif
+}
+
+const char doc_formattime[] =
+    "(format-time [unix-seconds [format-string]]) — format unix seconds "
+    "(default now) as UTC into a string using strftime "
+    "(default %Y-%m-%d %H:%M:%S).";
+exp_t *formattimecmd(exp_t *e, env_t *env) {
+  exp_t *sec_exp = NIL_EXP;
+  exp_t *fmt_exp = NIL_EXP;
+  if (e->next) {
+    sec_exp = EVAL(e->next->content, env);
+    if (iserror(sec_exp)) {
+      unrefexp(e);
+      return sec_exp;
+    }
+    if (e->next->next) {
+      fmt_exp = EVAL(e->next->next->content, env);
+      if (iserror(fmt_exp)) {
+        unrefexp(sec_exp);
+        unrefexp(e);
+        return fmt_exp;
+      }
+    }
+  }
+  time_t t;
+  if (sec_exp == NIL_EXP) {
+    t = time(NULL);
+  } else {
+    if (!isnumber(sec_exp)) {
+      unrefexp(sec_exp);
+      unrefexp(fmt_exp);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "format-time: unix-seconds must be a number");
+    }
+    t = (time_t)FIX_VAL(sec_exp);
+  }
+  const char *fmt = "%Y-%m-%d %H:%M:%S";
+  if (fmt_exp != NIL_EXP) {
+    if (!isstring(fmt_exp)) {
+      unrefexp(sec_exp);
+      unrefexp(fmt_exp);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "format-time: format-string must be a string");
+    }
+    fmt = (const char *)exp_text(fmt_exp);
+  }
+  struct tm tmbuf;
+  struct tm *tmp = gmtime_r(&t, &tmbuf);
+  if (!tmp) {
+    unrefexp(sec_exp);
+    unrefexp(fmt_exp);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env, "format-time: gmtime failed");
+  }
+  char out[256];
+  size_t n = strftime(out, sizeof(out), fmt, tmp);
+  exp_t *ret = make_string(out, (int)n);
+  unrefexp(sec_exp);
+  unrefexp(fmt_exp);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_parsetime[] =
+    "(parse-time format-string string) — parse a UTC time string into unix "
+    "seconds (fixnum) using strptime. Returns nil on failure.";
+exp_t *parsetimecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(fmtexp, strexp);
+  REQUIRE_2_STRINGS(fmtexp, strexp, CLEAN_RETURN_2(fmtexp, strexp, _alc_e),
+                    ERROR_ILLEGAL_VALUE, NULL, env,
+                    "(parse-time format-string string): both must be strings");
+  const char *fmt = (const char *)exp_text(fmtexp);
+  const char *str = (const char *)exp_text(strexp);
+  struct tm tm;
+  memset(&tm, 0, sizeof(tm));
+  tm.tm_year = 70;
+  tm.tm_mday = 1;
+  char *res = strptime(str, fmt, &tm);
+  if (!res) {
+    CLEAN_RETURN_2(fmtexp, strexp, refexp(NIL_EXP));
+  }
+  time_t t = timegm(&tm);
+  if (t == (time_t)-1) {
+    CLEAN_RETURN_2(fmtexp, strexp, refexp(NIL_EXP));
+  }
+  CLEAN_RETURN_2(fmtexp, strexp, MAKE_FIX((int64_t)t));
 }

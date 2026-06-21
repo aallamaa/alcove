@@ -754,8 +754,14 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         in_tail_position = was_tail;
         goto finisht;
       }
-      if (issymbol(tmpexp)) {
+      if (issymbol(tmpexp) && !tmpevexp) {
         if (((char *)exp_text(tmpexp))[0] == ':') {
+          int ifx_matched;
+          exp_t *ifx = ast_try_infix(tmpexp, e, env, &ifx_matched);
+          if (ifx_matched) {
+            ret = ifx;
+            goto finisht;
+          }
           ret = error(ERROR_ILLEGAL_VALUE, e, env,
                       "Error keyword %s can not be used as function",
                       exp_text(tmpexp));
