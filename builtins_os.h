@@ -78,18 +78,33 @@ exp_t *eprncmd(exp_t *e, env_t *env) { return epr_common(e, env, 1); }
 /* ---------- stdin ---------- */
 
 const char doc_readline[] =
-    "(read-line) — read one line from stdin (without the trailing newline). "
-    "Returns nil at end of input.";
+    "(read-line [port]) — read one line (without trailing newline) from stdin, "
+    "or from the given readable port. Returns nil at end of input.";
 exp_t *readlinecmd(exp_t *e, env_t *env) {
-  (void)env;
-  unrefexp(e);
+  FILE *fp = stdin;
+  exp_t *portexp = NULL;
+  if (e->next) {
+    portexp = EVAL(e->next->content, env);
+    if (iserror(portexp)) { unrefexp(e); return portexp; }
+    if (!isport(portexp)) {
+      unrefexp(portexp); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "read-line: argument must be a port");
+    }
+    alc_port_t *p = (alc_port_t *)portexp->ptr;
+    if (!p || p->closed || !p->fp || p->mode != 'r') {
+      unrefexp(portexp); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "read-line: port is not open for reading");
+    }
+    fp = p->fp;
+  }
   char *line = NULL;
   size_t cap = 0;
-  ssize_t n = getline(&line, &cap, stdin);
-  if (n < 0) {
-    free(line);
-    return refexp(NIL_EXP);
-  }
+  ssize_t n = getline(&line, &cap, fp);
+  if (portexp) unrefexp(portexp);
+  unrefexp(e);
+  if (n < 0) { free(line); return refexp(NIL_EXP); }
   while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
     n--;
   exp_t *ret = make_string(line, (int)n);
@@ -305,13 +320,24 @@ exp_t *readstdincmd(exp_t *e, env_t *env) {
 }
 
 const char doc_flush[] =
-    "(flush) — flush stdout. Needed when stdout is a pipe (block-buffered): "
-    "protocol servers (LSP) must flush after each message.";
+    "(flush [port]) — flush stdout, or the given writable port.";
 exp_t *flushcmd(exp_t *e, env_t *env) {
-  (void)env;
+  if (e->next) {
+    exp_t *portexp = EVAL(e->next->content, env);
+    if (iserror(portexp)) { unrefexp(e); return portexp; }
+    if (!isport(portexp)) {
+      unrefexp(portexp); unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "flush: argument must be a port");
+    }
+    alc_port_t *p = (alc_port_t *)portexp->ptr;
+    if (p && !p->closed && p->fp) fflush(p->fp);
+    unrefexp(portexp);
+  } else {
+    fflush(stdout);
+  }
   unrefexp(e);
-  fflush(stdout);
-  return NIL_EXP;
+  return refexp(NIL_EXP);
 }
 
 const char doc_direxistsp[] =
@@ -689,4 +715,96 @@ exp_t *parsetimecmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(fmtexp, strexp, refexp(NIL_EXP));
   }
   CLEAN_RETURN_2(fmtexp, strexp, MAKE_FIX((int64_t)t));
+}
+
+/* ── Stream IO / ports ── */
+
+const char doc_open[] =
+    "(open path mode) — open a file for buffered streaming. mode is \"r\", "
+    "\"w\", or \"a\". Returns a port, or a catchable error.";
+exp_t *opencmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(pathexp, modeexp);
+  if (!isstring(pathexp) || !isstring(modeexp))
+    CLEAN_RETURN_2(pathexp, modeexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "(open path mode): two strings expected"));
+  const char *m = (const char *)exp_text(modeexp);
+  if (!m[0] || m[1] || (m[0] != 'r' && m[0] != 'w' && m[0] != 'a'))
+    CLEAN_RETURN_2(pathexp, modeexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "open: mode must be \"r\", \"w\", or \"a\""));
+  const char *path = (const char *)exp_text(pathexp);
+  FILE *fp = fopen(path, m);
+  if (!fp)
+    CLEAN_RETURN_2(pathexp, modeexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "open: cannot open '%s': %s", path, strerror(errno)));
+  alc_port_t *p = (alc_port_t *)memalloc(1, sizeof(alc_port_t));
+  p->fp = fp;
+  p->path = strdup(path);
+  p->mode = m[0];
+  p->closed = 0;
+  MAKE_TYPED(ret, EXP_PORT, p);
+  CLEAN_RETURN_2(pathexp, modeexp, ret);
+}
+
+const char doc_close[] =
+    "(close port) — close an open port. Idempotent (closing again is a no-op).";
+exp_t *closecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(portexp);
+  if (!isport(portexp))
+    CLEAN_RETURN_1(portexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                  "(close port): a port expected"));
+  alc_port_t *p = (alc_port_t *)portexp->ptr;
+  if (p && !p->closed && p->fp) {
+    fclose(p->fp);
+    p->fp = NULL;
+    p->closed = 1;
+  }
+  CLEAN_RETURN_1(portexp, refexp(NIL_EXP));
+}
+
+const char doc_write[] =
+    "(write port string) — write string to a writable port. Returns nil.";
+exp_t *writecmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(portexp, strexp);
+  if (!isport(portexp) || !isstring(strexp))
+    CLEAN_RETURN_2(portexp, strexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "(write port string): a port and a string expected"));
+  alc_port_t *p = (alc_port_t *)portexp->ptr;
+  if (!p || p->closed || !p->fp || p->mode == 'r')
+    CLEAN_RETURN_2(portexp, strexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env,
+                         "write: port is not open for writing"));
+  const char *s = (const char *)exp_text(strexp);
+  size_t n = strlen(s);
+  if (n && fwrite(s, 1, n, p->fp) != n)
+    CLEAN_RETURN_2(portexp, strexp,
+                   error(ERROR_ILLEGAL_VALUE, NULL, env, "write: write failed"));
+  CLEAN_RETURN_2(portexp, strexp, refexp(NIL_EXP));
+}
+
+const char doc_eofp[] =
+    "(eof? port) — t if the readable port is at end-of-file, nil otherwise.";
+exp_t *eofpcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(portexp);
+  if (!isport(portexp))
+    CLEAN_RETURN_1(portexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                  "(eof? port): a port expected"));
+  alc_port_t *p = (alc_port_t *)portexp->ptr;
+  if (!p || p->closed || !p->fp || p->mode != 'r')
+    CLEAN_RETURN_1(portexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                  "eof?: port is not open for reading"));
+  int c = fgetc(p->fp);
+  if (c == EOF)
+    CLEAN_RETURN_1(portexp, refexp(TRUE_EXP));
+  ungetc(c, p->fp);
+  CLEAN_RETURN_1(portexp, refexp(NIL_EXP));
+}
+
+const char doc_portp[] = "(port? x) — t if x is a port, nil otherwise.";
+exp_t *portpcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(a);
+  CLEAN_RETURN_1(a, isport(a) ? refexp(TRUE_EXP) : refexp(NIL_EXP));
 }

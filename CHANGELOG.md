@@ -8,6 +8,7 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **Stream/Port File IO** — add buffered stream handle type `EXP_PORT` and builtins `open`/`close`/`write`/`eof?`/`port?`, and extend `read-line`/`flush` to accept an optional port.
 - **Observability** — make a server/embedded deployment debuggable.
   - **Structured error codes** — `(error-code e)` returns an error's
     machine-readable class as a stable, prose-independent symbol

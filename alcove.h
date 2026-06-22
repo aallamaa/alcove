@@ -60,7 +60,8 @@
      BEFORE EXP_CONT so isatom stays one contiguous bound ---- */              \
   X(EXP_RATIONAL, , "rational") /* int64 num/den (den>0, reduced) */           \
   X(EXP_DECIMAL, , "decimal")   /* bounded base-10: coeff + scale */           \
-  X(EXP_CONT, , "continuation") /* call/cc escape token; id in meta */
+  X(EXP_CONT, , "continuation") /* call/cc escape token; id in meta */         \
+  X(EXP_PORT, , "port")         /* buffered stream; ptr → alc_port_t */
 enum {
 #define X(name, anchor, dispname) name anchor,
   ALC_EXP_TYPES(X)
@@ -233,6 +234,7 @@ enum {
 #define isset(e) (is_ptr(e) && (e)->type == EXP_SET)
 #define ishamt(e) (is_ptr(e) && (e)->type == EXP_HAMT)
 #define iscont(e) (is_ptr(e) && (e)->type == EXP_CONT)
+#define isport(e) (is_ptr(e) && (e)->type == EXP_PORT)
 #define isvector(e) (is_ptr(e) && (e)->type == EXP_VECTOR)
 /* Self-evaluating: tagged immediates, scalar atoms (≤ EXP_VECTOR), and
    the appended Clojure-style containers (blob/dict/list). The container
@@ -1291,5 +1293,12 @@ typedef struct compiler_t {
   int locs_cap;
   int last_loc_line; /* last line recorded, to coalesce runs on the same line */
 } compiler_t;
+
+typedef struct {
+  FILE *fp;
+  char *path;
+  char mode;   /* 'r' | 'w' | 'a' */
+  int closed;
+} alc_port_t;
 
 #endif /* ALCOVE_H */

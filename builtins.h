@@ -509,4 +509,11 @@ exp_t *rediscmdscmd(exp_t *e, env_t *env);
     CLEAN_RETURN_2(a, b, ret);                                                 \
   }
 
+extern const char doc_open[], doc_close[], doc_write[], doc_eofp[], doc_portp[];
+exp_t *opencmd(exp_t *e, env_t *env);
+exp_t *closecmd(exp_t *e, env_t *env);
+exp_t *writecmd(exp_t *e, env_t *env);
+exp_t *eofpcmd(exp_t *e, env_t *env);
+exp_t *portpcmd(exp_t *e, env_t *env);
+
 #endif /* ALCOVE_BUILTINS_H */

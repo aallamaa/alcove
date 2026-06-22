@@ -1125,6 +1125,30 @@ Whole-file helpers:
 (load "lib.alc")                 ; evaluate Alcove forms from a file
 ```
 
+Ports / streaming file IO:
+
+For processing large files or handling streams, Alcove supports buffered streaming using ports:
+
+```lisp
+(open path mode)   ; open a file for buffered streaming. mode is "r", "w", or "a"
+(close port)       ; close an open port (idempotent)
+(write port str)   ; write string to a writable port
+(read-line [port]) ; read one line (without trailing newline) from port or stdin
+(eof? port)        ; t if the readable port is at EOF, nil otherwise
+(port? x)          ; t if x is a port, nil otherwise
+```
+
+To ensure files are properly closed in case of errors, use the manual cleanup idiom with `try/finally`:
+
+```lisp
+(let (f (open path "r"))
+  (try
+    (do ... (read-line f) ...)
+    (finally (close f))))
+```
+
+Note: ports will also auto-close upon being garbage collected if they are no longer referenced, but explicit cleanup is recommended.
+
 Filesystem management:
 
 ```
@@ -1543,8 +1567,7 @@ So you do not waste time looking:
 - No keyword arguments — default parameter values + dict-passing cover it
   (see §3). A keyword-arg design that desugars purely in the reader may
   happen someday; nothing that touches the calling convention will.
-- No stream/port objects. Whole-file helpers + `read-line` + `shell`
-  cover the scripting floor; `read-char`-level input is FFI territory.
+- No `with-open-file` macro (use `open`/`close` explicitly in a `try/finally` block).
 - No PCRE syntax: regex is POSIX **ERE** (see §4) — `[[:digit:]]`, not
   `\d`; no lazy quantifiers, lookaround, or `$1` backrefs. A PCRE binding
   belongs in a native module, not the core.

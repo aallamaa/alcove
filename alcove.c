@@ -758,6 +758,11 @@ lispProc lispProcList[] = {
     LISPCMD_APP("string-index", stringindexcmd, doc_stringindex),
     LISPCMD_APP("string-replace", stringreplacecmd, doc_stringreplace),
     LISPCMD_APP_UNSAFE("read-string", readstringcmd, doc_readstring),
+    LISPCMD_APP_UNSAFE("open", opencmd, doc_open),
+    LISPCMD_APP_UNSAFE("close", closecmd, doc_close),
+    LISPCMD_APP_UNSAFE("write", writecmd, doc_write),
+    LISPCMD_APP_UNSAFE("eof?", eofpcmd, doc_eofp),
+    LISPCMD_APP_UNSAFE("port?", portpcmd, doc_portp),
     LISPCMD_APP_UNSAFE("write-string", writestringcmd, doc_writestring),
     LISPCMD_APP_UNSAFE("append-string", appendstringcmd, doc_appendstring),
     LISPCMD_APP_UNSAFE("read-lines", readlinescmd, doc_readlines),
@@ -1345,6 +1350,16 @@ int unrefexp_free(exp_t *e,
     case EXP_FFI: {
       extern void alc_ffi_free(void *ptr); /* defined alongside ffi_call */
       alc_ffi_free(e->ptr);
+      break;
+    }
+    case EXP_PORT: {
+      alc_port_t *p = (alc_port_t *)e->ptr;
+      if (p) {
+        if (!p->closed && p->fp)
+          fclose(p->fp);
+        free(p->path);
+        free(p);
+      }
       break;
     }
     case EXP_VECTOR:
@@ -2417,6 +2432,7 @@ inline int istrue(exp_t *e) {
   case EXO_MACROINTERNAL:
   case EXP_FFI:
   case EXP_CONT:
+  case EXP_PORT:
     return 1;
   default:
     return 0;

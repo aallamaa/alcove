@@ -50,7 +50,9 @@ Implementation notes:
 
 Current state: whole-file helpers exist for text and binary data:
 `read-string`, `write-string`, `append-string`, `read-lines`, `file-exists?`,
-`read-bytes`, and `write-bytes`. There is still no stream/port abstraction.
+`read-bytes`, and `write-bytes`. Additionally, a stream/port API (`open`, `close`,
+`read-line`, `write`, `eof?`, `port?`) has been implemented, but the `with-open-file`
+macro is still pending.
 
 Proposed Alcove API:
 
@@ -74,10 +76,11 @@ Later stream API:
 Implementation notes:
 
 - Implemented: whole-file helpers; they are simpler and cover scripts.
+- Implemented: stream/port API (`open`, `close`, `read-line`, `write`, `eof?`, `port?`) for line-by-line streaming.
+- Pending: `with-open-file` macro.
 - Implemented: blobs for binary and strings/lists for text.
 - Keep errors explicit: missing files should produce an error object, not
   silent `nil`, unless a default argument is supplied.
-- Add Adder examples using `:` blocks once `with-open-file` exists.
 
 ## P0: Exceptions And Error Handling
 

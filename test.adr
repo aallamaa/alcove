@@ -2379,6 +2379,38 @@ write-string "/tmp/alcove-test-loaderr.alc" "; a comment\n(unbound_xyz_var)\n"
 assert "load error has src:line" (string-index (error-message (load "/tmp/alcove-test-loaderr.alc")) "alcove-test-loaderr.alc:2:"):
   0
 
+setf __pp (open "/tmp/alcove_test_port.txt" "w")
+
+write __pp "a\nb\nc\n"
+
+close __pp
+
+setf __pr (open "/tmp/alcove_test_port.txt" "r")
+
+assert "port read-line a" (read-line __pr) "a"
+
+assert "port read-line b" (read-line __pr) "b"
+
+assert "port read-line c" (read-line __pr) "c"
+
+assert "port read-line EOF" (read-line __pr) nil
+
+assert "port eof? t" (eof? __pr) t
+
+assert "port? t" (port? __pr) t
+
+assert "port? nil" (port? 5) nil
+
+close __pr
+
+assert "port double close" (close __pr) nil
+
+assert "port open missing" (error? (open "/no/such/dir/zzz" "r")) t
+
+assert "port write closed" (error? (write __pr "x")) t
+
+assert "port open bad mode" (error? (open "/tmp/x" "q")) t
+
 write-string "/tmp/alcove-test-mod.alc" "(ns tmod)\n(def hi (n) (str \"hi:\" n))\n(def bye (n) (str \"bye:\" n))\n"
 
 assert "require returns t first time" (require "/tmp/alcove-test-mod.alc") t
