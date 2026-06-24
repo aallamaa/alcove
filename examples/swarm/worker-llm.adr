@@ -1,0 +1,43 @@
+
+# examples/swarm/worker-llm.adr — a GENERATIVE swarm worker (M2 + M3 combined).
+#
+# The whole arc in one process: claim a ticket (M3 atomic INCR), ask the model
+# for a candidate (M2 lib/llm), parse + score it in the sandbox (M0 lib/evolve),
+# and publish the source and score to the shared board. Run many of these and the
+# swarm is a distributed, model-driven evolutionary search.
+#
+# Needs a key for real candidates:
+# export ANTHROPIC_API_KEY=sk-ant-...
+# sh examples/swarm/run-llm.sh
+# With no key (or no network) llm/complete returns nil and the worker falls back
+# to a placeholder candidate — so the plumbing runs anywhere; only the candidate
+# QUALITY depends on the model.
+require("lib/swarm")
+require("lib/evolve")
+require("lib/llm")
+
+# Fitness: 0 is perfect for a function that squares its input.
+def fit(f): 0 - ((abs ((f 2) - 4)) + (abs ((f 3) - 9)))
+
+# Ask the model for one candidate as a raw s-expression; fall back if it can't.
+def ask():
+  or (llm/complete "Output ONLY one Alcove lambda s-expression that squares its single numeric argument. No prose, no markdown, no fences. Example: (fn (x) (* x 2))") "(fn (x) 0)"
+
+# Generate for ticket i (1-based): publish the source AND its score (unique keys).
+def publish(fd i src):
+  swarm/set fd (str "cand:" (i - 1)) src
+  swarm/set fd (str "result:" (i - 1)) (str (evolve/score (evolve/compile src) fit))
+def work-one(fd i): publish fd i (ask)
+def work-after(fd total i):
+  work-one fd i
+  work-loop fd total
+def work-step(fd total i):
+  if (i > total):
+    nil
+    work-after fd total i
+def work-loop(fd total): work-step fd total (swarm/incr fd "next")
+
+port = (read-string-sexpr (nth 0 *args*))
+fd = (swarm/connect "127.0.0.1" port)
+work-loop fd (swarm/get-num fd "count")
+swarm/close fd

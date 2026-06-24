@@ -18,7 +18,11 @@ cleanup() { [ -n "$SRV" ] && kill -9 "$SRV" 2>/dev/null; rm -rf "$D"; }
 trap cleanup EXIT
 
 echo "== starting blackboard server on :$PORT =="
-./alcove -r "$PORT" --noload >/dev/null 2>"$D/srv.err" & SRV=$!
+# Run the server from $D with server-init.alc as its .init.alc, so it registers
+# the server-side BEST aggregation command at startup. exec so $! is the server.
+cp examples/swarm/server-init.alc "$D/.init.alc"
+ALC="$ROOT/alcove"
+( cd "$D" && exec "$ALC" -r "$PORT" --noload >/dev/null 2>"$D/srv.err" ) & SRV=$!
 
 echo "== seeding candidates (retry until the server is up) =="
 up=0; i=0
@@ -38,7 +42,8 @@ OUT=$(./adder examples/swarm/check.adr "$PORT" 2>"$D/chk.err")
 echo "  $OUT"
 CLEAN=$(echo "$OUT" | sed 's/\x1b\[[0-9;]*m//g')   # prn colorizes numbers; strip ANSI before matching
 
-if echo "$CLEAN" | grep -qF 'best=(fn (x) (* x x)) score=0 filled=6/6'; then
+if echo "$CLEAN" | grep -qF 'best=(fn (x) (* x x)) score=0 filled=6/6' \
+   && echo "$CLEAN" | grep -qF 'SWARM SERVER BEST: 2 0'; then
   echo "==> SWARM SMOKE PASSED"; exit 0
 fi
 echo "  worker / check stderr:"; sed 's/\x1b\[[0-9;]*m//g' "$D/w1.err" "$D/w2.err" "$D/chk.err" 2>/dev/null | tail -20
