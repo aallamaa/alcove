@@ -6499,6 +6499,119 @@ assert "check-syntax non-string errors" (error? (try (check-syntax 5) (fn (e) e)
 
 assert "read-stdin registered" (type-of read-stdin) 'fn
 
+assert "rss parses a list" (eval (read-string-sexpr "(+ 2 3)")) 5
+
+assert "rss parses an atom" (eval (read-string-sexpr "42")) 42
+
+assert "rss parses a string literal" (read-string-sexpr "\"hi\"") "hi"
+
+assert "rss parses a symbol" (read-string-sexpr "foo") 'foo
+
+assert "rss parses a quote form" (read-string-sexpr "'a") ''a
+
+assert "rss yields a pair" (pair? (read-string-sexpr "(a b c)")) t
+
+assert "rss reads only the FIRST form" (eval (read-string-sexpr "(* 6 7) (+ 1 1)")):
+  42
+
+assert "rss nested eval" (eval (read-string-sexpr "(+ 1 (* 2 (- 10 4)))")) 13
+
+assert "rss roundtrips via str" (eval (read-string-sexpr (str "(+ " 4 " " 5 ")"))):
+  9
+
+assert "rss empty is error" (error? (read-string-sexpr "")) t
+
+assert "rss whitespace-only is error" (error? (read-string-sexpr "   ")) t
+
+assert "rss incomplete form is error" (error? (read-string-sexpr "(+ 1")) t
+
+assert "rss unbalanced close is error" (error? (read-string-sexpr ")")) t
+
+assert "rss non-string arg errors" (error? (try (read-string-sexpr 5) (fn (e) e))):
+  t
+
+assert "rss error survives try" (try (eval (read-string-sexpr "(+ 1")) (fn (e) 'caught)):
+  'caught
+
+assert "ras empty -> nil" (read-all-string "") nil
+
+assert "ras whitespace -> nil" (read-all-string "  \n  ") nil
+
+assert "ras counts forms" (length (read-all-string "(+ 1 2) (* 3 4) 7")) 3
+
+assert "ras single form" (length (read-all-string "(+ 1 2)")) 1
+
+assert "ras forms are usable" (eval (cons '+ (read-all-string "1 2 3 4"))) 10
+
+assert "ras preserves order" (read-all-string "1 2 3") (list 1 2 3)
+
+assert "ras mixed types" (read-all-string "a \"b\" 3") (list 'a "b" 3)
+
+assert "ras run a program" (eval (cons 'do (read-all-string "(def _ras_dbl (x) (* x 2)) (_ras_dbl 21)"))):
+  42
+
+assert "ras unbalanced close is error" (error? (read-all-string "1 2 )")) t
+
+assert "ras leading close is error" (error? (read-all-string ") oops")) t
+
+assert "ras incomplete trailing -> clean end" (read-all-string "(a (b") nil
+
+assert "ras non-string arg errors" (error? (try (read-all-string 5) (fn (e) e))):
+  t
+
+assert "a2s returns a string" (string? (adder->sexpr "1 + 2")) t
+
+assert "a2s + rss + eval compose" (eval (read-string-sexpr (adder->sexpr "1 + 2"))):
+  3
+
+assert "a2s output is parseable" (pair? (read-string-sexpr (adder->sexpr "1 + 2"))):
+  t
+
+assert "a2s non-string arg errors" (error? (try (adder->sexpr 5) (fn (e) e))):
+  t
+
+setf _rss_src "(fn (n) (* n n))"
+
+assert "rss build+eval a lambda" ((eval (read-string-sexpr _rss_src)) 9) 81
+
+assert "rss registered" (type-of read-string-sexpr) 'fn
+
+assert "ras registered" (type-of read-all-string) 'fn
+
+assert "a2s registered" (type-of adder->sexpr) 'fn
+
+require "lib/evolve"
+
+def _ev_fit (f):
+  - 0 (+ (abs (- (f 2) 4)) (abs (- (f 3) 9)))
+
+setf _ev_st (evolve/run "(fn (x) x)" _ev_fit (evolve/stub-llm "square the input"))
+
+assert "evolve picks the best candidate" (evolve/best-src _ev_st):
+  "(fn (x) (* x x))"
+
+assert "evolve best score is optimal" (evolve/best-score _ev_st) 0
+
+assert "evolved fn actually computes" ((evolve/best-fn _ev_st) 9) 81
+
+setf _ev_st2 (evolve/run "(fn (x) x)" _ev_fit (list "(fn (x) (/ x 0))" "(this is not valid (" "(fn (x) (* x x))"))
+
+assert "evolve survives bad candidates" (evolve/best-src _ev_st2):
+  "(fn (x) (* x x))"
+
+assert "evolve/compile good -> fn" (type-of (evolve/compile "(fn (x) x)")) 'fn
+
+assert "evolve/compile bad -> nil" (evolve/compile "(this is broken (") nil
+
+assert "evolve/score nil cand -> worst" (evolve/score nil _ev_fit):
+  evolve/worst
+
+assert "evolve/score crashing -> worst" (evolve/score (evolve/compile "(fn (x) (/ x 0))") _ev_fit):
+  evolve/worst
+
+assert "evolve/compile-adder runs" ((evolve/compile-adder "(fn (x) (* x x))") 8):
+  64
+
 def _dflt (a (b 10) (c (+ 1 2))):
   list a b c
 

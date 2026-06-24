@@ -42,6 +42,9 @@ examples/mlp/optdigits.tes
 examples/mlp/digits.bin
 examples/mlp/digits.dump
 
+# Evolve demo: the persisted champion written by examples/evolve/run.adr
+examples/evolve/champion.dump
+
 # Mario demo: built shim + downloaded music track (not redistributed,
 # see examples/mario/README.md > Legal notice).
 examples/mario/libmariogfx.so

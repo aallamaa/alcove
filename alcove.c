@@ -812,6 +812,9 @@ lispProc lispProcList[] = {
     LISPCMD_APP("builtins", builtinscmd, doc_builtins),
     LISPCMD_APP_UNSAFE("globals", globalscmd, doc_globals),
     LISPCMD_APP("check-syntax", checksyntaxcmd, doc_checksyntax),
+    LISPCMD_APP("read-string-sexpr", readstringsexprcmd, doc_read_string_sexpr),
+    LISPCMD_APP("read-all-string", readallstringcmd, doc_read_all_string),
+    LISPCMD_APP("adder->sexpr", addertosexprcmd, doc_adder_to_sexpr),
     LISPCMD_UNSAFE("read-stdin", readstdincmd, doc_readstdin),
     LISPCMD("flush", flushcmd, doc_flush),
     /* File I/O & Filesystem */

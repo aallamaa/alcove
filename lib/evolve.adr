@@ -1,0 +1,109 @@
+
+# lib/evolve.adr — a minimal self-improvement loop (M0 of the AI-harness arc).
+#
+# Demonstrates the homoiconic loop end to end, with NO network and NO concurrency:
+#
+# code TEXT --read-string-sexpr--> form --eval(sandboxed)--> candidate fn
+# --fitness--> score --keep-if-better--> best   (then savedb to persist)
+#
+# The "LLM" is a stub (evolve/stub-llm) that returns canned candidate programs.
+# Swapping it for a real model (lib/llm.adr, a later milestone) leaves the loop
+# unchanged — the loop only ever sees candidate code as strings.
+#
+# Safety is the whole point of doing this in Alcove: every candidate is parsed to
+# a VALUE (a syntax error is a value, never a crash), and every eval / fitness
+# call runs under (try ...) + (with-time-limit ...), so a candidate that errors
+# or loops forever can't take down the loop — it just scores worst and is skipped.
+#
+# Usage (Adder or Alcove):
+# require("lib/evolve")
+# state = evolve/run(baseline, fitness, evolve/stub-llm(goal))
+# evolve/best-src(state)            # the winning source string
+# evolve/best-score(state)          # its fitness
+# f = evolve/best-fn(state)         # the compiled winning function
+# evolve/save(state, "eha.dump")    # persist the champion (survives restart)
+ns evolve
+
+# ---- safety knobs --------------------------------------------------
+evolve/time-limit-ms = 1000 # wall-clock budget per candidate (bounds runaways)
+evolve/worst = -1000000 # score for a candidate that won't compile / run / score
+
+# champion globals — set by evolve/save so savedb captures the evolved closure.
+evolve/champion = nil
+evolve/champion-src = nil
+
+# ---- parse + sandboxed compile of a candidate ----------------------
+# A candidate is CODE TEXT (s-expressions). Parse it to a form, then eval the
+# form to a value (expected: a function). compile returns that value on success,
+# or nil on failure (parse error OR eval error OR timeout) so selection simply
+# skips it. NOTE: error VALUES propagate through normal call positions in Alcove,
+# so the whole parse+eval runs INSIDE one (try ...) and the handler returns nil —
+# we never let an error value flow out as a return value.
+def evolve/compile(src): try (evolve/compile-unsafe src) (fn (e) nil)
+def evolve/compile-unsafe(src):
+  with-time-limit evolve/time-limit-ms (fn () (eval (read-string-sexpr src)))
+
+# Adder-dialect candidate: transpile surface Adder to s-exprs first, then compile.
+# Lets a stub / model emit Adder instead of raw s-expressions.
+def evolve/compile-adder(src):
+  try (evolve/compile-adder-unsafe src) (fn (e) nil)
+def evolve/compile-adder-unsafe(src):
+  with-time-limit evolve/time-limit-ms (fn () (eval (read-string-sexpr (adder->sexpr src))))
+
+# ---- score a candidate with a user fitness function ----------------
+# cand is a compiled function, or nil if it failed to compile. fitness takes the
+# function and returns a number; higher is better. Sandboxed: a nil candidate, a
+# fitness that raises / loops, or a non-number result all yield the worst score
+# so selection passes them over.
+def evolve/score(cand fitness):
+  if cand:
+    try (evolve/finite (with-time-limit evolve/time-limit-ms (fn () (fitness cand)))) (fn (e) evolve/worst)
+    evolve/worst
+def evolve/finite(s):
+  if (number? s):
+    s
+    evolve/worst
+
+# ---- one selection step --------------------------------------------
+# state is a hash-map {"src" .. "fn" .. "score" ..}. Compile + score the
+# candidate text once, then replace the incumbent iff it scores strictly higher.
+def evolve/step(state fitness src):
+  evolve/consider state fitness src (evolve/compile src)
+def evolve/consider(state fitness src cand):
+  evolve/select state src cand (evolve/score cand fitness)
+def evolve/select(state src cand sc):
+  if (sc > (get state "score")):
+    hash-map "src" src "fn" cand "score" sc
+    state
+
+# ---- the loop ------------------------------------------------------
+# Seed with the baseline (so "best" is always defined), then fold the candidate
+# texts through step. Returns the final state.
+def evolve/seed(baseline-src fitness):
+  evolve/step (hash-map "src" baseline-src "fn" nil "score" evolve/worst) fitness baseline-src
+def evolve/run(baseline-src fitness candidates):
+  reduce (fn (st src) (evolve/step st fitness src)) (evolve/seed baseline-src fitness) candidates
+
+# ---- accessors -----------------------------------------------------
+def evolve/best-src(state): get state "src"
+def evolve/best-score(state): get state "score"
+def evolve/best-fn(state): get state "fn"
+
+# ---- persistence ---------------------------------------------------
+# Park the evolved champion (its compiled closure + source) in globals, MARK them
+# persistent (savedb only dumps persisted bindings), and dump the environment.
+# savedb serializes EXP_LAMBDA closures, so a later (loaddb "path") brings the
+# evolved function back, ready to call.
+def evolve/save(state path):
+  evolve/champion = (evolve/best-fn state)
+  evolve/champion-src = (evolve/best-src state)
+  persist (quote evolve/champion)
+  persist (quote evolve/champion-src)
+  savedb path
+
+# ---- the stub "LLM" ------------------------------------------------
+# Stands in for a real model: ignores the goal and returns a fixed menu of
+# candidate programs (as code strings). Replaceable by a real completion call
+# with no change to the loop.
+def evolve/stub-llm(goal):
+  list "(fn (x) x)" "(fn (x) (+ x 1))" "(fn (x) (* x x))" "(fn (x) (* x x x))"

@@ -1,0 +1,43 @@
+
+# examples/evolve/run.adr — the M0 self-improvement loop, end to end.
+#
+# Run me:   ./adder examples/evolve/run.adr      (or ./alcove on the .alc twin)
+#
+# This is the whole AI-harness idea in miniature, with a STUB model and no
+# network: candidate programs arrive as TEXT, get parsed (read-string-sexpr),
+# evaluated in a sandbox (try + with-time-limit), scored by a fitness function,
+# and the best is kept — then persisted with savedb so it survives a restart.
+# Replace evolve/stub-llm with a real model and the loop is unchanged.
+require("lib/evolve")
+
+# The goal: discover a function that squares its input. We score a candidate by
+# how close f(2),f(3) land to 4,9 (0 = perfect). Body is written in prefix form
+# so it transpiles cleanly regardless of infix precedence.
+def fit(f): 0 - ((abs ((f 2) - 4)) + (abs ((f 3) - 9)))
+
+prn("goal: evolve a squaring function")
+prn("candidate menu (the stub 'LLM'):")
+each c (evolve/stub-llm "square the input"): prn("  " c)
+
+# Seed with a deliberately-wrong baseline, then let the loop select.
+state = evolve/run("(fn (x) x)" fit (evolve/stub-llm "square the input"))
+
+prn("")
+prn("evolved best : " (evolve/best-src state))
+prn("fitness      : " (evolve/best-score state))
+prn("check 9 -> " ((evolve/best-fn state) 9) "  (want 81)")
+
+# Robustness: the same loop, but the menu now includes a crashing candidate and a
+# syntactically broken one. Neither derails the loop — they score worst. (Kept on
+# one line: an Adder call must not be split across newlines.)
+rough = evolve/run("(fn (x) x)" fit (list "(fn (x) (/ x 0))" "(bad syntax (" "(fn (x) (* x x))"))
+prn("")
+prn("with bad candidates in the mix, best is still: " (evolve/best-src rough))
+
+# Persist the evolved champion (its compiled closure + source). savedb serializes
+# EXP_LAMBDA closures, so examples/evolve/reload.adr can load it in a FRESH
+# process and call it.
+evolve/save(state "examples/evolve/champion.dump")
+prn("")
+prn("saved champion to examples/evolve/champion.dump")
+prn("now run:  ./adder --noload examples/evolve/reload.adr")
