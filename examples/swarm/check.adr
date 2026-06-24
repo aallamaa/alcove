@@ -1,0 +1,28 @@
+
+# examples/swarm/check.adr — read the blackboard, report the swarm's best.
+#
+# Run after the workers finish:  ./adder check.adr PORT
+# Scans result:0..total-1, finds the highest-scoring candidate, and prints a
+# machine-checkable line the smoke driver asserts against.
+require("lib/swarm")
+require("lib/evolve")
+
+def swarm/range(n):
+  if (n > 0):
+    append (swarm/range (n - 1)) (list (n - 1))
+    nil
+def rscore(fd i): read-string-sexpr (swarm/get fd (str "result:" i))
+def better(fd b i):
+  if ((rscore fd i) > (rscore fd b)):
+    i
+    b
+def best-idx(fd idxs): reduce (fn (b i) (better fd b i)) (car idxs) (cdr idxs)
+
+port = (read-string-sexpr (nth 0 *args*))
+fd = (swarm/connect "127.0.0.1" port)
+total = (swarm/get-num fd "count")
+idxs = (swarm/range total)
+bi = (best-idx fd idxs)
+filled = (length (filter (fn (i) (swarm/get fd (str "result:" i))) idxs))
+prn("SWARM RESULT: best=" (swarm/get fd (str "cand:" bi)) " score=" (rscore fd bi) " filled=" filled "/" total)
+swarm/close fd

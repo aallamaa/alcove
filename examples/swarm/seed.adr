@@ -1,0 +1,19 @@
+
+# examples/swarm/seed.adr — seed the blackboard with candidate programs.
+#
+# Run by scripts/swarm-smoke.sh after the server is up:  ./adder seed.adr PORT
+# Writes `count` and cand:0..N-1 (a mix of good, suboptimal, crashing, and
+# unparseable candidates) into the shared RESP keyspace.
+require("lib/swarm")
+
+port = (read-string-sexpr (nth 0 *args*))
+fd = (swarm/connect "127.0.0.1" port)
+swarm/set fd "count" "6"
+swarm/set fd "cand:0" "(fn (x) x)"
+swarm/set fd "cand:1" "(fn (x) (+ x 1))"
+swarm/set fd "cand:2" "(fn (x) (* x x))"
+swarm/set fd "cand:3" "(fn (x) (* x x x))"
+swarm/set fd "cand:4" "(fn (x) (/ x 0))"
+swarm/set fd "cand:5" "(bad syntax ("
+swarm/close fd
+prn("seeded 6 candidates on :" port)

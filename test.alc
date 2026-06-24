@@ -4302,6 +4302,22 @@
 (assert "llm extract-text nil on nil"  (llm/extract-text nil) nil)
 (assert "llm/complete registered"      (type-of llm/complete) 'fn)
 
+;; ---------- swarm: RESP blackboard client (lib/swarm.adr) ----------
+;; PURE wire codec only — no network (the multi-process swarm is exercised by
+;; scripts/swarm-smoke.sh / `make swarm-smoke`). encode builds a RESP command;
+;; parse turns a RESP reply into a value. These are what the worker/server speak.
+(require "lib/swarm")
+(assert "swarm encode command"
+        (swarm/encode (list "SET" "k" "v")) "*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n")
+(assert "swarm encode 1 arg" (swarm/encode (list "PING")) "*1\r\n$4\r\nPING\r\n")
+(assert "swarm parse integer (INCR reply)"  (swarm/parse ":42\r\n") 42)
+(assert "swarm parse bulk (GET reply)"       (swarm/parse "$2\r\nhi\r\n") "hi")
+(assert "swarm parse nil bulk (missing key)" (swarm/parse "$-1\r\n") nil)
+(assert "swarm parse simple (SET reply)"     (swarm/parse "+OK\r\n") "OK")
+(assert "swarm parse error -> nil"           (swarm/parse "-ERR boom\r\n") nil)
+(assert "swarm get registered"  (type-of swarm/get) 'fn)
+(assert "swarm incr registered" (type-of swarm/incr) 'fn)
+
 ;; default parameter values — long-supported, now DOCUMENTED; pinned here.
 (def _dflt (a (b 10) (c (+ 1 2))) (list a b c))
 (assert "default params: all defaulted" (_dflt 1) (list 1 10 3))

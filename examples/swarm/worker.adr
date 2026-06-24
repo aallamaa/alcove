@@ -1,0 +1,31 @@
+
+# examples/swarm/worker.adr — one swarm worker.
+#
+# Run (many in parallel):  ./adder worker.adr PORT
+#
+# Loops: claim the next candidate with an atomic INCR ticket, compile + score it
+# (reusing lib/evolve's sandboxed compile/score), and publish the score to a
+# unique key. Because the claim is INCR and each result key is unique, N workers
+# share the work with no double-evaluation and no lost writes — no CAS needed.
+require("lib/swarm")
+require("lib/evolve")
+
+# Fitness: 0 is perfect for a function that squares its input.
+def fit(f): 0 - ((abs ((f 2) - 4)) + (abs ((f 3) - 9)))
+
+# Score candidate for ticket i (1-based) and publish to its unique result key.
+def work-one(fd i):
+  swarm/set fd (str "result:" (i - 1)) (str (evolve/score (evolve/compile (swarm/get fd (str "cand:" (i - 1)))) fit))
+def work-after(fd total i):
+  work-one fd i
+  work-loop fd total
+def work-step(fd total i):
+  if (i > total):
+    nil
+    work-after fd total i
+def work-loop(fd total): work-step fd total (swarm/incr fd "next")
+
+port = (read-string-sexpr (nth 0 *args*))
+fd = (swarm/connect "127.0.0.1" port)
+work-loop fd (swarm/get-num fd "count")
+swarm/close fd
