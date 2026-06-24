@@ -1,0 +1,18 @@
+
+# examples/llm/smoke.adr — prove the FFI libcurl transport works, NO API key.
+#
+# Run me:  ./adder examples/llm/smoke.adr
+#
+# Points the client at httpbin.org/post (which echoes the request) instead of the
+# Anthropic API, so it verifies the whole native-HTTPS path — libcurl bound via
+# FFI, JSON body, custom headers, response capture — without needing a key.
+require("lib/llm")
+
+llm/api-url = "https://httpbin.org/post"
+resp = (llm/http-post llm/api-url (list "content-type: application/json" "x-alcove: smoke") (llm/build-body "ping"))
+dec = (json-decode resp)
+
+prn("FFI libcurl HTTPS round-trip:")
+prn("  our header echoed back : " (get (get dec "headers") "X-Alcove"))
+prn("  request body delivered : model=" (get (get dec "json") "model"))
+prn("If you see 'smoke' and 'claude-opus-4-8' above, the transport works.")

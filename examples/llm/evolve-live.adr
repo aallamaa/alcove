@@ -1,0 +1,32 @@
+
+# examples/llm/evolve-live.adr — the self-improvement loop driven by a REAL model.
+#
+# This is M0's evolve loop with the stub model swapped for lib/llm: the candidate
+# programs now come from Claude instead of a hardcoded menu. Nothing in the loop
+# itself changes — it only ever sees candidate code as strings.
+#
+# Run me:
+# export ANTHROPIC_API_KEY=sk-ant-...
+# ./adder examples/llm/evolve-live.adr
+require("lib/evolve")
+require("lib/llm")
+
+# Goal + fitness: reward a function that squares its input (0 = perfect).
+goal = "computes the square of its single numeric argument"
+def fit(f): 0 - ((abs ((f 2) - 4)) + (abs ((f 3) - 9)))
+
+# Ask the model for ONE candidate Alcove lambda as a raw s-expression, so the
+# reply parses directly with read-string-sexpr. (Clean-output prompting is the
+# tuning surface; a noisy reply just fails to compile and is skipped.)
+def ask(g):
+  llm/complete (str "Output ONLY a single Alcove lambda s-expression that " g ". No prose, no markdown, no fences. Example form: (fn (x) (* x 2))")
+
+# Collect a few candidates, dropping nil (failed) replies.
+def candidates(g): filter (fn (c) c) (map (fn (i) (ask g)) (list 1 2 3 4))
+
+cands = (candidates goal)
+prn("got " (length cands) " candidate(s) from " llm/model)
+state = (evolve/run "(fn (x) x)" fit cands)
+prn("evolved best : " (evolve/best-src state))
+prn("fitness      : " (evolve/best-score state))
+prn("check 9 -> " ((evolve/best-fn state) 9) "  (want 81)")

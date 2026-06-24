@@ -1,0 +1,17 @@
+
+# examples/llm/complete.adr — a real Anthropic Messages API call via FFI libcurl.
+#
+# Run me:
+# export ANTHROPIC_API_KEY=sk-ant-...
+# ./adder examples/llm/complete.adr
+#
+# llm/complete returns the model's text, or nil on any failure (missing key,
+# network, HTTP error, refusal). This is the drop-in replacement for the stub
+# model in lib/evolve.adr — see examples/llm/evolve-live.adr.
+require("lib/llm")
+
+prn("calling " llm/model " ...")
+reply = (llm/complete "In one short sentence, what is a Lisp s-expression?")
+if reply:
+  prn("reply: " reply)
+  prn("no reply — set ANTHROPIC_API_KEY and check connectivity.")
