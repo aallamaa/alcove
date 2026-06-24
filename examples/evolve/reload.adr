@@ -1,0 +1,13 @@
+
+# examples/evolve/reload.adr — prove the evolved code SURVIVES a restart.
+#
+# Run me AFTER run.adr, in a fresh process:
+# ./adder --noload examples/evolve/reload.adr
+#
+# loaddb brings back the persisted champion — an EXP_LAMBDA closure (bytecode +
+# captured env), not just its source — ready to call.
+loaddb("examples/evolve/champion.dump")
+
+prn("reloaded champion source : " evolve/champion-src)
+prn("champion(7)  -> " (evolve/champion 7) "  (want 49)")
+prn("champion(12) -> " (evolve/champion 12) "  (want 144)")

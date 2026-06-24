@@ -1018,3 +1018,163 @@ exp_t *checksyntaxcmd(exp_t *e, env_t *env) {
   g_reader_src = prev_src;
   CLEAN_RETURN_1(srcexp, ret);
 }
+
+/* ---- runtime s-expression reading: read-string-sexpr / read-all-string ----
+   The enabling primitives for the homoiconic loop: parse TEXT into s-expr
+   VALUES at runtime, so code generated at runtime (e.g. via adder->sexpr, or by
+   an LLM) can be handed to eval. Both run the shared reader() over an
+   fmemopen'd copy of the string. A syntax error (including an incomplete form)
+   is RETURNED as a first-class EXP_ERROR value — caught with try / inspected
+   with error? — never raised to top level, so the stderr-spew gate is
+   unaffected. They are plain applicative builtins (LISPCMD_APP): pure, no host
+   escape, and NOT special forms, so the AST/VM/JIT tiers need no teaching. */
+
+/* Saved snapshot of the reader's global position state, so reading a string
+   here never corrupts the outer stream (script / REPL / load) the evaluator
+   drives. `buf` is the fmemopen backing buffer (a copy of src + trailing '\n'),
+   freed on close. */
+typedef struct {
+  int line, col, arm;
+  long off;
+  const char *src;
+  char *buf;
+} reader_pos_t;
+
+/* Open an fmemopen stream over a copy of `src` (with a trailing newline so a
+   bare final token terminates instead of EOF-ing mid-token — same trick as the
+   REPL) and reset the reader position to a clean line-1 start, saving the
+   previous state into *saved. NULL on alloc/fmemopen failure (reader state
+   untouched). */
+static FILE *read_sexpr_open(const char *src, reader_pos_t *saved) {
+  size_t n = strlen(src);
+  char *buf = (char *)malloc(n + 2);
+  if (!buf)
+    return NULL;
+  memcpy(buf, src, n);
+  buf[n] = '\n';
+  buf[n + 1] = '\0';
+  FILE *stream = fmemopen(buf, n + 1, "r");
+  if (!stream) {
+    free(buf);
+    return NULL;
+  }
+  saved->buf = buf;
+  saved->line = g_reader_line;
+  saved->col = g_reader_col;
+  saved->off = g_reader_off;
+  saved->arm = g_form_line_arm;
+  saved->src = g_reader_src;
+  g_reader_line = 1;
+  g_reader_col = 1;
+  g_reader_off = 0;
+  g_reader_src = NULL;
+  return stream;
+}
+
+/* Close the stream, free the backing buffer, and restore the reader position
+   saved by read_sexpr_open. */
+static void read_sexpr_close(FILE *stream, const reader_pos_t *saved) {
+  fclose(stream);
+  free(saved->buf);
+  g_reader_line = saved->line;
+  g_reader_col = saved->col;
+  g_reader_off = saved->off;
+  g_form_line_arm = saved->arm;
+  g_reader_src = saved->src;
+}
+
+const char doc_read_string_sexpr[] =
+    "(read-string-sexpr s) — parse the FIRST s-expression in string s and "
+    "return "
+    "it as a value (unevaluated). A syntax error (incl. an incomplete form) is "
+    "returned as an error value; empty input is an error. Compose with eval to "
+    "run generated code: (eval (read-string-sexpr \"(+ 1 2)\")).";
+exp_t *readstringsexprcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(srcexp);
+  REQUIRE_TYPE(srcexp, isstring, CLEAN_RETURN_1(srcexp, _alc_e),
+               ERROR_ILLEGAL_VALUE, NULL, env,
+               "read-string-sexpr: argument must be a string");
+  reader_pos_t saved;
+  FILE *stream = read_sexpr_open((const char *)exp_text(srcexp), &saved);
+  if (!stream)
+    CLEAN_RETURN_1(srcexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "read-string-sexpr: unreadable input"));
+  exp_t *form = reader(stream, 0, 0);
+  read_sexpr_close(stream, &saved);
+  /* NULL = no form at all (empty/whitespace input); a parse error (incl.
+     EXP_ERROR_PARSING_EOF for an unterminated form) is already an EXP_ERROR
+     value — forward it unchanged for try / error?. */
+  if (!form)
+    form =
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "read-string-sexpr: empty input");
+  CLEAN_RETURN_1(srcexp, form);
+}
+
+const char doc_read_all_string[] =
+    "(read-all-string s) — parse EVERY s-expression in string s and return "
+    "them "
+    "as a list (each element unevaluated). Empty input yields nil. A syntax "
+    "error (incl. an incomplete trailing form) is returned as an error value. "
+    "Compose with eval/each to run a whole program generated at runtime.";
+exp_t *readallstringcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(srcexp);
+  REQUIRE_TYPE(srcexp, isstring, CLEAN_RETURN_1(srcexp, _alc_e),
+               ERROR_ILLEGAL_VALUE, NULL, env,
+               "read-all-string: argument must be a string");
+  reader_pos_t saved;
+  FILE *stream = read_sexpr_open((const char *)exp_text(srcexp), &saved);
+  if (!stream)
+    CLEAN_RETURN_1(srcexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "read-all-string: unreadable input"));
+  exp_t *head = NULL, *tail = NULL, *errval = NULL;
+  for (;;) {
+    exp_t *form = reader(stream, 0, 0);
+    if (!form)
+      break; /* clean EOF — all forms consumed */
+    if (iserror(form)) {
+      /* EXP_ERROR_PARSING_EOF is the reader's end-of-stream terminator (and an
+         incomplete trailing form lands here too) — treat as clean end, matching
+         the canonical file-eval loop. Any other error is a real syntax error.
+       */
+      if (form->flags == EXP_ERROR_PARSING_EOF) {
+        unrefexp(form);
+        break;
+      }
+      errval = form; /* genuine syntax error (already refcounted) */
+      break;
+    }
+    exp_t *node = make_node(form); /* adopts form's ref (no extra unref) */
+    if (tail) {
+      tail->next = node;
+      tail = node;
+    } else
+      head = tail = node;
+  }
+  read_sexpr_close(stream, &saved);
+  if (errval) {
+    if (head)
+      unrefexp(head);
+    CLEAN_RETURN_1(srcexp, errval);
+  }
+  CLEAN_RETURN_1(srcexp, head ? head : refexp(NIL_EXP));
+}
+
+const char doc_adder_to_sexpr[] =
+    "(adder->sexpr s) — transpile Adder surface source string s to Alcove "
+    "s-expression TEXT (a string). Compose with read-string-sexpr + eval to "
+    "run "
+    "Adder generated at runtime: (eval (read-string-sexpr (adder->sexpr s))). "
+    "Malformed Adder yields s-expr text that read-string-sexpr then reports as "
+    "a "
+    "syntax error.";
+exp_t *addertosexprcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_1(srcexp);
+  REQUIRE_TYPE(srcexp, isstring, CLEAN_RETURN_1(srcexp, _alc_e),
+               ERROR_ILLEGAL_VALUE, NULL, env,
+               "adder->sexpr: argument must be a string");
+  char *sx = als_to_sexpr((const char *)exp_text(srcexp));
+  if (!sx)
+    CLEAN_RETURN_1(srcexp, error(ERROR_ILLEGAL_VALUE, NULL, env,
+                                 "adder->sexpr: transpile failed"));
+  CLEAN_RETURN_1(srcexp, make_string_take(sx, (int)strlen(sx)));
+}

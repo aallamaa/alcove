@@ -220,6 +220,11 @@ exp_t *builtinscmd(exp_t *e, env_t *env);
 exp_t *globalscmd(exp_t *e, env_t *env);
 exp_t *checksyntaxcmd(exp_t *e, env_t *env);
 exp_t *readstdincmd(exp_t *e, env_t *env);
+extern const char doc_read_string_sexpr[], doc_read_all_string[],
+    doc_adder_to_sexpr[];
+exp_t *readstringsexprcmd(exp_t *e, env_t *env);
+exp_t *readallstringcmd(exp_t *e, env_t *env);
+exp_t *addertosexprcmd(exp_t *e, env_t *env);
 extern const char doc_flush[];
 exp_t *flushcmd(exp_t *e, env_t *env);
 exp_t *docstringcmd(exp_t *e, env_t *env);
