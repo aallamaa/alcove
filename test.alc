@@ -4281,6 +4281,27 @@
 ;; Adder-dialect candidate compiles + runs through adder->sexpr
 (assert "evolve/compile-adder runs"       ((evolve/compile-adder "(fn (x) (* x x))") 8) 64)
 
+;; ---------- llm: Anthropic Messages API client (lib/llm.adr) ----------
+;; PURE request/response helpers only — no network, no FFI (the libcurl transport
+;; is exercised manually in examples/llm/). build-body constructs the request
+;; JSON; extract-text pulls content[0].text out of a decoded response.
+(require "lib/llm")
+(assert "llm body carries the model"   (string-contains? (llm/build-body "hi") "claude-opus-4-8") t)
+(assert "llm body carries the prompt"  (string-contains? (llm/build-body "xyzzy42") "xyzzy42") t)
+(assert "llm body is valid json"       (get (json-decode (llm/build-body "hi")) "max_tokens") llm/max-tokens)
+(assert "llm body role is user"
+        (get (first (get (json-decode (llm/build-body "hi")) "messages")) "role") "user")
+(assert "llm extract-text first text block"
+        (llm/extract-text (json-decode "{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}")) "hello")
+(assert "llm extract-text skips thinking, takes text"
+        (llm/extract-text (json-decode "{\"content\":[{\"type\":\"thinking\",\"text\":\"t\"},{\"type\":\"text\",\"text\":\"answer\"}]}")) "answer")
+(assert "llm extract-text nil on empty content"
+        (llm/extract-text (json-decode "{\"content\":[]}")) nil)
+(assert "llm extract-text nil on error-shaped body"
+        (llm/extract-text (json-decode "{\"type\":\"error\",\"error\":{\"message\":\"x\"}}")) nil)
+(assert "llm extract-text nil on nil"  (llm/extract-text nil) nil)
+(assert "llm/complete registered"      (type-of llm/complete) 'fn)
+
 ;; default parameter values — long-supported, now DOCUMENTED; pinned here.
 (def _dflt (a (b 10) (c (+ 1 2))) (list a b c))
 (assert "default params: all defaulted" (_dflt 1) (list 1 10 3))

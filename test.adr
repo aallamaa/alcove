@@ -6612,6 +6612,36 @@ assert "evolve/score crashing -> worst" (evolve/score (evolve/compile "(fn (x) (
 assert "evolve/compile-adder runs" ((evolve/compile-adder "(fn (x) (* x x))") 8):
   64
 
+require "lib/llm"
+
+assert "llm body carries the model" (string-contains? (llm/build-body "hi") "claude-opus-4-8"):
+  t
+
+assert "llm body carries the prompt" (string-contains? (llm/build-body "xyzzy42") "xyzzy42"):
+  t
+
+assert "llm body is valid json" (get (json-decode (llm/build-body "hi")) "max_tokens"):
+  llm/max-tokens
+
+assert "llm body role is user" (get (first (get (json-decode (llm/build-body "hi")) "messages")) "role"):
+  "user"
+
+assert "llm extract-text first text block" (llm/extract-text (json-decode "{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}")):
+  "hello"
+
+assert "llm extract-text skips thinking, takes text" (llm/extract-text (json-decode "{\"content\":[{\"type\":\"thinking\",\"text\":\"t\"},{\"type\":\"text\",\"text\":\"answer\"}]}")):
+  "answer"
+
+assert "llm extract-text nil on empty content" (llm/extract-text (json-decode "{\"content\":[]}")):
+  nil
+
+assert "llm extract-text nil on error-shaped body" (llm/extract-text (json-decode "{\"type\":\"error\",\"error\":{\"message\":\"x\"}}")):
+  nil
+
+assert "llm extract-text nil on nil" (llm/extract-text nil) nil
+
+assert "llm/complete registered" (type-of llm/complete) 'fn
+
 def _dflt (a (b 10) (c (+ 1 2))):
   list a b c
 

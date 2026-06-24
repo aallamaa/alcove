@@ -1,0 +1,137 @@
+
+# lib/llm.adr — a native Anthropic Messages API client over FFI libcurl (M2).
+#
+# Turns the evolve loop's stub model (lib/evolve.adr) into a real one: an
+# (llm/complete prompt) call that POSTs to the Anthropic Messages API and returns
+# the model's text. Transport is native HTTPS via libcurl bound through FFI — no
+# subprocess. The pure request/response helpers (build-body, extract-text) carry
+# no I/O and are unit-tested in test.alc; the network path is exercised manually
+# in examples/llm/.
+#
+# Build & key:
+# make adder                       # needs an FFI-enabled build (default)
+# export ANTHROPIC_API_KEY=sk-...  # read from the environment, never hardcoded
+#
+# Usage (Adder or Alcove):
+# require("lib/llm")
+# text = llm/complete("Write an Alcove lambda that squares its input.")
+# #  -> the model's reply as a string, or nil on any failure (network / HTTP /
+# #     JSON / refusal / missing key) — callers branch on nil, never on a raised
+# #     error (error VALUES propagate through normal calls in Alcove).
+#
+# Names avoid *earmuffs* on purpose: in Adder `*` is the infix-multiply token, so
+# `*name*` is awkward to write. All config lives in plain llm/ globals below.
+ns llm
+
+# ---- config (override after require) -------------------------------
+llm/api-url = "https://api.anthropic.com/v1/messages"
+llm/model = "claude-opus-4-8" # current Opus; exact id, no date suffix
+llm/max-tokens = 2048
+llm/version = "2023-06-01" # anthropic-version header
+llm/timeout = 60 # whole-request budget, seconds
+llm/key-env = "ANTHROPIC_API_KEY"
+llm/curl-lib = "libcurl.so.4"
+llm/tmpfile = "/tmp/alcove-llm-resp.json"
+
+# libcurl CURLoption constants (from curl.h; OBJECTPOINT=10000, LONG=0)
+llm/opt-url = 10002
+llm/opt-postfields = 10015
+llm/opt-httpheader = 10023
+llm/opt-writedata = 10001
+llm/opt-timeout = 13
+
+# ---- pure request builder (no I/O — unit-tested) -------------------
+# Build the JSON request body for a single user-turn completion.
+def llm/msg(role content): hash-map "role" role "content" content
+def llm/build-body(prompt):
+  json-encode (hash-map "model" llm/model "max_tokens" llm/max-tokens "messages" (list (llm/msg "user" prompt)))
+
+# ---- pure response extractor (no I/O — unit-tested) ---------------
+# Pull the assistant text out of a decoded Messages response: the first content
+# block whose "type" is "text". Returns nil if there's no text block (empty
+# content, a refusal, or an error-shaped body) — callers treat nil as "no result".
+def llm/extract-text(decoded):
+  if decoded:
+    llm/text-of (filter (fn (b) ((get b "type") iso "text")) (get decoded "content"))
+    nil
+def llm/text-of(texts):
+  if texts:
+    get (car texts) "text"
+    nil
+
+# ---- FFI libcurl bindings (bound once, lazily) --------------------
+# Lazy so that `require "lib/llm"` is safe even in a build without FFI — nothing
+# calls ffi-fn until llm/http-post actually runs. Note: the FFI string type is
+# "string" (the ffi-fn docstring's "cstr" is wrong); integer 0 is a NULL ptr.
+llm/curl-ready = nil
+# Pre-declare the binding + transient globals so the assignments inside bind-curl
+# and http-post-do mutate THESE globals — an `=` inside a function targets a local
+# unless the name already exists at the top level.
+llm/curl-init = nil
+llm/setopt-s = nil
+llm/setopt-p = nil
+llm/setopt-l = nil
+llm/curl-perform = nil
+llm/curl-cleanup = nil
+llm/slist-append = nil
+llm/slist-free = nil
+llm/c-fopen = nil
+llm/c-fclose = nil
+llm/h = nil
+llm/fp = nil
+llm/hdrs = nil
+def llm/ensure-curl():
+  if llm/curl-ready:
+    t
+    llm/bind-curl()
+def llm/bind-curl():
+  llm/curl-init = (ffi-fn llm/curl-lib "curl_easy_init" "ptr")
+  llm/setopt-s = (ffi-fn llm/curl-lib "curl_easy_setopt" "int" "ptr" "int" "string")
+  llm/setopt-p = (ffi-fn llm/curl-lib "curl_easy_setopt" "int" "ptr" "int" "ptr")
+  llm/setopt-l = (ffi-fn llm/curl-lib "curl_easy_setopt" "int" "ptr" "int" "long")
+  llm/curl-perform = (ffi-fn llm/curl-lib "curl_easy_perform" "int" "ptr")
+  llm/curl-cleanup = (ffi-fn llm/curl-lib "curl_easy_cleanup" "void" "ptr")
+  llm/slist-append = (ffi-fn llm/curl-lib "curl_slist_append" "ptr" "ptr" "string")
+  llm/slist-free = (ffi-fn llm/curl-lib "curl_slist_free_all" "void" "ptr")
+  llm/c-fopen = (ffi-fn "" "fopen" "ptr" "string" "string")
+  llm/c-fclose = (ffi-fn "" "fclose" "int" "ptr")
+  llm/curl-ready = t
+
+# ---- HTTP POST (native HTTPS via libcurl) ------------------------
+# headers is a list of "Header: value" strings. Returns the response body as a
+# string. curl writes the body to a temp FILE* (its default writer), which we
+# then slurp — avoids reading raw memory from a write callback. Wrapped by
+# llm/complete in a try, so a transport failure surfaces as nil, not a raise.
+# Transient handles live in module globals (single-call, single-threaded harness)
+# to avoid an embedded s-expr let, which the Adder transpiler can't carry.
+def llm/build-slist(headers):
+  reduce (fn (acc h) (llm/slist-append acc h)) 0 headers
+def llm/http-post(url headers body):
+  llm/ensure-curl()
+  llm/http-post-do url headers body
+def llm/http-post-do(url headers body):
+  llm/h = (llm/curl-init)
+  llm/fp = (llm/c-fopen llm/tmpfile "wb")
+  llm/hdrs = (llm/build-slist headers)
+  llm/setopt-s llm/h llm/opt-url url
+  llm/setopt-s llm/h llm/opt-postfields body
+  llm/setopt-p llm/h llm/opt-httpheader llm/hdrs
+  llm/setopt-p llm/h llm/opt-writedata llm/fp
+  llm/setopt-l llm/h llm/opt-timeout llm/timeout
+  llm/curl-perform llm/h
+  llm/curl-cleanup llm/h
+  llm/c-fclose llm/fp
+  llm/slist-free llm/hdrs
+  read-string llm/tmpfile
+
+# ---- the public call ---------------------------------------------
+def llm/auth-headers():
+  list "content-type: application/json" (str "x-api-key: " (getenv llm/key-env)) (str "anthropic-version: " llm/version)
+def llm/decode(resp): try (json-decode resp) (fn (e) nil)
+def llm/post-or-nil(prompt):
+  try (llm/http-post llm/api-url (llm/auth-headers) (llm/build-body prompt)) (fn (e) nil)
+def llm/parse-response(resp):
+  if resp:
+    llm/extract-text (llm/decode resp)
+    nil
+def llm/complete(prompt): llm/parse-response (llm/post-or-nil prompt)
