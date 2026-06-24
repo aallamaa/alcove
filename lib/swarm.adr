@@ -1,0 +1,104 @@
+
+# lib/swarm.adr — a swarm blackboard client over the RESP keyspace (M3).
+#
+# The final piece of the AI-harness arc: many WORKER PROCESSES coordinate through
+# the lock-free RESP keyspace of one alcove server (./alcove -r PORT) used as a
+# shared blackboard. There is no in-language spawn, so a swarm is separate OS
+# processes; they reach the server as redis clients over a minimal RESP client
+# built on the tcp-connect builtins (no redis-cli dependency, no new C).
+#
+# Coordination needs NO compare-and-swap: the server's INCR is atomic (lock-free
+# keyspace), so workers claim work by INCR-ing a ticket counter, and write each
+# result to a UNIQUE key (result:<ticket>) — no read-compare-write race anywhere.
+#
+# Layout the example uses:
+# count        -> number of candidates                  (seeded)
+# cand:<i>     -> candidate source string               (seeded)
+# next         -> INCR'd ticket counter (atomic claim)
+# result:<i>   -> fitness score for candidate i         (worker writes, unique)
+#
+# Usage:
+# require("lib/swarm")
+# fd = swarm/connect("127.0.0.1" 7793)
+# t  = swarm/incr(fd "next")          # atomic ticket (1,2,3,...)
+# swarm/set(fd "result:0" "-8")
+# v  = swarm/get(fd "result:0")       # "-8"  (nil if unset)
+# swarm/close(fd)
+ns swarm
+
+# ---- RESP wire codec (PURE — no I/O, unit-tested) ----------------
+# Encode a command (a list of string args) as a RESP array:
+# *N\r\n  then for each arg  $len\r\n<arg>\r\n
+def swarm/encode(args):
+  str "*" (length args) "\r\n" (reduce (fn (acc a) (str acc "$" (length a) "\r\n" a "\r\n")) "" args)
+
+# Parse a single RESP reply string into a value:
+# :N            -> integer N
+# $len\r\ndata  -> data (string);  $-1 -> nil (key missing)
+# +S            -> S (string);  -ERR / anything else -> nil
+# (One-recv parsing: fine for the small replies on loopback this client makes.)
+def swarm/parse(s):
+  if (starts-with? s ":"):
+    read-string-sexpr (car (string-split (substr s 1 (length s)) "\r\n"))
+    swarm/parse-bulk s
+def swarm/parse-bulk(s):
+  if (starts-with? s "$"):
+    swarm/bulk s
+    swarm/parse-simple s
+def swarm/bulk(s):
+  if ((car (string-split (substr s 1 (length s)) "\r\n")) iso "-1"):
+    nil
+    nth 1 (string-split s "\r\n")
+def swarm/parse-simple(s):
+  if (starts-with? s "+"):
+    car (string-split (substr s 1 (length s)) "\r\n")
+    nil
+
+# ---- complete-reply detection (a single recv can return a PARTIAL reply) ----
+# A line reply (+ - :) is complete once it contains \r\n. A bulk ($) needs the
+# header line PLUS len data bytes PLUS the trailing \r\n; $-1 is complete at the
+# header. swarm/recv-reply loops tcp-recv until the buffer holds one full reply
+# (or the peer closes), so the client never desyncs under load.
+def swarm/complete?(buf):
+  if ((length buf) < 1):
+    nil
+    swarm/complete-typed buf
+def swarm/complete-typed(buf):
+  if (starts-with? buf "$"):
+    swarm/bulk-complete? buf
+    string-contains? buf "\r\n"
+def swarm/bulk-complete?(buf):
+  if (string-contains? buf "\r\n"):
+    swarm/bulk-len-ok buf (string-index buf "\r\n")
+    nil
+def swarm/bulk-len-ok(buf p):
+  swarm/bulk-need buf p (read-string-sexpr (substr buf 1 p))
+def swarm/bulk-need(buf p len):
+  if (len < 0):
+    t
+    (length buf) >= ((p + 2) + (len + 2))
+
+def swarm/recv-reply(fd): swarm/recv-acc fd ""
+def swarm/recv-acc(fd buf):
+  if (swarm/complete? buf):
+    buf
+    swarm/recv-more fd buf
+def swarm/recv-more(fd buf): swarm/recv-acc2 fd buf (tcp-recv fd 65536)
+def swarm/recv-acc2(fd buf chunk):
+  if ((length chunk) < 1):
+    buf
+    swarm/recv-acc fd (str buf chunk)
+
+# ---- RESP client over tcp-connect (network) ---------------------
+def swarm/connect(host port): tcp-connect host port
+def swarm/close(fd): tcp-close fd
+def swarm/call(fd args):
+  tcp-send fd (swarm/encode args)
+  swarm/parse (swarm/recv-reply fd)
+
+# ---- typed commands ---------------------------------------------
+def swarm/ping(fd): swarm/call fd (list "PING")
+def swarm/get(fd k): swarm/call fd (list "GET" k)
+def swarm/set(fd k v): swarm/call fd (list "SET" k v)
+def swarm/incr(fd k): swarm/call fd (list "INCR" k) # atomic — the claim primitive
+def swarm/get-num(fd k): read-string-sexpr (swarm/get fd k) # GET, parsed as a number

@@ -720,6 +720,13 @@ oom-test:
 resp-tsan:
 	sh tools/resp_tsan.sh
 
+# Swarm smoke: a multi-process worker swarm over the RESP keyspace blackboard
+# (examples/swarm). Starts a server, seeds candidates, runs 2 workers that claim
+# + score them via atomic INCR tickets, and asserts convergence. Pure alcove (no
+# redis-cli). Manual integration check — not part of test-all. See scripts/swarm-smoke.sh.
+swarm-smoke: jit adder
+	sh scripts/swarm-smoke.sh
+
 # Observability gate: leveled logfmt logging (assert one logfmt line per emit on
 # stderr + below-threshold silence) and RESP server auto-instrumentation metrics
 # (resp.connections/.commands/.errors > 0 under driven traffic, queried via a
@@ -823,4 +830,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
