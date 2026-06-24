@@ -1,0 +1,22 @@
+;; examples/swarm/server-init.alc — server-side read-only aggregation (M3).
+;;
+;; Copied to the blackboard server's working dir as `.init.alc`, so it runs at
+;; server startup (before serving) and registers a custom RESP command, BEST.
+;;
+;; BEST scans the result:* keys and returns "idx score" for the highest-scoring
+;; candidate — the RFC's "server coordinates / workers compute" split: the
+;; command runs SERVER-SIDE in the redis-defcmd sandbox (read-only w.r.t. Lisp
+;; globals), touching only the concurrency-safe keyspace via redis-keys/redis-get.
+;; It computes nothing application-specific itself — it just aggregates what the
+;; worker processes published.
+
+(def _swarm-score (k) (read-string-sexpr (blob->string (redis-get k))))
+(def _swarm-idx (k) (substr k 7 (length k)))            ;; "result:3" -> "3"
+(def _swarm-best (ks)
+  (reduce (fn (b k) (if (> (_swarm-score k) (_swarm-score b)) k b)) (car ks) (cdr ks)))
+
+(redis-defcmd "BEST" (fn (args)
+  (let res (filter (fn (k) (starts-with? k "result:")) (redis-keys))
+    (if res
+        (let bk (_swarm-best res) (str (_swarm-idx bk) " " (_swarm-score bk)))
+        "none"))))

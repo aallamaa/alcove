@@ -25,4 +25,7 @@ idxs = (swarm/range total)
 bi = (best-idx fd idxs)
 filled = (length (filter (fn (i) (swarm/get fd (str "result:" i))) idxs))
 prn("SWARM RESULT: best=" (swarm/get fd (str "cand:" bi)) " score=" (rscore fd bi) " filled=" filled "/" total)
+# Server-side aggregation: ask the blackboard's own BEST command (server-init.alc)
+# and confirm it agrees with the client-side scan above ("<idx> <score>").
+prn("SWARM SERVER BEST: " (swarm/call fd (list "BEST")))
 swarm/close fd
