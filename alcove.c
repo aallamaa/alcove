@@ -22,6 +22,13 @@
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
 #endif
+/* On macOS, _XOPEN_SOURCE puts the system headers into strict-POSIX mode, which
+   hides the BSD/Darwin extensions this codebase relies on (vasprintf/asprintf,
+   timegm, MAP_ANONYMOUS, MAP_JIT, pthread_jit_write_protect_np, INADDR_LOOPBACK).
+   _DARWIN_C_SOURCE re-exposes them — the Darwin analogue of _GNU_SOURCE. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -1200,12 +1207,16 @@ static int stack_guard_exhausted(void) {
       if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
           rl.rlim_cur >= (1u * 1024 * 1024) && (size_t)rl.rlim_cur < lim)
         lim = (size_t)rl.rlim_cur;
-      /* Reserve a 1 MiB tail so the error path (vasprintf + backtrace capture)
-         always has room, then allow the rest. 1 MiB is ample for the shallow
-         error path in every build (the deepest legitimate recursion in the
-         suite — Ackermann(3,7) in the unoptimized AST build — peaks near 6 MiB
-         of an 8 MiB stack, so the budget must sit well above half). */
-      size_t margin = 1024u * 1024;
+      /* Reserve a 512 KiB tail so the error path (vasprintf + backtrace
+         capture) always has room, then allow the rest. The shallow error path
+         needs only a few KiB, so 512 KiB is still ample headroom. The deepest
+         legitimate recursion in the suite — Ackermann(3,7) in the unoptimized
+         AST build — peaks near 7 MiB of an 8 MiB stack: its per-frame footprint
+         is larger under Apple clang's unoptimized arm64 codegen than under
+         glibc/gcc, and macOS also reports RLIMIT_STACK a hair under 8 MiB, so a
+         full 1 MiB reserve tripped the guard on a recursion that has real stack
+         to spare. 512 KiB keeps the error-path safety while admitting it. */
+      size_t margin = 512u * 1024;
       g_stack_budget = lim > margin * 2 ? lim - margin : lim / 2;
     }
     return 0;
