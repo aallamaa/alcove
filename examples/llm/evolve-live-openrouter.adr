@@ -1,15 +1,15 @@
-
-# examples/llm/evolve-live.adr — the self-improvement loop driven by a REAL model.
+# examples/llm/evolve-live-openrouter.adr — the evolve loop driven by OpenRouter.
 #
-# This is M0's evolve loop with the stub model swapped for lib/llm: the candidate
-# programs now come from Claude instead of a hardcoded menu. Nothing in the loop
-# itself changes — it only ever sees candidate code as strings.
+# Identical to evolve-live.adr, but the candidate generator is OpenRouter (any
+# model slug) instead of the Anthropic API. The ONLY difference is the require
+# line: lib/llm-openrouter overlays lib/llm with the OpenAI-compatible seams, so
+# the loop and llm/complete are unchanged.
 #
 # Run me:
-# export ANTHROPIC_API_KEY=sk-ant-...
-# ./adder examples/llm/evolve-live.adr
+# export OPENROUTER_API_KEY=sk-or-...
+# ./adder examples/llm/evolve-live-openrouter.adr
 require("lib/evolve")
-require("lib/llm")
+require("lib/llm-openrouter")
 
 # Goal + fitness: reward a function that squares its input (0 = perfect).
 goal = "computes the square of its single numeric argument"
@@ -19,7 +19,9 @@ def fit(f): 0 - ((abs ((f 2) - 4)) + (abs ((f 3) - 9)))
 # reply parses directly with read-string-sexpr. (Clean-output prompting is the
 # tuning surface; a noisy reply just fails to compile and is skipped.)
 def ask(g):
-  llm/complete-retry (str "Output ONLY a single Alcove lambda s-expression that " g ". No prose, no markdown, no fences. Example form: (fn (x) (* x 2))") 3
+  output = llm/complete-retry str("Output ONLY a single Alcove lambda s-expression (https://github.com/aallamaa/alcove) that " g ". No prose, no markdown, no fences. Example form: (fn (x) (* x 2))") 3
+  prn(output)
+  output
 
 # Collect a few candidates, dropping nil (failed) replies.
 def candidates(g): filter (fn (c) c) (map (fn (i) (ask g)) (list 1 2 3 4))

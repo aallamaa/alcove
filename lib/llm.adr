@@ -102,6 +102,11 @@ def llm/bind-curl():
 # string. curl writes the body to a temp FILE* (its default writer), which we
 # then slurp — avoids reading raw memory from a write callback. Wrapped by
 # llm/complete in a try, so a transport failure surfaces as nil, not a raise.
+# The CURLcode from curl_easy_perform is stashed in llm/last-curl-code so a nil
+# reply can be diagnosed: 0 = OK, 28 = CURLE_OPERATION_TIMEDOUT, 6 = couldn't
+# resolve host, 7 = couldn't connect. (curl reports failure via this code, not by
+# raising — that's why a timeout never throws; see llm/transport-ok?.)
+llm/last-curl-code = 0
 # Transient handles live in module globals (single-call, single-threaded harness)
 # to avoid an embedded s-expr let, which the Adder transpiler can't carry.
 def llm/build-slist(headers):
@@ -118,7 +123,7 @@ def llm/http-post-do(url headers body):
   llm/setopt-p llm/h llm/opt-httpheader llm/hdrs
   llm/setopt-p llm/h llm/opt-writedata llm/fp
   llm/setopt-l llm/h llm/opt-timeout llm/timeout
-  llm/curl-perform llm/h
+  llm/last-curl-code = (llm/curl-perform llm/h)
   llm/curl-cleanup llm/h
   llm/c-fclose llm/fp
   llm/slist-free llm/hdrs
@@ -135,3 +140,44 @@ def llm/parse-response(resp):
     llm/extract-text (llm/decode resp)
     nil
 def llm/complete(prompt): llm/parse-response (llm/post-or-nil prompt)
+
+# ---- transport-failure predicate ---------------------------------
+# Was the last http-post a transport-level failure (timeout, DNS, connect)?
+# These are transient and worth retrying; a clean transport that returned an
+# HTTP error body (auth, billing, 400) has code 0 and is NOT worth retrying.
+def llm/transport-ok?(): (llm/last-curl-code iso 0)
+
+# ---- a tiny sleep (libc, via FFI) --------------------------------
+# No sleep builtin exists; bind libc sleep(3) the same way http-post binds fopen.
+# Lazy so require stays FFI-safe. Whole seconds (coarse, but fine for backoff).
+llm/c-sleep = nil
+def llm/ensure-sleep():
+  if llm/c-sleep:
+    t
+    llm/bind-sleep()
+def llm/bind-sleep(): llm/c-sleep = (ffi-fn "" "sleep" "int" "int")
+def llm/sleep(secs):
+  llm/ensure-sleep()
+  if (secs > 0):
+    (llm/c-sleep secs)
+    nil
+
+# ---- retry with exponential backoff ------------------------------
+# Call llm/complete up to `tries` times, returning the FIRST non-nil reply. Pauses
+# 1s, 2s, 4s, … between attempts so a saturated / rate-limited provider can
+# recover. Returns nil only if every attempt fails. Inherited unchanged by every
+# provider overlay (e.g. lib/llm-openrouter), since it's built on llm/complete.
+def llm/complete-retry(prompt tries): llm/retry-loop prompt tries 1
+def llm/retry-loop(prompt tries backoff):
+  llm/retry-check (llm/complete prompt) prompt tries backoff
+def llm/retry-check(reply prompt tries backoff):
+  if reply:
+    reply
+    llm/retry-more prompt tries backoff
+def llm/retry-more(prompt tries backoff):
+  if (tries <= 1):
+    nil
+    llm/retry-wait prompt tries backoff
+def llm/retry-wait(prompt tries backoff):
+  llm/sleep backoff
+  llm/retry-loop prompt (tries - 1) (backoff + backoff)

@@ -1,0 +1,41 @@
+# lib/llm-openrouter.adr — point the llm client at OpenRouter (OpenAI-compatible).
+#
+# OpenRouter speaks the OpenAI Chat Completions format, not the Anthropic Messages
+# format, so this overlay redefines the three provider-specific seams in lib/llm:
+# the request builder, the response extractor, and the auth headers — plus the
+# api-url/model/key-env config. The FFI libcurl transport (llm/http-post) is
+# reused unchanged, so the nil-or-string contract of llm/complete still holds.
+#
+# Key & run:
+# export OPENROUTER_API_KEY=sk-or-...
+# require("lib/llm-openrouter")
+# text = llm/complete("Write an Alcove lambda that squares its input.")
+require("lib/llm")
+
+# ---- config (override after require) -------------------------------
+llm/api-url = "https://openrouter.ai/api/v1/chat/completions"
+llm/model = "nvidia/nemotron-3-ultra-550b-a55b:free" # any OpenRouter model slug
+llm/key-env = "OPENROUTER_API_KEY"
+
+# ---- pure request builder (OpenAI Chat Completions shape) ----------
+# Same one-user-turn body, minus the required max_tokens of the Messages API.
+def llm/build-body(prompt):
+  json-encode (hash-map "model" llm/model "max_tokens" llm/max-tokens "messages" (list (llm/msg "user" prompt)))
+
+# ---- pure response extractor (choices[0].message.content) ----------
+# Pull the assistant text out of an OpenAI-shaped response. Returns nil on any
+# error-shaped or empty body — callers treat nil as "no result", as before.
+def llm/extract-text(decoded):
+  if decoded:
+    llm/choice-text (get decoded "choices")
+    nil
+def llm/choice-text(choices):
+  if choices:
+    get (get (car choices) "message") "content"
+    nil
+
+# ---- auth headers (Bearer, not x-api-key) -------------------------
+# anthropic-version is dropped; OpenRouter ignores unknown headers but there's no
+# reason to send it. HTTP-Referer/X-Title are optional OpenRouter attribution.
+def llm/auth-headers():
+  list "content-type: application/json" (str "authorization: Bearer " (getenv llm/key-env))
