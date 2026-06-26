@@ -1431,6 +1431,61 @@ static char *alc_readline(const char *prompt) {
   return line;
 }
 
+/* ---- REPL Ctrl-C: cancel the current input, exit only on an empty line -----
+   While a form is being read interactively, SIGINT (Ctrl-C) abandons whatever is
+   on the line (and the whole multi-line form) and returns to a fresh prompt; on
+   a truly empty prompt it exits. readline's own signal trapping is turned off
+   (see repl_install_sigint) so this handler owns SIGINT during readline — the
+   form reader's longjmp landing pad restores the terminal via
+   rl_cleanup_after_signal. Outside a form read (g_repl_reading == 0, e.g. while
+   evaluating) Ctrl-C terminates as before. The accumulator is file-scope so the
+   landing pad can free it safely after siglongjmp (a modified local would be
+   indeterminate). */
+static sigjmp_buf g_repl_sigint_jmp;
+static volatile sig_atomic_t g_repl_reading = 0;  /* 1 while blocked in readline */
+static volatile sig_atomic_t g_repl_has_text = 0; /* line non-empty / mid-form */
+static char *g_repl_acc = NULL;                   /* in-progress form */
+
+static void repl_sigint_handler(int sig) {
+  (void)sig;
+  if (!g_repl_reading)
+    _exit(130); /* not at a prompt (e.g. mid-eval): terminate, as before */
+  if (rl_end > 0)
+    g_repl_has_text = 1; /* text on the current line -> cancel, don't exit */
+  siglongjmp(g_repl_sigint_jmp, 1);
+}
+
+/* Landing pad for the SIGINT longjmp, shared by both form readers. Restores the
+   terminal readline left in raw mode, ends bracketed paste, drops to a new line,
+   and frees the partial form. Returns NULL (empty line -> the REPL loop exits)
+   or a fresh "" (had text -> the REPL loop skips it and reprompts). */
+static char *repl_sigint_recover(void) {
+  g_repl_reading = 0;
+  rl_startup_hook = NULL;
+  rl_free_line_state();
+  rl_cleanup_after_signal();
+  FILE *out = rl_outstream ? rl_outstream : stdout;
+  fputs("\x1B[?2004l", out); /* disable bracketed paste (alc_readline's pair) */
+  fflush(out);
+  putchar('\n');
+  free(g_repl_acc);
+  g_repl_acc = NULL;
+  return g_repl_has_text ? strdup("") : NULL;
+}
+
+/* Install the Ctrl-C handler and stop readline from trapping SIGINT itself.
+   Window-resize (SIGWINCH) handling is independent (rl_catch_sigwinch) and stays
+   on. Called from repl_readline_setup, i.e. only when stdin is a tty. */
+static void repl_install_sigint(void) {
+  rl_catch_signals = 0;
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_handler = repl_sigint_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0; /* persistent; no SA_RESTART so the blocking read is broken */
+  sigaction(SIGINT, &sa, NULL);
+}
+
 /* Read one complete top-level form from the terminal. Continues
    prompting (with a continuation prompt) until paren balance hits 0.
    Returned string is malloc'd. NULL on EOF. */
@@ -1451,6 +1506,11 @@ static char *rl_read_form(int idx) {
      multi-line buffer — honor *prompt-cont*. */
   free(g_repl_cont);
   g_repl_cont = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
+  g_repl_acc = NULL;
+  g_repl_has_text = 0;
+  if (sigsetjmp(g_repl_sigint_jmp, 1))
+    return repl_sigint_recover(); /* Ctrl-C: cancel form / exit on empty line */
+  g_repl_reading = 1;
   char *hook = repl_prompt_str(g_global_env, "*prompt-in*", idx);
   char *line = alc_readline(hook ? hook : prompt);
   free(hook);
@@ -1459,31 +1519,39 @@ static char *rl_read_form(int idx) {
      trailing \r\n itself, but our hook doesn't, so the eval result
      would otherwise appear glued to the input. Emit it ourselves. */
   putchar('\n');
-  if (!line)
+  if (!line) {
+    g_repl_reading = 0;
     return NULL; /* Ctrl-D on empty line */
+  }
   size_t len = strlen(line);
+  if (len)
+    g_repl_has_text = 1;
   size_t cap = len + 256;
-  char *acc = malloc(cap);
-  memcpy(acc, line, len + 1);
+  g_repl_acc = malloc(cap);
+  memcpy(g_repl_acc, line, len + 1);
   free(line);
-  while (rl_paren_depth(acc) > 0) {
+  while (rl_paren_depth(g_repl_acc) > 0) {
+    g_repl_has_text = 1; /* mid-form -> Ctrl-C cancels, never exits */
     char *more = alc_readline(repl_cont_text());
     putchar('\n'); /* same fix for continuation lines */
     if (!more)
       break;
-    size_t al = strlen(acc), ml = strlen(more);
+    size_t al = strlen(g_repl_acc), ml = strlen(more);
     size_t need = al + ml + 2;
     if (need > cap) {
       cap = need * 2;
-      acc = xrealloc(acc, cap);
+      g_repl_acc = xrealloc(g_repl_acc, cap);
     }
-    acc[al] = '\n'; /* append "\n" + more at the known offset */
-    memcpy(acc + al + 1, more, ml + 1); /* copies more's NUL too */
+    g_repl_acc[al] = '\n'; /* append "\n" + more at the known offset */
+    memcpy(g_repl_acc + al + 1, more, ml + 1); /* copies more's NUL too */
     free(more);
   }
-  if (acc[0])
-    add_history(acc);
-  return acc;
+  g_repl_reading = 0;
+  if (g_repl_acc[0])
+    add_history(g_repl_acc);
+  char *ret = g_repl_acc;
+  g_repl_acc = NULL;
+  return ret;
 }
 #endif /* !ALCOVE_ALS */
 
@@ -1573,16 +1641,25 @@ static char *als_rl_read_form(int idx) {
      multi-line buffer — honor *prompt-cont*. */
   free(g_repl_cont);
   g_repl_cont = repl_prompt_str(g_global_env, "*prompt-cont*", idx);
+  g_repl_acc = NULL;
+  g_repl_has_text = 0;
+  if (sigsetjmp(g_repl_sigint_jmp, 1))
+    return repl_sigint_recover(); /* Ctrl-C: cancel form / exit on empty line */
+  g_repl_reading = 1;
   char *hook = repl_prompt_str(g_global_env, "*prompt-in*", idx);
   char *line = alc_readline(hook ? hook : prompt);
   free(hook);
   putchar('\n');
-  if (!line)
+  if (!line) {
+    g_repl_reading = 0;
     return NULL;
+  }
   size_t len = strlen(line);
+  if (len)
+    g_repl_has_text = 1;
   size_t cap = len + 256;
-  char *acc = malloc(cap);
-  memcpy(acc, line, len + 1);
+  g_repl_acc = malloc(cap);
+  memcpy(g_repl_acc, line, len + 1);
   free(line);
   /* A recalled (or pasted) history entry arrives from the first
      readline() as one buffer that already contains '\n'. Treat that as
@@ -1590,11 +1667,13 @@ static char *als_rl_read_form(int idx) {
      can append lines / submit with a blank line — same as fresh input.
      Without this, recalling a multi-line form and hitting Enter would
      submit immediately instead of letting it be extended. */
-  int multiline = (rl_paren_depth(acc) > 0) || als_line_opens_block(acc) ||
-                  memchr(acc, '\n', len) != NULL;
+  int multiline = (rl_paren_depth(g_repl_acc) > 0) ||
+                  als_line_opens_block(g_repl_acc) ||
+                  memchr(g_repl_acc, '\n', len) != NULL;
   if (multiline) {
+    g_repl_has_text = 1; /* mid-form -> Ctrl-C cancels, never exits */
     for (;;) {
-      als_pending_indent = als_next_indent(acc);
+      als_pending_indent = als_next_indent(g_repl_acc);
       rl_startup_hook = als_preinput;
       char *more = alc_readline(repl_cont_text());
       rl_startup_hook = NULL;
@@ -1607,24 +1686,27 @@ static char *als_rl_read_form(int idx) {
           blank = 0;
           break;
         }
-      if (blank && rl_paren_depth(acc) <= 0) {
+      if (blank && rl_paren_depth(g_repl_acc) <= 0) {
         free(more); /* whitespace-only line + balanced parens -> submit */
         break;
       }
-      size_t al = strlen(acc), ml = strlen(more);
+      size_t al = strlen(g_repl_acc), ml = strlen(more);
       size_t need = al + ml + 2;
       if (need > cap) {
         cap = need * 2;
-        acc = xrealloc(acc, cap);
+        g_repl_acc = xrealloc(g_repl_acc, cap);
       }
-      acc[al] = '\n'; /* append "\n" + more at the known offset */
-      memcpy(acc + al + 1, more, ml + 1); /* copies more's NUL too */
+      g_repl_acc[al] = '\n'; /* append "\n" + more at the known offset */
+      memcpy(g_repl_acc + al + 1, more, ml + 1); /* copies more's NUL too */
       free(more);
     }
   }
-  if (acc[0])
-    add_history(acc);
-  return acc;
+  g_repl_reading = 0;
+  if (g_repl_acc[0])
+    add_history(g_repl_acc);
+  char *ret = g_repl_acc;
+  g_repl_acc = NULL;
+  return ret;
 }
 
 #endif /* ALCOVE_ALS */

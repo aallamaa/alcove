@@ -44,6 +44,7 @@
 #include <unistd.h> /* isatty for the readline REPL gate; needed even
                           when ALCOVE_JIT is off. */
 #include <setjmp.h> /* OOM recovery: longjmp from a failed alloc to the eval boundary */
+#include <signal.h> /* REPL Ctrl-C: cancel the current input instead of exiting */
 #include <sys/resource.h> /* getrlimit(RLIMIT_STACK) for the stack-overflow guard */
 /* Adder front end: a string->string transpiler that turns the
    whitespace/`:`-block surface syntax into ordinary alcove s-expressions
@@ -7436,6 +7437,17 @@ static void repl_readline_setup(env_t *global) {
   rl_attempted_completion_function = alcove_rl_completer;
   /* TAB indents at line start (only whitespace precedes), else completes. */
   rl_bind_key('\t', alcove_smart_tab);
+  /* List all candidates immediately on an ambiguous TAB. Required because TAB is
+     bound to alcove_smart_tab, not rl_complete directly: readline's "list on the
+     2nd consecutive TAB" check compares rl_last_func against rl_complete, which
+     is never the dispatched key here, so the match list would otherwise never
+     show (e.g. `redis-<TAB>` would ring the bell instead of listing redis-*).
+     The debugger sets this the same way for its own completion. */
+  rl_variable_bind("show-all-if-ambiguous", "on");
+  /* Ctrl-C cancels the current input (or aborts a multi-line form) and reprompts;
+     on an empty line it exits. Takes over SIGINT from readline — see the handler
+     in debugger.h. */
+  repl_install_sigint();
   /* Shift-TAB (back-tab, ESC[Z) dedents by up to one indent level. */
   rl_bind_keyseq("\033[Z", alcove_back_tab);
   rl_basic_word_break_characters = " \t\n()'`,;\"";
