@@ -110,3 +110,6 @@ adfmt.o
 
 # Claude Code local runtime state (session locks, local settings, worktrees)
 .claude/
+
+# editor backups
+*~
