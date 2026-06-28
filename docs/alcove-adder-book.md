@@ -277,7 +277,7 @@ Generators provide stateful yield-style lazy sequence iteration.
 #### Alcove (Lisp)
 <!-- exec: alcove -->
 ```
-In [1]:Out[1]:{"gs" 1, "gk" 1, "gc" 1, "ge" 5}
+In [1]:Out[1]:{"gs" 1, "gk" 1, "gc" 1, "ge" 5}
 
 In [2]:Out[2]:1
 
@@ -287,7 +287,7 @@ In [3]:Out[3]:2
 #### Adder
 <!-- exec: adder -->
 ```
-In [1]:Out[1]:{"gs" 1, "gk" 1, "gc" 1, "ge" 5}
+In [1]:Out[1]:{"gs" 1, "gk" 1, "gc" 1, "ge" 5}
 
 In [2]:Out[2]:1
 

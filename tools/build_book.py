@@ -24,9 +24,10 @@ def run_repl(dialect, code):
         stdout = e.stdout or ""
         stdout += "\n[Error: Execution timed out]"
     
-    # Strip ANSI color escape sequences
+    # Strip ANSI color escape sequences and readline prompt wrap control characters
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     stdout = ansi_escape.sub('', stdout)
+    stdout = re.sub(r'[\x01\x02]', '', stdout)
 
     # Normalize hex addresses and pointers (e.g. @5595fedaaa00 or 0x5595fedaaa00 -> @...)
     stdout = re.sub(r'0x[0-9a-fA-F]+|@[0-9a-fA-F]+', '@...', stdout)
@@ -77,6 +78,29 @@ def build_book(template_path, output_path):
         f.write(new_content)
         
     print(f"Book compiled successfully and saved to {output_path}")
+
+    # Compile to EPUB and PDF if pandoc is available
+    import shutil
+    if shutil.which("pandoc"):
+        epub_path = output_path.replace(".md", ".epub")
+        pdf_path = output_path.replace(".md", ".pdf")
+        
+        print("Compiling to EPUB...")
+        subprocess.run([
+            "pandoc", output_path, "-o", epub_path,
+            "--metadata", "title=The Alcove & Adder Programming Manual",
+            "--metadata", "author=Alcove Team"
+        ])
+        
+        if shutil.which("pdflatex"):
+            print("Compiling to PDF...")
+            subprocess.run([
+                "pandoc", output_path, "-o", pdf_path,
+                "--pdf-engine=pdflatex",
+                "--metadata", "title=The Alcove & Adder Programming Manual",
+                "--metadata", "author=Alcove Team"
+            ])
+
 
 if __name__ == "__main__":
     template = "docs/book_template.md"
