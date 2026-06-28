@@ -756,7 +756,7 @@ comparisons for tests</td>
 <td>bignums, ratios, complex numbers</td>
 <td>JVM numeric tower</td>
 <td>integers/floats vary</td>
-<td>fixnums and floats; no bignums, ratios, or complex numbers</td>
+<td>fixnums, floats, ratios (exact fractions), and decimals; no bignums or complex numbers</td>
 <td>runtime types unchanged; Adder only changes source spelling</td>
 </tr>
 </tbody>
@@ -1044,8 +1044,8 @@ Time</h2>
 <td><code>regexp</code>, <code>pregexp</code></td>
 <td>Java regex literals</td>
 <td>native regex functions</td>
-<td>not built in; use FFI</td>
-<td>not built in</td>
+<td>built-in regex support (<code>re-match</code>, <code>re-find</code>, <code>re-find-all</code>, <code>re-replace</code>, <code>re-split</code>)</td>
+<td>same regex family</td>
 </tr>
 <tr class="odd">
 <td>Date/time</td>
@@ -1113,11 +1113,21 @@ Named function
 <code>defun</code>
 </td>
 <td>
-<code>(def name (args…) body…)</code>
+Single-arity:
+<pre><code>(def square (x) (* x x))</code></pre>
+Multi-arity:
+<pre><code>(defn area
+  ((r) (* 3.14 r r))
+  ((w h) (* w h)))</code></pre>
 </td>
 <td>
-<pre><code>def name (args):
-  body</code></pre>
+Single-arity:
+<pre><code>def square (x):
+  * x x</code></pre>
+Multi-arity:
+<pre><code>defn area:
+  ((r) (* 3.14 r r))
+  ((w h) (* w h))</code></pre>
 </td>
 </tr>
 <tr>
@@ -1422,8 +1432,8 @@ Interop</h2>
 <td>ports</td>
 <td>Java streams/readers</td>
 <td>buffers/processes/files</td>
-<td>no general stream API</td>
-<td>no general stream API</td>
+<td>built-in port/stream I/O (<code>open</code>, <code>close</code>, <code>write</code>, <code>eof?</code>, <code>port?</code>)</td>
+<td>same port family</td>
 </tr>
 <tr class="even">
 <td>Read whole file bytes</td>
@@ -1488,9 +1498,29 @@ store</td>
 <td>classes/structs</td>
 <td>records/protocols/classes</td>
 <td>EIEIO/cl-defstruct</td>
-<td>no object system; use lists, dicts, vectors, deques</td>
-<td>no object syntax; use <code>hash-map</code>, <code>vector</code>,
-<code>deque</code></td>
+<td>
+<pre><code>(defstruct point x y)
+(def p (point 3 4))
+(point-x p)      ; 3
+(point? p)       ; t
+(type-of p)      ; 'point
+
+(defmulti area type-of)
+(defmethod area 'point (p)
+  (* (point-x p)
+     (point-y p)))</code></pre>
+</td>
+<td>
+<pre><code>defstruct point x y
+setf p (point 3 4)
+point-x p        # 3
+point? p         # t
+type-of p        # 'point
+
+defmulti area type-of
+defmethod area 'point (p):
+  * (point-x p) (point-y p)</code></pre>
+</td>
 </tr>
 <tr class="odd">
 <td>RESP/Redis server</td>
@@ -1528,22 +1558,22 @@ are still documented.</p>
 <td><code>quote</code>, <code>quasiquote</code>, <code>if</code>,
 <code>do</code>, <code>when</code>, <code>unless</code>,
 <code>while</code>, <code>repeat</code>, <code>and</code>,
-<code>or</code>, <code>case</code>, <code>for</code>, <code>each</code>,
+<code>or</code>, <code>case</code>, <code>cond</code>, <code>match</code>, <code>for</code>, <code>each</code>,
 <code>let</code>, <code>let*</code>, <code>with</code></td>
 <td>CL/Racket/Clojure/Emacs all have conditionals and local binding;
 <code>quasiquote</code>/<code>unquote</code>/<code>unquote-splicing</code>
 match the backtick reader (<code>`</code>, <code>,</code>,
 <code>,@</code>); <code>repeat</code>, integer <code>for</code>, and
-<code>each</code> map to loop libraries or sequence functions</td>
+<code>each</code> map to loop libraries or sequence functions; structural pattern matching (<code>match</code>) and flat conditional (<code>cond</code>)</td>
 </tr>
 <tr class="even">
 <td>Assignment/comparison</td>
 <td><code>=</code>, <code>setf</code> (exact synonym of <code>=</code>),
 <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>,
-<code>&gt;=</code>, <code>is</code>, <code>iso</code>, <code>in</code>,
-<code>no</code></td>
+<code>&gt;=</code>, <code>is</code>, <code>eq</code>, <code>eq?</code>, <code>isnt</code>, <code>iso</code>, <code>in</code>,
+<code>no</code>, <code>not</code>, <code>yes</code></td>
 <td>CL/Elisp <code>setf</code> for assignment; <code>eq</code>/<code>equal</code>
-families; membership functions; <code>not</code></td>
+families; membership functions; <code>not</code>/<code>yes</code></td>
 </tr>
 <tr class="odd">
 <td>Arithmetic/math</td>
@@ -1554,10 +1584,12 @@ families; membership functions; <code>not</code></td>
 <code>random</code>, <code>round</code>, <code>floor</code>,
 <code>ceil</code>, <code>truncate</code>, <code>log</code>,
 <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>float</code>,
-<code>int</code></td>
+<code>int</code>, <code>rational</code>, <code>rational?</code>,
+<code>numerator</code>, <code>denominator</code>, <code>decimal</code>,
+<code>decimal?</code></td>
 <td>Standard numeric functions; <code>sqrt-int</code> often requires a
 helper/library; <code>float</code>/<code>int</code> are coercions
-(widen / truncate)</td>
+(widen / truncate); exact rationals and base-10 decimals</td>
 </tr>
 <tr class="even">
 <td>Bitwise</td>
@@ -1572,10 +1604,12 @@ Clojure bit functions; Emacs <code>logand</code>/<code>lsh</code></td>
 <td>Pairs/lists</td>
 <td><code>cons</code>, <code>car</code>, <code>cdr</code>,
 <code>list</code>, <code>length</code>, <code>nth</code>,
+<code>seq</code>, <code>first</code>, <code>rest</code>,
+<code>conj</code>, <code>into</code>,
 <code>reverse</code>, <code>append</code>, <code>take</code>,
 <code>drop</code>, <code>range</code>, <code>zip</code>,
 <code>flatten</code>, <code>sort</code>, <code>sort-by</code></td>
-<td>Standard list APIs; <code>take</code>/<code>drop</code>/
+<td>Standard list APIs; Clojure sequence operations; <code>take</code>/<code>drop</code>/
 <code>range</code>/<code>zip</code>/<code>flatten</code> map to Racket/
 Clojure sequence functions or CL <code>subseq</code>/<code>loop</code>;
 <code>sort-by</code> is Clojure's, CL's <code>sort</code> with a
@@ -1608,16 +1642,17 @@ equivalent</td>
 </tr>
 <tr class="odd">
 <td>Functions/macros/eval</td>
-<td><code>def</code>, <code>fn</code>, <code>defc</code>,
+<td><code>def</code>, <code>defn</code>, <code>fn</code>, <code>defc</code>,
 <code>defmacro</code>, <code>macroexpand-1</code>, <code>eval</code>,
-<code>apply</code>, <code>call/cc</code></td>
+<code>apply</code>, <code>call/cc</code>, <code>defstruct</code>,
+<code>defmulti</code>, <code>defmethod</code></td>
 <td>Standard Lisp function and macro facilities, with syntax
 differences; <code>call/cc</code> is an escape (upward, one-shot)
 continuation — like Scheme's <code>call/ec</code>, not a full re-entrant
 <code>call/cc</code>: the captured <code>k</code> is valid only within the
 dynamic extent of the <code>call/cc</code> call. <code>defc</code> is sugar for
 <code>(def name (params) (call/cc (fn (return) body…)))</code> — defines a
-function with an imperative-style early <code>return</code></td>
+function with an imperative-style early <code>return</code>. Struct/record types, multi-arity functions (<code>defn</code>), and multimethod polymorphism are also supported.</td>
 </tr>
 <tr class="even">
 <td>Higher order</td>
@@ -1627,13 +1662,14 @@ function with an imperative-style early <code>return</code></td>
 </tr>
 <tr class="odd">
 <td>Predicates</td>
-<td><code>number?</code>, <code>string?</code>, <code>symbol?</code>,
+<td><code>number?</code>, <code>zero?</code>, <code>char?</code>,
+<code>string?</code>, <code>symbol?</code>,
 <code>pair?</code>, <code>list?</code>, <code>null?</code>,
-<code>fn?</code>, <code>vec?</code>, <code>blob?</code>,
-<code>dict?</code>, <code>deque?</code></td>
+<code>nil?</code>, <code>fn?</code>, <code>vec?</code>, <code>blob?</code>,
+<code>dict?</code>, <code>deque?</code>, <code>set?</code></td>
 <td>Standard type predicates; <code>list?</code> accepts nil or a proper
 list, <code>null?</code> tests nil; <code>blob?</code>, <code>dict?</code>,
-<code>deque?</code> are Alcove-specific data types</td>
+<code>deque?</code>, <code>set?</code> are Alcove-specific data types</td>
 </tr>
 <tr class="even">
 <td>Printing</td>
@@ -1657,9 +1693,11 @@ values; dict/deque persistence is still a feature gap.</td>
 <td>Introspection/utilities</td>
 <td><code>inspect</code>, <code>disasm</code>, <code>source</code>,
 <code>dir</code>, <code>time</code>, <code>web?</code>,
+<code>platform</code>, <code>dialect</code>, <code>arch</code>,
+<code>dylib-suffix</code>, <code>now-ms</code>,
 <code>sleep-ms</code>, <code>exit</code>, <code>quit</code>,
 <code>doc</code>, <code>help</code></td>
-<td>Implementation tools; <code>web?</code> is Alcove/WASM-specific</td>
+<td>Implementation and target introspection tools; <code>web?</code> is Alcove/WASM-specific</td>
 </tr>
 <tr class="odd">
 <td>FFI</td>
@@ -1725,11 +1763,14 @@ decode with catchable errors.</td>
 <tr class="even">
 <td>Strings</td>
 <td><code>str</code>, <code>fmt</code>, <code>substr</code>,
-<code>string-append</code>, <code>string-split</code>,
-<code>string-join</code>, <code>string-trim</code>,
-<code>string-upcase</code>, <code>string-downcase</code>,
-<code>string-contains?</code>, <code>string-index</code>,
-<code>string-replace</code></td>
+<code>string-append</code>, <code>string-concat</code>,
+<code>string-split</code>, <code>string-join</code>,
+<code>string-trim</code>, <code>string-upcase</code>,
+<code>string-downcase</code>, <code>string-contains?</code>,
+<code>string-index</code>, <code>string-replace</code>,
+<code>starts-with?</code>, <code>ends-with?</code>,
+<code>string-repeat</code>, <code>string-pad-left</code>,
+<code>string-pad-right</code></td>
 <td>CL <code>concatenate</code>/<code>format</code>/<code>search</code>;
 Racket/Clojure string libraries; <code>fmt</code> is a small
 <code>{}</code>/<code>{:spec}</code> templating function (printf-style
@@ -1747,6 +1788,51 @@ common CL macro idiom (built-in here)</td>
 <td>Errors are reified as values; <code>try</code> is a lightweight
 <code>handler-case</code>/<code>with-handlers</code>/<code>try</code>
 catching a returned error rather than unwinding</td>
+</tr>
+<tr class="odd">
+<td>Stateful Generators</td>
+<td><code>*done*</code> / <code>*gendone*</code>, <code>done?</code> / <code>gen-done?</code>, <code>iter!</code> / <code>gen-list</code>, <code>range!</code> / <code>gen-range</code>, <code>next!</code> / <code>gen-next!</code>, <code>collect!</code> / <code>gen-collect</code>, <code>map!</code> / <code>gen-map</code>, <code>filter!</code> / <code>gen-filter</code>, <code>for-each!</code> / <code>for-gen</code></td>
+<td>Stateful yield-style lazy sequence generators and iterators. Preferred forms have a <code>!</code> suffix (or <code>?</code> for predicates) to indicate mutating state.</td>
+</tr>
+<tr class="even">
+<td>Clojure-Style Sequence Helpers</td>
+<td><code>frequencies</code>, <code>partition</code>, <code>interleave</code>, <code>group-by</code>, <code>max-by</code>, <code>min-by</code></td>
+<td>Sequence aggregation and manipulation functions.</td>
+</tr>
+<tr class="odd">
+<td>Codecs & Serialization</td>
+<td><code>json-encode</code>, <code>json-decode</code>, <code>base64-encode</code>, <code>base64-decode</code>, <code>hex-encode</code>, <code>hex-decode</code></td>
+<td>Built-in data serialization and encoding formats.</td>
+</tr>
+<tr class="even">
+<td>TCP Networking</td>
+<td><code>resolve-host</code>, <code>tcp-connect</code>, <code>tcp-send</code>, <code>tcp-recv</code>, <code>tcp-close</code></td>
+<td>Low-level TCP client operations. Excluded from the WASM/web build.</td>
+</tr>
+<tr class="odd">
+<td>Date & Time</td>
+<td><code>format-time</code>, <code>parse-time</code></td>
+<td>Time parsing and formatting helpers.</td>
+</tr>
+<tr class="even">
+<td>Filesystem Utilities</td>
+<td><code>dir-exists?</code>, <code>path-join</code>, <code>path-dirname</code>, <code>path-basename</code></td>
+<td>Cross-platform path and directory manipulation.</td>
+</tr>
+<tr class="odd">
+<td>Programmable REPL</td>
+<td><code>bind-key</code>, <code>repl-line</code>, <code>repl-point</code>, <code>repl-end</code>, <code>repl-goto</code>, <code>repl-insert</code>, <code>repl-delete</code>, <code>repl-replace-line</code>, <code>repl-refresh</code>, <code>repl-completions</code></td>
+<td>API to programmatically customize shortcut keys and modify the active REPL input buffer.</td>
+</tr>
+<tr class="even">
+<td>Regex</td>
+<td><code>re-match</code>, <code>re-find</code>, <code>re-find-all</code>, <code>re-replace</code>, <code>re-split</code></td>
+<td>Built-in PCRE regular expression matching, search, and substitution.</td>
+</tr>
+<tr class="odd">
+<td>File Port I/O</td>
+<td><code>open</code>, <code>close</code>, <code>write</code>, <code>eof?</code>, <code>port?</code>, <code>read-line</code>, <code>read-string</code>, <code>read-lines</code>, <code>write-string</code>, <code>append-string</code>, <code>write-bytes</code>, <code>read-bytes</code></td>
+<td>File and stream port I/O.</td>
 </tr>
 </tbody>
 </table>
