@@ -452,6 +452,16 @@ static char *als_strip_comment(const char *line) {
       }
       continue;
     }
+    /* A bare `;` (outside a string; a `#\;` char literal was handled above) is
+       the *Alcove* line-comment char. Adder's own comment char is `#`, but a
+       `;` must not pass through into the transpiled s-expr: there it would
+       start a comment that swallows the rest of the line — including a closing
+       paren — leaving the form unterminated, so the reader runs to EOF and
+       silently drops the whole form (and any following input up to a `)`).
+       Treat it as a comment here too, matching the alcove reader's
+       unconditional `;` rule. */
+    if (c == ';')
+      break;
     /* A line comment is `#` followed by a space, tab, or end of line:
        `# like this`. `#!` is also a comment (so `#!/usr/bin/env adder`
        shebang scripts run; the alcove reader has the matching `#!` rule).

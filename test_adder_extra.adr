@@ -152,3 +152,17 @@ assert "arc-lambda infix bind"       (adr-sq 7) 49
 assert "arc-lambda no extra parens"  ([+ _ 10] 5) 15
 assert "arc-lambda as map arg"       (map [+ _ 1] (list 1 2 3)) (list 2 3 4)
 assert "arc-lambda multi-form body"  ([do (+ _ 1) (* _ 2)] 4) 8
+
+# ====================================================================
+# `;` is the *Alcove* line-comment char and must be stripped by the adder
+# transpiler too. Before the fix it leaked into the s-expr, where it started
+# a comment that ate the closing paren — leaving the form unterminated, so
+# the reader hit EOF and SILENTLY DROPPED the whole line (no eval, no bind,
+# no output). Now a trailing `;` is a comment, matching `#`.
+# ====================================================================
+adr-semi = (+ 40 2) ; trailing semicolon is a comment, value still binds
+assert "trailing ; is a comment"     adr-semi 42
+adr-semi2 = (+ 1 1) ; (+ 99 99) <- this text is commented out, not evaluated
+assert "; truncates rest of line"    adr-semi2 2
+# a `#\;` char literal is NOT a comment — the value byte survives
+assert "#\\; char literal survives"  #\; #\;

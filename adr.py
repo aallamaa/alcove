@@ -216,6 +216,14 @@ def strip_comment(line):
                     out.append(line[i + 2])
                 i += 3
                 continue
+            # A bare `;` (a `#\;` char literal was handled above) is the
+            # *Alcove* line-comment char. Adder's comment char is `#`, but a
+            # `;` must not leak into the transpiled s-expr — there it starts a
+            # comment that eats the rest of the line including a closing paren,
+            # leaving the form unterminated and silently dropped. Treat it as a
+            # comment here too, matching the alcove reader's unconditional `;`.
+            if c == ";":
+                break
             # A line comment is `#` followed by a space, tab, or end of line.
             # `#!` comments too (shebang scripts). A `#` glued to any other
             # char is a dispatch token (#[ #{ #b"…) and survives to the
