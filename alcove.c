@@ -7946,6 +7946,10 @@ int main(int argc, char *argv[]) {
   exp_t *stre = NULL;
 
 #ifdef ALCOVE_READLINE
+/* Re-entry point for `-i`: after a script's stream hits EOF we switch to an
+   interactive tty and jump here so the post-script session gets line editing,
+   tab completion and history — not the raw reader the file path uses. */
+interactive_readline:
   if (rl_active) {
     /* Interactive readline-based REPL: per-iteration we read a complete
        top-level form (continuation prompt for unbalanced parens) into
@@ -8004,6 +8008,18 @@ int main(int argc, char *argv[]) {
           evaluatingfile = 0;
           g_reader_src = NULL; /* switching to interactive stdin */
           unrefexp(stre);
+#ifdef ALCOVE_READLINE
+          /* `-i` dropping into the REPL: arm readline now (it was off at
+             startup because `stream` was the script file) so Tab completion,
+             history and line editing work just like a bare interactive run. */
+          if (isatty(fileno(stdin))) {
+            rl_active = 1;
+            repl_readline_setup(global);
+            repl_history_load(save_history);
+            idx--; /* the readline loop re-increments for this prompt */
+            goto interactive_readline;
+          }
+#endif
           continue;
         } else {
           unrefexp(stre);
