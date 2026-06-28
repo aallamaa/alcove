@@ -2026,6 +2026,10 @@ inline exp_t *make_quote(exp_t *node) {
    nref=1; unrefexp's free-path knows how to drop them (see line ~365). */
 
 exp_t *make_blob(const char *bytes, size_t len) {
+#if UINTPTR_MAX <= 0xffffffff
+  if (len > SIZE_MAX - sizeof(alc_blob_t))
+    oom_raise();
+#endif
   alc_blob_t *b = (alc_blob_t *)malloc(sizeof(alc_blob_t) + len);
   if (!b)
     oom_raise();
@@ -5601,6 +5605,14 @@ exp_t *stringappendcmd(exp_t *e, env_t *env) {
 static exp_t *make_filled_string(int64_t n, uint32_t cp) {
   char enc[4];
   int k = utf8_encode(cp, enc);
+#if UINTPTR_MAX <= 0xffffffff
+  /* Cap total allocation to 64 MiB to prevent overflow/excessive memory usage */
+  if (n < 0 || (n > 0 && (size_t)n > (size_t)(64 * 1024 * 1024) / (size_t)k))
+    return NULL;
+#else
+  if (n < 0)
+    return NULL;
+#endif
   size_t total = (size_t)n * (size_t)k;
   char *buf = memalloc(total + 1, 1);
   for (int64_t j = 0; j < n; j++)
@@ -5631,6 +5643,8 @@ exp_t *stringbufcmd(exp_t *e, env_t *env) {
                          "string-buf: length out of range"));
   uint32_t cp = initexp ? (uint32_t)CHAR_VAL(initexp) : (uint32_t)' ';
   exp_t *ret = make_filled_string(n, cp);
+  if (!ret)
+    ret = error(ERROR_ILLEGAL_VALUE, e, env, "string-buf: result too large");
   CLEAN_RETURN_2(nexp, initexp, ret);
 }
 
@@ -5930,6 +5944,10 @@ static char *slurp_stream(FILE *fp, size_t *out_len) {
     long sz = ftell(fp);
     if (sz >= 0) {
       rewind(fp);
+#if UINTPTR_MAX <= 0xffffffff
+      if ((size_t)sz > SIZE_MAX - 1)
+        return NULL;
+#endif
       char *buf = malloc((size_t)sz + 1);
       if (!buf)
         return NULL;
@@ -5949,14 +5967,23 @@ static char *slurp_stream(FILE *fp, size_t *out_len) {
   char chunk[4096];
   while ((got = fread(chunk, 1, sizeof chunk, fp)) > 0) {
     if (len + got + 1 > cap) {
-      while (len + got + 1 > cap)
-        cap *= 2;
-      char *nb = realloc(buf, cap);
+      size_t new_cap = cap;
+      while (len + got + 1 > new_cap) {
+#if UINTPTR_MAX <= 0xffffffff
+        if (new_cap > SIZE_MAX / 2) {
+          free(buf);
+          return NULL; /* overflow guard */
+        }
+#endif
+        new_cap *= 2;
+      }
+      char *nb = realloc(buf, new_cap);
       if (!nb) {
         free(buf);
         return NULL;
       }
       buf = nb;
+      cap = new_cap;
     }
     memcpy(buf + len, chunk, got);
     len += got;
