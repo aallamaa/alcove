@@ -21,11 +21,11 @@ On 64-bit platforms, allocations returned by `malloc` are aligned to 8 bytes, wh
 
 ```
 +-------------------------------------------------------------+---+---+---+
-|                       Pointer Address (61 bits)             | 0 | 0 | 0 | (TAG_PTR)
+|    (TAG_PTR)          Pointer Address (61 bits)             | 0 | 0 | 0 |
 +-------------------------------------------------------------+---+---+---+
-|                       Signed Integer Value (61 bits)        | 0 | 0 | 1 | (TAG_FIX)
+|    (TAG_FIX)          Signed Integer Value (61 bits)        | 0 | 0 | 1 |
 +-------------------------------------------------------------+---+---+---+
-|                       Unicode Character Code (61 bits)      | 0 | 1 | 0 | (TAG_CHAR)
+|    (TAG_CHAR)         Unicode Character Code (61 bits)      | 0 | 1 | 0 |
 +-------------------------------------------------------------+---+---+---+
 ```
 
@@ -265,6 +265,65 @@ make-blob("hello")
 #b"hello"
 ```
 
+### 3.3 Stateful Generators
+Generators provide stateful yield-style lazy sequence iteration.
+
+#### Alcove (Lisp)
+**In [1]:**
+```clojure
+(setf g (gen-range 1 5))
+```
+**Out [1]:**
+```text
+{"gs" 1, "gk" 1, "gc" 1, "ge" 5}
+```
+
+**In [2]:**
+```clojure
+(gen-next! g)
+```
+**Out [2]:**
+```text
+1
+```
+
+**In [3]:**
+```clojure
+(gen-next! g)
+```
+**Out [3]:**
+```text
+2
+```
+
+#### Adder
+**In [1]:**
+```python
+g = gen-range(1 5)
+```
+**Out [1]:**
+```text
+{"gs" 1, "gk" 1, "gc" 1, "ge" 5}
+```
+
+**In [2]:**
+```python
+gen-next!(g)
+```
+**Out [2]:**
+```text
+1
+```
+
+**In [3]:**
+```python
+gen-next!(g)
+```
+**Out [3]:**
+```text
+2
+```
+
 ---
 
 ## Chapter 4: Advanced Scopes, Control Flows, & Recursion
@@ -381,6 +440,54 @@ let i 0:
 **Out [1]:**
 ```text
 nil
+```
+
+### 4.4 Escape Continuations (call/cc & defc)
+Escape continuations allow capturing the current control flow, enabling early returns, custom aborts, and exception handling.
+
+#### Alcove (Lisp)
+**In [1]:**
+```clojure
+(defc search (val lst)
+  (each x lst
+    (if (is x val) (return t)))
+  nil)
+```
+**Out [1]:**
+```text
+#<procedure:search@...>
+```
+
+**In [2]:**
+```clojure
+(search 42 (list 10 42 100))
+```
+**Out [2]:**
+```text
+t
+```
+
+#### Adder
+**In [1]:**
+```python
+defc search (val lst):
+  each x lst:
+    if (x is val):
+      return(t)
+  nil
+```
+**Out [1]:**
+```text
+#<procedure:search@...>
+```
+
+**In [2]:**
+```python
+search(42 list(10 42 100))
+```
+**Out [2]:**
+```text
+t
 ```
 
 ---

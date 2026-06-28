@@ -21,11 +21,11 @@ On 64-bit platforms, allocations returned by `malloc` are aligned to 8 bytes, wh
 
 ```
 +-------------------------------------------------------------+---+---+---+
-|                       Pointer Address (61 bits)             | 0 | 0 | 0 | (TAG_PTR)
+|    (TAG_PTR)          Pointer Address (61 bits)             | 0 | 0 | 0 |
 +-------------------------------------------------------------+---+---+---+
-|                       Signed Integer Value (61 bits)        | 0 | 0 | 1 | (TAG_FIX)
+|    (TAG_FIX)          Signed Integer Value (61 bits)        | 0 | 0 | 1 |
 +-------------------------------------------------------------+---+---+---+
-|                       Unicode Character Code (61 bits)      | 0 | 1 | 0 | (TAG_CHAR)
+|    (TAG_CHAR)         Unicode Character Code (61 bits)      | 0 | 1 | 0 |
 +-------------------------------------------------------------+---+---+---+
 ```
 
@@ -113,6 +113,25 @@ hamt("a" 1 "b" 2)
 make-blob("hello")
 ```
 
+### 3.3 Stateful Generators
+Generators provide stateful yield-style lazy sequence iteration.
+
+#### Alcove (Lisp)
+<!-- exec: alcove -->
+```
+(setf g (gen-range 1 5))
+(gen-next! g)
+(gen-next! g)
+```
+
+#### Adder
+<!-- exec: adder -->
+```
+g = gen-range(1 5)
+gen-next!(g)
+gen-next!(g)
+```
+
 ---
 
 ## Chapter 4: Advanced Scopes, Control Flows, & Recursion
@@ -179,6 +198,30 @@ let i 0:
   while (i < 3):
     prn(i)
     i = i + 1
+```
+
+### 4.4 Escape Continuations (call/cc & defc)
+Escape continuations allow capturing the current control flow, enabling early returns, custom aborts, and exception handling.
+
+#### Alcove (Lisp)
+<!-- exec: alcove -->
+```
+(defc search (val lst)
+  (each x lst
+    (if (is x val) (return t)))
+  nil)
+(search 42 (list 10 42 100))
+```
+
+#### Adder
+<!-- exec: adder -->
+```
+defc search (val lst):
+  each x lst:
+    if (x is val):
+      return(t)
+  nil
+search(42 list(10 42 100))
 ```
 
 ---
