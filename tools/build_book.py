@@ -4,45 +4,137 @@ import subprocess
 import sys
 import os
 
-def run_repl(dialect, code):
-    # Set up executable path
+def split_lisp_forms(code):
+    forms = []
+    current = []
+    depth = 0
+    in_string = False
+    escape = False
+    for char in code:
+        if escape:
+            current.append(char)
+            escape = False
+            continue
+        if char == '\\':
+            current.append(char)
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            current.append(char)
+            continue
+        if not in_string:
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+        current.append(char)
+        if depth == 0 and not in_string and char in ('\n', ' ', '\t'):
+            form = "".join(current).strip()
+            if form:
+                forms.append(form)
+            current = []
+    form = "".join(current).strip()
+    if form:
+        forms.append(form)
+    return [f for f in forms if f]
+
+def split_adder_forms(code):
+    lines = code.splitlines()
+    forms = []
+    current = []
+    for line in lines:
+        if not line.strip():
+            if current and not current[-1].strip().endswith(':'):
+                forms.append("\n".join(current))
+                current = []
+            continue
+        is_indented = line.startswith(" ") or line.startswith("\t")
+        if is_indented:
+            current.append(line)
+        else:
+            if current:
+                if not current[-1].strip().endswith(':'):
+                    forms.append("\n".join(current))
+                    current = []
+            current.append(line)
+    if current:
+        forms.append("\n".join(current))
+    return [f for f in forms if f]
+
+def run_repl_session(dialect, forms):
     exe = "./alcove" if dialect == "alcove" else "./adder"
     if not os.path.exists(exe):
-        # Fallback if adder is not built or symlinked
         exe = "./alcove"
     
-    # We pipe code into the REPL to get interactive prompts
     cmd = [exe, "-n"]
     if dialect == "adder" and exe == "./alcove":
-        # If running adder code via alcove binary (which doesn't happen usually, but for safety)
         cmd = ["./adder", "-n"]
-        
+
+    full_input = "\n".join(forms) + "\n"
+    
     try:
-        proc = subprocess.run(cmd, input=code, capture_output=True, text=True, timeout=5)
+        proc = subprocess.run(cmd, input=full_input, capture_output=True, text=True, timeout=10)
         stdout = proc.stdout
     except subprocess.TimeoutExpired as e:
         stdout = e.stdout or ""
         stdout += "\n[Error: Execution timed out]"
-    
-    # Strip ANSI color escape sequences and readline prompt wrap control characters
+
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     stdout = ansi_escape.sub('', stdout)
     stdout = re.sub(r'[\x01\x02]', '', stdout)
-
-    # Normalize hex addresses and pointers (e.g. @5595fedaaa00 or 0x5595fedaaa00 -> @...)
     stdout = re.sub(r'0x[0-9a-fA-F]+|@[0-9a-fA-F]+', '@...', stdout)
+
+    sections = re.split(r'In \[\d+\]:', stdout)
+    responses = [s.strip() for s in sections[1:]]
+    return responses
+
+def format_repl_markdown(dialect, forms, responses):
+    formatted = []
+    lang = "clojure" if dialect == "alcove" else "python"
     
-    # Strip trailing empty prompts (like the final In [X]: prompt)
-    lines = stdout.splitlines()
-    clean_lines = []
-    for line in lines:
-        # If it's a bare trailing prompt like "In [2]:" or "In [12]:", skip it if it's the last lines
-        clean_lines.append(line)
+    for i, form in enumerate(forms):
+        idx = i + 1
+        formatted.append(f"**In [{idx}]:**")
+        formatted.append(f"```{lang}\n{form}\n```")
         
-    while clean_lines and re.match(r'^In \[\d+\]:\s*$', clean_lines[-1]):
-        clean_lines.pop()
+        if i < len(responses):
+            response = responses[i]
+            marker = f"Out[{idx}]:"
+            if marker in response:
+                parts = response.split(marker, 1)
+                stdout_part = parts[0].strip()
+                retval_part = parts[1].strip()
+                
+                if stdout_part:
+                    formatted.append("*Stdout:*")
+                    formatted.append(f"```text\n{stdout_part}\n```")
+                if retval_part:
+                    formatted.append(f"**Out [{idx}]:**")
+                    formatted.append(f"```text\n{retval_part}\n```")
+            else:
+                alt_marker = re.search(r'Out\[\d+\]:', response)
+                if alt_marker:
+                    parts = response.split(alt_marker.group(0), 1)
+                    stdout_part = parts[0].strip()
+                    retval_part = parts[1].strip()
+                    if stdout_part:
+                        formatted.append("*Stdout:*")
+                        formatted.append(f"```text\n{stdout_part}\n```")
+                    if retval_part:
+                        formatted.append(f"**Out [{idx}]:**")
+                        formatted.append(f"```text\n{retval_part}\n```")
+                else:
+                    if response:
+                        formatted.append(f"**Out [{idx}]:**")
+                        formatted.append(f"```text\n{response}\n```")
+        else:
+            formatted.append(f"**Out [{idx}]:**")
+            formatted.append("```text\n[No response received]\n```")
+            
+        formatted.append("")
         
-    return "\n".join(clean_lines).strip()
+    return "\n".join(formatted).strip()
 
 def build_book(template_path, output_path):
     if not os.path.exists(template_path):
@@ -52,11 +144,6 @@ def build_book(template_path, output_path):
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
         
-    # We find blocks of the form:
-    # <!-- exec: <dialect> -->
-    # ```
-    # <code>
-    # ```
     pattern = re.compile(
         r'<!--\s*exec:\s*(alcove|adder)\s*-->\s*```(?:[a-zA-Z0-9_-]+)?\n(.*?)\n```',
         re.DOTALL
@@ -65,21 +152,23 @@ def build_book(template_path, output_path):
     def replacer(match):
         dialect = match.group(1)
         code = match.group(2)
-        print(f"Executing {dialect} code block...")
-        repl_output = run_repl(dialect, code)
         
-        # Format the result as a REPL session block
-        return f"<!-- exec: {dialect} -->\n```\n{repl_output}\n```"
+        if dialect == "alcove":
+            forms = split_lisp_forms(code)
+        else:
+            forms = split_adder_forms(code)
+            
+        print(f"Executing {len(forms)} {dialect} forms...")
+        responses = run_repl_session(dialect, forms)
+        return format_repl_markdown(dialect, forms, responses)
         
     new_content = pattern.sub(replacer, content)
     
-    # Save the compiled book
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(new_content)
         
     print(f"Book compiled successfully and saved to {output_path}")
 
-    # Compile to EPUB and PDF if pandoc is available
     import shutil
     if shutil.which("pandoc"):
         epub_path = output_path.replace(".md", ".epub")
@@ -100,7 +189,6 @@ def build_book(template_path, output_path):
                 "--metadata", "title=The Alcove & Adder Programming Manual",
                 "--metadata", "author=Alcove Team"
             ])
-
 
 if __name__ == "__main__":
     template = "docs/book_template.md"

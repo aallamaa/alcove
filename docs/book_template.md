@@ -1,13 +1,13 @@
-# The Alcove & Adder Programming Manual: A Deep Dive into High-Performance Lisp and Python-Like Dialect VM
+# The Alcove & Adder Reference Manual: A Technical Deep Dive
 
-Welcome to the definitive guide to **Alcove** and **Adder**. This book is built programmatically: every single code block is executed by the actual compiled `alcove` and `adder` binaries, verifying both syntax and runtime output in real-time.
+Welcome to the definitive programmer's reference and architecture manual for the **Alcove** and **Adder** languages. This book is generated dynamically: every single code block is executed by the actual compiled `alcove` and `adder` binaries, verifying both compiler correctness and execution output in real-time.
 
 ---
 
-## Chapter 1: Introduction & Architecture
+## Chapter 1: VM Architecture & Memory Design
 
-### 1.1 One VM, Two Dialects
-Alcove and Adder are two complementary frontends compiling to the same register-based bytecode virtual machine. 
+### 1.1 One VM, Two Symmetrical Dialects
+Alcove and Adder are two surface syntaxes compiling to the same register-based bytecode Virtual Machine:
 *   **Alcove** represents the classic Lisp-style S-expression syntax.
 *   **Adder** is a Python-inspired block-based syntax that compiles down to the exact same S-expressions and runs on the same VM.
 
@@ -19,6 +19,16 @@ On 64-bit platforms, allocations returned by `malloc` are aligned to 8 bytes, wh
 *   `001` (`TAG_FIX`): 61-bit signed immediate integer.
 *   `010` (`TAG_CHAR`): Unicode character immediate.
 
+```
++-------------------------------------------------------------+---+---+---+
+|                       Pointer Address (61 bits)             | 0 | 0 | 0 | (TAG_PTR)
++-------------------------------------------------------------+---+---+---+
+|                       Signed Integer Value (61 bits)        | 0 | 0 | 1 | (TAG_FIX)
++-------------------------------------------------------------+---+---+---+
+|                       Unicode Character Code (61 bits)      | 0 | 1 | 0 | (TAG_CHAR)
++-------------------------------------------------------------+---+---+---+
+```
+
 This immediate value tagging avoids memory allocation, refcount tracking, and collection overhead.
 
 ### 1.3 Memory Management & Teardown
@@ -26,34 +36,56 @@ Alcove uses a fast-path reference counting model. To handle cycles formed by loc
 
 ---
 
-## Chapter 2: Data Types & Collections
+## Chapter 2: Language Dialect Syntax Comparisons
 
-### 2.1 Numbers and Characters
-Alcove features fixnums, floats, ratios (exact fractions), and decimals.
+### 2.1 Symmetrical Comparison
+Let's see how identical expressions are written in Lisp (Alcove) vs Python-style (Adder).
 
 #### Alcove (Lisp)
 <!-- exec: alcove -->
 ```
 (+ 1 2)
-(/ 1 3)
-(rational? 1/3)
-(decimal "1.25")
-#\A
-(char? #\A)
+(is 1 1)
 ```
 
 #### Adder
 <!-- exec: adder -->
 ```
 1 + 2
+1 is 1
+```
+
+### 2.2 Infix Notation Rewriting Mechanics
+Unlike traditional Lisp, Alcove features infix rewriting. 
+*   **Compile-time**: An expression `(A op B)` where `op` is a known operator is compiled as `(op A B)` if `A` is statically non-callable (e.g., a literal, symbol, or type-hinted parameter).
+*   **Runtime**: If the compiler cannot determine callability statically, it compiles a generic call. At runtime, the evaluator and VM dispatch `(A op B)` as `(op A B)` if `A` evaluates to a non-callable value.
+
+---
+
+## Chapter 3: Deep Dive into Core Data Types
+
+### 3.1 Numbers Tower
+Alcove supports 61-bit fixnums, IEEE-754 double floats, exact fractional Ratios, and fixed-precision Decimals.
+
+#### Alcove (Lisp)
+<!-- exec: alcove -->
+```
+(/ 1 3)
+(rational? 1/3)
+(decimal "1.25")
+(decimal? (decimal "1.25"))
+```
+
+#### Adder
+<!-- exec: adder -->
+```
 1/3
 rational?(1/3)
 decimal("1.25")
-#\A
-char?(#\A)
+decimal?(decimal("1.25"))
 ```
 
-### 2.2 Collections
+### 3.2 Native Collections
 Alcove provides multiple native collections:
 *   **Lists**: Linked cons cells.
 *   **Vectors**: Flat arrays with double-ended queue operations.
@@ -83,9 +115,9 @@ make-blob("hello")
 
 ---
 
-## Chapter 3: Control Flow & Pattern Matching
+## Chapter 4: Advanced Scopes, Control Flows, & Recursion
 
-### 3.1 Local Bindings & Assignment
+### 4.1 Local Bindings & Assignment
 We can bind variables locally using `let` or `=` assignment.
 
 #### Alcove (Lisp)
@@ -101,7 +133,7 @@ let (x 10 y 20):
   x + y
 ```
 
-### 3.2 Conditionals & Pattern Matching
+### 4.2 Conditionals & Pattern Matching
 We can use `if`, `cond`, `case`, and structural pattern matching `match`.
 
 #### Alcove (Lisp)
@@ -128,7 +160,7 @@ match list(1 2):
   "fallback"
 ```
 
-### 3.3 Loops
+### 4.3 Loops & Recursion
 Supported loop constructs include `while`, `repeat`, `for`, and `each`.
 
 #### Alcove (Lisp)
@@ -144,63 +176,15 @@ Supported loop constructs include `while`, `repeat`, `for`, and `each`.
 <!-- exec: adder -->
 ```
 let i 0:
-  while i < 3:
+  while (i < 3):
     prn(i)
     i = i + 1
 ```
 
 ---
 
-## Chapter 4: Functions & Polymorphism
+## Chapter 5: Metaprogramming (Macros)
 
-### 4.1 Functions and Multi-arity
-Functions are defined via `def` (single-arity) or `defn` (multi-arity).
-
-#### Alcove (Lisp)
-<!-- exec: alcove -->
-```
-(defn area
-  ((r) (* 3.14 r r))
-  ((w h) (* w h)))
-(area 5)
-(area 4 5)
-```
-
-#### Adder
-<!-- exec: adder -->
-```
-defn area:
-  ((r) (* 3.14 r r))
-  ((w h) (* w h))
-area(5)
-area(4 5)
-```
-
-### 4.2 Escape Continuations
-Continuations can be captured via `call/cc` or early returns via `defc`.
-
-#### Alcove (Lisp)
-<!-- exec: alcove -->
-```
-(defc search (val lst)
-  (each x lst
-    (if (is x val) (return t)))
-  nil)
-(search 42 (list 10 42 100))
-```
-
-#### Adder
-<!-- exec: adder -->
-```
-defc search (val lst):
-  each x lst:
-    if x is val:
-      return(t)
-  nil
-search(42 list(10 42 100))
-```
-
-### 4.3 Macros
 Macros are defined using `defmacro`. They manipulate S-expressions and expand at compile time.
 
 #### Alcove (Lisp)
@@ -219,7 +203,10 @@ defmacro when (cond body):
 macroexpand-1('(when t prn("hello")))
 ```
 
-### 4.4 Structs & Multimethods
+---
+
+## Chapter 6: Polymorphism (Structs & Multimethods)
+
 Records are defined via `defstruct`. Custom type polymorphism is supported via `defmulti` and `defmethod`.
 
 #### Alcove (Lisp)
@@ -241,7 +228,7 @@ Records are defined via `defstruct`. Custom type polymorphism is supported via `
 <!-- exec: adder -->
 ```
 defstruct point x y
-setf p (point 3 4)
+p = point(3 4)
 point-x p
 point? p
 
@@ -256,40 +243,21 @@ greet(42)
 
 ---
 
-## Chapter 5: Advanced Systems
+## Chapter 7: High-Performance JIT Compiler
 
-### 5.1 Stateful Generators
-Generators provide stateful yield-style lazy sequence iteration.
+The VM contains an integrated JIT compiler that generates native instructions (AMD64/ARM64) at runtime.
+It accelerates recursion patterns like Ackerman loops, simple step loops, and Fibonacci layouts:
+*   **W^X Compliance**: Pages are mapped Write-only during compilation, then switched to Read/Execute before invocation.
+*   **Fast Call paths**: Skips frame creation overhead for tight numeric loops.
 
-#### Alcove (Lisp)
-<!-- exec: alcove -->
-```
-(setf g (gen-range 1 5))
-(gen-next! g)
-(gen-next! g)
-```
+---
 
-#### Adder
-<!-- exec: adder -->
-```
-g = gen-range(1 5)
-gen-next!(g)
-gen-next!(g)
-```
+## Chapter 8: Systems Integration & FFI
 
-### 5.2 JSON Serialization
-JSON encoding and decoding is built-in.
+### 8.1 Foreign Function Interface (FFI)
+Alcove supports loading shared libraries (.so / .dylib) dynamically, mapping C structures, and exporting Lisp procedures as C callback function pointers.
 
-#### Alcove (Lisp)
-<!-- exec: alcove -->
-```
-(json-encode (hash-map "name" "alcove" "score" 99))
-(json-decode "{\"name\":\"alcove\",\"score\":99}")
-```
-
-#### Adder
-<!-- exec: adder -->
-```
-json-encode(hash-map("name" "adder" "score" 99))
-json-decode("{\"name\":\"adder\",\"score\":99}")
-```
+### 8.2 Safe Mode Sandbox
+Invoking `./alcove --safe` enables a restrictive sandbox:
+*   Blocks all raw filesystem and network calls.
+*   Bypasses to unsafe builtins (like FFI or shell command gates) throw an immediate security exception.
