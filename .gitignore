@@ -32,6 +32,19 @@ db.dump
 *.db
 .init.alc
 .init.adr
+# The root init files are project documentation fixtures, not scratch.
+!/.init.alc
+!/.init.adr
+
+# The Alcove & Adder book lives in its own repo (alcove-adder-book); keep its
+# source, build script, generated outputs, and cover assets out of this tree.
+/docs/book_template.md
+/docs/alcove-adder-book*
+/docs/book.css
+/docs/preamble.tex
+/docs/adder.png
+/docs/adder-cover.png
+/tools/build_book.py
 
 # FFI example .so (built from .c on demand).
 ffi-examples/libmylib.so
