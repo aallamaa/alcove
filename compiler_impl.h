@@ -1759,9 +1759,17 @@ static inline int isindexable(exp_t *e) {
 static inline int iskeyed(exp_t *e) {
   return isdict(e) || isset(e) || ishamt(e);
 }
+/* List-like: a non-empty pair chain (EXP_PAIR) or a deque (EXP_LIST). These
+   answer (lst i) as nth — 0-based, nil out of range — so a list reads
+   index-style like a vector, just O(n). nil is excluded on purpose: calling
+   nil as a function stays a loud error (it is almost always a bug), rather
+   than silently indexing the empty list to nil. */
+static inline int islistlike(exp_t *e) {
+  return e != NIL_EXP && (ispair(e) || islist(e));
+}
 /* Any value that supports (container arg) as a read. */
 static inline int iscallable_container(exp_t *e) {
-  return isindexable(e) || iskeyed(e);
+  return isindexable(e) || iskeyed(e) || islistlike(e);
 }
 /* Apply a callable container to one already-evaluated argument, consuming
    `arg`'s ref. Indexable -> element by integer index; keyed -> value/member

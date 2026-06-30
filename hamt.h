@@ -586,6 +586,30 @@ exp_t *hamtcontainspcmd(exp_t *e, env_t *env) {
    absent), set returns the member (nil if absent) — Clojure's (m k) / (s e).
    Returns an owned result or an error exp. */
 static exp_t *container_apply(exp_t *c, exp_t *arg, env_t *env) {
+  if (islistlike(c)) {
+    /* (lst i) is sugar for (nth lst i): 0-based, nil out of range. Mirrors
+       nthcmd's walk exactly (coll_to_list normalizes a deque; for a pair list
+       it just adds a ref). A non-number index is the same error as a vector. */
+    if (!isnumber(arg) && !isfloat(arg)) {
+      unrefexp(arg);
+      return error(ERROR_NUMBER_EXPECTED, c, env,
+                   "index: arg must be a number");
+    }
+    int64_t i = isnumber(arg) ? FIX_VAL(arg) : (int64_t)arg->f;
+    unrefexp(arg);
+    if (i < 0)
+      return refexp(NIL_EXP);
+    exp_t *seq = coll_to_list(c);
+    exp_t *cur = seq;
+    while (i > 0 && ispair(cur) && cur->next) {
+      cur = cur->next;
+      i--;
+    }
+    exp_t *r = (i == 0 && ispair(cur) && cur->content) ? refexp(cur->content)
+                                                       : refexp(NIL_EXP);
+    unrefexp(seq);
+    return r;
+  }
   if (isindexable(c)) {
     if (!isnumber(arg) && !isfloat(arg)) {
       unrefexp(arg);

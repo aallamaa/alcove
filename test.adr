@@ -6136,6 +6136,24 @@ assert "compiled keyed: hamt" (_ci_lookup _ci_h "x") 10
 
 assert "compiled keyed: set" (_ci_lookup _ci_set 3) 3
 
+setf _ci_l (list 10 20 30 40)
+
+assert "list callable index" (_ci_l 2) 30
+
+assert "list callable == nth" (_ci_l 2) (nth _ci_l 2)
+
+assert "list callable oob -> nil" (_ci_l 99) nil
+
+assert "list literal head" ((list 5 6 7) 1) 6
+
+assert "deque callable index" ((deque 5 6 7) 2) 7
+
+assert "compiled list index" (_ci_lookup _ci_l 0) 10
+
+assert "list index non-number errs" (error? (_ci_l "x")) t
+
+assert "number head still errors" (error? (5 6)) t
+
 assert "eq same fixnum" (eq 3 3) t
 
 assert "eq different fixnum" (eq 3 4) nil
