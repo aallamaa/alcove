@@ -49,6 +49,11 @@ class Str:
         self.raw = raw      # bytes between the quotes, escapes intact
 
 
+class Bracket(list):
+    """A `[..]` bracket-lambda form: reads/traverses like a list but emits
+    with square brackets in Adder, mirroring alcove's `[body]` shorthand."""
+
+
 class Reader:
     def __init__(self, s):
         self.s = s
@@ -87,6 +92,8 @@ class Reader:
         c = self.s[self.i]
         if c == "(":
             return self.lst(")")
+        if c == "[":
+            return Bracket(self.lst("]"))   # bracket lambda
         if c == ")":
             raise SyntaxError(f"unexpected ) at {self.i}")
         if c == '"':
@@ -235,6 +242,8 @@ def is_quote(f):
 def expr(f):
     """Render `f` in argument position: lists keep their parens, a
     (quote x) collapses to 'x."""
+    if isinstance(f, Bracket):
+        return "[" + " ".join(expr(x) for x in f) + "]"
     if not isinstance(f, list):
         return tok(f)
     if len(f) == 0:
@@ -248,6 +257,9 @@ def stmt(f, indent, lines):
     """Render `f` in statement position (top level or a block child):
     drop the outer parens, open a `:`-block for body-bearing forms."""
     pad = " " * indent
+    if isinstance(f, Bracket):
+        lines.append(pad + expr(f))
+        return
     if not isinstance(f, list):
         lines.append(pad + tok(f))
         return
@@ -320,12 +332,22 @@ def convert(src):
 
 
 def main(argv):
-    if len(argv) < 2:
-        sys.stderr.write("usage: python3 alc2adr.py in.alc [-o out.adr]\n")
-        return 2
-    out = argv[argv.index("-o") + 1] if "-o" in argv else None
-    with open(argv[1]) as fh:
-        result = convert(fh.read())
+    args = argv[1:]
+    out = args[args.index("-o") + 1] if "-o" in args else None
+    if "-o" in args:
+        i = args.index("-o")
+        del args[i:i + 2]
+    inp = args[0] if args else None
+    # No file (or "-"): read Alcove from stdin when piped; otherwise show usage.
+    if inp is None or inp == "-":
+        if sys.stdin.isatty():
+            sys.stderr.write("usage: python3 alc2adr.py in.alc [-o out.adr]\n"
+                             "       (or pipe Alcove on stdin: ... | python3 alc2adr.py)\n")
+            return 2
+        result = convert(sys.stdin.read())
+    else:
+        with open(inp) as fh:
+            result = convert(fh.read())
     if out:
         open(out, "w").write(result)
     else:

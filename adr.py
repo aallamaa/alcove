@@ -69,6 +69,12 @@ class Str:
         self.raw = raw
 
 
+class Bracket(list):
+    """A `[..]` bracket-lambda form. Reads and traverses like a plain list
+    (so it nests anywhere a form may appear) but emits with square brackets,
+    matching alcove's `[body]` shorthand for `(fn (_) body)`."""
+
+
 # --- inline reader: one physical line of text -> list of forms -------------
 
 class LineReader:
@@ -130,6 +136,10 @@ class LineReader:
         if c == "(":
             self.i += 1
             return self.read_forms(terminator=")")
+        if c == "[":
+            # bracket lambda [body] -> kept as a [..] form (alcove shorthand)
+            self.i += 1
+            return Bracket(self.read_forms(terminator="]"))
         if c == '"':
             return self.read_string()
         if c == "'":
@@ -356,6 +366,8 @@ def atom_str(a):
 
 
 def flat(form):
+    if isinstance(form, Bracket):
+        return "[" + " ".join(flat(x) for x in form) + "]"
     if isinstance(form, list):
         return "(" + " ".join(flat(x) for x in form) + ")"
     return atom_str(form)
@@ -364,6 +376,8 @@ def flat(form):
 def fmt(form, indent=0):
     if not isinstance(form, list):
         return atom_str(form)
+    if isinstance(form, Bracket):  # short shorthand — never break across lines
+        return flat(form)
     one = flat(form)
     if len(one) + indent <= WIDTH and "\n" not in one:
         return one
@@ -391,15 +405,22 @@ def transpile(src):
 # --- cli -------------------------------------------------------------------
 
 def main(argv):
-    if len(argv) < 2:
-        print(__doc__.strip().split("Usage:")[1].strip(), file=sys.stderr)
-        return 2
-    inp = argv[1]
+    args = argv[1:]
     out = None
-    if "-o" in argv:
-        out = argv[argv.index("-o") + 1]
-    with open(inp) as f:
-        src = f.read()
+    if "-o" in args:
+        i = args.index("-o")
+        out = args[i + 1]
+        del args[i:i + 2]
+    inp = args[0] if args else None
+    # No file (or "-"): read Adder from stdin when piped; otherwise show usage.
+    if inp is None or inp == "-":
+        if sys.stdin.isatty():
+            print(__doc__.strip().split("Usage:")[1].strip(), file=sys.stderr)
+            return 2
+        src = sys.stdin.read()
+    else:
+        with open(inp) as f:
+            src = f.read()
     try:
         result = transpile(src)
     except SyntaxError as e:
