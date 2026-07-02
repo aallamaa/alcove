@@ -178,11 +178,16 @@ Together the repro is flat. Tests added under "20c" in test.alc.
 ## General reference cycles & the `(heap-stats)` leak audit (2026-06)
 
 The closure↔env 2-node cycle above is broken automatically
-(`env_break_self_cycle`). **Arbitrary** reference cycles are not — a cyclic
-list, a vector that contains itself, a callback that captures a dict that holds
-the callback, etc. Manual refcounting cannot reclaim them and they leak by
-design (alcove has **no tracing GC** — a settled non-goal). For long-running
-processes this is unbounded growth if the workload creates cycles.
+(`env_break_self_cycle`). **Arbitrary** reference cycles are not reclaimed by
+the refcounter — a cyclic list, a vector that contains itself, a callback that
+captures a dict that holds the callback, etc. There is still **no tracing GC**
+(a settled non-goal), but since 2026-07 the growth is no longer unbounded:
+**`(gc-cycles)`** (gc.h) is an on-demand trial-deletion collector that sweeps
+the calling thread's arena and reclaims container-threaded cycles explicitly,
+at zero cost to the hot paths. Its one deliberate gap is cycles threaded
+through closure captures (the callback↔dict shape): those are conservatively
+kept — break them by hand (nil the key) before dropping the last reference,
+or accept the leak and monitor with the audit below.
 
 `(heap-stats)` is the audit handle. It returns a property list for the calling
 thread's `exp_t` arena:

@@ -8,6 +8,30 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **`(gc-cycles)` — on-demand cycle collector** (new fragment `gc.h`).
+  Reference cycles (only constructible through the mutating containers:
+  `assoc!`, `push-right!`/`push-left!`, `vec-set!`) previously leaked with no
+  recourse beyond a `(heap-stats)` audit. `(gc-cycles)` reclaims them
+  explicitly via whole-arena trial deletion and returns the number of cells
+  freed — with **zero cost on the alloc/refcount hot paths** (nothing is
+  buffered or tagged; no `exp_t` layout change). Anything the collector
+  cannot see (C/VM stack, envs, bytecode constants, the keyspace, other
+  threads) keeps its target alive: unknown = kept. Cycles threaded through
+  closure captures are conservatively retained. Per-thread arena; not
+  concurrency-safe — never call it from a `--threads` RESP callback.
+- **Adder/Alcove list-call sugar** — `(v i)` (Adder: `v i` / `v(i)`) on a
+  list or deque is sugar for `(nth v i)`, matching the other callable
+  containers (vector, dict, HAMT).
+
+### Fixed
+- **REPL echo of a cyclic container crashed the process** — `print_node` had
+  no recursion guard, so merely evaluating `(assoc! d "self" d)` at the REPL
+  overflowed the C stack printing the result. The printer is now depth-capped
+  (256, prints `...` beyond), covering pairs, vectors, dicts/sets, deques,
+  and HAMTs through the single entry point.
+- `adr.py` / `alc2adr.py` read stdin when no file is given and handle `[..]`
+  bracket lambdas (previously looped forever).
+
 - **Stream/Port File IO** — add buffered stream handle type `EXP_PORT` and builtins `open`/`close`/`write`/`eof?`/`port?`, and extend `read-line`/`flush` to accept an optional port.
 - **Observability** — make a server/embedded deployment debuggable.
   - **Structured error codes** — `(error-code e)` returns an error's
