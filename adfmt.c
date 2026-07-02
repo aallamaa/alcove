@@ -82,6 +82,7 @@ typedef struct node {
   char *tok;         /* atom: verbatim text (owned) */
   char open;         /* list: '(' or '[' */
   int vec, set, map; /* #[..], #{..}, {..} */
+  char comp; /* l/g/s/d: #l[..]/#g[..]/#s{..}/#d{..} comprehension sugar */
   int call;          /* glued call group f(args) */
   struct node **kid;
   int n, cap;
@@ -202,6 +203,22 @@ static node *read_one(lex *r) {
       r->i += 2;
       node *L = mk_list('{');
       L->set = 1;
+      read_forms(r, '}', L);
+      return L;
+    }
+    /* comprehension sugar (same split as the reader: [ for the
+       sequence-shaped lfor/gfor, { for the collection-shaped sfor/dfor) */
+    if ((d == 'l' || d == 'g') && r->i + 2 < r->n && r->s[r->i + 2] == '[') {
+      r->i += 3;
+      node *L = mk_list('[');
+      L->comp = d;
+      read_forms(r, ']', L);
+      return L;
+    }
+    if ((d == 's' || d == 'd') && r->i + 2 < r->n && r->s[r->i + 2] == '{') {
+      r->i += 3;
+      node *L = mk_list('{');
+      L->comp = d;
       read_forms(r, '}', L);
       return L;
     }
@@ -371,9 +388,12 @@ static void scan_line(const char *line, buf *out, int *depth, int *in_str,
         continue;
       }
       if (d == '[' || d == '{' ||
-          (d == 'b' && i + 2 < n && line[i + 2] == '"')) {
+          (d == 'b' && i + 2 < n && line[i + 2] == '"') ||
+          ((d == 'l' || d == 'g') && i + 2 < n && line[i + 2] == '[') ||
+          ((d == 's' || d == 'd') && i + 2 < n && line[i + 2] == '{')) {
         buf_putc(out, c);
-        continue; /* #-literal: keep, brackets counted normally */
+        continue; /* #-literal (incl. #l[/#g[/#s{/#d{ comprehensions):
+                     keep, brackets counted normally */
       }
       *cpos = (int)i;
       return; /* # comment */
@@ -712,6 +732,14 @@ static void emit_inline(const node *x, buf *o) {
     buf_putc(o, ')');
     return;
   }
+  if (x->comp) {
+    buf_putc(o, '#');
+    buf_putc(o, x->comp);
+    buf_putc(o, (x->comp == 'l' || x->comp == 'g') ? '[' : '{');
+    emit_seq(x->kid, 0, x->n, o);
+    buf_putc(o, (x->comp == 'l' || x->comp == 'g') ? ']' : '}');
+    return;
+  }
   if (x->vec) {
     buf_puts(o, "#[");
     emit_seq(x->kid, 0, x->n, o);
@@ -916,7 +944,7 @@ static void emit_stmt_line(const node *x, buf *o) {
     return;
   }
   if (x->is_list && x->open == '(' && !x->call && !x->vec && !x->set &&
-      !x->map) {
+      !x->map && !x->comp) {
     if (x->n == 0) {
       buf_puts(o, "()");
       return;
