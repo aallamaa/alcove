@@ -104,6 +104,7 @@ pretty-printer, the debugger, the REPL editing builtins, and `main`.
 | `json.h` | JSON encode/decode |
 | `deque.h` | doubly-linked deque (`EXP_LIST`) ops |
 | `blob.h` | binary-safe byte blob (`EXP_BLOB`) ops |
+| `gc.h` | `(gc-cycles)`: on-demand trial-deletion cycle collector (zero hot-path cost; walks pairs/dicts/sets/deques/gen-vectors, unwalked types are conservative roots) |
 | `epoch.c` | epoch-based reclamation for the lock-free keyspace |
 | `lfkv.c` | lock-free keyspace implementation |
 | `repl_builtins.h` | Lisp-facing REPL editing, diagnostics (check-syntax), and key-binding builtins |

@@ -1068,6 +1068,8 @@ exp_t *withmemlimitcmd(exp_t *e, env_t *env);
 extern const char doc_with_memory_limit[];
 exp_t *heapstatscmd(exp_t *e, env_t *env);
 extern const char doc_heap_stats[];
+exp_t *gccyclescmd(exp_t *e, env_t *env); /* gc.h */
+extern const char doc_gc_cycles[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);

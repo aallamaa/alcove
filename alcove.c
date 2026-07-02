@@ -484,6 +484,7 @@ lispProc lispProcList[] = {
     LISPCMD("with-time-limit", withtimelimitcmd, doc_with_time_limit),
     LISPCMD("with-memory-limit", withmemlimitcmd, doc_with_memory_limit),
     LISPCMD("heap-stats", heapstatscmd, doc_heap_stats),
+    LISPCMD("gc-cycles", gccyclescmd, doc_gc_cycles),
     /* observability (builtins_log.h) */
     LISPCMD("error-code", errorcodecmd, doc_error_code),
     LISPCMD("log!", logemitcmd, doc_log_emit),
@@ -1286,7 +1287,15 @@ inline exp_t *refexp(exp_t *e) {
    freed exp_t's `next` pointer as the freelist link — safe because
    unrefexp recursively releases the original next before this point.
    __thread: per-shard worker, no cross-thread alloc traffic. On a
-   single-threaded run the TLS slot collapses to one backing copy. */
+   single-threaded run the TLS slot collapses to one backing copy.
+
+   INVARIANT (safety, not perf): the per-thread arena + freelist are
+   intentionally never reclaimed — chunks are process-lived (no tracing GC,
+   see exp_bump_next below) and the RESP reactor pool is fixed-size and
+   spawned once, so no thread exit ever orphans a freelist. Sound only as
+   long as reactor threads live for the whole process. If dynamic worker
+   threads are ever added, drain this freelist + free the chunks at thread
+   exit or it becomes a genuine per-thread leak. */
 static ALCOVE_TLS exp_t *exp_freelist = NULL;
 
 /* Bump-allocator for fresh exp_t when the free-list is empty. calloc(1,
@@ -1298,6 +1307,12 @@ static ALCOVE_TLS exp_t *exp_freelist = NULL;
 #define EXP_BUMP_CHUNK 256
 static ALCOVE_TLS exp_t *exp_bump_next = NULL;
 static ALCOVE_TLS int exp_bump_left = 0;
+/* Registry of every chunk base pointer, appended on the rare chunk-alloc
+   path. This is what makes the arena ENUMERABLE — (gc-cycles) in gc.h
+   walks it to visit every cell without needing a root set. Same TLS
+   model as the arena: per-thread bases, per-thread collection. */
+static ALCOVE_TLS exp_t **exp_chunk_bases = NULL;
+static ALCOVE_TLS int64_t exp_chunk_cap = 0;
 /* g_exp_chunks (the arena high-water backing heap-stats + the memory budget) is
    declared earlier, ahead of budget_check. */
 
@@ -1663,6 +1678,16 @@ static inline exp_t *make_nil() {
         oom_raise(); /* was an unchecked NULL deref → segfault on exp_t OOM */
       exp_bump_left = EXP_BUMP_CHUNK;
       g_exp_chunks++; /* rare path: per-chunk, not per-alloc */
+      if (g_exp_chunks > exp_chunk_cap) {
+        int64_t ncap = exp_chunk_cap ? exp_chunk_cap * 2 : 64;
+        exp_t **nb =
+            (exp_t **)realloc(exp_chunk_bases, (size_t)ncap * sizeof *nb);
+        if (!nb)
+          oom_raise();
+        exp_chunk_bases = nb;
+        exp_chunk_cap = ncap;
+      }
+      exp_chunk_bases[g_exp_chunks - 1] = exp_bump_next;
     }
     nil_exp = exp_bump_next++;
     exp_bump_left--;
@@ -7427,6 +7452,9 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
 #include "deque.h"
 /* blob (EXP_BLOB) ops live in a dedicated #included fragment. */
 #include "blob.h"
+/* (gc-cycles) on-demand cycle collector — needs the container internals
+   (dict_t, alc_list_t, vec accessors) included above. */
+#include "gc.h"
 
 /* Epoch-based reclamation for the lock-free keyspace (LF-1). Included
    here so it can see ALCOVE_TLS and any other build-time toggles. */

@@ -4715,6 +4715,40 @@
 (assert "log-level restored to :info"        (log-level) :info)
 
 ;; ====================================================================
+;; (gc-cycles) — on-demand trial-deletion cycle collector (gc.h). Cycles
+;; are only constructible through the mutating containers; the collector
+;; must reclaim them, keep everything reachable, and be idempotent.
+;; The suite itself plants cycles on purpose (the 500 vector self-cycles at
+;; the heap-stats leak test above) — the first call must reclaim them all.
+(assert-true "gc-cycles reclaims the suite's deliberate leaks (500+ cells)"
+             (>= (gc-cycles) 500))
+(assert "gc-cycles on a clean heap frees nothing" (gc-cycles) 0)
+(assert "gc-cycles reclaims a dict self-cycle"
+        (do (let ((d (hash-map))) (assoc! d "self" d)) (gc-cycles)) 1)
+(assert "gc-cycles reclaims a mutual dict cycle"
+        (do (let ((d1 (hash-map)) (d2 (hash-map)))
+              (assoc! d1 "x" d2) (assoc! d2 "y" d1))
+            (gc-cycles)) 2)
+(assert "gc-cycles reclaims a deque self-cycle"
+        (do (let ((q (deque 1 2))) (push-right! q q)) (gc-cycles)) 1)
+(assert "gc-cycles reclaims a heterogeneous vector self-cycle"
+        (do (let ((v (vector 1 "a" nil))) (vec-set! v 2 v)) (gc-cycles)) 1)
+(assert "gc-cycles reclaims a dict<->deque chain cycle"
+        (do (let ((d (hash-map)) (q (deque)))
+              (push-right! q d) (assoc! d "q" q))
+            (gc-cycles)) 2)
+(setf _gc_keep (list 100 200 300))
+(assert "gc-cycles frees a cycle holding globally reachable data"
+        (do (let ((d (hash-map)))
+              (assoc! d "self" d) (assoc! d "shared" _gc_keep))
+            (gc-cycles)) 1)
+(assert "globally reachable data survives the sweep intact"
+        _gc_keep (list 100 200 300))
+(assert "gc-cycles is idempotent" (gc-cycles) 0)
+(assert "allocation after gc-cycles reuses the freelist cleanly"
+        (do (gc-cycles) (length (list 1 2 3 4 5))) 5)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner
