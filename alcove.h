@@ -1083,6 +1083,14 @@ exp_t *weakgetcmd(exp_t *e, env_t *env);
 extern const char doc_weak_get[];
 exp_t *weakpcmd(exp_t *e, env_t *env);
 extern const char doc_weakp[];
+exp_t *lforcmd(exp_t *e, env_t *env); /* comprehensions.h */
+extern const char doc_lfor[];
+exp_t *sforcmd(exp_t *e, env_t *env);
+extern const char doc_sfor[];
+exp_t *dforcmd(exp_t *e, env_t *env);
+extern const char doc_dfor[];
+exp_t *gforcmd(exp_t *e, env_t *env);
+extern const char doc_gfor[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);

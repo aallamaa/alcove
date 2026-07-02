@@ -4819,6 +4819,39 @@
 (assert "odd errors on a non-integer" (error-code (try (odd "x") (fn (er) er))) 'illegal-value)
 
 ;; ====================================================================
+;; The comprehension family (comprehensions.h): lfor (list), sfor (set),
+;; dfor (hash-map), gfor (lazy generator). Positional Hy-flavored clauses:
+;; (Xfor var coll [pred] expr...) — omit pred to keep every element.
+(assert "lfor with a filter"        (lfor x (range 0 10) (odd x) (* x x)) (list 1 9 25 49 81))
+(assert "lfor without a filter"     (lfor x (range 0 5) (* x 10)) (list 0 10 20 30 40))
+(assert "lfor over the empty list"  (lfor x nil (* x x)) nil)
+(assert "lfor keeps nil elements"   (lfor x (list 1 nil 3) t x) (list 1 nil 3))
+(assert "lfor nests (inner shadows cleanly)"
+        (lfor x (range 0 3) (lfor y (range 0 3) (* x y)))
+        (list (list 0 0 0) (list 0 1 2) (list 0 2 4)))
+(assert "lfor refuses a reserved loop var"
+        (error-code (try (lfor seq (range 0 3) seq) (fn (er) er))) 'illegal-value)
+(assert "lfor coll must be a list"
+        (error-code (try (lfor x 42 x) (fn (er) er))) 'illegal-value)
+(assert "lfor propagates a body error"
+        (error-code (try (lfor x (range 0 3) (/ 1 0)) (fn (er) er))) 'div-by-zero)
+(assert "sfor collapses duplicates" (count (sfor x (list 1 2 2 3 3 3) t (* x x))) 3)
+(assert-true "sfor result is a set with the right members"
+             (let ((s (sfor x (list 1 2 3) t (* x x))))
+               (and (set-has? s 1) (set-has? s 4) (set-has? s 9) (no (set-has? s 2)))))
+(assert "dfor builds entries"       (get (dfor w (list "ada" "bob") w (length w)) "ada") 3)
+(assert "dfor with a filter"        (count (dfor x (range 0 6) (odd x) (str x) (* x x))) 3)
+(assert "dfor key type errors"
+        (error-code (try (dfor x (range 0 3) (list 1) x) (fn (er) er))) 'illegal-value)
+(assert "gfor is lazy: next! pulls one" (next! (gfor x (range 0 10) (odd x) (* x x))) 1)
+(assert "gfor collects like lfor"
+        (collect! (gfor x (range 0 10) (odd x) (* x x))) (list 1 9 25 49 81))
+(assert "gfor without a filter"
+        (collect! (gfor x (range 0 4) (+ x 100))) (list 100 101 102 103))
+(assert "lfor big input stays iterative"
+        (lfor x (range 0 100001) (is 0 (mod x 50000)) x) (list 0 50000 100000))
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner

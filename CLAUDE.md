@@ -106,6 +106,7 @@ pretty-printer, the debugger, the REPL editing builtins, and `main`.
 | `blob.h` | binary-safe byte blob (`EXP_BLOB`) ops |
 | `gc.h` | `(gc-cycles)`: on-demand trial-deletion cycle collector (zero hot-path cost; walks pairs/dicts/sets/deques/gen-vectors, unwalked types are conservative roots) |
 | `weak.h` | weak references (`EXP_WEAK`): `(weak v)`/`(weak-get w)`/`(weak? x)`, TLS target→chain registry, free-path hooks (cells null on target free) |
+| `comprehensions.h` | the `lfor`/`sfor`/`dfor`/`gfor` comprehension family (shared eager driver + gfor's synthesized generator pipeline) |
 | `epoch.c` | epoch-based reclamation for the lock-free keyspace |
 | `lfkv.c` | lock-free keyspace implementation |
 | `repl_builtins.h` | Lisp-facing REPL editing, diagnostics (check-syntax), and key-binding builtins |

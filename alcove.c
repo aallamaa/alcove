@@ -511,6 +511,10 @@ lispProc lispProcList[] = {
     LISPCMD_TAIL("match", matchcmd, doc_match),
     LISPCMD("for", forcmd, doc_for),
     LISPCMD("each", eachcmd, doc_each),
+    LISPCMD("lfor", lforcmd, doc_lfor),
+    LISPCMD("sfor", sforcmd, doc_sfor),
+    LISPCMD("dfor", dforcmd, doc_dfor),
+    LISPCMD("gfor", gforcmd, doc_gfor),
     LISPCMD_TAIL("for-gen", forgencmd, doc_forgen),
     LISPCMD_TAIL("for-each!", forgencmd, doc_forgen), /* canonical !-suffix */
     LISPCMD_TAIL("let", letcmd, doc_let),
@@ -7427,6 +7431,9 @@ static exp_t *alc_cstr_to_key(const char *k) {
 
 /* hash-set (EXP_SET) ops live in a dedicated #included fragment (on dict.h). */
 #include "set.h"
+/* The lfor/sfor/dfor/gfor comprehension family — needs the dict/set
+   constructors and alc_key_to_cstr included/defined above. */
+#include "comprehensions.h"
 
 /* HAMT ops + builtins live in a dedicated #included fragment. */
 #include "hamt.h"

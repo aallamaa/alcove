@@ -22,6 +22,13 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 - **Adder/Alcove list-call sugar** — `(v i)` (Adder: `v i` / `v(i)`) on a
   list or deque is sugar for `(nth v i)`, matching the other callable
   containers (vector, dict, HAMT).
+- **Comprehensions** — the Hy-flavored positional family, in both dialects:
+  `(lfor x (range 0 10) (odd x) (* x x))` → `(1 9 25 49 81)`. `lfor` builds
+  a list, `sfor` a set, `dfor` a hash-map (`(dfor var coll [pred] kexpr
+  vexpr)`), and `gfor` the lazy generator twin (sugar over
+  `map!`/`filter!`/`iter!` — nothing runs until pulled). The predicate
+  clause is optional everywhere; body errors propagate; the loop variable
+  respects the reserved-name check.
 - **Weak references** — `(weak v)` returns a weak cell that does NOT keep
   `v` alive; `(weak-get w)` returns the target while it has strong
   references and `nil` after it is freed (including when freed by the
