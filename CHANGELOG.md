@@ -87,6 +87,14 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   bytes — mirroring the guard `json-encode` already had (`JS_MAX_DEPTH`).
 - `adr.py` / `alc2adr.py` read stdin when no file is given and handle `[..]`
   bracket lambdas (previously looped forever).
+- **Error classes were lost across compiled calls** — the VM blanket-raised
+  `illegal-value` for every runtime error with the same *message* the AST
+  tier uses, so the divergence was invisible to the output-comparing equiv
+  sweep while `(error-code e)` dispatch silently broke for any error
+  crossing a compiled function call (`div-by-zero` arrived as
+  `illegal-value`, arity errors weren't `missing-parameter`, vector index
+  errors weren't `index-out-of-range`). The VM now raises the same class
+  the AST does at each site; tier-parity tests pin all four classes.
 - **`defmacro` accepted reserved names as parameters** — `def`/`let`/`each`
   refuse them loudly, but `(defmacro m (var seq cond body) ...)` was
   accepted silently and the body's `,seq`/`,cond` unquotes resolved to the

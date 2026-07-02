@@ -2133,9 +2133,15 @@ tail_reentry:
       g_err_col = _ec;                                                         \
     }                                                                          \
   } while (0)
-#define RUNTIME_ERR(msg)                                                       \
+/* RUNTIME_ERR_C carries the machine-readable error CLASS. The class must
+   match what the AST tier raises for the same failure (div-by-zero,
+   missing-parameter, index-out-of-range, ...) — handlers dispatch on
+   (error-code e), and the equiv sweep compares printed OUTPUT, so a code
+   divergence between tiers is invisible to it (this hid the div-by-zero
+   class turning into illegal-value through every compiled call). */
+#define RUNTIME_ERR_C(errnum, msg)                                             \
   do {                                                                         \
-    exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, msg);                    \
+    exp_t *_err = error(errnum, fn, env, msg);                                 \
     RUNTIME_ERR_LOC;                                                           \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
@@ -2144,11 +2150,13 @@ tail_reentry:
       unrefexp(fn);                                                            \
     return vm_unwind_handlers(_err, handler_base);                             \
   } while (0)
+#define RUNTIME_ERR(msg) RUNTIME_ERR_C(ERROR_ILLEGAL_VALUE, msg)
 /* Like RUNTIME_ERR but with two printf args — for arity errors, so the VM
-   wording matches the AST path's "too few/many arguments to NAME". */
+   wording matches the AST path's "too few/many arguments to NAME"
+   (class: missing-parameter, same as the AST arity path). */
 #define RUNTIME_ERR_FMT(fmt, a1, a2)                                           \
   do {                                                                         \
-    exp_t *_err = error(ERROR_ILLEGAL_VALUE, fn, env, fmt, a1, a2);            \
+    exp_t *_err = error(ERROR_MISSING_PARAMETER, fn, env, fmt, a1, a2);        \
     RUNTIME_ERR_LOC;                                                           \
     int _i;                                                                    \
     for (_i = 0; _i < sp; _i++)                                                \
@@ -2578,7 +2586,7 @@ l_div: {
   if (isnumber(a) && isnumber(b)) {
     int64_t bb = FIX_VAL(b);
     if (bb == 0)
-      RUNTIME_ERR("Illegal division by 0");
+      RUNTIME_ERR_C(ERROR_DIV_BY0, "Illegal division by 0");
     PUSH(MAKE_FIX(FIX_VAL(a) / bb));
   } else if (isrational(a) || isdecimal(a) || isrational(b) || isdecimal(b)) {
     /* exact tower division: defer to the AST builtin (VM == AST). */
@@ -2591,7 +2599,7 @@ l_div: {
     COERCE_TO_DOUBLE(a, da, "Illegal value in /");
     COERCE_TO_DOUBLE(b, db, "Illegal value in /");
     if (db == 0)
-      RUNTIME_ERR("Illegal division by 0");
+      RUNTIME_ERR_C(ERROR_DIV_BY0, "Illegal division by 0");
     PUSH(make_floatf(da / db));
   }
   NEXT;
@@ -2605,7 +2613,7 @@ l_mod: {
   if (isnumber(a) && isnumber(b)) {
     int64_t bb = FIX_VAL(b);
     if (bb == 0)
-      RUNTIME_ERR(ERR_MODULO_BY_ZERO);
+      RUNTIME_ERR_C(ERROR_DIV_BY0, ERR_MODULO_BY_ZERO);
     int64_t va = FIX_VAL(a);
     PUSH(MAKE_FIX(va - (va / bb) * bb));
   } else {
@@ -2613,7 +2621,7 @@ l_mod: {
     COERCE_TO_DOUBLE(a, da, "Illegal value in mod");
     COERCE_TO_DOUBLE(b, db, "Illegal value in mod");
     if (db == 0.0)
-      RUNTIME_ERR(ERR_MODULO_BY_ZERO);
+      RUNTIME_ERR_C(ERROR_DIV_BY0, ERR_MODULO_BY_ZERO);
     PUSH(make_floatf(fmod(da, db)));
   }
   NEXT;
@@ -3116,7 +3124,7 @@ l_vec_ref: {
   if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(iexp);
     unrefexp(vexp);
-    RUNTIME_ERR("vec-ref: index out of range");
+    RUNTIME_ERR_C(ERROR_INDEX_OUT_OF_RANGE, "vec-ref: index out of range");
   }
   exp_t *r = vec_get_boxed(vexp, i);
   unrefexp(iexp);
@@ -3138,7 +3146,7 @@ l_vec_set: {
     unrefexp(valexp);
     unrefexp(iexp);
     unrefexp(vexp);
-    RUNTIME_ERR("vec-set!: index out of range");
+    RUNTIME_ERR_C(ERROR_INDEX_OUT_OF_RANGE, "vec-set!: index out of range");
   }
   /* Push the returned value before vec_set_boxed consumes valexp. */
   exp_t *r = refexp(valexp);

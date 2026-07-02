@@ -7539,6 +7539,27 @@ defmacro _m_ok (a b):
 
 assert "defmacro with clean params still works" (_m_ok 2 3) 5
 
+def _ec_div ():
+  / 1 0
+
+def _ec_two (a b):
+  a
+
+assert "div-by-zero class survives a compiled call" (try (_ec_div) (fn (e) (error-code e))):
+  'div-by-zero
+
+assert "mod-by-zero is div-by-zero through a call" (try ((fn () (mod 5 0))) (fn (e) (error-code e))):
+  'div-by-zero
+
+assert "arity class is missing-parameter through a call" (try (_ec_two 1) (fn (e) (error-code e))):
+  'missing-parameter
+
+assert "vec index class survives a compiled call" (try ((fn () (vec-ref (vec 2 0) 99))) (fn (e) (error-code e))):
+  'index-out-of-range
+
+assert "raised custom codes cascade through call layers" (try ((fn () (+ 1 ((fn () (raise 'deep "d")))))) (fn (e) (error-code e))):
+  'deep
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.
