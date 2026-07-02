@@ -22,6 +22,20 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 - **Adder/Alcove list-call sugar** — `(v i)` (Adder: `v i` / `v(i)`) on a
   list or deque is sugar for `(nth v i)`, matching the other callable
   containers (vector, dict, HAMT).
+- **Custom errors: `(raise 'code "msg")`** — raise a first-class error
+  whose `(error-code e)` is YOUR symbol (class `'user-error`; the one-arg
+  form `(raise "msg")` uses `'user-error` as the code). Propagates, is
+  caught by `try`, and dispatches like any builtin error.
+- **Validators: `(set-validator! obj fn)`** — the PRE-write veto layer
+  complementing `watch!`. Before each structural mutation `fn` runs as
+  `(fn obj op key new)` and rules on the proposed change: truthy allows,
+  nil rejects with a standard error, and an error value (e.g. from
+  `raise`) rejects with *that* error — so `(raise 'not-positive "score
+  must be > 0")` surfaces intact as the mutator's result. On rejection
+  the object is unchanged and watchers stay silent. One validator per
+  object (replace by setting again, remove with nil); deletions validate
+  too (dispatch on `op`); a validator mutating its own object is not
+  re-validated.
 - **Watches (Django-signals / Clojure add-watch flavor)** — `(watch! obj
   fn)` calls `(fn obj ev)` AFTER each structural mutation of a hash-map,
   deque, vector, or set (`assoc!`/`dissoc!`, `push-*!`/`pop-*!`,
@@ -73,6 +87,12 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   bytes — mirroring the guard `json-encode` already had (`JS_MAX_DEPTH`).
 - `adr.py` / `alc2adr.py` read stdin when no file is given and handle `[..]`
   bracket lambdas (previously looped forever).
+- **`defmacro` accepted reserved names as parameters** — `def`/`let`/`each`
+  refuse them loudly, but `(defmacro m (var seq cond body) ...)` was
+  accepted silently and the body's `,seq`/`,cond` unquotes resolved to the
+  BUILTINS, splicing `#<builtin>` into every expansion. Now the same
+  `CHECK_RESERVED_BIND` guard applies: "cannot bind reserved name 'seq' as
+  a macro parameter".
 - **`(odd x)` never evaluated its argument** — it read the raw form, so
   `(odd 1)` worked (a literal is already a fixnum) but `(odd k)` errored on
   every AST-path call, e.g. as a `when`/`if` condition inside `for`/`each`

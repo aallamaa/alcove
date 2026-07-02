@@ -31,8 +31,9 @@
  */
 
 typedef struct {
-  exp_t *target; /* key; NULL = empty, (exp_t *)-1 = tombstone */
-  exp_t *fns;    /* owned Lisp list of watcher closures, newest first */
+  exp_t *target;    /* key; NULL = empty, (exp_t *)-1 = tombstone */
+  exp_t *fns;       /* owned Lisp list of watcher closures, newest first */
+  exp_t *validator; /* owned single PRE-write validator, or NULL */
 } watch_slot_t;
 
 static ALCOVE_TLS watch_slot_t *watch_tab = NULL;
@@ -80,11 +81,12 @@ static int watch_grow(void) {
   return 1;
 }
 
-/* Register fn (owned ref transferred on success) as a watcher of target. */
-static int watch_insert(exp_t *target, exp_t *fn) {
+/* Find-or-create target's slot (empty watcher list, no validator).
+   NULL on OOM. */
+static watch_slot_t *watch_ensure_slot(exp_t *target) {
   if (!watch_cap || (watch_used + 1) * 10 > watch_cap * 7)
     if (!watch_grow())
-      return 0;
+      return NULL;
   size_t mask = watch_cap - 1, i = watch_hash(target) & mask;
   watch_slot_t *slot = NULL, *tomb = NULL;
   while (watch_tab[i].target) {
@@ -102,22 +104,35 @@ static int watch_insert(exp_t *target, exp_t *fn) {
       watch_used++;
     slot->target = target;
     slot->fns = NULL;
+    slot->validator = NULL;
   }
+  return slot;
+}
+
+/* Register fn (owned ref transferred on success) as a watcher of target. */
+static int watch_insert(exp_t *target, exp_t *fn) {
+  watch_slot_t *slot = watch_ensure_slot(target);
+  if (!slot)
+    return 0;
   exp_t *cell = make_node(fn); /* cell owns fn */
   cell->next = slot->fns;
   slot->fns = cell;
   return 1;
 }
 
-/* Drop a target's entire watcher list (unwatch! and the free paths). */
+/* Drop a target's entire watcher list AND validator (unwatch! and the
+   free paths). */
 static void watch_on_target_free(exp_t *target) {
   watch_slot_t *s = watch_find(target);
   if (!s)
     return;
   if (s->fns)
     unrefexp(s->fns);
+  if (s->validator)
+    unrefexp(s->validator);
   s->target = WATCH_TOMBSTONE;
   s->fns = NULL;
+  s->validator = NULL;
 }
 
 /* Build (:op opsym :key k :old o :new n) — every arg borrowed, NULL = nil. */
@@ -174,6 +189,38 @@ static exp_t *watch_notify(exp_t *obj, const char *op, exp_t *k, exp_t *old,
   return err;
 }
 
+/* PRE-write validation. Call ONLY when (obj->flags & FLAG_WATCHED) and
+   BEFORE mutating. The validator runs as (fn obj 'op 'key 'new) — key/new
+   NULL→nil — and rules on the PROPOSED change: an error return (e.g. from
+   (raise 'code "msg")) rejects the write with THAT error; nil rejects with
+   a standard one; anything truthy allows. Returns NULL to proceed, or the
+   rejection error (owned by the caller, returned as the mutator's result —
+   the write must NOT happen). Same reentrancy guard as watch_notify. */
+static exp_t *watch_validate(exp_t *obj, const char *op, exp_t *k, exp_t *nw,
+                             env_t *env) {
+  watch_slot_t *s = watch_find(obj);
+  if (!s || !s->validator)
+    return NULL;
+  obj->flags &= (unsigned short)~FLAG_WATCHED;
+  exp_t *call = make_node(refexp(s->validator));
+  call->next = make_node(refexp(obj));
+  call->next->next = make_node(make_quote(make_symbol((char *)op, strlen(op))));
+  call->next->next->next = make_node(make_quote(k ? refexp(k) : NIL_EXP));
+  call->next->next->next->next = make_node(make_quote(nw ? refexp(nw) : NIL_EXP));
+  exp_t *r = EVAL(call, env);
+  unrefexp(call);
+  if (watch_find(obj)) /* validator may have removed itself */
+    obj->flags |= FLAG_WATCHED;
+  if (r && iserror(r))
+    return r; /* the validator's own (possibly raised) error */
+  int ok = (r && r != NIL_EXP);
+  unrefexp(r);
+  if (ok)
+    return NULL;
+  return error(ERROR_ILLEGAL_VALUE, NULL, env, "%s: rejected by validator",
+               op);
+}
+
 /* ---- builtins ---- */
 
 const char doc_watch[] =
@@ -205,12 +252,23 @@ exp_t *watchcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_unwatch[] =
-    "(unwatch! obj) — remove ALL watchers from obj. Returns obj.";
+    "(unwatch! obj) — remove ALL watchers from obj (a validator installed "
+    "with set-validator! stays; remove it with (set-validator! obj nil)). "
+    "Returns obj.";
 exp_t *unwatchcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(obj);
   if (is_ptr(obj)) {
-    watch_on_target_free(obj);
-    obj->flags &= (unsigned short)~FLAG_WATCHED;
+    watch_slot_t *s = watch_find(obj);
+    if (s) {
+      if (s->fns) {
+        unrefexp(s->fns);
+        s->fns = NULL;
+      }
+      if (!s->validator) { /* nothing left: drop the slot + flag */
+        s->target = WATCH_TOMBSTONE;
+        obj->flags &= (unsigned short)~FLAG_WATCHED;
+      }
+    }
   }
   unrefexp(e);
   return obj;
@@ -219,7 +277,62 @@ exp_t *unwatchcmd(exp_t *e, env_t *env) {
 const char doc_watchedp[] = "(watched? obj) — t if obj has any watcher.";
 exp_t *watchedpcmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(obj);
-  exp_t *ret =
-      (is_ptr(obj) && (obj->flags & FLAG_WATCHED)) ? TRUE_EXP : NIL_EXP;
+  watch_slot_t *s = is_ptr(obj) ? watch_find(obj) : NULL;
+  exp_t *ret = (s && s->fns) ? TRUE_EXP : NIL_EXP;
   CLEAN_RETURN_1(obj, refexp(ret));
+}
+
+const char doc_set_validator[] =
+    "(set-validator! obj fn) — install fn as obj's single PRE-write "
+    "validator (replaces any previous one; nil removes it). Before each "
+    "structural mutation fn is called as (fn obj op key new) — op a symbol "
+    "('assoc!, 'push-right!, ...), key/new nil where the op has none — and "
+    "rules on the proposed change: return truthy to allow; nil to reject "
+    "with a standard error; or an error value — e.g. (raise 'not-positive "
+    "\"must be > 0\") — to reject with YOUR error. On rejection the mutator "
+    "returns the error and the object is UNCHANGED. Deletions (dissoc!, "
+    "pop-*!, set-del!) validate too (new is nil; dispatch on op). Runs "
+    "before any watch! watcher; a validator mutating its own obj is not "
+    "re-validated. Returns obj.";
+exp_t *setvalidatorcmd(exp_t *e, env_t *env) {
+  EVAL_ARG_2(obj, fn);
+  if (!is_ptr(obj) ||
+      !(isdict(obj) || islist(obj) || isvector(obj) || isset(obj)))
+    CLEAN_RETURN_2(
+        obj, fn,
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "set-validator!: obj must be a hash-map/deque/vector/set"));
+  int removing = (!fn || fn == NIL_EXP);
+  if (!removing &&
+      !(is_ptr(fn) && (fn->type == EXP_LAMBDA || fn->type == EXP_INTERNAL)))
+    CLEAN_RETURN_2(obj, fn,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "set-validator!: fn must be a function (or nil)"));
+  watch_slot_t *s = watch_find(obj);
+  if (removing) {
+    if (s && s->validator) {
+      unrefexp(s->validator);
+      s->validator = NULL;
+      if (!s->fns) { /* nothing left: drop the slot + flag */
+        s->target = WATCH_TOMBSTONE;
+        obj->flags &= (unsigned short)~FLAG_WATCHED;
+      }
+    }
+    unrefexp(fn);
+    unrefexp(e);
+    return obj;
+  }
+  if (!s)
+    s = watch_ensure_slot(obj);
+  if (!s)
+    CLEAN_RETURN_2(obj, fn,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "set-validator!: out of memory"));
+  if (s->validator)
+    unrefexp(s->validator);
+  s->validator = refexp(fn);
+  obj->flags |= FLAG_WATCHED;
+  unrefexp(fn);
+  unrefexp(e);
+  return obj;
 }

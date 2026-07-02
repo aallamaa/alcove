@@ -38,14 +38,66 @@ exp_t *errorcodecmd(exp_t *e, env_t *env) {
     a = EVAL(e->next->content,
              env); /* non-propagating: inspect, don't re-raise */
     if (a && iserror(a)) {
-      const char *nm = error_code_name((int)a->flags);
-      ret = make_symbol((char *)nm, (int)strlen(nm));
+      if (a->flags == ERROR_USER && a->meta) {
+        /* (raise 'code ...) carries its custom code symbol in meta. */
+        ret = refexp((exp_t *)a->meta);
+      } else {
+        const char *nm = error_code_name((int)a->flags);
+        ret = make_symbol((char *)nm, (int)strlen(nm));
+      }
     }
   }
   if (a)
     unrefexp(a);
   unrefexp(e);
   return ret;
+}
+
+const char doc_raise[] =
+    "(raise code msg) / (raise msg) — raise a CUSTOM error: an ordinary "
+    "first-class error value with class 'user-error, message msg, and "
+    "(error-code e) returning YOUR code symbol (one-arg form: 'user-error). "
+    "Propagates, is caught by (try ...), and dispatches like any builtin "
+    "error: (raise 'not-positive \"score must be > 0\").";
+exp_t *raisecmd(exp_t *e, env_t *env) {
+  exp_t *a1 = e->next ? EVAL(e->next->content, env) : NULL;
+  if (a1 && iserror(a1)) {
+    unrefexp(e);
+    return a1;
+  }
+  exp_t *a2 = NULL;
+  if (e->next && e->next->next) {
+    a2 = EVAL(e->next->next->content, env);
+    if (a2 && iserror(a2)) {
+      unrefexp(a1);
+      unrefexp(e);
+      return a2;
+    }
+  }
+  exp_t *codesym = NULL, *msg = NULL;
+  if (a2) { /* (raise code msg) */
+    codesym = a1;
+    msg = a2;
+  } else { /* (raise msg) */
+    msg = a1;
+  }
+  if (!msg || !(isstring(msg) || issymbol(msg)) ||
+      (codesym && !issymbol(codesym))) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                       "(raise 'code \"msg\") or (raise \"msg\")");
+    unrefexp(a1);
+    unrefexp(a2);
+    unrefexp(e);
+    return err;
+  }
+  exp_t *err = error(ERROR_USER, e, env, "%s", (char *)exp_text(msg));
+  if (codesym)
+    err->meta = (keyval_t *)refexp(codesym); /* owned; freed by ERROR_USER
+                                                gate in unrefexp_free */
+  unrefexp(a1);
+  unrefexp(a2);
+  unrefexp(e);
+  return err;
 }
 
 /* Buffer growth + value rendering reuse alcove.c's str_buf_put /

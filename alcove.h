@@ -199,7 +199,8 @@ enum {
   X(ERROR_MISSING_PARAMETER, , "missing-parameter")                            \
   X(ERROR_UNBOUND_VARIABLE, , "unbound-variable")                              \
   X(ERROR_NUMBER_EXPECTED, , "number-expected")                                \
-  X(ERROR_INDEX_OUT_OF_RANGE, , "index-out-of-range")
+  X(ERROR_INDEX_OUT_OF_RANGE, , "index-out-of-range")                          \
+  X(ERROR_USER, , "user-error") /* raise: custom code symbol OWNED in meta */
 enum {
 #define X(name, anchor, codename) name anchor,
   ALC_ERRORS(X)
@@ -1101,6 +1102,10 @@ exp_t *unwatchcmd(exp_t *e, env_t *env);
 extern const char doc_unwatch[];
 exp_t *watchedpcmd(exp_t *e, env_t *env);
 extern const char doc_watchedp[];
+exp_t *setvalidatorcmd(exp_t *e, env_t *env);
+extern const char doc_set_validator[];
+exp_t *raisecmd(exp_t *e, env_t *env); /* builtins_log.h */
+extern const char doc_raise[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);

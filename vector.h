@@ -432,6 +432,11 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
                          "vec-set!: index out of range"));
 
   int watched = (vexp->flags & FLAG_WATCHED) != 0;
+  if (watched) {
+    exp_t *verr = watch_validate(vexp, "vec-set!", iexp, valexp, env);
+    if (verr)
+      CLEAN_RETURN_3(vexp, iexp, valexp, verr); /* rejected: v unchanged */
+  }
   exp_t *old = watched ? vec_get_boxed(vexp, i) : NULL; /* owned */
   /* Refcount the return value before vec_set_boxed eats valexp's ref. */
   exp_t *ret = refexp(valexp);

@@ -7470,6 +7470,75 @@ unwatch! _w_v
 
 unwatch! _w_q
 
+assert "raise carries a custom code" (try (raise 'not-positive "must be > 0") (fn (er) (error-code er))):
+  'not-positive
+
+assert "raise carries the message" (try (raise 'not-positive "must be > 0") (fn (er) (error-message er))):
+  "must be > 0"
+
+assert "one-arg raise defaults to user-error" (try (raise "boom") (fn (er) (error-code er))):
+  'user-error
+
+assert-true "raised errors are ordinary error values" (error? (try (raise 'x "y") (fn (er) er)))
+
+setf _v_d (hash-map "score" 10)
+
+set-validator! _v_d (fn (o op k v) (if (is op 'assoc!) (if (and (number? v) (> v 0)) t (raise 'not-positive "score must be positive")) t))
+
+assoc! _v_d "score" 42
+
+assert "validator allows a valid write" (get _v_d "score") 42
+
+assert "validator rejects with the RAISED code" (try (assoc! _v_d "score" -5) (fn (er) (error-code er))):
+  'not-positive
+
+assert "rejected write leaves the object unchanged" (get _v_d "score") 42
+
+assert "validator dispatches on op (deletion allowed)" (do (dissoc! _v_d "score") (contains? _v_d "score")):
+  nil
+
+setf _v_q (deque)
+
+set-validator! _v_q (fn (o op k v) (isnt op 'pop-left!))
+
+push-right! _v_q 1
+
+assert "nil-return rejects with a standard error" (try (pop-left! _v_q) (fn (er) (error-code er))):
+  'illegal-value
+
+assert "other ops unaffected" (pop-right! _v_q) 1
+
+setf _v_w (hash-map)
+
+setf _v_seen 0
+
+watch! _v_w (fn (o ev) (setf _v_seen (+ _v_seen 1)))
+
+set-validator! _v_w (fn (o op k v) (number? v))
+
+assoc! _v_w "n" 7
+
+try (assoc! _v_w "s" "no") (fn (er) nil)
+
+assert "watchers fire for allowed, stay silent for vetoed" _v_seen 1
+
+unwatch! _v_w
+
+assert-true "unwatch! keeps the validator" (error? (try (assoc! _v_w "s2" "no") (fn (er) er)))
+
+set-validator! _v_w nil
+
+assoc! _v_w "s3" "now-fine"
+
+assert "removing the validator re-opens writes" (get _v_w "s3") "now-fine"
+
+assert-true "defmacro refuses a reserved parameter name" (error? (try (eval '(defmacro _m_bad (a seq) (quasiquote ((unquote a) (unquote seq))))) (fn (er) er)))
+
+defmacro _m_ok (a b):
+  quasiquote (+ (unquote a) (unquote b))
+
+assert "defmacro with clean params still works" (_m_ok 2 3) 5
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

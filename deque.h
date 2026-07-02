@@ -69,6 +69,15 @@ exp_t *dequecmd(exp_t *e, env_t *env) {
       unrefexp(e);                                                             \
       return v;                                                                \
     }                                                                          \
+    if (d->flags & FLAG_WATCHED) {                                             \
+      exp_t *verr = watch_validate(d, err_name, NULL, v, env);                 \
+      if (verr) {                                                              \
+        unrefexp(v);                                                           \
+        unrefexp(d);                                                           \
+        unrefexp(e);                                                           \
+        return verr; /* rejected: deque unchanged */                           \
+      }                                                                        \
+    }                                                                          \
     push_fn((alc_list_t *)d->ptr, v); /* takes ownership; v stays live */      \
     if (d->flags & FLAG_WATCHED) {                                             \
       exp_t *werr = watch_notify(d, err_name, NULL, NULL, v, env);             \
@@ -97,6 +106,14 @@ exp_t *dequecmd(exp_t *e, env_t *env) {
     }                                                                          \
     alc_list_t *l = (alc_list_t *)d->ptr;                                      \
     exp_t *ret = NIL_EXP;                                                      \
+    if ((d->flags & FLAG_WATCHED) && l->HEAD) {                                \
+      exp_t *verr = watch_validate(d, err_name, NULL, NULL, env);              \
+      if (verr) {                                                              \
+        unrefexp(d);                                                           \
+        unrefexp(e);                                                           \
+        return verr; /* rejected: deque unchanged */                           \
+      }                                                                        \
+    }                                                                          \
     if (l->HEAD) {                                                             \
       alc_listnode_t *n = l->HEAD;                                             \
       ret = n->val;                                                            \

@@ -206,6 +206,14 @@ exp_t *setaddbangcmd(exp_t *e, env_t *env) {
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "set-add!: unsupported element type"));
   }
+  if (s->flags & FLAG_WATCHED) {
+    exp_t *verr = watch_validate(s, "set-add!", NULL, v, env);
+    if (verr) {
+      unrefexp(stored);
+      free(ks);
+      CLEAN_RETURN_2(s, v, verr); /* rejected: set unchanged */
+    }
+  }
   set_get_keyval_dict((dict_t *)s->ptr, ks, stored);
   unrefexp(stored);
   free(ks);
@@ -222,6 +230,13 @@ const char doc_setdelbang[] =
 exp_t *setdelbangcmd(exp_t *e, env_t *env) {
   SET_VALUE_SETUP("set-del!")
   if (ks) {
+    if (s->flags & FLAG_WATCHED) {
+      exp_t *verr = watch_validate(s, "set-del!", NULL, v, env);
+      if (verr) {
+        free(ks);
+        CLEAN_RETURN_2(v, s, verr); /* rejected: set unchanged */
+      }
+    }
     del_keyval_dict((dict_t *)s->ptr, ks);
     free(ks);
     if (s->flags & FLAG_WATCHED) {

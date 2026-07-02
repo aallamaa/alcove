@@ -65,7 +65,11 @@ exp_t *assocbangcmd(exp_t *e, env_t *env) {
 
   int watched = (d->flags & FLAG_WATCHED) != 0;
   exp_t *old = NULL;
-  if (watched) { /* capture the overwritten value for the event's :old */
+  if (watched) {
+    exp_t *verr = watch_validate(d, "assoc!", k, v, env);
+    if (verr)
+      CLEAN_RETURN_3(k, v, d, verr); /* rejected: d unchanged */
+    /* capture the overwritten value for the event's :old */
     keyval_t *kv0 = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
     if (kv0 && kv0->val)
       old = refexp(kv0->val);
@@ -89,6 +93,9 @@ exp_t *dissocbangcmd(exp_t *e, env_t *env) {
     int watched = (d->flags & FLAG_WATCHED) != 0;
     exp_t *old = NULL;
     if (watched) {
+      exp_t *verr = watch_validate(d, "dissoc!", k, NULL, env);
+      if (verr)
+        CLEAN_RETURN_2(k, d, verr); /* rejected: d unchanged */
       keyval_t *kv0 = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
       if (kv0 && kv0->val)
         old = refexp(kv0->val);
