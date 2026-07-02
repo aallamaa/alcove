@@ -22,6 +22,23 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 - **Adder/Alcove list-call sugar** — `(v i)` (Adder: `v i` / `v(i)`) on a
   list or deque is sugar for `(nth v i)`, matching the other callable
   containers (vector, dict, HAMT).
+- **Watches (Django-signals / Clojure add-watch flavor)** — `(watch! obj
+  fn)` calls `(fn obj ev)` AFTER each structural mutation of a hash-map,
+  deque, vector, or set (`assoc!`/`dissoc!`, `push-*!`/`pop-*!`,
+  `vec-set!`, `set-add!`/`set-del!`); `ev` is a plist `(:op sym :key k
+  :old o :new n)` with the overwritten/removed value captured as `:old`
+  where the operation has one. Watchers stack (newest first); a watcher
+  error propagates as the mutator's result while the write persists; a
+  watcher mutating its own object does not re-fire; `(unwatch! obj)`
+  removes all watchers, `(watched? obj)` tests. Zero cost on unwatched
+  objects (one flag test in the mutator builtins — the same
+  FLAG+TLS-registry pattern as weak references); the bulk numeric vec ops
+  deliberately do not notify. Post-only by design — a veto layer
+  (`set-validator!`) can come later.
+- **Comprehension reader sugar** — `#l[…]`/`#g[…]` read as
+  `(lfor …)`/`(gfor …)` and `#s{…}`/`#d{…}` as `(sfor …)`/`(dfor …)` in
+  both dialects (the bracket mirrors the result shape, matching `#[`
+  vector vs `#{` set), e.g. `#l[x (range 0 10) (odd x) (* x x)]`.
 - **Comprehensions** — the Hy-flavored positional family, in both dialects:
   `(lfor x (range 0 10) (odd x) (* x x))` → `(1 9 25 49 81)`. `lfor` builds
   a list, `sfor` a set, `dfor` a hash-map (`(dfor var coll [pred] kexpr

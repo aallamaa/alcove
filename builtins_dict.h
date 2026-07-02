@@ -63,7 +63,21 @@ exp_t *assocbangcmd(exp_t *e, env_t *env) {
         k, d, v,
         error(ERROR_ILLEGAL_VALUE, NULL, env, "assoc!: unsupported key type"));
 
+  int watched = (d->flags & FLAG_WATCHED) != 0;
+  exp_t *old = NULL;
+  if (watched) { /* capture the overwritten value for the event's :old */
+    keyval_t *kv0 = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
+    if (kv0 && kv0->val)
+      old = refexp(kv0->val);
+  }
   set_get_keyval_dict((dict_t *)d->ptr, ks, v);
+  if (watched) {
+    exp_t *werr = watch_notify(d, "assoc!", k, old, v, env);
+    if (old)
+      unrefexp(old);
+    if (werr)
+      CLEAN_RETURN_3(k, v, d, werr);
+  }
   CLEAN_RETURN_2(k, v, d);
 }
 
@@ -71,8 +85,23 @@ const char doc_dissocbang[] =
     "(dissoc! d k) — delete key k from d in place; returns d.";
 exp_t *dissocbangcmd(exp_t *e, env_t *env) {
   DICT_KV_SETUP("dissoc!")
-  if (ks)
+  if (ks) {
+    int watched = (d->flags & FLAG_WATCHED) != 0;
+    exp_t *old = NULL;
+    if (watched) {
+      keyval_t *kv0 = set_get_keyval_dict((dict_t *)d->ptr, ks, NULL);
+      if (kv0 && kv0->val)
+        old = refexp(kv0->val);
+    }
     del_keyval_dict((dict_t *)d->ptr, ks);
+    if (watched) {
+      exp_t *werr = watch_notify(d, "dissoc!", k, old, NULL, env);
+      if (old)
+        unrefexp(old);
+      if (werr)
+        CLEAN_RETURN_2(k, d, werr);
+    }
+  }
   CLEAN_RETURN_1(k, d); /* d is not unref'd, it is returned */
 }
 

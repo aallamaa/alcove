@@ -209,6 +209,11 @@ exp_t *setaddbangcmd(exp_t *e, env_t *env) {
   set_get_keyval_dict((dict_t *)s->ptr, ks, stored);
   unrefexp(stored);
   free(ks);
+  if (s->flags & FLAG_WATCHED) {
+    exp_t *werr = watch_notify(s, "set-add!", NULL, NULL, v, env);
+    if (werr)
+      CLEAN_RETURN_2(v, s, werr);
+  }
   CLEAN_RETURN_1(v, s);
 }
 
@@ -219,6 +224,11 @@ exp_t *setdelbangcmd(exp_t *e, env_t *env) {
   if (ks) {
     del_keyval_dict((dict_t *)s->ptr, ks);
     free(ks);
+    if (s->flags & FLAG_WATCHED) {
+      exp_t *werr = watch_notify(s, "set-del!", NULL, v, NULL, env);
+      if (werr)
+        CLEAN_RETURN_2(v, s, werr);
+    }
   }
   CLEAN_RETURN_1(v, s);
 }

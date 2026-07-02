@@ -197,6 +197,8 @@ static void gc_release_edge(exp_t *child, void *ud) {
 static void gc_free_dead_cell(exp_t *e) {
   if (e->flags & FLAG_WEAK_REFERENT)
     weak_on_target_free(e); /* same contract as unrefexp_free's hook */
+  if (e->flags & FLAG_WATCHED)
+    watch_on_target_free(e);
   switch (e->type) {
   case EXP_DICT:
   case EXP_SET: {

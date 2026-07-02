@@ -4882,6 +4882,58 @@
         (error? (read-string-sexpr "#d[x (range 0 3) x x]")) t)
 
 ;; ====================================================================
+;; (watch! obj fn) — POST-modification hooks (watch.h). The watcher runs
+;; after the write with ev = (:op sym :key k :old o :new n); errors from a
+;; watcher propagate but the write persists; a watcher mutating its own
+;; object does not re-fire; unwatch! removes all watchers.
+(setf _w_evs nil)
+(setf _w_d (hash-map "score" 10))
+(watch! _w_d (fn (o ev) (setf _w_evs (cons ev _w_evs))))
+(assert "watched? after watch!"          (watched? _w_d) t)
+(assoc! _w_d "score" 20)
+(assert "assoc! event carries op/key/old/new"
+        (car _w_evs) (list ':op 'assoc! ':key "score" ':old 10 ':new 20))
+(dissoc! _w_d "score")
+(assert "dissoc! event carries the removed value as :old"
+        (car _w_evs) (list ':op 'dissoc! ':key "score" ':old 20 ':new nil))
+(unwatch! _w_d)
+(assert "watched? nil after unwatch!"    (watched? _w_d) nil)
+(assoc! _w_d "quiet" 1)
+(assert "no events after unwatch!"       (length _w_evs) 2)
+(setf _w_n 0)
+(setf _w_q (deque 1))
+(watch! _w_q (fn (o ev) (setf _w_n (+ _w_n 1))))
+(push-right! _w_q 2)
+(push-left! _w_q 0)
+(pop-right! _w_q)
+(pop-left! _w_q)
+(assert "deque push/pop all notify"      _w_n 4)
+(setf _w_v (vector 1 "a" nil))
+(watch! _w_v (fn (o ev) (setf _w_evs (cons ev _w_evs))))
+(vec-set! _w_v 1 99)
+(assert "vec-set! event has index key and old slot"
+        (car _w_evs) (list ':op 'vec-set! ':key 1 ':old "a" ':new 99))
+(setf _w_s (set 1 2))
+(watch! _w_s (fn (o ev) (setf _w_evs (cons ev _w_evs))))
+(set-add! _w_s 3)
+(assert "set-add! event carries :new"
+        (car _w_evs) (list ':op 'set-add! ':key nil ':old nil ':new 3))
+(setf _w_r (hash-map))
+(watch! _w_r (fn (o ev) (assoc! o "count" 999)))
+(assoc! _w_r "a" 1)
+(assert "watcher mutating its own object does not re-fire"
+        (get _w_r "count") 999)
+(setf _w_e (hash-map))
+(watch! _w_e (fn (o ev) (/ 1 0)))
+(assert-true "watcher error propagates as the mutator's result"
+             (error? (try (assoc! _w_e "k" 1) (fn (er) er))))
+(assert "the write persists despite the watcher error"
+        (get _w_e "k") 1)
+(assert "watch! rejects a non-container"
+        (error-code (try (watch! 42 (fn (o ev) nil)) (fn (er) er))) 'illegal-value)
+(unwatch! _w_e) (unwatch! _w_r) (unwatch! _w_s) (unwatch! _w_v) (unwatch! _w_q)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner

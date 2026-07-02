@@ -431,13 +431,26 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
                    error(ERROR_INDEX_OUT_OF_RANGE, e, env,
                          "vec-set!: index out of range"));
 
+  int watched = (vexp->flags & FLAG_WATCHED) != 0;
+  exp_t *old = watched ? vec_get_boxed(vexp, i) : NULL; /* owned */
   /* Refcount the return value before vec_set_boxed eats valexp's ref. */
   exp_t *ret = refexp(valexp);
   if (!vec_set_boxed(vexp, i, valexp)) {
     unrefexp(ret);
+    if (old)
+      unrefexp(old);
     CLEAN_RETURN_2(vexp, iexp,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "vec-set!: alloc failure or shared vec promote"));
+  }
+  if (watched) {
+    exp_t *werr = watch_notify(vexp, "vec-set!", iexp, old, ret, env);
+    if (old)
+      unrefexp(old);
+    if (werr) {
+      unrefexp(ret);
+      CLEAN_RETURN_2(vexp, iexp, werr);
+    }
   }
   /* valexp ownership consumed by vec_set_boxed — don't clean it. */
   CLEAN_RETURN_2(vexp, iexp, ret);

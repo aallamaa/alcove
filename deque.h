@@ -69,7 +69,15 @@ exp_t *dequecmd(exp_t *e, env_t *env) {
       unrefexp(e);                                                             \
       return v;                                                                \
     }                                                                          \
-    push_fn((alc_list_t *)d->ptr, v);                                          \
+    push_fn((alc_list_t *)d->ptr, v); /* takes ownership; v stays live */      \
+    if (d->flags & FLAG_WATCHED) {                                             \
+      exp_t *werr = watch_notify(d, err_name, NULL, NULL, v, env);             \
+      if (werr) {                                                              \
+        unrefexp(d);                                                           \
+        unrefexp(e);                                                           \
+        return werr;                                                           \
+      }                                                                        \
+    }                                                                          \
     unrefexp(e);                                                               \
     return d;                                                                  \
   }
@@ -99,6 +107,15 @@ exp_t *dequecmd(exp_t *e, env_t *env) {
         l->TAIL = NULL;                                                        \
       l->len--;                                                                \
       free(n);                                                                 \
+    }                                                                          \
+    if (d->flags & FLAG_WATCHED) {                                             \
+      exp_t *werr = watch_notify(d, err_name, NULL, ret, NULL, env);           \
+      if (werr) {                                                              \
+        unrefexp(ret);                                                         \
+        unrefexp(d);                                                           \
+        unrefexp(e);                                                           \
+        return werr;                                                           \
+      }                                                                        \
     }                                                                          \
     unrefexp(d);                                                               \
     unrefexp(e);                                                               \

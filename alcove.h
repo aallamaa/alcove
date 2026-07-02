@@ -328,6 +328,10 @@ typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv,
    registry chain so a later (weak-get) returns nil instead of dangling.
    Bit 10 — bits 4-5 are the vector element kind, 6/7/8/9 taken above. */
 #define FLAG_WEAK_REFERENT 1024
+/* Set on a container with at least one (watch! obj fn) watcher. Tested by
+   the structural-mutator builtins (assoc!, push-*!, vec-set!, ...) which
+   call watch_notify (watch.h) after the write. Bit 11. */
+#define FLAG_WATCHED 2048
 #define FLAG_APPLICATIVE 256
 /* Privileged/unsafe builtin: touches the host OS, filesystem, network, FFI, or
    loads/persists code (shell, file ops, setenv, FFI, require of native modules,
@@ -1091,6 +1095,12 @@ exp_t *dforcmd(exp_t *e, env_t *env);
 extern const char doc_dfor[];
 exp_t *gforcmd(exp_t *e, env_t *env);
 extern const char doc_gfor[];
+exp_t *watchcmd(exp_t *e, env_t *env); /* watch.h */
+extern const char doc_watch[];
+exp_t *unwatchcmd(exp_t *e, env_t *env);
+extern const char doc_unwatch[];
+exp_t *watchedpcmd(exp_t *e, env_t *env);
+extern const char doc_watchedp[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);

@@ -488,6 +488,9 @@ lispProc lispProcList[] = {
     LISPCMD("weak", weakcmd, doc_weak),
     LISPCMD("weak-get", weakgetcmd, doc_weak_get),
     LISPCMD("weak?", weakpcmd, doc_weakp),
+    LISPCMD("watch!", watchcmd, doc_watch),
+    LISPCMD("unwatch!", unwatchcmd, doc_unwatch),
+    LISPCMD("watched?", watchedpcmd, doc_watchedp),
     /* observability (builtins_log.h) */
     LISPCMD("error-code", errorcodecmd, doc_error_code),
     LISPCMD("log!", logemitcmd, doc_log_emit),
@@ -1335,6 +1338,8 @@ static ALCOVE_TLS int64_t exp_chunk_cap = 0;
    it; when a weak cell dies, unlink it from its target's chain. */
 static void weak_on_target_free(exp_t *target);
 static void weak_on_cell_free(exp_t *cell);
+/* Watch hook (watch.h): drop a dying object's watcher list. */
+static void watch_on_target_free(exp_t *target);
 
 int unrefexp_free(exp_t *e,
                   int ret) { /* non-static: see alcove.h (native modules) */
@@ -1381,6 +1386,8 @@ int unrefexp_free(exp_t *e,
        equivalent to the old fall-through, since ptr aliases content. */
     if (e->flags & FLAG_WEAK_REFERENT)
       weak_on_target_free(e); /* null out every (weak e) cell */
+    if (e->flags & FLAG_WATCHED)
+      watch_on_target_free(e); /* release the watcher list */
     switch (e->type) {
     case EXP_WEAK:
       /* ptr is a BORROWED target and meta a borrowed sibling link — neither
@@ -5017,6 +5024,10 @@ exp_t *sqrtcmd(exp_t *e, env_t *env) {
 
 /* Vector storage + ops live in a dedicated #included fragment (kept in the
    single TU so the inline tensor helpers stay inlinable). */
+/* (watch!) post-modification hooks — included BEFORE the container
+   fragments (vector.h, builtins_dict.h, set.h, deque.h) so their mutator
+   builtins can call watch_notify. */
+#include "watch.h"
 #include "vector.h"
 
 /* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
