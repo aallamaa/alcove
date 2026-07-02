@@ -491,6 +491,8 @@ lispProc lispProcList[] = {
     LISPCMD("watch!", watchcmd, doc_watch),
     LISPCMD("unwatch!", unwatchcmd, doc_unwatch),
     LISPCMD("watched?", watchedpcmd, doc_watchedp),
+    LISPCMD("set-validator!", setvalidatorcmd, doc_set_validator),
+    LISPCMD("raise", raisecmd, doc_raise),
     /* observability (builtins_log.h) */
     LISPCMD("error-code", errorcodecmd, doc_error_code),
     LISPCMD("log!", logemitcmd, doc_log_emit),
@@ -1396,6 +1398,11 @@ int unrefexp_free(exp_t *e,
       break;
     case EXP_ERROR:
       free(e->ptr);
+      /* (raise 'code ...) errors own their custom-code symbol in meta.
+         Strictly gated on ERROR_USER: other error classes never own meta
+         (ERROR_CONT_ESCAPE borrows it for the continuation id). */
+      if (e->flags == ERROR_USER && e->meta)
+        unrefexp((exp_t *)e->meta);
       break;
     case EXP_SYMBOL:
     case EXP_STRING:
@@ -3390,6 +3397,15 @@ exp_t *defmacrocmd(exp_t *e, env_t *env) {
     if (cur && ispair(cur->content)) {
       header = car(cur);
       cur = cdr(cur);
+      /* Same guard def/fn/let apply — without it a macro param named after
+         a builtin (seq, cond, list, ...) was accepted silently and the
+         body's unquotes then resolved to the BUILTIN, splicing #<builtin>
+         into every expansion instead of the argument. */
+      exp_t *rsverr = NULL;
+      CHECK_RESERVED_BIND(header, rsverr, "as a macro parameter", {
+        unrefexp(e);
+        return rsverr;
+      });
       if (cur && ispair(cur->content)) {
         body = car(cur);
         vali = make_node(refexp(body));
