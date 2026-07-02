@@ -7287,6 +7287,14 @@ assert "weak of nil never clears" (weak-get (weak nil)) nil
 
 assert-true "a weak ref does not keep a cycle alive; the sweep clears it" (let ((wd nil)) (do (let ((d (hash-map))) (do (assoc! d "self" d) (setf wd (weak d)))) (and (is (gc-cycles) 1) (no (weak-get wd)))))
 
+assert "odd evaluates a variable argument" (let ((k 5)) (odd k)) t
+
+assert "odd as a loop-body condition (the loop-accumulate idiom)" (do (setf _odd_acc nil) (for i 0 9 (when (odd i) (setf _odd_acc (cons (* i i) _odd_acc)))) (reverse _odd_acc)):
+  list 1 9 25 49 81
+
+assert "odd errors on a non-integer" (error-code (try (odd "x") (fn (er) er))):
+  'illegal-value
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

@@ -49,6 +49,13 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   bytes — mirroring the guard `json-encode` already had (`JS_MAX_DEPTH`).
 - `adr.py` / `alc2adr.py` read stdin when no file is given and handle `[..]`
   bracket lambdas (previously looped forever).
+- **`(odd x)` never evaluated its argument** — it read the raw form, so
+  `(odd 1)` worked (a literal is already a fixnum) but `(odd k)` errored on
+  every AST-path call, e.g. as a `when`/`if` condition inside `for`/`each`
+  (the classic loop-accumulate idiom). It was the only builtin with the
+  pattern; it now evaluates like every other applicative builtin, and the
+  non-integer error message is specific (`odd: argument must be an integer`
+  instead of `Illegal value in operation`).
 
 - **Stream/Port File IO** — add buffered stream handle type `EXP_PORT` and builtins `open`/`close`/`write`/`eof?`/`port?`, and extend `read-line`/`flush` to accept an optional port.
 - **Observability** — make a server/embedded deployment debuggable.

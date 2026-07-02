@@ -4807,6 +4807,18 @@
                    (and (is (gc-cycles) 1) (no (weak-get wd))))))
 
 ;; ====================================================================
+;; (odd x) evaluated its argument only by luck: it read the raw form, so
+;; (odd 1) worked (a literal is already a fixnum) but (odd k) errored on
+;; every AST-path call — e.g. as a when/if condition inside for/each.
+(assert "odd evaluates a variable argument"  (let ((k 5)) (odd k)) t)
+(assert "odd as a loop-body condition (the loop-accumulate idiom)"
+        (do (setf _odd_acc nil)
+            (for i 0 9 (when (odd i) (setf _odd_acc (cons (* i i) _odd_acc))))
+            (reverse _odd_acc))
+        (list 1 9 25 49 81))
+(assert "odd errors on a non-integer" (error-code (try (odd "x") (fn (er) er))) 'illegal-value)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner

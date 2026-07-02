@@ -1794,13 +1794,17 @@ exp_t *callcccmd(exp_t *e, env_t *env) {
 
 const char doc_odd[] = "(odd x) — t if integer x is odd, nil otherwise.";
 exp_t *oddcmd(exp_t *e, env_t *env) {
-  exp_t *ret;
-  if (e->next && isnumber(e->next->content))
-    ret = ((FIX_VAL(e->next->content) & 1) ? TRUE_EXP : NIL_EXP);
-  else
-    ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
-  unrefexp(e);
-  return ret;
+  /* Was reading the argument RAW (e->next->content, no EVAL) — (odd 1)
+     worked by luck (a literal is already a fixnum) while (odd k) errored
+     on any AST-path call such as a when/if condition. Evaluate like every
+     other applicative builtin. */
+  EVAL_ARG_1(a);
+  if (a && isnumber(a)) {
+    exp_t *ret = ((FIX_VAL(a) & 1) ? TRUE_EXP : NIL_EXP);
+    CLEAN_RETURN_1(a, refexp(ret));
+  }
+  CLEAN_RETURN_1(a, error(ERROR_ILLEGAL_VALUE, e, env,
+                          "odd: argument must be an integer"));
 }
 
 const char doc_do[] = "(do expr ...) — evaluate exprs in order; returns the "
