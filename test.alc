@@ -4718,12 +4718,29 @@
 ;; (gc-cycles) — on-demand trial-deletion cycle collector (gc.h). Cycles
 ;; are only constructible through the mutating containers; the collector
 ;; must reclaim them, keep everything reachable, and be idempotent.
-;; Printing a cyclic value must terminate (depth-capped with an ellipsis),
-;; not overflow the C stack — the REPL echoing (assoc! d "self" d) used to
-;; kill the process. This plants one more cycle; the drain below absorbs it.
+;; Every recursive walker must TERMINATE on a cyclic value, not overflow the
+;; C stack: the printer and (str) depth-cap with an ellipsis; json-encode and
+;; msgpack-encode FAIL with an error value (truncated output would be corrupt
+;; bytes). Each of these plants a cycle; the drain below absorbs them.
 (assert-true "printing a cyclic dict terminates (depth guard)"
              (let ((d (hash-map)))
                (do (assoc! d "self" d) (pr d) (prn "") t)))
+(assert-true "(str cyclic) terminates with an ellipsis"
+             (let ((d (hash-map)))
+               (do (assoc! d "self" d)
+                   (no (no (re-find "\\.\\.\\." (str d)))))))
+(assert "json-encode of a cyclic dict is an error"
+        (error-code (try (let ((d (hash-map)))
+                           (do (assoc! d "self" d) (json-encode d)))
+                         (fn (er) er)))
+        'illegal-value)
+(assert "msgpack-encode of a cyclic dict is an error"
+        (error-code (try (let ((d (hash-map)))
+                           (do (assoc! d "self" d) (msgpack-encode d)))
+                         (fn (er) er)))
+        'illegal-value)
+(assert "msgpack round-trip unaffected by the depth guard"
+        (msgpack-decode (msgpack-encode (list 1 "two" (list 3 4)))) (list 1 "two" (list 3 4)))
 ;; The suite itself plants cycles on purpose (the 500 vector self-cycles at
 ;; the heap-stats leak test above) — the first call must reclaim them all.
 (assert-true "gc-cycles reclaims the suite's deliberate leaks (500+ cells)"

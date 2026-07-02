@@ -29,6 +29,11 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   overflowed the C stack printing the result. The printer is now depth-capped
   (256, prints `...` beyond), covering pairs, vectors, dicts/sets, deques,
   and HAMTs through the single entry point.
+- **`(str cyclic)` and `(msgpack-encode cyclic)` crashed the process** — the
+  same unbounded-recursion class as the printer. `str` now depth-caps with an
+  ellipsis like `print_node`; `msgpack-encode` fails with an `illegal-value`
+  error beyond `MP_MAX_DEPTH` (512) rather than ever emitting truncated
+  bytes — mirroring the guard `json-encode` already had (`JS_MAX_DEPTH`).
 - `adr.py` / `alc2adr.py` read stdin when no file is given and handle `[..]`
   bracket lambdas (previously looped forever).
 

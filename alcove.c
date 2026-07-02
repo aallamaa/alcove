@@ -5270,7 +5270,25 @@ static void *buf_reserve(void *b, size_t len, size_t n, size_t *cap) {
   return nb;
 }
 
+/* Depth guard, same shape as print_node's (print.h): a cyclic container
+   ((assoc! d "self" d), ...) recursed this renderer to a C-stack overflow —
+   (str d) killed the process. The wrapper owns the counter so every early
+   return in the body unwinds it. */
+#define STR_BUF_MAX_DEPTH 256
+static ALCOVE_TLS int exp_to_string_depth = 0;
+static void exp_to_string_buf_1(exp_t *v, char **buf, size_t *len,
+                                size_t *cap);
 static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
+  if (exp_to_string_depth >= STR_BUF_MAX_DEPTH) {
+    str_buf_put(buf, len, cap, "...", 3);
+    return;
+  }
+  exp_to_string_depth++;
+  exp_to_string_buf_1(v, buf, len, cap);
+  exp_to_string_depth--;
+}
+static void exp_to_string_buf_1(exp_t *v, char **buf, size_t *len,
+                                size_t *cap) {
   char tmp[128];
   /* NULL/nil and the tagged immediates (fixnum, char) have no ->type word, so
      they're handled before the switch; everything past here is is_ptr. */

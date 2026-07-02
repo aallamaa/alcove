@@ -7200,6 +7200,18 @@ assert "log-level restored to :info" (log-level) :info
 
 assert-true "printing a cyclic dict terminates (depth guard)" (let ((d (hash-map))) (do (assoc! d "self" d) (pr d) (prn "") t))
 
+assert-true "(str cyclic) terminates with an ellipsis" (let ((d (hash-map))) (do (assoc! d "self" d) (no (no (re-find "\\.\\.\\." (str d))))))
+
+assert "json-encode of a cyclic dict is an error" (error-code (try (let ((d (hash-map))) (do (assoc! d "self" d) (json-encode d))) (fn (er) er))):
+  'illegal-value
+
+assert "msgpack-encode of a cyclic dict is an error" (error-code (try (let ((d (hash-map))) (do (assoc! d "self" d) (msgpack-encode d))) (fn (er) er))):
+  'illegal-value
+
+assert "msgpack round-trip unaffected by the depth guard" (msgpack-decode (msgpack-encode (list 1 "two" (list 3 4)))):
+  list 1 "two":
+    list 3 4
+
 assert-true "gc-cycles reclaims the suite's deliberate leaks (500+ cells)" (>= (gc-cycles) 500)
 
 assert "gc-cycles on a clean heap frees nothing" (gc-cycles) 0

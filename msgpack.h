@@ -87,7 +87,22 @@ static int mp_encode_int(mp_buf *m, int64_t n) {
 static int mp_encode_strlen(mp_buf *m, size_t len) {
   return mp_put_sized(m, 0xa0, 32, 0xd9, 0xda, 0xdb, len);
 }
+/* Depth guard (same shape as JS_MAX_DEPTH in json.h and print_node's): a
+   cyclic container recursed the encoder to a C-stack overflow. A truncated
+   MessagePack stream would be corrupt, so beyond the cap the encode FAILS
+   (returns 0) and the builtin surfaces an error value — never bad bytes. */
+#define MP_MAX_DEPTH 512
+static ALCOVE_TLS int mp_encode_depth = 0;
+static int mp_encode_1(exp_t *v, mp_buf *m);
 static int mp_encode(exp_t *v, mp_buf *m) {
+  if (mp_encode_depth >= MP_MAX_DEPTH)
+    return 0;
+  mp_encode_depth++;
+  int ok = mp_encode_1(v, m);
+  mp_encode_depth--;
+  return ok;
+}
+static int mp_encode_1(exp_t *v, mp_buf *m) {
   if (!v || v == NIL_EXP)
     return mp_put1(m, 0xc0); /* nil (also the empty list) */
   if (v == TRUE_EXP)
@@ -330,14 +345,17 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
 
 const char doc_msgpackencode[] =
     "(msgpack-encode v) — serialize v to a MessagePack blob. Supports nil, t, "
-    "fixnums, floats, strings/symbols, blobs, lists, and string-keyed dicts.";
+    "fixnums, floats, strings/symbols, blobs, lists, and string-keyed dicts. "
+    "Errors on an unsupported type or nesting past 512 levels (e.g. a cyclic "
+    "container) — it never emits truncated bytes.";
 exp_t *msgpackencodecmd(exp_t *e, env_t *env) {
   EVAL_ARG_1(v);
   mp_buf m = {NULL, 0, 0};
   if (!mp_encode(v, &m)) {
     free(m.b);
     CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
-                            "msgpack-encode: unsupported value type"));
+                            "msgpack-encode: unsupported value type or "
+                            "nesting too deep (cyclic?)"));
   }
   exp_t *ret = make_blob((char *)m.b, m.len);
   free(m.b);
