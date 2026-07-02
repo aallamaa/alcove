@@ -2330,6 +2330,24 @@ int isoequal(exp_t *cur1, exp_t *cur2) {
             ret = 0;
         }
       }
+    } else if (islist(cur1)) {
+      /* deque: same length and elements iso-equal in order. Was the one
+         container compared by identity only — (iso (deque 1 2) (deque 1 2))
+         returned nil while vector/dict/set/hamt all compared deep. */
+      alc_list_t *l1 = (alc_list_t *)cur1->ptr, *l2 = (alc_list_t *)cur2->ptr;
+      if (!l1 || !l2)
+        ret = (l1 == l2);
+      else if (l1->len != l2->len)
+        ret = 0;
+      else {
+        ret = 1;
+        alc_listnode_t *n1 = l1->head, *n2 = l2->head;
+        while (ret && n1 && n2) {
+          ret = isoequal(n1->val, n2->val);
+          n1 = n1->next;
+          n2 = n2->next;
+        }
+      }
     } else
       ret = isequal(cur1, cur2);
   }
@@ -2342,8 +2360,10 @@ const char doc_is[] =
     "Aliases: eq, eq?.";
 EQUALITY_CMD(iscmd, isequal)
 
-const char doc_iso[] = "(iso a b) — structural (deep) equality. Recurses into "
-                       "pairs/strings/vectors.";
+const char doc_iso[] =
+    "(iso a b) — structural (deep) equality. Recurses into pairs, vectors, "
+    "deques, hash-maps, sets, and HAMTs; strings/blobs compare by content. "
+    "Bails out (nil) past a depth cap on pathological/cyclic nesting.";
 EQUALITY_CMD(isocmd, isoequal)
 
 const char doc_isnt[] = "(isnt a b) — t if a and b are NOT identical (the "
