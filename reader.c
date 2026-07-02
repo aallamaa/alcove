@@ -1,8 +1,8 @@
 /* reader.c — the s-expression reader / tokenizer: make_atom_from_token (the
  * number/symbol/string classifier), callmacrochar (the (/[/{/'/`/, reader
  * macros), escapereader (\n, \xAB, ...), and reader() (the main DFA, incl. the
- * #-dispatch for #\ char, #[ vector, #{ set, #b\"...\" blob, and `# `
- * comments).
+ * #-dispatch for #\ char, #[ vector, #{ set, #b\"...\" blob, the
+ * #l[/#g[/#s{/#d{ comprehension sugars, and `# ` comments).
  *
  * FRAGMENT #included into alcove.c after the value-model constructors it calls
  * (make_node/make_symbol/make_quote/make_char/make_blob/make_integer/make_float,
@@ -527,6 +527,42 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
                same value. (Plain `{...}` is the hash-map literal.) */
             return reader_collect(stream, '}',
                                   make_node(make_symbol("hash-set", 8)));
+          } else if (y == 'l' || y == 'g' || y == 's' || y == 'd') {
+            /* Comprehension sugar:
+                 #l[…] / #g[…] → (lfor …) / (gfor …)   — sequence-shaped
+                 #s{…} / #d{…} → (sfor …) / (dfor …)   — collection-shaped
+               The bracket mirrors the result type: [..] for list/generator,
+               {…} for set/dict (same split as #[ vector vs #{ set). The body
+               holds the comprehension's positional clauses
+               (var coll [pred] expr[, vexpr]) and is collected by
+               reader_collect, which already drives both ] and } closes. */
+            char *head;
+            unsigned char close, want;
+            if (y == 'l') {
+              head = "lfor";
+              close = ']';
+              want = '[';
+            } else if (y == 'g') {
+              head = "gfor";
+              close = ']';
+              want = '[';
+            } else if (y == 's') {
+              head = "sfor";
+              close = '}';
+              want = '{';
+            } else { /* y == 'd' */
+              head = "dfor";
+              close = '}';
+              want = '{';
+            }
+            if ((z = RGETC(stream)) != want) {
+              if (z != EOF)
+                RUNGETC(z, stream);
+              return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
+                           "#%c must be followed by '%c'", y, want);
+            }
+            return reader_collect(stream, close,
+                                  make_node(make_symbol(head, 4)));
           } else if (y == '!') {
             /* `#!` — comment to end of line (Scheme convention). Exists so
                `#!/usr/bin/env alcove` shebang scripts parse; harmless

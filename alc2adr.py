@@ -14,9 +14,11 @@ Reader fidelity notes (matched to alcove's own reader in alcove.c):
   'x  `x  ,x       reader macros           -> (quote x) (quasiquote x)
                                               (unquote x)
   #\\X              character literal       -> kept verbatim as #\\X
-  #[a b c]         vector literal          -> (vector a b c)   (this is
-                                              literally what alcove's
-                                              reader expands it to)
+   #[a b c]         vector literal          -> (vector a b c)   (this is
+                                               literally what alcove's
+                                               reader expands it to)
+   #l[..]/#g[..]    comprehension sugar     -> (lfor ..) / (gfor ..)
+   #s{..}/#d{..}    comprehension sugar     -> (sfor ..) / (dfor ..)
 
 Emission: a form is printed inline when it is short; otherwise the head
 (plus its leading atom operands and the first list operand -- the
@@ -132,6 +134,27 @@ class Reader:
             if nxt == "{":                        # #{..} set literal
                 self.i += 2
                 v = [Sym("hash-set")]
+                while True:
+                    self.skip()
+                    if self.i < self.n and self.s[self.i] == "}":
+                        self.i += 1
+                        return v
+                    v.append(self.form())
+            opn = self.s[self.i + 2:self.i + 3]
+            if nxt in ("l", "g") and opn == "[":   # #l[..] / #g[..] comprehension
+                head = "lfor" if nxt == "l" else "gfor"
+                self.i += 3                       # consume #, letter, [
+                v = [Sym(head)]
+                while True:
+                    self.skip()
+                    if self.i < self.n and self.s[self.i] == "]":
+                        self.i += 1
+                        return v
+                    v.append(self.form())
+            if nxt in ("s", "d") and opn == "{":   # #s{..} / #d{..} comprehension
+                head = "sfor" if nxt == "s" else "dfor"
+                self.i += 3                       # consume #, letter, {
+                v = [Sym(head)]
                 while True:
                     self.skip()
                     if self.i < self.n and self.s[self.i] == "}":

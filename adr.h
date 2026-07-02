@@ -346,6 +346,30 @@ static als_node *als_read_one(als_lr *r) {
     als_read_forms(r, '}', set);
     return set;
   }
+  /* comprehension sugar: #l[..]/#g[..] -> (lfor..)/(gfor..) and
+     #s{..}/#d{..} -> (sfor..)/(dfor..). alcove's own reader expands these
+     identically; we lower them here so the body isn't misread by the
+     indentation reader (a bare [..] is an arc-lambda and {..} is a
+     hash-map, so the dispatch prefix must be consumed as one form). The
+     opener is fixed per letter: [ for the sequence-shaped l/g, { for the
+     collection-shaped s/d. */
+  if (c == '#' && r->i + 2 < r->n) {
+    char d = r->s[r->i + 1], op = r->s[r->i + 2];
+    if ((d == 'l' || d == 'g') && op == '[') {
+      r->i += 3; /* consume #l[ / #g[ */
+      als_node *comp = als_list();
+      als_push(comp, als_atom((d == 'l') ? "lfor" : "gfor", 4));
+      als_read_forms(r, ']', comp);
+      return comp;
+    }
+    if ((d == 's' || d == 'd') && op == '{') {
+      r->i += 3; /* consume #s{ / #d{ */
+      als_node *comp = als_list();
+      als_push(comp, als_atom((d == 's') ? "sfor" : "dfor", 4));
+      als_read_forms(r, '}', comp);
+      return comp;
+    }
+  }
   /* blob literal #b"..." -> (string->blob "..."). This is the form the printer
      emits for a printable blob, so a printed blob re-reads in Adder. */
   if (c == '#' && r->i + 2 < r->n && r->s[r->i + 1] == 'b' &&

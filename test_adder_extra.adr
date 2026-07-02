@@ -166,3 +166,17 @@ adr-semi2 = (+ 1 1) ; (+ 99 99) <- this text is commented out, not evaluated
 assert "; truncates rest of line"    adr-semi2 2
 # a `#\;` char literal is NOT a comment — the value byte survives
 assert "#\\; char literal survives"  #\; #\;
+
+# ====================================================================
+# Comprehension reader sugar: #l[/#g[ (sequence-shaped) and #s{/#d{
+# (collection-shaped) desugar to (lfor…)/(gfor…)/(sfor…)/(dfor…). The
+# adder front end (adr.h) lowers each to the same s-expr alcove's reader
+# produces, so a bare [..] (arc-lambda) / {..} (hash-map) inside the body
+# isn't misread.
+# ====================================================================
+assert "adder sugar #l[ with filter"    #l[x (range 0 10) (odd x) (* x x)] (list 1 9 25 49 81)
+assert "adder sugar #l[ no filter"      #l[x (range 0 5) (* x 10)] (list 0 10 20 30 40)
+assert "adder sugar #s{ dedup count"    (count #s{x (list 1 2 2 3 3 3) t (* x x)}) 3
+assert "adder sugar #d{ entry"          (get #d{w (list "ada" "bob") w (length w)} "ada") 3
+assert "adder sugar #g[ collects"       (collect! #g[x (range 0 10) (odd x) (* x x)]) (list 1 9 25 49 81)
+assert "adder sugar #g[ no filter"      (collect! #g[x (range 0 4) (+ x 100)]) (list 100 101 102 103)

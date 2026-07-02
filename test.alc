@@ -4851,6 +4851,36 @@
 (assert "lfor big input stays iterative"
         (lfor x (range 0 100001) (is 0 (mod x 50000)) x) (list 0 50000 100000))
 
+;; --- reader sugar for the comprehension family: #l[/#g[ and #s{/#d{
+;; desugar to (lfor…)/(gfor…)/(sfor…)/(dfor…). [..] for the sequence-shaped
+;; results (list/generator), {…} for the collection-shaped (set/dict) — same
+;; split as #[ vector vs #{ set. The body holds the comprehension's positional
+;; clauses, so each sugar form must equal its desugared counterpart.
+(assert "sugar #l[ with a filter"
+        #l[x (range 0 10) (odd x) (* x x)] (list 1 9 25 49 81))
+(assert "sugar #l[ without a filter"
+        #l[x (range 0 5) (* x 10)] (list 0 10 20 30 40))
+(assert "sugar #l[ over the empty list"
+        #l[x nil (* x x)] nil)
+(assert "sugar #l[ nests like lfor"
+        #l[x (range 0 3) #l[y (range 0 3) (* x y)]]
+        (list (list 0 0 0) (list 0 1 2) (list 0 2 4)))
+(assert "sugar #s{ collapses duplicates"
+        (count #s{x (list 1 2 2 3 3 3) t (* x x)}) 3)
+(assert-true "sugar #s{ result is a set"
+             (let ((s #s{x (list 1 2 3) t (* x x)}))
+               (and (set-has? s 1) (set-has? s 4) (set-has? s 9) (no (set-has? s 2)))))
+(assert "sugar #d{ builds entries"
+        (get #d{w (list "ada" "bob") w (length w)} "ada") 3)
+(assert "sugar #d{ with a filter"
+        (count #d{x (range 0 6) (odd x) (str x) (* x x)}) 3)
+(assert "sugar #g[ collects like gfor"
+        (collect! #g[x (range 0 10) (odd x) (* x x)]) (list 1 9 25 49 81))
+(assert "sugar #g[ without a filter"
+        (collect! #g[x (range 0 4) (+ x 100)]) (list 100 101 102 103))
+(assert "sugar #d[ wrong opener is a parse error"
+        (error? (read-string-sexpr "#d[x (range 0 3) x x]")) t)
+
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).

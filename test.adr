@@ -7346,6 +7346,40 @@ assert "gfor without a filter" (collect! (gfor x (range 0 4) (+ x 100))):
 assert "lfor big input stays iterative" (lfor x (range 0 100001) (is 0 (mod x 50000)) x):
   list 0 50000 100000
 
+assert "sugar #l[ with a filter" (lfor x (range 0 10) (odd x) (* x x)):
+  list 1 9 25 49 81
+
+assert "sugar #l[ without a filter" (lfor x (range 0 5) (* x 10)):
+  list 0 10 20 30 40
+
+assert "sugar #l[ over the empty list" (lfor x nil (* x x)) nil
+
+assert "sugar #l[ nests like lfor" (lfor x (range 0 3) (lfor y (range 0 3) (* x y))):
+  list:
+    list 0 0 0
+    list 0 1 2
+    list 0 2 4
+
+assert "sugar #s{ collapses duplicates" (count (sfor x (list 1 2 2 3 3 3) t (* x x))):
+  3
+
+assert-true "sugar #s{ result is a set" (let ((s (sfor x (list 1 2 3) t (* x x)))) (and (set-has? s 1) (set-has? s 4) (set-has? s 9) (no (set-has? s 2))))
+
+assert "sugar #d{ builds entries" (get (dfor w (list "ada" "bob") w (length w)) "ada"):
+  3
+
+assert "sugar #d{ with a filter" (count (dfor x (range 0 6) (odd x) (str x) (* x x))):
+  3
+
+assert "sugar #g[ collects like gfor" (collect! (gfor x (range 0 10) (odd x) (* x x))):
+  list 1 9 25 49 81
+
+assert "sugar #g[ without a filter" (collect! (gfor x (range 0 4) (+ x 100))):
+  list 100 101 102 103
+
+assert "sugar #d[ wrong opener is a parse error" (error? (read-string-sexpr "#d[x (range 0 3) x x]")):
+  t
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.
@@ -7515,6 +7549,20 @@ adr-semi2 = (+ 1 1) ; (+ 99 99) <- this text is commented out, not evaluated
 assert "; truncates rest of line"    adr-semi2 2
 # a `#\;` char literal is NOT a comment — the value byte survives
 assert "#\\; char literal survives"  #\; #\;
+
+# ====================================================================
+# Comprehension reader sugar: #l[/#g[ (sequence-shaped) and #s{/#d{
+# (collection-shaped) desugar to (lfor…)/(gfor…)/(sfor…)/(dfor…). The
+# adder front end (adr.h) lowers each to the same s-expr alcove's reader
+# produces, so a bare [..] (arc-lambda) / {..} (hash-map) inside the body
+# isn't misread.
+# ====================================================================
+assert "adder sugar #l[ with filter"    #l[x (range 0 10) (odd x) (* x x)] (list 1 9 25 49 81)
+assert "adder sugar #l[ no filter"      #l[x (range 0 5) (* x 10)] (list 0 10 20 30 40)
+assert "adder sugar #s{ dedup count"    (count #s{x (list 1 2 2 3 3 3) t (* x x)}) 3
+assert "adder sugar #d{ entry"          (get #d{w (list "ada" "bob") w (length w)} "ada") 3
+assert "adder sugar #g[ collects"       (collect! #g[x (range 0 10) (odd x) (* x x)]) (list 1 9 25 49 81)
+assert "adder sugar #g[ no filter"      (collect! #g[x (range 0 4) (+ x 100)]) (list 100 101 102 103)
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 
