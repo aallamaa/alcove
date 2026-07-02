@@ -61,7 +61,8 @@
   X(EXP_RATIONAL, , "rational") /* int64 num/den (den>0, reduced) */           \
   X(EXP_DECIMAL, , "decimal")   /* bounded base-10: coeff + scale */           \
   X(EXP_CONT, , "continuation") /* call/cc escape token; id in meta */         \
-  X(EXP_PORT, , "port")         /* buffered stream; ptr → alc_port_t */
+  X(EXP_PORT, , "port")         /* buffered stream; ptr → alc_port_t */        \
+  X(EXP_WEAK, , "weak") /* weak ref; ptr → target (borrowed), see weak.h */
 enum {
 #define X(name, anchor, dispname) name anchor,
   ALC_EXP_TYPES(X)
@@ -321,6 +322,12 @@ typedef struct exp_t *lispCmdV(int nargs, struct exp_t **argv,
    native-module builtin (e.g. lmi/get) isn't a per-call AST re-resolve. Core
    special forms (while/each/time/…) are installed via make_internal directly,
    never get this bit, and keep the AST path. Bit 8. */
+/* Set on an object that has at least one live (weak v) cell pointing at it.
+   Tested only on the out-of-line free path (unrefexp_free / the gc sweep):
+   when set, weak_on_target_free nulls out every weak cell in the target's
+   registry chain so a later (weak-get) returns nil instead of dangling.
+   Bit 10 — bits 4-5 are the vector element kind, 6/7/8/9 taken above. */
+#define FLAG_WEAK_REFERENT 1024
 #define FLAG_APPLICATIVE 256
 /* Privileged/unsafe builtin: touches the host OS, filesystem, network, FFI, or
    loads/persists code (shell, file ops, setenv, FFI, require of native modules,
@@ -1070,6 +1077,12 @@ exp_t *heapstatscmd(exp_t *e, env_t *env);
 extern const char doc_heap_stats[];
 exp_t *gccyclescmd(exp_t *e, env_t *env); /* gc.h */
 extern const char doc_gc_cycles[];
+exp_t *weakcmd(exp_t *e, env_t *env); /* weak.h */
+extern const char doc_weak[];
+exp_t *weakgetcmd(exp_t *e, env_t *env);
+extern const char doc_weak_get[];
+exp_t *weakpcmd(exp_t *e, env_t *env);
+extern const char doc_weakp[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);

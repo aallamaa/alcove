@@ -211,6 +211,8 @@ static void print_node_1(exp_t *node) {
     hamt_print(node);
   } else if (node->type == EXP_CONT) {
     printf("\x1B[92m#<continuation>\x1B[39m");
+  } else if (node->type == EXP_WEAK) {
+    printf("\x1B[92m#<weak%s>\x1B[39m", node->ptr ? "" : ":cleared");
   } else if (node->type == EXP_LIST) {
     alc_list_t *l = (alc_list_t *)node->ptr;
     printf("(");

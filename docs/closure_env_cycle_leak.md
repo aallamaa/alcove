@@ -186,8 +186,11 @@ captures a dict that holds the callback, etc. There is still **no tracing GC**
 the calling thread's arena and reclaims container-threaded cycles explicitly,
 at zero cost to the hot paths. Its one deliberate gap is cycles threaded
 through closure captures (the callback↔dict shape): those are conservatively
-kept — break them by hand (nil the key) before dropping the last reference,
-or accept the leak and monitor with the audit below.
+kept. For that shape, **`(weak v)`** (weak.h) is the designed answer — hold
+the back-pointer weakly and the cycle never forms; `(weak-get w)` returns
+nil once the target is freed. Otherwise break the cycle by hand (nil the
+key) before dropping the last reference, or accept the leak and monitor
+with the audit below.
 
 `(heap-stats)` is the audit handle. It returns a property list for the calling
 thread's `exp_t` arena:

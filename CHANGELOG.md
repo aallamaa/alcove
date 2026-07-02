@@ -22,6 +22,19 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 - **Adder/Alcove list-call sugar** — `(v i)` (Adder: `v i` / `v(i)`) on a
   list or deque is sugar for `(nth v i)`, matching the other callable
   containers (vector, dict, HAMT).
+- **Weak references** — `(weak v)` returns a weak cell that does NOT keep
+  `v` alive; `(weak-get w)` returns the target while it has strong
+  references and `nil` after it is freed (including when freed by the
+  `gc-cycles` sweep); `(weak? x)` is the predicate. The designed escape
+  hatch for reference cycles: hold the back-pointer weakly and the cycle
+  never forms. Zero cost on the refcount hot path — only objects that were
+  ever weakly referenced pay a registry lookup, and only when freed.
+
+### Changed
+- **`iso` now compares deques deeply** (same length, elements `iso`-equal
+  in order) — it was the one container compared by identity only, while
+  vector/dict/set/HAMT already compared structurally. Cyclic input still
+  bails out safely (`nil`) at the existing depth cap.
 
 ### Fixed
 - **REPL echo of a cyclic container crashed the process** — `print_node` had

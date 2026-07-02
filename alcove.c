@@ -485,6 +485,9 @@ lispProc lispProcList[] = {
     LISPCMD("with-memory-limit", withmemlimitcmd, doc_with_memory_limit),
     LISPCMD("heap-stats", heapstatscmd, doc_heap_stats),
     LISPCMD("gc-cycles", gccyclescmd, doc_gc_cycles),
+    LISPCMD("weak", weakcmd, doc_weak),
+    LISPCMD("weak-get", weakgetcmd, doc_weak_get),
+    LISPCMD("weak?", weakpcmd, doc_weakp),
     /* observability (builtins_log.h) */
     LISPCMD("error-code", errorcodecmd, doc_error_code),
     LISPCMD("log!", logemitcmd, doc_log_emit),
@@ -1323,6 +1326,12 @@ static ALCOVE_TLS int64_t exp_chunk_cap = 0;
    inline in the wrapper and never call here. e is always a heap object.
    Recurses (through the wrapper, so immediate children are free) for e->content
    and vector/list elements. */
+/* Weak-reference hooks (defined in weak.h, far below in the TU): when an
+   object flagged FLAG_WEAK_REFERENT dies, null every weak cell pointing at
+   it; when a weak cell dies, unlink it from its target's chain. */
+static void weak_on_target_free(exp_t *target);
+static void weak_on_cell_free(exp_t *cell);
+
 int unrefexp_free(exp_t *e,
                   int ret) { /* non-static: see alcove.h (native modules) */
   SAFE_ASSERT(is_ptr(e)); /* wrapper's contract — checked under ALCOVE_SAFE */
@@ -1366,7 +1375,14 @@ int unrefexp_free(exp_t *e,
        message via vasprintf (and overloads `flags` as the error code, so it
        is never flag-tested). A container with a NULL ptr does nothing —
        equivalent to the old fall-through, since ptr aliases content. */
+    if (e->flags & FLAG_WEAK_REFERENT)
+      weak_on_target_free(e); /* null out every (weak e) cell */
     switch (e->type) {
+    case EXP_WEAK:
+      /* ptr is a BORROWED target and meta a borrowed sibling link — neither
+         is released; falling to `default` would over-release the target. */
+      weak_on_cell_free(e);
+      break;
     case EXP_ERROR:
       free(e->ptr);
       break;
@@ -7473,6 +7489,9 @@ static exp_t *coll_assoc_to_list(exp_t *coll) {
 /* (gc-cycles) on-demand cycle collector — needs the container internals
    (dict_t, alc_list_t, vec accessors) included above. */
 #include "gc.h"
+/* Weak references (EXP_WEAK) — defines the weak_on_* hooks forward-declared
+   ahead of unrefexp_free and used by gc.h's sweep. */
+#include "weak.h"
 
 /* Epoch-based reclamation for the lock-free keyspace (LF-1). Included
    here so it can see ALCOVE_TLS and any other build-time toggles. */

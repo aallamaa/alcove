@@ -4772,6 +4772,41 @@
         (do (gc-cycles) (length (list 1 2 3 4 5))) 5)
 
 ;; ====================================================================
+;; (iso) on deques — was the one container compared by identity only;
+;; now deep like vector/dict/set/hamt. Cyclic input bails (nil), no crash.
+(assert "iso deque deep equality"        (iso (deque 1 2) (deque 1 2)) t)
+(assert "iso deque nested elements"      (iso (deque 1 (list 2 3)) (deque 1 (list 2 3))) t)
+(assert "iso deque value mismatch"       (iso (deque 1) (deque 2)) nil)
+(assert "iso deque length mismatch"      (iso (deque 1) (deque 1 2)) nil)
+(assert "iso dict-of-deque recurses"     (iso (hash-map "q" (deque 1 2)) (hash-map "q" (deque 1 2))) t)
+(assert "iso cyclic deques bail out (nil, no crash)"
+        (let ((q (deque 1)) (r (deque 1)))
+          (do (push-right! q q) (push-right! r r) (iso q r))) nil)
+(assert-true "iso-cyclic leftovers reclaimed" (>= (gc-cycles) 2))
+
+;; ====================================================================
+;; (weak v) / (weak-get w) / (weak? x) — weak references: do not keep the
+;; target alive; cleared when the target's last strong reference drops
+;; (including by the gc-cycles sweep).
+(setf _wk_t (deque 7))
+(setf _wk_a (weak _wk_t))
+(setf _wk_b (weak _wk_t))
+(assert "weak? on a weak cell"           (weak? _wk_a) t)
+(assert "weak? on a non-weak value"      (weak? 42) nil)
+(assert "weak-get while target is alive" (weak-get _wk_a) (deque 7))
+(setf _wk_t nil)
+(assert "weak-get after last strong ref drops"  (weak-get _wk_a) nil)
+(assert "all weak cells of a target clear"      (weak-get _wk_b) nil)
+(assert "weak of a temporary clears immediately" (weak-get (weak (list 1 2))) nil)
+(assert "weak of a fixnum never clears"          (weak-get (weak 42)) 42)
+(assert "weak of nil never clears"               (weak-get (weak nil)) nil)
+(assert-true "a weak ref does not keep a cycle alive; the sweep clears it"
+             (let ((wd nil))
+               (do (let ((d (hash-map)))
+                     (do (assoc! d "self" d) (setf wd (weak d))))
+                   (and (is (gc-cycles) 1) (no (weak-get wd))))))
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner
