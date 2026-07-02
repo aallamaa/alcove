@@ -4718,6 +4718,12 @@
 ;; (gc-cycles) — on-demand trial-deletion cycle collector (gc.h). Cycles
 ;; are only constructible through the mutating containers; the collector
 ;; must reclaim them, keep everything reachable, and be idempotent.
+;; Printing a cyclic value must terminate (depth-capped with an ellipsis),
+;; not overflow the C stack — the REPL echoing (assoc! d "self" d) used to
+;; kill the process. This plants one more cycle; the drain below absorbs it.
+(assert-true "printing a cyclic dict terminates (depth guard)"
+             (let ((d (hash-map)))
+               (do (assoc! d "self" d) (pr d) (prn "") t)))
 ;; The suite itself plants cycles on purpose (the 500 vector self-cycles at
 ;; the heap-stats leak test above) — the first call must reclaim them all.
 (assert-true "gc-cycles reclaims the suite's deliberate leaks (500+ cells)"

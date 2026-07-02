@@ -6,7 +6,26 @@
  * (exp_to_string_buf) and the source pretty-printer (pp_*) remain in alcove.c.
  * NOT standalone, NOT separately compiled.
  */
+/* Depth guard: a cyclic container ((assoc! d "self" d), a deque pushed into
+   itself, ...) used to recurse print_node to a C-stack overflow — the REPL
+   merely ECHOING such a value killed the process. Cap the depth and print an
+   ellipsis instead; 256 exceeds any real data's nesting yet is only a couple
+   hundred stack frames. Same precedent as ALCOVE_DUMPABLE_MAX_DEPTH
+   (dict.h). The wrapper owns the counter so every early return in the body
+   (print_node_1) still unwinds it correctly. */
+#define PRINT_NODE_MAX_DEPTH 256
+static ALCOVE_TLS int print_node_depth = 0;
+static void print_node_1(exp_t *node);
 void print_node(exp_t *node) {
+  if (print_node_depth >= PRINT_NODE_MAX_DEPTH) {
+    printf("...");
+    return;
+  }
+  print_node_depth++;
+  print_node_1(node);
+  print_node_depth--;
+}
+static void print_node_1(exp_t *node) {
   if (node == NULL) {
     printf("nil");
     return;

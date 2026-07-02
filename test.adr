@@ -7198,6 +7198,8 @@ set-log-level :info
 
 assert "log-level restored to :info" (log-level) :info
 
+assert-true "printing a cyclic dict terminates (depth guard)" (let ((d (hash-map))) (do (assoc! d "self" d) (pr d) (prn "") t))
+
 assert-true "gc-cycles reclaims the suite's deliberate leaks (500+ cells)" (>= (gc-cycles) 500)
 
 assert "gc-cycles on a clean heap frees nothing" (gc-cycles) 0
