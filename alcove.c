@@ -493,6 +493,7 @@ lispProc lispProcList[] = {
     LISPCMD("watched?", watchedpcmd, doc_watchedp),
     LISPCMD("set-validator!", setvalidatorcmd, doc_set_validator),
     LISPCMD("raise", raisecmd, doc_raise),
+    LISPCMD("error-codes", errorcodescmd, doc_error_codes),
     /* observability (builtins_log.h) */
     LISPCMD("error-code", errorcodecmd, doc_error_code),
     LISPCMD("log!", logemitcmd, doc_log_emit),

@@ -15,7 +15,7 @@ static const char *error_code_name(int errnum) {
 /* one `case CODE: return "name";` per ALC_ERRORS row (alcove.h). The 4
    PARSING_* rows each return "parse-error"; ERROR_CONT_ESCAPE isn't in the
    list, so it (and any unknown code) hits the default. */
-#define X(name, anchor, codename)                                              \
+#define X(name, anchor, codename, desc)                                        \
   case name:                                                                   \
     return codename;
     ALC_ERRORS(X)
@@ -51,6 +51,47 @@ exp_t *errorcodecmd(exp_t *e, env_t *env) {
     unrefexp(a);
   unrefexp(e);
   return ret;
+}
+
+const char doc_error_codes[] =
+    "(error-codes) — every machine-readable error CLASS as a list of "
+    "(code \"description\") pairs — the code symbols are what (error-code "
+    "e) returns for builtin errors. Single-sourced from the same table as "
+    "the codes themselves. 'user-error is the class of (raise ...) errors, "
+    "whose (error-code) may also be any custom symbol you raised.";
+exp_t *errorcodescmd(exp_t *e, env_t *env) {
+  (void)env;
+  unrefexp(e);
+  static const char *names[] = {
+#define X(name, anchor, codename, desc) codename,
+      ALC_ERRORS(X)
+#undef X
+  };
+  static const char *descs[] = {
+#define X(name, anchor, codename, desc) desc,
+      ALC_ERRORS(X)
+#undef X
+  };
+  size_t n = sizeof(names) / sizeof(names[0]);
+  exp_t *head = NULL, *tail = NULL;
+  for (size_t i = 0; i < n; i++) {
+    size_t j; /* skip duplicates (the parse-error enumerators, ...) */
+    for (j = 0; j < i; j++)
+      if (strcmp(names[j], names[i]) == 0)
+        break;
+    if (j < i)
+      continue;
+    exp_t *pair = make_node(make_symbol((char *)names[i], strlen(names[i])));
+    pair->next = make_node(make_string((char *)descs[i], strlen(descs[i])));
+    exp_t *cell = make_node(pair);
+    if (!head)
+      head = tail = cell;
+    else {
+      tail->next = cell;
+      tail = cell;
+    }
+  }
+  return head ? head : refexp(NIL_EXP);
 }
 
 const char doc_raise[] =

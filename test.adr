@@ -7560,6 +7560,10 @@ assert "vec index class survives a compiled call" (try ((fn () (vec-ref (vec 2 0
 assert "raised custom codes cascade through call layers" (try ((fn () (+ 1 ((fn () (raise 'deep "d")))))) (fn (e) (error-code e))):
   'deep
 
+assert-true "error-codes lists every builtin class with a description" (let ((cs (error-codes))) (and (any? (fn (c) (is (car c) 'div-by-zero)) cs) (any? (fn (c) (is (car c) 'illegal-value)) cs) (any? (fn (c) (is (car c) 'missing-parameter)) cs) (any? (fn (c) (is (car c) 'index-out-of-range)) cs) (any? (fn (c) (is (car c) 'user-error)) cs) (all? (fn (c) (and (symbol? (car c)) (string? (nth c 1)) (> (length (nth c 1)) 0))) cs)))
+
+assert-true "every code an error actually carries is in error-codes" (let ((cs (error-codes))) (all? (fn (k) (any? (fn (c) (is (car c) k)) cs)) (list (error-code (try (/ 1 0) (fn (e) e))) (error-code (try (_zz_undefined) (fn (e) e))) (error-code (try (raise "m") (fn (e) e))))))
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

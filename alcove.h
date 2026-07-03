@@ -185,24 +185,41 @@ enum {
    "parse-error". ERROR_CONT_ESCAPE is NOT in this list — it is not a real error
    (a call/cc escape token), so it has no code-name and is appended to the enum
    by hand, falling through to error_code_name's "error" default. */
+/* Columns: MEMBER, value-anchor, "code-name", "description" — the last is
+   what (error-codes) reports next to each class. */
 #define ALC_ERRORS(X)                                                          \
-  X(EXP_ERROR_PARSING_MACROCHAR, = 1, "parse-error")                           \
-  X(EXP_ERROR_PARSING_ILLEGAL_CHAR, , "parse-error")                           \
-  X(EXP_ERROR_PARSING_EOF, , "parse-error")                                    \
-  X(EXP_ERROR_PARSING_ESCAPE, , "parse-error")                                 \
-  X(EXP_ERROR_INVALID_KEY_UPDATE, = 256, "invalid-key-update")                 \
-  X(EXP_ERROR_BODY_NOT_LIST, , "body-not-list")                                \
-  X(EXP_ERROR_PARAM_NOT_LIST, , "param-not-list")                              \
-  X(EXP_ERROR_MISSING_NAME, , "missing-name")                                  \
-  X(ERROR_ILLEGAL_VALUE, , "illegal-value")                                    \
-  X(ERROR_DIV_BY0, , "div-by-zero")                                            \
-  X(ERROR_MISSING_PARAMETER, , "missing-parameter")                            \
-  X(ERROR_UNBOUND_VARIABLE, , "unbound-variable")                              \
-  X(ERROR_NUMBER_EXPECTED, , "number-expected")                                \
-  X(ERROR_INDEX_OUT_OF_RANGE, , "index-out-of-range")                          \
-  X(ERROR_USER, , "user-error") /* raise: custom code symbol OWNED in meta */
+  X(EXP_ERROR_PARSING_MACROCHAR, = 1, "parse-error",                           \
+    "the reader could not parse the source text")                              \
+  X(EXP_ERROR_PARSING_ILLEGAL_CHAR, , "parse-error",                           \
+    "the reader could not parse the source text")                              \
+  X(EXP_ERROR_PARSING_EOF, , "parse-error",                                    \
+    "the reader could not parse the source text")                              \
+  X(EXP_ERROR_PARSING_ESCAPE, , "parse-error",                                 \
+    "the reader could not parse the source text")                              \
+  X(EXP_ERROR_INVALID_KEY_UPDATE, = 256, "invalid-key-update",                 \
+    "rebinding a reserved/builtin name")                                       \
+  X(EXP_ERROR_BODY_NOT_LIST, , "body-not-list",                                \
+    "def/fn body is not a list of forms")                                      \
+  X(EXP_ERROR_PARAM_NOT_LIST, , "param-not-list",                              \
+    "def/fn parameter spec is not a list")                                     \
+  X(EXP_ERROR_MISSING_NAME, , "missing-name",                                  \
+    "def/defmacro without a name symbol")                                      \
+  X(ERROR_ILLEGAL_VALUE, , "illegal-value",                                    \
+    "wrong type or value for the operation (the general class)")               \
+  X(ERROR_DIV_BY0, , "div-by-zero",                                            \
+    "division or modulo by zero")                                              \
+  X(ERROR_MISSING_PARAMETER, , "missing-parameter",                            \
+    "wrong number of arguments in a call")                                     \
+  X(ERROR_UNBOUND_VARIABLE, , "unbound-variable",                              \
+    "reference to a name with no binding")                                     \
+  X(ERROR_NUMBER_EXPECTED, , "number-expected",                                \
+    "a numeric argument was required")                                         \
+  X(ERROR_INDEX_OUT_OF_RANGE, , "index-out-of-range",                          \
+    "index past the end (or negative) for an erroring accessor")               \
+  X(ERROR_USER, , "user-error",                                                \
+    "(raise ...) errors; error-code may also be your custom symbol")
 enum {
-#define X(name, anchor, codename) name anchor,
+#define X(name, anchor, codename, desc) name anchor,
   ALC_ERRORS(X)
 #undef X
       ERROR_CONT_ESCAPE, /* not a real error: a call/cc escape token in flight,
@@ -1106,6 +1123,8 @@ exp_t *setvalidatorcmd(exp_t *e, env_t *env);
 extern const char doc_set_validator[];
 exp_t *raisecmd(exp_t *e, env_t *env); /* builtins_log.h */
 extern const char doc_raise[];
+exp_t *errorcodescmd(exp_t *e, env_t *env);
+extern const char doc_error_codes[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);
