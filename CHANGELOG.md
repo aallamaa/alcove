@@ -98,6 +98,16 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   bails out safely (`nil`) at the existing depth cap.
 
 ### Fixed
+- **Keyspace expiry: value and deadline now publish atomically** — a reader
+  could combine a fresh value with a stale expiry from a previous write;
+  both now live in one atomically-swapped entry, expiry is honored
+  consistently across every read path (`GET`/`EXISTS`/`TTL`/`DEL`/`SET
+  NX|XX`/`PERSIST`/`EXPIRE`/`DBSIZE`), and a live-server expiry gate
+  (`make resp-expiry-test`) pins the semantics. TSan-clean under
+  4-reactor contention.
+- **REPL editing keys** — `C-a`/`C-k` are reasserted after inputrc, and
+  `M-f`/`M-b` move over *language symbols* (`+`, `foo/bar`, `set!`) rather
+  than readline's alnum words; covered by a pty-driven REPL test.
 - **REPL echo of a cyclic container crashed the process** — `print_node` had
   no recursion guard, so merely evaluating `(assoc! d "self" d)` at the REPL
   overflowed the C stack printing the result. The printer is now depth-capped

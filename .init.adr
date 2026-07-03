@@ -1,0 +1,7 @@
+# Project-local Adder startup.
+# Keep the REPL quiet: no "In [n]:" input prompt and no "Out[n]:" result label.
+# Continuation rows show only two spaces; Adder's own auto-indent still inserts
+# the block indentation after that display prompt.
+setf *prompt-in* (fn (n) "")
+setf *prompt-out* (fn (n) "")
+setf *prompt-cont* (fn (n) "  ")

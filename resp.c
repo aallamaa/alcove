@@ -363,9 +363,10 @@ static inline void resp_kv_evict_expired(void) {
    server still ticks the sweep at the same cadence. */
 #define RESP_SWEEP_INTERVAL_US 1000000
 static void resp_kv_maybe_sweep(void) {
-  if (!resp_kv_current())
+  lfkv_t *kv = resp_kv_current();
+  if (!kv)
     return;
-  if (resp_kv_count() == 0)
+  if (lfkv_count(kv) == 0)
     return;
   int64_t now = resp_now_us();
   int64_t last =
@@ -1350,8 +1351,7 @@ static void cmd_strlen(resp_client_t *c, char **argv, long *argl, int argc) {
 }
 
 /* Shared core for INCR/DECR/INCRBY/DECRBY. CAS-loop on the value slot
-   so concurrent reactors can't lose updates; lfkv_cas preserves TTL
-   (does not touch the slot's expiry_us). */
+   so concurrent reactors can't lose updates; lfkv_cas preserves TTL. */
 static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
                             long long delta) {
   resp_kv_ensure();

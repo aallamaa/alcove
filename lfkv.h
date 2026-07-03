@@ -2,12 +2,14 @@
  *
  * Open-addressed, linear probing, fixed-size (no resize). Each slot is a
  * pointer to an `lfslot_t` record holding immutable key bytes plus an
- * atomic `_Atomic(exp_t *)` value pointer and atomic expiry timestamp.
+ * atomic `_Atomic(lfentry_t *)` entry pointer. The entry publishes value
+ * and expiry together, so readers never combine a fresh value with a stale
+ * deadline from a previous write.
  *
  * Semantics:
- *   slots[i] == NULL                      → never reached, end of probe
- *   slots[i] == S, S->val.load() == NULL  → soft-tombstone (deleted), keep
- * probing slots[i] == S, S->val.load() != NULL  → live entry
+ *   slots[i] == NULL                        → never reached, end of probe
+ *   slots[i] == S, S->entry.load() == NULL  → soft-tombstone (deleted), keep
+ * probing slots[i] == S, S->entry.load() != NULL  → live entry
  *
  * Slot records are allocated once on first insert for a key and never
  * freed except at lfkv_destroy. This avoids the cost of reallocating
@@ -16,15 +18,14 @@
  *
  * Memory ordering:
  *   - acquire on slot pointer loads (slots[i])
- *   - acquire on value pointer loads (slot->val)
+ *   - acquire on entry pointer loads (slot->entry)
  *   - release on slot pointer stores (CAS)
- *   - release on value pointer stores (CAS)
+ *   - release on entry pointer stores (CAS)
  *   - relaxed on count (approximate is fine)
  *
- * Reclamation: every value swap retires the old exp_t * via epoch.h.
- * The retire freer is `unrefexp_void` which performs `unrefexp(old)` —
- * the slot's implicit ref is transferred to the retire list and released
- * once min_quiescent surpasses retire_epoch.
+ * Reclamation: every entry swap retires the old lfentry_t * via epoch.h.
+ * The retire freer unrefs entry->val and frees the entry once min_quiescent
+ * surpasses retire_epoch.
  *
  * Integration: callers MUST register the calling thread via
  * epoch_register() and call epoch_tick() at quiescent points (top of
@@ -40,12 +41,16 @@
 
 #include "alcove.h"
 
+typedef struct lfentry {
+  struct exp_t *val;
+  int64_t expiry_us; /* 0 = no expiry */
+} lfentry_t;
+
 typedef struct lfslot {
   uint32_t khash;
   uint32_t klen;
-  _Atomic(struct exp_t *) val;
-  _Atomic int64_t expiry_us; /* 0 = no expiry */
-  char key[];                /* klen bytes, no NUL */
+  _Atomic(lfentry_t *) entry;
+  char key[]; /* klen bytes, no NUL */
 } lfslot_t;
 
 typedef struct lfkv {

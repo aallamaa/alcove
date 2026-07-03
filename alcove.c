@@ -7717,6 +7717,12 @@ static void repl_readline_setup(env_t *global) {
      on an empty line it exits. Takes over SIGINT from readline — see the handler
      in debugger.h. */
   repl_install_sigint();
+  /* Reassert the common Emacs editing keys after inputrc has loaded. M-f is
+     language-aware: readline's stock forward-word skips punctuation operators. */
+  rl_bind_key('\001', rl_beg_of_line);   /* C-a */
+  rl_bind_key('\013', rl_kill_line);     /* C-k */
+  rl_bind_keyseq("\033b", alcove_backward_symbol); /* M-b / ESC b */
+  rl_bind_keyseq("\033f", alcove_forward_symbol); /* M-f / ESC f */
   /* Shift-TAB (back-tab, ESC[Z) dedents by up to one indent level. */
   rl_bind_keyseq("\033[Z", alcove_back_tab);
   rl_basic_word_break_characters = " \t\n()'`,;\"";

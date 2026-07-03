@@ -150,6 +150,24 @@ def run_doc(binary, dialect):
     check(f"{dialect}: doc-under-cursor not the literal 'tok'", "for 'tok'" not in clean)
 
 
+def run_editing_keys(binary, dialect):
+    """Real readline editing keys: C-a, C-k, and M-f/ESC-f."""
+    init = 'require("repl")\nrepl/install-all()\n'
+    c_a_c_k = "garbage\x01\x0b+ 20 22\n"
+    m_f = "+ 1 2\x01\x1bf\x0b 20 2\n"
+    m_b = "+ 1 2\x1bb\x0b41\n"
+    if binary.endswith("alcove"):
+        init = '(require "repl")\n(repl/install-all)\n'
+        c_a_c_k = "garbage\x01\x0b(+ 20 22)\n"
+        m_f = "(+ 1 2)\x01\x1bf\x0b 20 2)\n"
+        m_b = "(+ 1 2)\x1bb\x0b41)\n"
+    raw, _ = drive(binary, init, [c_a_c_k, m_f, m_b])
+    clean = ANSI.sub("", raw)
+    check(f"{dialect}: C-a then C-k replaces the line", "[1]= 42" in clean)
+    check(f"{dialect}: M-f moves over a language symbol", "[2]= 22" in clean)
+    check(f"{dialect}: M-b moves over a language symbol", "[3]= 42" in clean)
+
+
 def run_graceful(binary, dialect):
     """A nil / erroring hook must never brick the REPL."""
     init = (
@@ -178,6 +196,7 @@ def main():
             continue
         run_dialect(binary, dialect)
         run_doc(binary, dialect)
+        run_editing_keys(binary, dialect)
         run_graceful(binary, dialect)
     print(f"checks: {passed} passed, {failed} failed")
     if failed == 0:

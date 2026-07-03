@@ -1774,6 +1774,43 @@ static int alcove_back_tab(int count, int key) {
   return 0;
 }
 
+/* Meta-b/Meta-f should move over language symbols, not just readline's idea of
+   an alnum word. In a Lisp/Adder prompt, operators and names like +, map,
+   foo/bar, and set! are the units a user expects to jump across. */
+static int alcove_forward_symbol(int count, int key);
+static int alcove_backward_symbol(int count, int key) {
+  (void)key;
+  if (!rl_line_buffer || count == 0)
+    return 0;
+  if (count < 0)
+    return alcove_forward_symbol(-count, key);
+  int p = rl_point;
+  for (int n = 0; n < count && p > 0; n++) {
+    while (p > 0 && !alc_sym_char((unsigned char)rl_line_buffer[p - 1]))
+      p--;
+    while (p > 0 && alc_sym_char((unsigned char)rl_line_buffer[p - 1]))
+      p--;
+  }
+  rl_point = p;
+  return 0;
+}
+
+static int alcove_forward_symbol(int count, int key) {
+  if (!rl_line_buffer || count == 0)
+    return 0;
+  if (count < 0)
+    return alcove_backward_symbol(-count, key);
+  int p = rl_point;
+  for (int n = 0; n < count && p < rl_end; n++) {
+    while (p < rl_end && !alc_sym_char((unsigned char)rl_line_buffer[p]))
+      p++;
+    while (p < rl_end && alc_sym_char((unsigned char)rl_line_buffer[p]))
+      p++;
+  }
+  rl_point = p;
+  return 0;
+}
+
 /* ---- Debugger tab-completion (readline) -----------------------------------
  */
 static const char *g_dbg_commands[] = {
