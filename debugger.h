@@ -754,7 +754,17 @@ exp_t *evaluate(exp_t *e, env_t *env) {
       dbg_hook(e, env); /* gated; one never-taken branch when not debugging */
     tmpexp = car(e);
     if (tmpexp && ispair(tmpexp)) {
+      /* The HEAD of a form is never in tail position — only the eventual
+         invocation of the whole form is. Without clearing, a call in head
+         position of a tail-positioned form — ((tmp 1) + (rest)) as an if
+         branch — returned a TAILREC marker instead of its value, and the
+         infix/callable dispatch below choked on it ("Illegal value in
+         operation"). Latent for the then-branch forever; surfaced when the
+         else branch became properly tail-positioned. */
+      int head_tail = in_tail_position;
+      in_tail_position = 0;
       tmpevexp = EVAL(tmpexp, env);
+      in_tail_position = head_tail;
       tmpexp = tmpevexp;
       /* If evaluating the head form itself raised (e.g. an unbound operator in
          ((undefined-fn) 1 2)), propagate that error. Without this the form
