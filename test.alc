@@ -5055,6 +5055,23 @@
         :survived)
 
 ;; ====================================================================
+;; AST-tier TCO parity (fixed 2026-07-03; the VM always had these):
+;; - if's ELSE branch evaluated in the condition slot with tail=0 — every
+;;   else-tail recursion overflowed the C stack under --interpret;
+;; - the cross-function tail trampoline jumped into a MULTI (defn) wrapper
+;;   without re-dispatching to a clause (fn->next is NULL there) — SEGV;
+;; - make_tail_marker stored raw-NULL nil args, so a nil passed through a
+;;   tail call rebind reported the parameter "unbound".
+(def _tco_else (n acc) (if (is n 0) acc (_tco_else (- n 1) (+ acc 1))))
+(assert "deep else-branch tail recursion" (_tco_else 200000 0) 200000)
+(defn _tco_multi ((n) (_tco_multi n 0))
+                 ((n acc) (if (is n 0) acc (_tco_multi (- n 1) (+ acc 1)))))
+(assert "deep multi-arity cross-clause tail recursion" (_tco_multi 200000) 200000)
+(def _tco_rev (xs acc) (if (no xs) acc (_tco_rev (cdr xs) (cons (car xs) acc))))
+(assert "nil flows through a tail-call rebind (cdr of last pair)"
+        (_tco_rev (list 1 2 3 4 5) (list)) (list 5 4 3 2 1))
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner

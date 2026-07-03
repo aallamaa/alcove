@@ -353,6 +353,18 @@ test-all:
 	    *) echo "  FAILURES — $$res"; ok=0;; \
 	  esac; \
 	done; \
+	printf '\n=== whole suite under --interpret (AST tier) ===\n'; \
+	ires=$$(./alcove --noload --no-init --interpret test.alc 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	case "$$ires" in \
+	  *" 8 failed") echo "  OK — $$ires (8 = the pinned tier-definitional set:"; \
+	                echo "       6 jit/compiled? introspection asserts + 2 deep-try"; \
+	                echo "       shapes that need the VM handler stack)";; \
+	  "") echo "  CRASH / early exit — no TEST RESULT line (a defn-multi SEGV"; \
+	      echo "       and a missing else-branch TCO hid here for months)"; ok=0;; \
+	  *) echo "  BASELINE DRIFT — $$ires (expected exactly 8 failed)."; \
+	     echo "       New AST-tier failures, or fixed ones: update the pinned"; \
+	     echo "       count knowingly."; ok=0;; \
+	esac; \
 	printf '\n=== test.adr freshness (generated from test.alc) ===\n'; \
 	gadr=/tmp/test.adr.check.$$$$; \
 	if python3 gen_test_adr.py -o "$$gadr" >/dev/null 2>&1 && \

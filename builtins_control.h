@@ -840,6 +840,10 @@ static exp_t *make_tail_marker(exp_t *fn, exp_t *call_form, env_t *env) {
       in_tail_position = saved_tail;
       return v;
     }
+    if (!v) /* raw-NULL nil (e.g. (cdr last-pair)): normalize, or the rebind
+               binds the param to NULL and the next lookup reports it
+               unbound. */
+      v = NIL_EXP;
     tail = tail->next = make_node(v);
     src = src->next;
   }

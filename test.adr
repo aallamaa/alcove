@@ -7583,6 +7583,27 @@ assert-true "raise records its call-site location" (let ((loc (try ((fn (v) (rai
 assert "introspection does not re-raise" (do (try (_ei_call 1) (fn (e) (do (error-location e) (error-backtrace e) (error-form e)))) :survived):
   :survived
 
+def _tco_else (n acc):
+  if (is n 0):
+    acc
+    _tco_else (- n 1) (+ acc 1)
+
+assert "deep else-branch tail recursion" (_tco_else 200000 0) 200000
+
+defn _tco_multi ((n) (_tco_multi n 0)):
+  (n acc) (if (is n 0) acc (_tco_multi (- n 1) (+ acc 1)))
+
+assert "deep multi-arity cross-clause tail recursion" (_tco_multi 200000):
+  200000
+
+def _tco_rev (xs acc):
+  if (no xs):
+    acc
+    _tco_rev (cdr xs) (cons (car xs) acc)
+
+assert "nil flows through a tail-call rebind (cdr of last pair)" (_tco_rev (list 1 2 3 4 5) (list)):
+  list 5 4 3 2 1
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.

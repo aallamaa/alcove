@@ -2528,6 +2528,11 @@ exp_t *forcmd(exp_t *e, env_t *env) {
           }
           counter++;
         }
+        if (!ret)
+          ret = NIL_EXP; /* zero-iteration (empty/descending) range -> nil,
+                            matching the compiled tier — the shared error
+                            label below reads a NULL ret as "missing
+                            parameter" */
       }
     }
   }

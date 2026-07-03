@@ -586,6 +586,28 @@ tailrec: {
       e = marker;
       marker_args =
           1; /* marker's arg nodes are pre-evaluated — don't re-eval */
+      /* The tail call may resolve to a MULTI (defn) wrapper — re-dispatch on
+         the marker's arg count to the matching clause, exactly as the entry
+         path does. The wrapper has no body of its own (fn->next is NULL), so
+         jumping to tailrec with it read through NULL: (defn f ((n) (f n 0))
+         ((n acc) ...tail (f ...))) segfaulted on the AST tier. */
+      if (fn->flags & FLAG_MULTI) {
+        int _n = 0;
+        for (exp_t *a = e->next; a; a = a->next)
+          _n++;
+        exp_t *chosen = multi_pick(fn->content, _n);
+        if (!chosen) {
+          exp_t *er = error(ERROR_MISSING_PARAMETER, e, env,
+                            "no matching clause for %d argument(s)", _n);
+          unrefexp(fn);
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return er;
+        }
+        refexp(chosen); /* own the clause; drop the wrapper's ref */
+        unrefexp(fn);
+        fn = chosen;
+      }
       /* cross-function tail loop back-edge (AST tier): runaway-budget
          checkpoint. newenv is already destroyed above; we own fn (new_fn) and
          e (marker). Build the error before unref'ing e (error() refs it). */

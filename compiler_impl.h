@@ -2085,6 +2085,10 @@ static exp_t *ast_container_infix(exp_t *container, exp_t *op, exp_t *e,
    OP_TAIL_CALL re-enters via goto tail_reentry with a fresh fn —
    `fn_owned` tracks whether we took ownership of the post-tail fn (so
    we can unref it on final return or error). */
+/* defn clause dispatch — needed by OP_TAIL_CALL's multi re-dispatch inside
+   vm_run; defined further down (before invoke). */
+static exp_t *multi_pick(exp_t *clauses, int n);
+
 exp_t *vm_run(exp_t *fn, env_t *env) {
 #define VM_STACK_MAX 256
   exp_t *stack[VM_STACK_MAX];
@@ -2828,6 +2832,22 @@ l_tail_call: {
   uint8_t n = READ_U8;
   int base = sp - n;
   exp_t *new_fn = stack[base - 1];
+
+  /* MULTI (defn) wrapper in tail position: re-dispatch to the matching
+     clause by arg count HERE, so a compiled clause keeps full TCO. The
+     wrapper itself is never FLAG_COMPILED, so without this it fell to the
+     vm_invoke_values fallback — one C frame per hop — and deep cross-clause
+     defn recursion overflowed the stack (the AST tier's trampoline has the
+     mirror re-dispatch). No matching clause: leave the wrapper; the
+     fallback below raises the canonical error. */
+  if (islambda(new_fn) && (new_fn->flags & FLAG_MULTI)) {
+    exp_t *chosen = multi_pick(new_fn->content, n);
+    if (chosen) {
+      refexp(chosen);
+      unrefexp(new_fn);
+      new_fn = stack[base - 1] = chosen;
+    }
+  }
 
   /* String-as-callable and escape continuations: dispatch via
      vm_invoke_values (it has the string-index arm and the EXP_CONT escape

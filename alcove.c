@@ -3704,28 +3704,40 @@ exp_t *ifcmd(exp_t *e, env_t *env) {
     unrefexp(tmpexp);
     if ((tmpexp = cdddr(e)))
       do {
+        if (!tmpexp->next) {
+          /* Lone final element = the ELSE expression. Evaluate it in TAIL
+             position, exactly like the then-branch above. It was previously
+             evaluated in the condition slot with in_tail_position=0, which
+             silently disabled TCO for every else-branch tail call on the
+             AST tier — (def g (n acc) (if (is n 0) acc (g ...))) overflowed
+             the C stack under --interpret while the VM (compiled jumps)
+             looped fine. */
+          tmpexp2 = refexp(tmpexp->content);
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return evaluate(tmpexp2, env);
+        }
         in_tail_position = 0;
         tmpexp2 = EVAL(tmpexp->content, env);
-        if ((!iserror(tmpexp2)) && (tmpexp->next)) {
-          if (istrue(tmpexp2)) {
-            unrefexp(tmpexp2);
-            tmpexp2 = refexp(cadr(tmpexp));
-            unrefexp(e);
-            in_tail_position = outer_tail;
-            return evaluate(tmpexp2, env);
-          }
-          if (!(tmpexp = cddr(tmpexp))) {
-            unrefexp(tmpexp2);
-            unrefexp(e);
-            in_tail_position = outer_tail;
-            return NIL_EXP; /* clauses exhausted, no match — canonical nil, not
-                               raw NULL (else iso/is mis-compare vs nil literal)
-                             */
-          }
-        } else {
+        if (iserror(tmpexp2)) {
           unrefexp(e);
           in_tail_position = outer_tail;
           return tmpexp2;
+        }
+        if (istrue(tmpexp2)) {
+          unrefexp(tmpexp2);
+          tmpexp2 = refexp(cadr(tmpexp));
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return evaluate(tmpexp2, env);
+        }
+        unrefexp(tmpexp2);
+        if (!(tmpexp = cddr(tmpexp))) {
+          unrefexp(e);
+          in_tail_position = outer_tail;
+          return NIL_EXP; /* clauses exhausted, no match — canonical nil, not
+                             raw NULL (else iso/is mis-compare vs nil literal)
+                           */
         }
       } while (1);
     else {

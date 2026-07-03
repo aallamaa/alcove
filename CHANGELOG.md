@@ -101,6 +101,27 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   bytes — mirroring the guard `json-encode` already had (`JS_MAX_DEPTH`).
 - `adr.py` / `alc2adr.py` read stdin when no file is given and handle `[..]`
   bracket lambdas (previously looped forever).
+- **The AST tier (`--interpret`) had three long-hidden tail-call bugs** —
+  found by running the WHOLE suite under `--interpret`, which no gate did
+  (the differentials sample forms; `test-all` now pins a full AST-tier
+  suite run):
+  1. `if`'s **else branch** was evaluated in the condition slot with the
+     tail flag cleared, silently disabling TCO for every else-branch tail
+     call — `(def g (n acc) (if (is n 0) acc (g ...)))` overflowed the C
+     stack under `--interpret` while the VM looped fine.
+  2. The cross-function tail trampoline jumped into a **multi-arity (defn)
+     wrapper** without re-dispatching to a clause — the wrapper has no
+     body, so this read through NULL and **segfaulted** (the crash that
+     took the whole suite down).
+  3. `make_tail_marker` stored raw-NULL nil arguments, so a nil flowing
+     through a tail-call rebind (e.g. `(cdr last-pair)`) reported the
+     parameter "unbound".
+  The VM gained the mirror of fix 2: a defn wrapper in tail position now
+  re-dispatches to its clause in `OP_TAIL_CALL`, so compiled cross-clause
+  recursion keeps full TCO instead of paying one C frame per hop (deep
+  `defn` recursion overflowed there too). Also: an empty/descending `for`
+  range on the AST tier returned a "missing parameter" error instead of
+  nil (the compiled tier's behavior).
 - **Error classes were lost across compiled calls** — the VM blanket-raised
   `illegal-value` for every runtime error with the same *message* the AST
   tier uses, so the divergence was invisible to the output-comparing equiv
