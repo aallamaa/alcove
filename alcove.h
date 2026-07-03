@@ -1125,6 +1125,12 @@ exp_t *raisecmd(exp_t *e, env_t *env); /* builtins_log.h */
 extern const char doc_raise[];
 exp_t *errorcodescmd(exp_t *e, env_t *env);
 extern const char doc_error_codes[];
+exp_t *errorlocationcmd(exp_t *e, env_t *env);
+extern const char doc_error_location[];
+exp_t *errorbacktracecmd(exp_t *e, env_t *env);
+extern const char doc_error_backtrace[];
+exp_t *errorformcmd(exp_t *e, env_t *env);
+extern const char doc_error_form[];
 exp_t *allocfailaftercmd(exp_t *e, env_t *env);
 extern const char doc_alloc_fail_after[];
 exp_t *andcmd(exp_t *e, env_t *env);

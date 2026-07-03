@@ -213,6 +213,130 @@ static inline void bt_clear(void) {
   g_error_bt_more = 0;
 }
 
+/* ---- per-error introspection metadata (errmeta) ----------------------------
+   The top-level reporter knows an error's line/col and call stack, but those
+   live in transient TLS globals (g_err_line, g_error_bt) that later errors —
+   or the catch itself — overwrite. For programmatic introspection (the
+   self-healing/AI-harness use-case: a handler that reads WHERE and in WHAT
+   CALL CONTEXT code failed, then patches it), every error() call records a
+   side entry here at creation time: the final line/col (the VM's RUNTIME_ERR
+   updates it from the pc→line table) and a private copy of the LIVE call
+   stack as a Lisp list of names (innermost first). Read from Lisp via
+   (error-location e) / (error-backtrace e) / (error-form e) in
+   builtins_log.h; released in unrefexp_free's EXP_ERROR case. TLS
+   open-addressed table, same pattern as weak.h/watch.h; error creation is
+   the cold path, so the copy cost is irrelevant. */
+typedef struct {
+  exp_t *err; /* key; NULL = empty, (exp_t *)-1 = tombstone */
+  int line, col;
+  exp_t *bt; /* owned Lisp list of function-name strings, or NULL */
+} errmeta_slot_t;
+static ALCOVE_TLS errmeta_slot_t *errmeta_tab = NULL;
+static ALCOVE_TLS size_t errmeta_cap = 0;
+static ALCOVE_TLS size_t errmeta_used = 0;
+#define ERRMETA_TOMBSTONE ((exp_t *)(uintptr_t)-1)
+
+static size_t errmeta_hash(exp_t *p) {
+  return (size_t)(((uintptr_t)p >> 3) * 0x9E3779B97F4A7C15ull);
+}
+static errmeta_slot_t *errmeta_find(exp_t *err) {
+  if (!errmeta_cap)
+    return NULL;
+  size_t mask = errmeta_cap - 1, i = errmeta_hash(err) & mask;
+  while (errmeta_tab[i].err) {
+    if (errmeta_tab[i].err == err)
+      return &errmeta_tab[i];
+    i = (i + 1) & mask;
+  }
+  return NULL;
+}
+static int errmeta_grow(void) {
+  size_t ncap = errmeta_cap ? errmeta_cap * 2 : 64;
+  errmeta_slot_t *nt = (errmeta_slot_t *)calloc(ncap, sizeof *nt);
+  if (!nt)
+    return 0;
+  size_t mask = ncap - 1, live = 0;
+  for (size_t i = 0; i < errmeta_cap; i++) {
+    exp_t *k = errmeta_tab[i].err;
+    if (!k || k == ERRMETA_TOMBSTONE)
+      continue;
+    size_t j = errmeta_hash(k) & mask;
+    while (nt[j].err)
+      j = (j + 1) & mask;
+    nt[j] = errmeta_tab[i];
+    live++;
+  }
+  free(errmeta_tab);
+  errmeta_tab = nt;
+  errmeta_cap = ncap;
+  errmeta_used = live;
+  return 1;
+}
+/* Record err's creation-time metadata: its line/col (as just computed by
+   error()) and a private copy of the LIVE stack (g_callstack — per-error
+   accurate, unlike the once-per-episode g_error_bt snapshot). */
+static void errmeta_record(exp_t *err, int line, int col) {
+  if (!errmeta_cap || (errmeta_used + 1) * 10 > errmeta_cap * 7)
+    if (!errmeta_grow())
+      return; /* OOM: introspection degrades to nil, the error still works */
+  size_t mask = errmeta_cap - 1, i = errmeta_hash(err) & mask;
+  errmeta_slot_t *slot = NULL, *tomb = NULL;
+  while (errmeta_tab[i].err) {
+    if (errmeta_tab[i].err == err) {
+      slot = &errmeta_tab[i];
+      break;
+    }
+    if (errmeta_tab[i].err == ERRMETA_TOMBSTONE && !tomb)
+      tomb = &errmeta_tab[i];
+    i = (i + 1) & mask;
+  }
+  if (!slot) {
+    slot = tomb ? tomb : &errmeta_tab[i];
+    if (!tomb)
+      errmeta_used++;
+    slot->err = err;
+  } else if (slot->bt) {
+    unrefexp(slot->bt); /* freelist reuse of an err cell: replace stale meta */
+  }
+  slot->line = line;
+  slot->col = col;
+  slot->bt = NULL;
+  int n = g_calldepth < ALC_BT_MAX ? g_calldepth : ALC_BT_MAX;
+  exp_t *head = NULL, *tail = NULL;
+  for (int k = 0; k < n; k++) {
+    const char *nm = g_callstack[k] ? g_callstack[k] : "<anonymous>";
+    exp_t *cell = make_node(make_string((char *)nm, (int)strlen(nm)));
+    if (!head)
+      head = tail = cell;
+    else {
+      tail->next = cell;
+      tail = cell;
+    }
+  }
+  slot->bt = head; /* innermost LAST here; reversed at read for
+                      innermost-first — no: g_callstack[0] is outermost, so
+                      this list is outermost-first; error-backtrace reverses
+                      to match the printed report (innermost first). */
+}
+/* The VM's RUNTIME_ERR knows the precise line only after mapping the pc —
+   update the recorded location. */
+static void errmeta_set_loc(exp_t *err, int line, int col) {
+  errmeta_slot_t *s = errmeta_find(err);
+  if (s) {
+    s->line = line;
+    s->col = col;
+  }
+}
+static void errmeta_on_free(exp_t *err) {
+  errmeta_slot_t *s = errmeta_find(err);
+  if (!s)
+    return;
+  if (s->bt)
+    unrefexp(s->bt);
+  s->err = ERRMETA_TOMBSTONE;
+  s->bt = NULL;
+}
+
 /* ---- Debugger (gdb-style, runs on the AST tree-walker) --------------------
    Opt-in via --debug (which also forces the AST walker, like --interpret, so
    every call frame is a live, inspectable env_t) or the (break) builtin. All
@@ -494,6 +618,9 @@ lispProc lispProcList[] = {
     LISPCMD("set-validator!", setvalidatorcmd, doc_set_validator),
     LISPCMD("raise", raisecmd, doc_raise),
     LISPCMD("error-codes", errorcodescmd, doc_error_codes),
+    LISPCMD("error-location", errorlocationcmd, doc_error_location),
+    LISPCMD("error-backtrace", errorbacktracecmd, doc_error_backtrace),
+    LISPCMD("error-form", errorformcmd, doc_error_form),
     /* observability (builtins_log.h) */
     LISPCMD("error-code", errorcodecmd, doc_error_code),
     LISPCMD("log!", logemitcmd, doc_log_emit),
@@ -1039,6 +1166,8 @@ exp_t *error(int errnum, exp_t *id, env_t *env, const char *err_message, ...) {
   g_err_line = form_line(id);
   g_err_col = form_col(id);
   bt_capture(); /* snapshot the call stack at the error site for a backtrace */
+  /* per-error line/col + live-stack copy for (error-location e) etc. */
+  errmeta_record(ret, g_err_line, g_err_col);
   /* Debugger break-on-raise: an error raised outside any (try ...) during a
      top-level form's evaluation drops into the debugger HERE — at the raise
      site, where every frame and its env are still live (locals/p work). Gated
@@ -1404,6 +1533,7 @@ int unrefexp_free(exp_t *e,
          (ERROR_CONT_ESCAPE borrows it for the continuation id). */
       if (e->flags == ERROR_USER && e->meta)
         unrefexp((exp_t *)e->meta);
+      errmeta_on_free(e); /* drop the introspection side entry */
       break;
     case EXP_SYMBOL:
     case EXP_STRING:

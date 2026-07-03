@@ -94,6 +94,80 @@ exp_t *errorcodescmd(exp_t *e, env_t *env) {
   return head ? head : refexp(NIL_EXP);
 }
 
+const char doc_error_location[] =
+    "(error-location e) — (line col) of the form whose evaluation raised e "
+    "(1-based; source of the file/'-e' text that was running), or nil when "
+    "no location was recorded. Captured per-error at raise time in BOTH "
+    "tiers (the compiled tier maps the VM pc back to the source line). Does "
+    "NOT re-raise e.";
+exp_t *errorlocationcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env); /* non-propagating: inspect */
+    if (a && iserror(a)) {
+      errmeta_slot_t *s = errmeta_find(a);
+      if (s && s->line > 0) {
+        ret = make_node(MAKE_FIX(s->line));
+        ret->next = make_node(MAKE_FIX(s->col));
+      }
+    }
+  }
+  if (a)
+    unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_error_backtrace[] =
+    "(error-backtrace e) — the call stack AT THE RAISE SITE as a list of "
+    "function-name strings, innermost call first (like the top-level "
+    "report), or nil at top level / when unrecorded. A per-error snapshot: "
+    "it survives the catch and later errors, unlike (backtrace), which "
+    "reads the CURRENT stack. Tail calls collapse frames as usual. Does "
+    "NOT re-raise e.";
+exp_t *errorbacktracecmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env); /* non-propagating: inspect */
+    if (a && iserror(a)) {
+      errmeta_slot_t *s = errmeta_find(a);
+      if (s && s->bt) { /* stored outermost-first; reverse for the report
+                           order (innermost first) */
+        exp_t *rev = NIL_EXP;
+        for (exp_t *w = s->bt; w && w->content; w = w->next) {
+          exp_t *cell = make_node(refexp(w->content));
+          cell->next = (rev == NIL_EXP) ? NULL : rev;
+          rev = cell;
+        }
+        ret = rev;
+      }
+    }
+  }
+  if (a)
+    unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_error_form[] =
+    "(error-form e) — the FORM whose evaluation raised e (the code itself, "
+    "as data — e.g. (/ x 0)), when the AST tier retained it; a compiled "
+    "frame yields the enclosing procedure instead, and nil when nothing "
+    "was retained. Pair with (error-location e)/(source fn) to find and "
+    "patch the failing code. Does NOT re-raise e.";
+exp_t *errorformcmd(exp_t *e, env_t *env) {
+  exp_t *a = NULL, *ret = NIL_EXP;
+  if (e->next) {
+    a = EVAL(e->next->content, env); /* non-propagating: inspect */
+    if (a && iserror(a) && a->next)
+      ret = refexp(a->next); /* the offending form (AST) or procedure (VM) */
+  }
+  if (a)
+    unrefexp(a);
+  unrefexp(e);
+  return ret;
+}
+
 const char doc_raise[] =
     "(raise code msg) / (raise msg) — raise a CUSTOM error: an ordinary "
     "first-class error value with class 'user-error, message msg, and "

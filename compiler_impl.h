@@ -2131,6 +2131,7 @@ tail_reentry:
     if (bc_loc_at(bc, pc, &_el, &_ec)) {                                       \
       g_err_line = _el;                                                        \
       g_err_col = _ec;                                                         \
+      errmeta_set_loc(_err, _el, _ec); /* per-error copy for introspection */  \
     }                                                                          \
   } while (0)
 /* RUNTIME_ERR_C carries the machine-readable error CLASS. The class must

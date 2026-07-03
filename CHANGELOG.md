@@ -23,8 +23,19 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   list or deque is sugar for `(nth v i)`, matching the other callable
   containers (vector, dict, HAMT).
 - **`(error-codes)`** — every machine-readable error class as a list of
-  symbols, single-sourced from the same table as the codes themselves —
-  the discoverability companion to `(error-code e)` dispatch.
+  `(code "description")` pairs, single-sourced from the same table as the
+  codes themselves — the discoverability companion to `(error-code e)`
+  dispatch.
+- **Error introspection: `(error-location e)` / `(error-backtrace e)` /
+  `(error-form e)`** — every error now records, at raise time, its source
+  `(line col)` (both tiers; the VM maps its pc back to the line), a private
+  copy of the raise-site call stack (a list of function names, innermost
+  first, that survives the catch and later errors — unlike `(backtrace)`,
+  which reads the current stack), and the failing form itself (the code as
+  data on the AST tier; the enclosing procedure from a compiled frame).
+  None of the inspectors re-raise. This is the introspection floor for
+  self-healing harnesses: a handler can now see what failed, where, in
+  which call context, and read the offending code.
 - **Custom errors: `(raise 'code "msg")`** — raise a first-class error
   whose `(error-code e)` is YOUR symbol (class `'user-error`; the one-arg
   form `(raise "msg")` uses `'user-error` as the code). Propagates, is

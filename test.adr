@@ -7564,6 +7564,25 @@ assert-true "error-codes lists every builtin class with a description" (let ((cs
 
 assert-true "every code an error actually carries is in error-codes" (let ((cs (error-codes))) (all? (fn (k) (any? (fn (c) (is (car c) k)) cs)) (list (error-code (try (/ 1 0) (fn (e) e))) (error-code (try (_zz_undefined) (fn (e) e))) (error-code (try (raise "m") (fn (e) e))))))
 
+def _ei_boom (x):
+  / x 0
+
+def _ei_call (x):
+  _ei_boom (+ x 1)
+
+assert-true "error-location is a (line col) pair of positive ints" (let ((loc (try (_ei_call 1) (fn (e) (error-location e))))) (and (list? loc) (is (length loc) 2) (number? (car loc)) (> (car loc) 0) (number? (nth loc 1)) (> (nth loc 1) 0)))
+
+assert-true "error-backtrace is a non-empty list of function-name strings" (let ((bt (try (_ei_call 1) (fn (e) (error-backtrace e))))) (and (list? bt) (> (length bt) 0) (all? (fn (f) (string? f)) bt)))
+
+assert-true "the captured backtrace survives the catch and later errors" (let ((bt1 (try (_ei_call 1) (fn (e) (error-backtrace e))))) (do (try (/ 2 0) (fn (e) nil)) (and (> (length bt1) 0) (all? (fn (f) (string? f)) bt1))))
+
+assert-true "error-form retains the failing code or its procedure" (no (no (try (_ei_call 1) (fn (e) (error-form e)))))
+
+assert-true "raise records its call-site location" (let ((loc (try ((fn (v) (raise 'neg "n")) -1) (fn (e) (error-location e))))) (and (list? loc) (> (car loc) 0)))
+
+assert "introspection does not re-raise" (do (try (_ei_call 1) (fn (e) (do (error-location e) (error-backtrace e) (error-form e)))) :survived):
+  :survived
+
 
 # ====================================================================
 # Adder-syntax-specific tests — the ONLY hand-maintained part of test.adr.
