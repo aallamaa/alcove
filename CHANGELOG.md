@@ -22,6 +22,15 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 - **Adder/Alcove list-call sugar** — `(v i)` (Adder: `v i` / `v(i)`) on a
   list or deque is sugar for `(nth v i)`, matching the other callable
   containers (vector, dict, HAMT).
+- **Self-healing harness: `lib/heal.adr` + `examples/heal/`** — the error
+  introspection surface put to work: `heal/diagnose` bundles a failure's
+  code/message/location/backtrace/form into a diagnosis value;
+  `heal/attempt` tries candidate patches from a generator (an LLM in
+  production, any list in tests) — parse + eval under `with-time-limit`,
+  install under the broken name via `setf`, keep the first that passes the
+  tests. The example heals a crashing function live: no restart, syntax
+  errors are skipped values, runaways time out, and nothing survives that
+  the tests reject.
 - **`(error-codes)`** — every machine-readable error class as a list of
   `(code "description")` pairs, single-sourced from the same table as the
   codes themselves — the discoverability companion to `(error-code e)`

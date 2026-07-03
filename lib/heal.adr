@@ -1,0 +1,54 @@
+# lib/heal.adr — the self-healing loop: catch -> diagnose -> candidate
+# patches -> verify under limits -> install.
+#
+# This is the AI-harness idea pointed at RUNNING code: when a function
+# fails, the supervisor doesn't just log it — it bundles everything the
+# error knows (class, message, source location, raise-site backtrace, the
+# failing form itself) into a DIAGNOSIS value, hands that to a patch
+# generator (an LLM in production, any candidate list in tests), and tries
+# each candidate: parse + evaluate under a time limit (a syntax error, a
+# crash, or a runaway all score as failure, never an outage), install it
+# under the broken function's name, run the test suite, keep the first
+# that passes. Code that fixes code, with the operator owning every arrow.
+#
+# Candidates are FUNCTION-VALUE sources — "(fn (xs) ...)" — installed by
+# rebinding the target name with setf (a def evaluated inside the harness
+# frame would create a local, not the global being healed).
+#
+# Usage (see examples/heal/run.adr):
+#   require("lib/heal")
+#   d = heal/diagnose (fn () (avg nil))       # nil, or a diagnosis map
+#   heal/attempt 'avg candidates tests        # first passing source, or nil
+#
+# Bodies are written in prefix form so they transpile cleanly, one line
+# per form (an Adder call must not be split across newlines) — the same
+# conventions as lib/evolve.adr.
+ns heal
+
+heal/time-limit-ms = 1000 # per candidate-eval and per test call
+
+# Run thunk; nil when it succeeds, else a diagnosis hash-map built from the
+# error-introspection surface (error-code/-message/-location/-backtrace/
+# -form). Built inside the handler: a caught error is safe to inspect and
+# to pass around — it re-arms only when consumed as an operand.
+def heal/diagnose(thunk):
+  (try (do (thunk) nil) (fn (e) (hash-map "code" (error-code e) "message" (error-message e) "location" (error-location e) "backtrace" (error-backtrace e) "form" (str (error-form e)))))
+
+# Do all test thunks pass? Each runs under try + with-time-limit, so a
+# candidate that crashes or loops scores as a failure, never an outage.
+def heal/passes(tests):
+  (all? (fn (tc) (is t (try (with-time-limit heal/time-limit-ms (fn () (no (no (tc))))) (fn (e) nil)))) tests)
+
+# Parse + evaluate one candidate "(fn ...)" source under limits and REBIND
+# the global `name` to the resulting closure. t when installed, nil when
+# the candidate is broken (syntax error, eval error, runaway).
+def heal/install(name src):
+  (is t (try (with-time-limit heal/time-limit-ms (fn () (do (eval (list (quote setf) name (list (quote quote) (eval (read-string-sexpr src))))) t))) (fn (e) nil)))
+
+# Try candidates (fn-source strings) in order: install under `name`, run
+# the tests, return the first source whose tests all pass; nil when none
+# does. NOTE: a failing candidate stays installed until the next one
+# overwrites it — pass the current implementation as a final fallback
+# candidate if you want no-op-on-failure semantics.
+def heal/attempt(name candidates tests):
+  (if (no candidates) nil (if (and (heal/install name (car candidates)) (heal/passes tests)) (car candidates) (heal/attempt name (cdr candidates) tests)))

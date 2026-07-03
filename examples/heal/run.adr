@@ -1,0 +1,50 @@
+# examples/heal — an entity that heals its own code, live.
+#
+#   ./adder --noload examples/heal/run.adr
+#
+# The loop: a "production" function crashes -> the supervisor catches it
+# and builds a DIAGNOSIS from the error-introspection surface (class,
+# message, source line/col, raise-site backtrace, the failing form) ->
+# the diagnosis goes to a patch generator (a STUB here; swap in
+# lib/llm.adr and the loop is unchanged) -> each candidate patch is
+# parsed + evaluated under a time limit and installed under the broken
+# name -> the test suite decides -> the first passing patch stays.
+#
+# No process restart, no human in the loop after the tests are written —
+# and every arrow bounded: a candidate with a syntax error is skipped
+# (parse errors are values), a crashing or looping candidate scores as a
+# failure (try + with-time-limit), and nothing is kept that the tests
+# reject. This is the safety shape from examples/evolve pointed at
+# healing instead of search.
+require("lib/heal")
+
+# ---- the "production" function, with a latent bug -------------------
+def avg(xs): (/ (reduce + 0 xs) (length xs))
+
+prn("avg of (2 4 6)  : " (avg (list 2 4 6)))
+prn("")
+
+# ---- the crash, caught and diagnosed --------------------------------
+diag = heal/diagnose (fn () (avg nil))
+prn("crash diagnosed : " (get diag "code") " — " (get diag "message"))
+prn("  at line/col   : " (get diag "location"))
+prn("  call chain    : " (get diag "backtrace"))
+prn("")
+
+# ---- the patch generator (stub LLM) ---------------------------------
+# A real generator gets the diagnosis as its prompt context. The stub
+# keys on the error class the same way, and its menu deliberately
+# includes a syntactically broken patch and a plausible-but-wrong one —
+# neither derails the loop, they just don't survive the tests.
+def stub-llm(d):
+  (if (is (get d "code") (quote div-by-zero)) (list "(fn (xs" "(fn (xs) 0)" "(fn (xs) (if (no xs) 0 (/ (reduce + 0 xs) (length xs))))") nil)
+
+# ---- the tests that define "healed" ---------------------------------
+tests = (list (fn () (is (avg (list 2 4 6)) 4)) (fn () (is (avg nil) 0)))
+
+# ---- heal ------------------------------------------------------------
+won = heal/attempt (quote avg) (stub-llm diag) tests
+prn("healed with     : " won)
+prn("")
+prn("avg of (2 4 6)  : " (avg (list 2 4 6)))
+prn("avg of nil      : " (avg nil) "   (was: the crash above)")
