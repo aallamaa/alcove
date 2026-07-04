@@ -577,6 +577,135 @@ defmethod tgreet :hi (x) "hi!"
 
 assert "defmethod keyword disp" (tgreet :hi) "hi!"
 
+defclass Vehicle (wheels Int) (name String)
+
+defclass Car (:extends Vehicle) (doors Int)
+
+setf _car (Car 4 "Beetle" 2)
+
+assert "extends: merged-field constructor (own field)" (Car-doors _car) 2
+
+assert "extends: child getter for inherited field" (Car-wheels _car) 4
+
+assert "extends: child getter for 2nd inherited field" (Car-name _car):
+  "Beetle"
+
+assert "extends: PARENT accessor on child instance" (Vehicle-wheels _car) 4
+
+assert "extends: is-a? child" (is-a? _car Car) t
+
+assert "extends: is-a? parent (subsumption)" (is-a? _car Vehicle) t
+
+assert "extends: parent predicate on child" (Vehicle? _car) t
+
+assert "extends: type-of stays most-derived" (type-of _car) Car
+
+assert "extends: parent instance is NOT child" (is-a? (Car 4 "x" 2) Car) t
+
+setf _veh (Vehicle 2 "bike")
+
+assert "extends: parent instance is not the child type" (is-a? _veh Car) nil
+
+assert "extends: child is still a Dict" (is-a? _car Dict) t
+
+assert "extends: schema records parent type object" (get Car__class "parent"):
+  Vehicle
+
+assert "extends: base class has no parent key" (get Vehicle__class "parent"):
+  nil
+
+defclass RaceCar (:extends Car) (topspeed Int)
+
+setf _rc (RaceCar 4 "F1" 2 300)
+
+assert "extends: grandchild own field" (RaceCar-topspeed _rc) 300
+
+assert "extends: grandchild inherited-1" (RaceCar-doors _rc) 2
+
+assert "extends: grandchild inherited-2" (RaceCar-wheels _rc) 4
+
+assert "extends: grandchild is-a parent" (is-a? _rc Car) t
+
+assert "extends: grandchild is-a grandparent" (is-a? _rc Vehicle) t
+
+assert "extends: grandparent accessor on grandchild" (Vehicle-name _rc) "F1"
+
+assert "extends: ctor rejects bad inherited field" (error? (try (Car "notint" "x" 2) (fn (e) e))):
+  t
+
+assert "extends: setter rejects bad inherited field" (error? (try (Car-wheels! _car "notint") (fn (e) e))):
+  t
+
+assert "extends: setter updates inherited field" (do (Car-wheels! _car 6) (Car-wheels _car)):
+  6
+
+defclass Garage (holds Vehicle)
+
+setf _gar (Garage _car)
+
+assert "extends: class-typed field accepts subclass" (Vehicle-name (Garage-holds _gar)):
+  "Beetle"
+
+assert "extends: undefined parent errors" (error? (try (defclass Bad1 (:extends NoSuchClass) (a Int)) (fn (e) e))):
+  t
+
+assert "extends: builtin type as parent errors" (error? (try (defclass Bad2 (:extends Int) (a Int)) (fn (e) e))):
+  t
+
+assert "extends: :extends not first errors" (error? (try (defclass Bad3 (a Int) (:extends Vehicle)) (fn (e) e))):
+  t
+
+assert "extends: duplicate inherited field errors" (error? (try (defclass Bad4 (:extends Vehicle) (name String)) (fn (e) e))):
+  t
+
+defclass Shape (sides Int):
+  :method describe (self) (str "shape with " (Shape-sides self) " sides")
+  :method area-ish (self) (* (Shape-sides self) 10)
+
+setf _sq (Shape 4)
+
+assert "method: call generic on instance" (describe _sq) "shape with 4 sides"
+
+assert "method: second generic on same class" (area-ish _sq) 40
+
+defclass Counter (n Int) (:method plus (self k) (+ (Counter-n self) k))
+
+assert "method: extra args" (plus (Counter 5) 37) 42
+
+defclass Animalx (nm String) (:method speak (self) "...")
+
+defclass Dogx (:extends Animalx) (breed String) (:method speak (self) "woof")
+
+defclass Puppyx (:extends Dogx) (cute Bool)
+
+assert "method: class defines its own" (speak (Dogx "Rex" "lab")) "woof"
+
+assert "method: child inherits parent" (speak (Puppyx "Bit" "lab" t)) "woof"
+
+defclass Catx (:extends Animalx) (:method speak (self) "meow")
+
+assert "method: two classes, same generic, dispatch by type A" (speak (Dogx "d" "b")):
+  "woof"
+
+assert "method: two classes, same generic, dispatch by type B" (speak (Catx "c")):
+  "meow"
+
+assert "method: unoverridden inherits from grandparent" (speak (Animalx "a")):
+  "..."
+
+defmethod speak Any (x) "???"
+
+assert "method: Any default for an int" (speak 99) "???"
+
+assert "method: Any default does not shadow a class method" (speak (Catx "c")):
+  "meow"
+
+defmethod speak Int (x) "an integer"
+
+assert "method: builtin-type key beats Any" (speak 99) "an integer"
+
+assert "method: Any still applies to unmatched type" (speak "hi") "???"
+
 assert "iso dict same" (iso (hash-map "a" 1 "b" 2) (hash-map "b" 2 "a" 1)) t
 
 assert "iso dict diff val" (iso (hash-map "a" 1) (hash-map "a" 2)) nil
@@ -8127,6 +8256,31 @@ assert "adder sugar #s{ dedup count"    (count #s{x (list 1 2 2 3 3 3) t (* x x)
 assert "adder sugar #d{ entry"          (get #d{w (list "ada" "bob") w (length w)} "ada") 3
 assert "adder sugar #g[ collects"       (collect! #g[x (range 0 10) (odd x) (* x x)]) (list 1 9 25 49 81)
 assert "adder sugar #g[ no filter"      (collect! #g[x (range 0 4) (+ x 100)]) (list 100 101 102 103)
+
+# ====================================================================
+# defclass block form (Adder-idiomatic): a `defclass Name:` opens a block
+# whose indented lines are clauses. `:extends Parent` inherits; a
+# `:method name (self):` line with a trailing colon opens a nested body
+# block (a single-line `:method name (self) body` also works). This is the
+# spelling the generated corpus (transpiled from test.alc s-exprs) does not
+# exercise directly.
+# ====================================================================
+defclass Beast:
+  species String
+  legs Int
+  :method noise (self):
+    (str (Beast-species self) " has " (Beast-legs self) " legs")
+
+defclass Wolf:
+  :extends Beast
+  pack String
+  :method noise (self) "awooo"
+
+assert "block: inherited getter"        (Beast-species (Wolf "canis" 4 "alpha")) "canis"
+assert "block: own getter"              (Wolf-pack (Wolf "canis" 4 "alpha")) "alpha"
+assert "block: is-a? parent"            (is-a? (Wolf "c" 4 "p") Beast) t
+assert "block: parent method on parent" (noise (Beast "cat" 4)) "cat has 4 legs"
+assert "block: child overrides method"  (noise (Wolf "c" 4 "p")) "awooo"
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 

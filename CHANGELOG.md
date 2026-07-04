@@ -26,6 +26,24 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   class **name** (dump **v5**): a load in a different class-definition order
   keeps the right identity, and when the class is defined before `loaddb` the
   schema validator is reattached so enforcement is fully restored (see Fixed).
+- **`defclass` inheritance — `(:extends Parent)`.** As the first clause (at most
+  one), a class inherits `Parent`'s fields: the constructor takes all
+  inherited-then-own fields, `(is-a? child Parent)` holds (so `Parent`'s
+  accessors and any class-typed field accept a child), `type-of` stays
+  most-derived, and a child field may not shadow an inherited one. `Parent` must
+  be a fully-defined class; the chain is transitive (grandchildren work) and its
+  parent type object is recorded under `Name__class`'s `"parent"` key.
+- **`defclass` generic methods — `(:method name (self args…) body…)`.** After the
+  field clauses, method clauses define generic functions dispatched on the first
+  argument's type: `(name inst …)`. A child inherits a parent method it does not
+  override, a method registered for `Any` is the default, and several classes may
+  share one generic name. Built on the multimethod machinery (`defmulti` is now
+  **idempotent** so re-declaring a shared generic keeps its method table), with a
+  new internal `__mm-lookup` resolver that walks the `:extends` chain then falls
+  back to `Any`. `(defmethod name Type …)` keyed by a type object — user class or
+  builtin — works the same way. There is no `super` yet. In Adder, write the
+  block form (`defclass Dog:` / `  :extends Animal` / `  :method speak (self):`
+  with the body indented under a trailing-colon method line).
 - **`(gc-cycles)` — on-demand cycle collector** (new fragment `gc.h`).
   Reference cycles (only constructible through the mutating containers:
   `assoc!`, `push-right!`/`push-left!`, `vec-set!`) previously leaked with no

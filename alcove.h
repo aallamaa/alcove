@@ -1182,6 +1182,7 @@ exp_t *defstructcmd(exp_t *e, env_t *env);
 exp_t *defclasscmd(exp_t *e, env_t *env);
 exp_t *defmulticmd(exp_t *e, env_t *env);
 exp_t *defmethodcmd(exp_t *e, env_t *env);
+exp_t *mm_lookupcmd(exp_t *e, env_t *env);
 exp_t *reversecmd(exp_t *e, env_t *env);
 exp_t *appendcmd(exp_t *e, env_t *env);
 exp_t *numberpcmd(exp_t *e, env_t *env);

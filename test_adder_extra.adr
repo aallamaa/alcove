@@ -180,3 +180,28 @@ assert "adder sugar #s{ dedup count"    (count #s{x (list 1 2 2 3 3 3) t (* x x)
 assert "adder sugar #d{ entry"          (get #d{w (list "ada" "bob") w (length w)} "ada") 3
 assert "adder sugar #g[ collects"       (collect! #g[x (range 0 10) (odd x) (* x x)]) (list 1 9 25 49 81)
 assert "adder sugar #g[ no filter"      (collect! #g[x (range 0 4) (+ x 100)]) (list 100 101 102 103)
+
+# ====================================================================
+# defclass block form (Adder-idiomatic): a `defclass Name:` opens a block
+# whose indented lines are clauses. `:extends Parent` inherits; a
+# `:method name (self):` line with a trailing colon opens a nested body
+# block (a single-line `:method name (self) body` also works). This is the
+# spelling the generated corpus (transpiled from test.alc s-exprs) does not
+# exercise directly.
+# ====================================================================
+defclass Beast:
+  species String
+  legs Int
+  :method noise (self):
+    (str (Beast-species self) " has " (Beast-legs self) " legs")
+
+defclass Wolf:
+  :extends Beast
+  pack String
+  :method noise (self) "awooo"
+
+assert "block: inherited getter"        (Beast-species (Wolf "canis" 4 "alpha")) "canis"
+assert "block: own getter"              (Wolf-pack (Wolf "canis" 4 "alpha")) "alpha"
+assert "block: is-a? parent"            (is-a? (Wolf "c" 4 "p") Beast) t
+assert "block: parent method on parent" (noise (Beast "cat" 4)) "cat has 4 legs"
+assert "block: child overrides method"  (noise (Wolf "c" 4 "p")) "awooo"

@@ -604,7 +604,8 @@ exp_t *is_acmd(exp_t *e, env_t *env) {
               (target == TYPE_NUMBER && (actual == TYPE_INT || actual == TYPE_FLOAT || actual == TYPE_RATIONAL || actual == TYPE_DECIMAL)) ||
               (target == TYPE_LIST && is_proper_list(x)) ||
               (target == TYPE_DICT && isdict(x)) ||
-              (target >= TYPE_USER_MIN && alc_user_type_instance_p(x, target)) ||
+              (target >= TYPE_USER_MIN &&
+               alc_user_type_conforms(dict_user_type_id(x), target)) ||
               (target == TYPE_FN && (actual == TYPE_LAMBDA || actual == TYPE_BUILTIN || actual == TYPE_FFI));
 
   CLEAN_RETURN_2(x, t, refexp(match ? TRUE_EXP : NIL_EXP));
@@ -771,16 +772,31 @@ const char doc_defclass[] =
     "(defclass Account (owner String) (balance Decimal)) — typed dict-backed "
     "class: constructor, predicate, getters, setters, and checked mutation. "
     "Zero fields is (defclass Name) — a trailing () is a malformed field. "
-    "Classes cannot be redefined in a session. savedb/loaddb persists instances "
-    "by class NAME (dump v5), so a load in a different class-definition order "
-    "keeps the right identity; if the class is defined BEFORE loaddb its "
-    "validator is reattached and schema enforcement is fully restored. Loading "
-    "an instance BEFORE its class is defined preserves identity via a claimable "
-    "pre-registration (type-of / is-a? work, and a later defclass claims it), "
-    "but such an instance is not retroactively validated. Future class-body "
-    "directives "
-    "(inheritance, methods, optional fields) will be keyword-headed clauses like "
-    "(:extends P) — bare (name Type) pairs are always fields.";
+    "Keyword-headed clauses extend the body: (:extends Parent) — as the FIRST "
+    "clause, at most one — inherits Parent's fields (Parent must be a "
+    "fully-defined class); the constructor takes all inherited-then-own fields, "
+    "(is-a? child Parent) and Parent's accessors work on a child, and a child "
+    "field may not shadow an inherited one. (:method name (self args...) "
+    "body...) clauses, AFTER all fields, define generic functions dispatched on "
+    "the first arg's type: (name inst ...); a child inherits a parent method it "
+    "does not override, and a method for the Any type is the default. There is "
+    "no `super` yet. Classes cannot be redefined in a session. savedb/loaddb "
+    "persists instances by class NAME (dump v5), so a load in a different "
+    "class-definition order keeps the right identity; if the class is defined "
+    "BEFORE loaddb its validator is reattached and schema enforcement is fully "
+    "restored. Loading an instance BEFORE its class is defined preserves "
+    "identity via a claimable pre-registration (type-of / is-a? work, and a "
+    "later defclass claims it), but such an instance is not retroactively "
+    "validated. Bare (name Type) pairs are always fields.";
+/* Emit a defclass body's (:method ...) clauses as generic-function forms:
+   (defmulti NAME type) once per method name (idempotent — preserves any
+   sibling class's method table) + (defmethod NAME ClassName PARAMS body...)
+   keyed by the class's type object. Inherited methods resolve at call time via
+   __mm-lookup's parent-chain walk. Returns an error value on the first method
+   that fails to register (the class itself stays defined — methods are
+   additive), else NULL. Defined after sx_lst/sx_sym below. */
+static exp_t *defclass_emit_methods(const char *cname, exp_t **methods,
+                                    int nmethods, env_t *env);
 exp_t *defclasscmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm)) {
@@ -821,31 +837,79 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   }
   uint32_t class_id = is_claim ? claim->id : alc_next_user_type_id();
 
-  int nfields = 0;
+  /* Clauses (everything after the name) come in three flavours:
+       (:extends Parent)    inheritance — FIRST clause only, at most one
+       (name Type)          a field
+       (:method n (p..) ..) a generic-function method — AFTER all fields
+     Size the own-field and method arrays by the clause count (each is at most
+     that many), then classify in one pass. `#define DC_FAIL` frees the scratch
+     arrays and returns the error so the many guards stay readable. */
+  int nclauses = 0;
   for (exp_t *p = cddr(e); p && p->content; p = p->next)
-    nfields++;
+    nclauses++;
   defclass_field_t *fields =
-      nfields ? calloc((size_t)nfields, sizeof(defclass_field_t)) : NULL;
-  if (nfields && !fields) {
+      nclauses ? calloc((size_t)nclauses, sizeof(defclass_field_t)) : NULL;
+  exp_t **methods =
+      nclauses ? calloc((size_t)nclauses, sizeof(exp_t *)) : NULL;
+  if (nclauses && (!fields || !methods)) {
+    free(fields);
+    free(methods);
     exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "defclass: out of memory");
     unrefexp(e);
     return err;
   }
+#define DC_FAIL(...)                                                            \
+  do {                                                                          \
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, __VA_ARGS__);               \
+    free(fields);                                                               \
+    free(methods);                                                              \
+    unrefexp(e);                                                                \
+    return err;                                                                 \
+  } while (0)
 
-  int i = 0;
-  for (exp_t *p = cddr(e); p && p->content; p = p->next, i++) {
+  const char *parent_name = NULL;
+  int nfields = 0, nmethods = 0, seen_method = 0, clause_i = 0;
+  for (exp_t *p = cddr(e); p && p->content; p = p->next, clause_i++) {
     exp_t *spec = p->content;
+    exp_t *head = ispair(spec) ? car(spec) : NULL;
+    const char *hd =
+        (head && issymbol(head)) ? (const char *)exp_text(head) : NULL;
+
+    if (hd && strcmp(hd, ":extends") == 0) {
+      if (clause_i != 0)
+        DC_FAIL("defclass: (:extends Parent) must be the first clause");
+      exp_t *pn = cadr(spec);
+      if (!pn || !issymbol(pn) || (cddr(spec) && cddr(spec)->content))
+        DC_FAIL("defclass: (:extends Parent) takes one class name");
+      parent_name = (const char *)exp_text(pn);
+      continue;
+    }
+
+    if (hd && strcmp(hd, ":method") == 0) {
+      exp_t *mn = cadr(spec);
+      exp_t *mp = caddr(spec);
+      if (!mn || !issymbol(mn) || !defclass_ident_ok((char *)exp_text(mn)) ||
+          is_reserved_name((char *)exp_text(mn)))
+        DC_FAIL("defclass: (:method name (params) body...) needs a "
+                "non-reserved name");
+      if (!((ispair(mp) && mp->content) || issymbol(mp)))
+        DC_FAIL("defclass: (:method %s ...) needs a param list with at least "
+                "the dispatch (self) parameter",
+                (char *)exp_text(mn));
+      methods[nmethods++] = spec;
+      seen_method = 1;
+      continue;
+    }
+
+    /* A field clause (name Type). Fields must precede all methods. */
+    if (seen_method)
+      DC_FAIL("defclass: a field clause cannot follow a (:method ...) — put "
+              "all fields before the methods");
     exp_t *fname = ispair(spec) ? car(spec) : NULL;
     exp_t *tname = ispair(spec) ? cadr(spec) : NULL;
     if (!fname || !tname || (cddr(spec) && cddr(spec)->content) ||
-        !issymbol(fname) || !issymbol(tname)) {
-      free(fields);
-      exp_t *err =
-          error(ERROR_ILLEGAL_VALUE, e, env,
-                "defclass: each field must be (name Type)");
-      unrefexp(e);
-      return err;
-    }
+        !issymbol(fname) || !issymbol(tname))
+      DC_FAIL("defclass: each field must be (name Type)");
     const char *fn = (const char *)exp_text(fname);
     const char *tn = (const char *)exp_text(tname);
     uint32_t tid = alc_type_from_name(tn);
@@ -855,65 +919,130 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
       else
         tid = alc_user_type_id_by_name(tn);
     }
-    if (!defclass_ident_ok(fn) || is_reserved_name(fn)) {
-      free(fields);
-      exp_t *err =
-          error(ERROR_ILLEGAL_VALUE, e, env,
-                "defclass: field names must be non-reserved symbols");
-      unrefexp(e);
-      return err;
-    }
-    for (int j = 0; j < i; j++) {
-      if (!strcmp(fields[j].name, fn)) {
-        free(fields);
-        exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
-                           "defclass: duplicate field '%s'", fn);
-        unrefexp(e);
-        return err;
-      }
-    }
-    if (!tid) {
-      free(fields);
-      exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
-                         "defclass: unknown field type '%s'", tn);
-      unrefexp(e);
-      return err;
-    }
-    fields[i].name = fn;
-    fields[i].type_name = tn;
+    if (!defclass_ident_ok(fn) || is_reserved_name(fn))
+      DC_FAIL("defclass: field names must be non-reserved symbols");
+    for (int j = 0; j < nfields; j++)
+      if (!strcmp(fields[j].name, fn))
+        DC_FAIL("defclass: duplicate field '%s'", fn);
+    if (!tid)
+      DC_FAIL("defclass: unknown field type '%s'", tn);
+    fields[nfields].name = fn;
+    fields[nfields].type_name = tn;
+    nfields++;
   }
+
+  /* Resolve (:extends Parent): the parent must be a fully-defined class (a
+     constructorless claimable pre-registration or a forward/self reference is
+     rejected — this keeps the parent chain acyclic). */
+  uint32_t parent_id = 0;
+  exp_t *parent_fields = NULL; /* Parent__class "fields" list (name TypeObj)* */
+  int nparent = 0;
+  if (parent_name) {
+    alc_user_type_t *pt = alc_user_type_by_name(parent_name);
+    if (!pt || !pt->constructor)
+      DC_FAIL("defclass: (:extends %s) — %s is not a defined class",
+              parent_name, parent_name);
+    parent_id = pt->id;
+    if (pt->schema && isdict(pt->schema) && pt->schema->ptr) {
+      keyval_t *kv =
+          set_get_keyval_dict((dict_t *)pt->schema->ptr, "fields", NULL);
+      if (kv && kv->val)
+        parent_fields = kv->val;
+    }
+    for (exp_t *p = parent_fields; ispair(p) && p->content; p = p->next)
+      nparent++;
+  }
+
+  /* Effective fields = inherited (parent order) ++ own. A child field that
+     shadows an inherited name is an error. The parent's stored schema already
+     holds ITS full effective list, so a grandchild inherits transitively with
+     no recursion. */
+  int neff = nparent + nfields;
+  defclass_field_t *eff =
+      neff ? calloc((size_t)neff, sizeof(defclass_field_t)) : NULL;
+  if (neff && !eff) {
+    free(fields);
+    free(methods);
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "defclass: out of memory");
+    unrefexp(e);
+    return err;
+  }
+#undef DC_FAIL
+#define DC_FAIL(...)                                                            \
+  do {                                                                          \
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, __VA_ARGS__);               \
+    free(fields);                                                               \
+    free(methods);                                                              \
+    free(eff);                                                                  \
+    unrefexp(e);                                                                \
+    return err;                                                                 \
+  } while (0)
+  {
+    int k = 0;
+    for (exp_t *p = parent_fields; ispair(p) && p->content; p = p->next) {
+      exp_t *pair = p->content;
+      exp_t *pnm = car(pair);
+      exp_t *pty = cadr(pair);
+      if (!pnm || !isstring(pnm) || !pty || !istype(pty))
+        DC_FAIL("defclass: parent '%s' has a corrupt field schema",
+                parent_name);
+      eff[k].name = (const char *)exp_text(pnm);
+      eff[k].type_name = alc_type_name(TYPE_ID(pty));
+      k++;
+    }
+    for (int j = 0; j < nfields; j++) {
+      for (int m = 0; m < nparent; m++)
+        if (!strcmp(eff[m].name, fields[j].name))
+          DC_FAIL("defclass: field '%s' duplicates an inherited field",
+                  fields[j].name);
+      eff[k].name = fields[j].name;
+      eff[k].type_name = fields[j].type_name;
+      k++;
+    }
+  }
+#undef DC_FAIL
 
   defclass_buf_t b = {0};
   b.ok = 1;
   if (!alc_register_user_type(cname) || !alc_bind_global_type(cname, class_id)) {
     free(fields);
+    free(methods);
+    free(eff);
     exp_t *err =
         error(ERROR_ILLEGAL_VALUE, e, env, "defclass: cannot register class");
     unrefexp(e);
     return err;
   }
+  /* Record the (:extends) link now so is-a? chain-walking (and inherited
+     methods) see it. A fresh entry's rollback drops it with the entry; a
+     claimed pre-registration keeps it (task: claim WITH :extends sets parent). */
+  alc_user_type_set_parent(class_id, parent_id);
+
+  int i;
   defclass_buf_addf(&b, "(do ");
   defclass_buf_addf(&b, "(= %s__class (hash-map \"__type__\" (quote Class) "
-                           "\"name\" (quote %s) \"type\" %s \"fields\" (list",
+                           "\"name\" (quote %s) \"type\" %s ",
                      cname, cname, cname);
-  for (i = 0; i < nfields; i++)
-    defclass_buf_addf(&b, " (list \"%s\" %s)", fields[i].name,
-                      fields[i].type_name);
+  if (parent_name)
+    defclass_buf_addf(&b, "\"parent\" %s ", parent_name);
+  defclass_buf_addf(&b, "\"fields\" (list");
+  for (i = 0; i < neff; i++)
+    defclass_buf_addf(&b, " (list \"%s\" %s)", eff[i].name, eff[i].type_name);
   defclass_buf_addf(&b, "))) ");
 
   defclass_buf_addf(&b, "(def %s__validator (_o _op _k _v) ", cname);
   defclass_buf_addf(&b, "(if (is _op (quote assoc!)) ");
-  for (i = 0; i < nfields; i++) {
-    defclass_buf_addf(&b, "(if (is _k \"%s\") ", fields[i].name);
+  for (i = 0; i < neff; i++) {
+    defclass_buf_addf(&b, "(if (is _k \"%s\") ", eff[i].name);
     defclass_buf_addf(&b,
                       "(if (is-a? _v %s) t (raise (quote type-error) "
                       "\"%s.%s expected %s\")) ",
-                      fields[i].type_name, cname, fields[i].name,
-                      fields[i].type_name);
+                      eff[i].type_name, cname, eff[i].name,
+                      eff[i].type_name);
   }
   defclass_buf_addf(&b, "(raise (quote illegal-value) \"%s: unknown field\")",
                     cname);
-  for (i = 0; i < nfields; i++)
+  for (i = 0; i < neff; i++)
     defclass_buf_addf(&b, ")");
   defclass_buf_addf(&b, " (if (is _op (quote dissoc!)) "
                          "(raise (quote illegal-value) "
@@ -921,25 +1050,25 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
                     cname);
 
   defclass_buf_addf(&b, "(def %s__new (", cname);
-  for (i = 0; i < nfields; i++)
+  for (i = 0; i < neff; i++)
     defclass_buf_addf(&b, "_a%d ", i);
   defclass_buf_addf(&b, ") (do ");
-  for (i = 0; i < nfields; i++)
+  for (i = 0; i < neff; i++)
     defclass_buf_addf(&b,
                       "(if (is-a? _a%d %s) t (raise (quote type-error) "
                       "\"%s.%s expected %s\")) ",
-                      i, fields[i].type_name, cname,
-                      fields[i].name, fields[i].type_name);
+                      i, eff[i].type_name, cname,
+                      eff[i].name, eff[i].type_name);
   defclass_buf_addf(&b, "(let _obj (hash-map \"__type__\" %s", cname);
-  for (i = 0; i < nfields; i++)
-    defclass_buf_addf(&b, " \"%s\" _a%d", fields[i].name, i);
+  for (i = 0; i < neff; i++)
+    defclass_buf_addf(&b, " \"%s\" _a%d", eff[i].name, i);
   defclass_buf_addf(&b, ") (set-validator! _obj %s__validator) _obj))) ", cname);
 
   defclass_buf_addf(&b,
                     "(def %s? (_o) (is-a? _o %s)) ",
                     cname, cname);
-  for (i = 0; i < nfields; i++) {
-    const char *fn = fields[i].name;
+  for (i = 0; i < neff; i++) {
+    const char *fn = eff[i].name;
     defclass_buf_addf(&b,
                       "(def %s-%s (_o) (if (%s? _o) (get _o \"%s\") "
                       "(raise (quote illegal-value) "
@@ -985,8 +1114,13 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
           alc_unregister_user_type(class_id);
         ret = error(ERROR_ILLEGAL_VALUE, e, env,
                     "defclass: generated class metadata is invalid");
-      } else
-        ret = refexp(MAKE_TYPE(class_id));
+      } else {
+        /* Class fields/accessors are live; now register the (:method ...)
+           generics. A method-registration failure returns the error but leaves
+           the class defined (methods are additive; no rollback of the type). */
+        exp_t *merr = defclass_emit_methods(cname, methods, nmethods, env);
+        ret = merr ? merr : refexp(MAKE_TYPE(class_id));
+      }
       free(ctor_name);
       free(validator_name);
       free(schema_name);
@@ -994,6 +1128,8 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   }
   free(b.s);
   free(fields);
+  free(methods);
+  free(eff);
   unrefexp(e);
   return ret;
 }
@@ -1023,9 +1159,47 @@ static exp_t *sx_lst(int n, ...) { /* build a proper list from n owned exps */
   return head ? head : refexp(NIL_EXP);
 }
 
+/* Emit a defclass body's (:method name (params) body...) clauses. See the
+   forward-declared banner near defclasscmd. */
+static exp_t *defclass_emit_methods(const char *cname, exp_t **methods,
+                                    int nmethods, env_t *env) {
+  for (int m = 0; m < nmethods; m++) {
+    exp_t *spec = methods[m]; /* (:method NAME PARAMS body...) */
+    exp_t *mn = cadr(spec);
+    exp_t *mp = caddr(spec);
+    exp_t *bodyforms = cdddr(spec); /* node chain of body forms (may be NULL) */
+    const char *mname = (const char *)exp_text(mn);
+    /* (defmulti NAME type) — dispatch on the first arg's type object; the
+       builtin `type` ignores extra args so (apply type args) is first-arg
+       typed. Idempotent, so a sibling class reusing NAME keeps its methods. */
+    exp_t *dmulti =
+        sx_lst(3, sx_sym("defmulti"), sx_sym(mname), sx_sym("type"));
+    exp_t *r1 = evaluate(dmulti, env);
+    if (iserror(r1))
+      return r1;
+    unrefexp(r1);
+    /* (defmethod NAME ClassName PARAMS body...) — ClassName evaluates to the
+       class type object, which becomes the method-table key. */
+    exp_t *dm = make_node(sx_sym("defmethod"));
+    exp_t *tl = dm;
+    tl = tl->next = make_node(sx_sym(mname));
+    tl = tl->next = make_node(sx_sym(cname));
+    tl = tl->next = make_node(refexp(mp));
+    for (exp_t *bp = bodyforms; bp && bp->content; bp = bp->next)
+      tl = tl->next = make_node(refexp(bp->content));
+    exp_t *r2 = evaluate(dm, env);
+    if (iserror(r2))
+      return r2;
+    unrefexp(r2);
+  }
+  return NULL;
+}
+
 const char doc_defmulti[] =
     "(defmulti area type-of) — define a multimethod: calling (area x ...) "
-    "applies the dispatch fn to the args and runs the matching defmethod.";
+    "applies the dispatch fn to the args and runs the matching defmethod. "
+    "Idempotent: re-defining an existing multi keeps its method table (so "
+    "several defclass bodies can register methods on one shared generic).";
 exp_t *defmulticmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e), *disp = caddr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm) || !disp) {
@@ -1037,17 +1211,30 @@ exp_t *defmulticmd(exp_t *e, env_t *env) {
   char mname[160];
   snprintf(mname, sizeof mname, "%s__m", (const char *)exp_text(nm));
   exp_t *ret = make_symbol((char *)exp_text(nm), (int)strlen(exp_text(nm)));
+  /* Idempotence: if NAME__m already holds a method-table dict, this is a
+     re-definition of an existing multi — preserve the table (only rebind the
+     dispatcher NAME) so a sibling defclass's methods survive. */
+  exp_t *existing_tbl = alc_global_value(mname);
+  int already = existing_tbl && isdict(existing_tbl);
   /* (do (= NAME__m (hash-map))           ; = binds a VALUE; def would read the
          (def NAME (. args)               ;   (hash-map) as a param list
-              (apply (get NAME__m (apply DISP args)) args))) */
-  exp_t *d1 =
-      sx_lst(3, sx_sym("="), sx_sym(mname), sx_lst(1, sx_sym("hash-map")));
+              (apply (__mm-lookup NAME__m (apply DISP args)) args)))
+     __mm-lookup is `get` plus, when the dispatch value is a type object, a
+     parent-chain + Any fallback (class-method inheritance). */
   exp_t *dispcall = sx_lst(3, sx_sym("apply"), refexp(disp), sx_sym("args"));
-  exp_t *getcall = sx_lst(3, sx_sym("get"), sx_sym(mname), dispcall);
+  exp_t *getcall =
+      sx_lst(3, sx_sym("__mm-lookup"), sx_sym(mname), dispcall);
   exp_t *body = sx_lst(3, sx_sym("apply"), getcall, sx_sym("args"));
   exp_t *params = sx_lst(2, sx_sym("."), sx_sym("args"));
   exp_t *d2 = sx_lst(4, sx_sym("def"), refexp(nm), params, body);
-  exp_t *form = sx_lst(3, sx_sym("do"), d1, d2);
+  exp_t *form;
+  if (already) {
+    form = d2; /* preserve the existing table; just (re)bind the dispatcher */
+  } else {
+    exp_t *d1 =
+        sx_lst(3, sx_sym("="), sx_sym(mname), sx_lst(1, sx_sym("hash-map")));
+    form = sx_lst(3, sx_sym("do"), d1, d2);
+  }
   exp_t *r = evaluate(form, env);
   unrefexp(e);
   if (iserror(r)) {
@@ -1056,6 +1243,57 @@ exp_t *defmulticmd(exp_t *e, env_t *env) {
   }
   unrefexp(r);
   return ret;
+}
+
+const char doc_mm_lookup[] =
+    "(__mm-lookup table dval) — internal multimethod resolver: table[dval], or "
+    "when dval is a type object, the nearest (:extends) ancestor's method, or "
+    "the Any-typed default; nil if none.";
+exp_t *mm_lookupcmd(exp_t *e, env_t *env) {
+  exp_t *tbl = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  if (iserror(tbl)) {
+    unrefexp(e);
+    return tbl;
+  }
+  exp_t *dval = (e->next && e->next->next) ? EVAL(e->next->next->content, env)
+                                           : refexp(NIL_EXP);
+  if (iserror(dval)) {
+    unrefexp(tbl);
+    unrefexp(e);
+    return dval;
+  }
+  exp_t *res = NIL_EXP;
+  if (isdict(tbl) && tbl->ptr) {
+    dict_t *d = (dict_t *)tbl->ptr;
+    char tmp[32];
+    char *ks = alc_key_to_cstr(dval, tmp);
+    keyval_t *kv = ks ? set_get_keyval_dict(d, ks, NULL) : NULL;
+    if (!kv && istype(dval)) {
+      /* Walk the class's (:extends) parent chain, then fall back to Any. */
+      uint32_t cur = TYPE_ID(dval);
+      for (int depth = 0; depth < 64 && !kv; depth++) {
+        alc_user_type_t *t =
+            (cur >= TYPE_USER_MIN) ? alc_user_type_by_id(cur) : NULL;
+        if (!t || !t->parent)
+          break;
+        cur = t->parent;
+        char kb[32];
+        snprintf(kb, sizeof kb, "\x01%u", (unsigned)cur);
+        kv = set_get_keyval_dict(d, kb, NULL);
+      }
+      if (!kv) {
+        char kb[32];
+        snprintf(kb, sizeof kb, "\x01%u", (unsigned)TYPE_ANY);
+        kv = set_get_keyval_dict(d, kb, NULL);
+      }
+    }
+    if (kv && kv->val)
+      res = refexp(kv->val);
+  }
+  unrefexp(tbl);
+  unrefexp(dval);
+  unrefexp(e);
+  return res;
 }
 
 const char doc_defmethod[] =

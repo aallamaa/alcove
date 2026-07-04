@@ -117,6 +117,7 @@ static unsigned short g_next_type_id =
    types, whose ids must remain < ALCOVE_TYPE_CAP for exp_tfuncList dispatch. */
 typedef struct alc_user_type {
   uint32_t id;
+  uint32_t parent; /* defclass (:extends P) — P's id, or 0 for no parent */
   char *name;
   exp_t *constructor;
   exp_t *validator;
@@ -773,6 +774,7 @@ lispProc lispProcList[] = {
     LISPCMD("defclass", defclasscmd, doc_defclass),
     LISPCMD("defmulti", defmulticmd, doc_defmulti),
     LISPCMD("defmethod", defmethodcmd, doc_defmethod),
+    LISPCMD("__mm-lookup", mm_lookupcmd, doc_mm_lookup),
     LISPCMD_APP("reverse", reversecmd, doc_reverse),
     LISPCMD("append", appendcmd, doc_append), /* has inline OP handling */
     /* Vectors — O(1) random-access array */
@@ -2107,8 +2109,34 @@ static uint32_t dict_user_type_id(exp_t *x) {
   return alc_user_type_by_id(id) ? id : 0;
 }
 
-static int alc_user_type_instance_p(exp_t *x, uint32_t id) {
-  return dict_user_type_id(x) == id;
+/* Record a defclass (:extends P) parent link on an already-registered class.
+   parent==0 clears it (a claimable pre-registration starts parentless). */
+static int alc_user_type_set_parent(uint32_t id, uint32_t parent) {
+  alc_user_type_t *t = alc_user_type_by_id(id);
+  if (!t)
+    return 0;
+  t->parent = parent;
+  return 1;
+}
+
+/* True if a class `actual` conforms to `target` by walking the (:extends)
+   parent chain: actual, its parent, grandparent, … The chain is acyclic by
+   construction (a parent must be a fully-defined class, so a self/forward
+   reference is impossible) but the walk is still capped defensively. Both
+   ids are user-type ids (>= TYPE_USER_MIN); 0 for either means no match. */
+static int alc_user_type_conforms(uint32_t actual, uint32_t target) {
+  if (!actual || !target)
+    return 0;
+  uint32_t cur = actual;
+  for (int depth = 0; cur && depth < 64; depth++) {
+    if (cur == target)
+      return 1;
+    alc_user_type_t *t = alc_user_type_by_id(cur);
+    if (!t)
+      return 0;
+    cur = t->parent;
+  }
+  return 0;
 }
 
 static void alc_user_types_destroy(void) {
@@ -7323,6 +7351,10 @@ static exp_t *load_native_module(const char *path, const char *spec,
 #endif
 }
 
+/* alc_key_to_cstr is defined further down (alongside the dict builtins) but the
+   multimethod resolver in builtins_stdlib.h needs it — forward-declare it. */
+static char *alc_key_to_cstr(exp_t *k, char *tmpbuf);
+
 /* The standard-library builtins live in a dedicated #included fragment. */
 #include "builtins_log.h"
 #include "builtins_os.h"
@@ -7987,6 +8019,16 @@ static char *alc_key_to_cstr(exp_t *k, char *tmpbuf) {
     return (char *)exp_text(k);
   if (isnumber(k)) {
     snprintf(tmpbuf, 32, "%lld", (long long)FIX_VAL(k));
+    return tmpbuf;
+  }
+  /* Type objects: encode as "\x01" + the decimal type id. The id (not the
+     name) keeps the key inside tmpbuf's 32 bytes for any class-name length,
+     and is stable/consistent within a session — (type x) and a class name
+     both yield the same id. The \x01 prefix keeps type keys from colliding
+     with a same-spelled string/number key. Multimethod method tables key on
+     this; (assoc! d Int v) on an ordinary hash-map now works the same way. */
+  if (istype(k)) {
+    snprintf(tmpbuf, 32, "\x01%u", (unsigned)TYPE_ID(k));
     return tmpbuf;
   }
   return NULL;
