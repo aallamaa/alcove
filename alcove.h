@@ -105,7 +105,7 @@ enum alc_type_id {
   TYPE_CHAR, TYPE_PAIR, TYPE_LIST, TYPE_VECTOR, TYPE_BLOB, TYPE_DICT,
   TYPE_DEQUE, TYPE_SET, TYPE_HAMT, TYPE_FN, TYPE_LAMBDA, TYPE_BUILTIN,
   TYPE_MACRO, TYPE_FFI, TYPE_ERROR, TYPE_PORT, TYPE_WEAK, TYPE_CONTINUATION,
-  TYPE_TYPE, TYPE_USER_MIN = 100
+  TYPE_TYPE, TYPE_USER_MIN = 100000
 };
 
 #define MAKE_FIX(v) ((exp_t *)((((uintptr_t)(int64_t)(v)) << 3) | TAG_FIX))
@@ -1179,6 +1179,7 @@ exp_t *type_namecmd(exp_t *e, env_t *env);
 exp_t *typecmd(exp_t *e, env_t *env);
 exp_t *is_acmd(exp_t *e, env_t *env);
 exp_t *defstructcmd(exp_t *e, env_t *env);
+exp_t *defclasscmd(exp_t *e, env_t *env);
 exp_t *defmulticmd(exp_t *e, env_t *env);
 exp_t *defmethodcmd(exp_t *e, env_t *env);
 exp_t *reversecmd(exp_t *e, env_t *env);

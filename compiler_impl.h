@@ -3367,6 +3367,8 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     goto bind_lambda;
   }
   /* fn is not a lambda — the rare callee shapes, each of which returns. */
+  if (istype(fn) && alc_user_type_constructor(TYPE_ID(fn)))
+    return alc_apply_n(fn, nargs, argv, env);
   /* String-as-callable: (s i) returns the indexed char. The AST
      evaluator handles this in two places (literal string head and the
      symbol-lookup path added in ticket 5). The bytecode VM compiles

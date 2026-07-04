@@ -365,6 +365,156 @@ assert "defstruct pred neg" (tpoint? (hash-map)) nil
 
 assert "defstruct type-of" (type-of _tp) 'tpoint
 
+defclass Account (owner String) (balance Decimal) (active Bool)
+
+assert "defclass public name is type" (type? Account) t
+
+assert "defclass type-name" (type-name Account) "Account"
+
+assert "defclass schema" Account__class (hash-map "__type__" 'Class "name" 'Account "type" Account "fields" (list (list "owner" String) (list "balance" Decimal) (list "active" Bool)))
+
+setf _acct (Account "Ada" 100.0m t)
+
+assert "defclass predicate" (Account? _acct) t
+
+assert "defclass type-of" (type-of _acct) Account
+
+assert "defclass type" (type _acct) Account
+
+assert "defclass is-a class" (is-a? _acct Account) t
+
+assert "defclass is-a dict" (is-a? _acct Dict) t
+
+assert "defclass getter" (Account-owner _acct) "Ada"
+
+assert "defclass decimal getter" (Account-balance _acct) 100.0m
+
+assert "defclass apply constructor" (Account? (apply Account (list "Grace" 50.0m t))):
+  t
+
+def _make-account (name):
+  Account name 75.0m t
+
+assert "defclass compiled constructor call" (Account-owner (_make-account "Lin")):
+  "Lin"
+
+assert "defclass type assignment rejects" (error? (try (setf Account 1) (fn (e) e))):
+  t
+
+assert "defclass redefinition rejects" (error? (try (defclass Account (x Int)) (fn (e) e))):
+  t
+
+assert "defclass constructor type rejects" (error? (try (Account "Ada" "bad" t) (fn (e) e))):
+  t
+
+Account-balance! _acct 125.0m
+
+assert "defclass setter updates" (Account-balance _acct) 125.0m
+
+assert "defclass setter type rejects" (error? (try (Account-balance! _acct "bad") (fn (e) e))):
+  t
+
+assert "defclass rejected setter unchanged" (Account-balance _acct) 125.0m
+
+assoc! _acct "balance" 130.0m
+
+assert "defclass direct assoc! valid" (Account-balance _acct) 130.0m
+
+assert "defclass direct assoc! type rejects" (error? (try (assoc! _acct "balance" "bad") (fn (e) e))):
+  t
+
+assert "defclass unknown field rejects" (error? (try (assoc! _acct "extra" 1) (fn (e) e))):
+  t
+
+assert "defclass field deletion rejects" (error? (try (dissoc! _acct "owner") (fn (e) e))):
+  t
+
+assert "defclass getter rejects wrong object" (error? (try (Account-owner (hash-map)) (fn (e) e))):
+  t
+
+assert "defclass reserved field rejects" (error? (try (defclass BadReserved (str String)) (fn (e) e))):
+  t
+
+assert "defclass unknown type rejects" (error? (try (defclass BadType (x Nope)) (fn (e) e))):
+  t
+
+assert "defclass duplicate field rejects" (error? (try (defclass BadDup (x Int) (x String)) (fn (e) e))):
+  t
+
+defclass Transfer (from Account) (to Account) (amount Decimal)
+
+setf _acct2 (Account "Grace" 25.0m t)
+
+setf _tx (Transfer _acct _acct2 5.0m)
+
+assert "defclass custom field predicate" (Transfer? _tx) t
+
+assert "defclass custom field type-of" (type-of _tx) Transfer
+
+assert "defclass custom field getter" (Transfer-from _tx) _acct
+
+assert "defclass custom constructor rejects" (error? (try (Transfer _acct "bad" 5.0m) (fn (e) e))):
+  t
+
+assert "defclass custom setter rejects" (error? (try (Transfer-to! _tx "bad") (fn (e) e))):
+  t
+
+assert "defclass custom apply constructor" (Transfer? (apply Transfer (list _acct _acct2 1.0m))):
+  t
+
+defclass Toggle (on Bool)
+
+setf _tg (Toggle nil)
+
+assert "defclass bool field nil construct" (Toggle-on _tg) nil
+
+Toggle-on! _tg (< 2 1)
+
+assert "defclass bool field set false reads nil" (Toggle-on _tg) nil
+
+assert-true "is-a? nil Bool" (is-a? nil Bool)
+
+assert-true "is-a? t Bool" (is-a? t Bool)
+
+assert "is-a? int Bool nil" (is-a? 0 Bool) nil
+
+defclass Marker
+
+assert "defclass zero-field predicate" (Marker? (Marker)) t
+
+def _clob (x):
+  x
+
+assert "defclass clobber rejects" (error? (try (defclass _clob (a Int)) (fn (e) e))):
+  t
+
+assert "defclass clobber leaves binding intact" (_clob 5) 5
+
+assert "defclass failed unknown type rejects" (error? (try (defclass Reusable (x Nope)) (fn (e) e))):
+  t
+
+defclass Reusable (x Int)
+
+assert "defclass name reusable after failure" (Reusable? (Reusable 7)) t
+
+def _uc_f (a Account):
+  Account-owner a
+
+assert "user-class param annotation" (_uc_f _acct) "Ada"
+
+setf _uc_fn (fn (a Account) (Account-owner a))
+
+assert "user-class fn param annotation" (_uc_fn _acct) "Ada"
+
+def _uc_g (nm):
+  Account
+  Account nm 1.0m t
+
+assert "user-class return annotation" (Account? (_uc_g "Zoe")) t
+
+assert "user-class nested annotation still rejected" (error? (try (def _uc_bad ((Account)) 1) (fn (e) e))):
+  t
+
 defstruct tcirc cr
 
 defmulti tarea type-of

@@ -8,6 +8,23 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **First-class type objects** — `Int`, `Float`, `String`, … are now real
+  runtime values (`TAG_TYPE` immediates), not just JIT annotations. `(type x)`
+  returns the type object for a value, `(type? v)` tests for one, `(type-name t)`
+  gives its string name, and `(is-a? x t)` tests conformance (with `Number`,
+  `List`, `Fn`, and user-class subsumption). A JIT hint code **is** a type id, so
+  `(x Int)` and `(x :int)` are the same annotation. This **reserves 30 new
+  names** (`Int Float String Bool Nil …`) — a breaking change for scripts that
+  bound any of them as ordinary identifiers. The db dump format bumps to **v4**.
+- **`(defclass Name (field Type)…)` — typed, dict-backed classes.** Generates a
+  constructor, a predicate `Name?`, per-field getters `Name-field`, and checked
+  setters `Name-field!`; the **type object itself is callable** as the
+  constructor. Every field write (constructor, setter, or a raw `assoc!`) is
+  schema-enforced through the mutation-validator layer, and field types may be
+  builtin types or other user classes. Zero fields is `(defclass Name)`. Classes
+  **cannot be redefined** in a session, and persistence of instances is an MVP
+  limitation: `savedb`/`loaddb` carries the data and type tag but not the
+  validator, so schema enforcement is lost on a reloaded instance.
 - **`(gc-cycles)` — on-demand cycle collector** (new fragment `gc.h`).
   Reference cycles (only constructible through the mutating containers:
   `assoc!`, `push-right!`/`push-left!`, `vec-set!`) previously leaked with no

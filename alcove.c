@@ -111,6 +111,20 @@ static struct {
 } g_custom_types[ALCOVE_TYPE_CAP];
 static unsigned short g_next_type_id =
     0; /* lazily set to EXP_MAXSIZE on first use */
+/* User-defined class/type registry. Public values are still compact TAG_TYPE
+   immediates (`MAKE_TYPE(id)`); the constructor/schema live here, keyed by id.
+   This id space is intentionally separate from native-module EXP_* custom
+   types, whose ids must remain < ALCOVE_TYPE_CAP for exp_tfuncList dispatch. */
+typedef struct alc_user_type {
+  uint32_t id;
+  char *name;
+  exp_t *constructor;
+  exp_t *validator;
+  exp_t *schema;
+  struct alc_user_type *next;
+} alc_user_type_t;
+static alc_user_type_t *g_user_types = NULL;
+static uint32_t g_next_user_type_id = TYPE_USER_MIN;
 /* The module spec currently being loaded by load_native_module, so a type
    registered inside its alcove_module_init records where it came from. */
 static const char *g_current_module_spec = NULL;
@@ -751,6 +765,7 @@ lispProc lispProcList[] = {
     LISPCMD("type-name", type_namecmd, doc_type_name),
     LISPCMD("is-a?", is_acmd, doc_is_a),
     LISPCMD("defstruct", defstructcmd, doc_defstruct),
+    LISPCMD("defclass", defclasscmd, doc_defclass),
     LISPCMD("defmulti", defmulticmd, doc_defmulti),
     LISPCMD("defmethod", defmethodcmd, doc_defmethod),
     LISPCMD_APP("reverse", reversecmd, doc_reverse),
@@ -1972,6 +1987,142 @@ int alcove_is_foreign(const exp_t *e, unsigned short type_id) {
   return is_ptr(e) && e->type == type_id && type_id >= EXP_MAXSIZE;
 }
 
+static alc_user_type_t *alc_user_type_by_id(uint32_t id) {
+  for (alc_user_type_t *t = g_user_types; t; t = t->next)
+    if (t->id == id)
+      return t;
+  return NULL;
+}
+
+static alc_user_type_t *alc_user_type_by_name(const char *name) {
+  if (!name)
+    return NULL;
+  for (alc_user_type_t *t = g_user_types; t; t = t->next)
+    if (strcmp(t->name, name) == 0)
+      return t;
+  return NULL;
+}
+
+static uint32_t alc_next_user_type_id(void) { return g_next_user_type_id; }
+
+static uint32_t alc_user_type_id_by_name(const char *name) {
+  alc_user_type_t *t = alc_user_type_by_name(name);
+  return t ? t->id : 0;
+}
+
+static const char *alc_user_type_name(uint32_t id) {
+  alc_user_type_t *t = alc_user_type_by_id(id);
+  return t ? t->name : NULL;
+}
+
+static uint32_t alc_register_user_type(const char *name) {
+  alc_user_type_t *existing = alc_user_type_by_name(name);
+  if (existing)
+    return existing->id;
+  alc_user_type_t *t = memalloc(1, sizeof(*t));
+  t->id = g_next_user_type_id++;
+  t->name = strdup(name);
+  t->next = g_user_types;
+  g_user_types = t;
+  return t->id;
+}
+
+/* Roll back a fresh alc_register_user_type + alc_bind_global_type when a later
+   defclass step fails. Unlinks the entry from g_user_types (releasing any
+   metadata) and removes the global binding so the name is reusable. Safe to
+   call only for a type that was just registered by this defclass call. */
+static void alc_unregister_user_type(uint32_t id) {
+  alc_user_type_t **pp = &g_user_types;
+  for (alc_user_type_t *t = g_user_types; t; pp = &t->next, t = t->next) {
+    if (t->id != id)
+      continue;
+    *pp = t->next;
+    if (t->constructor)
+      unrefexp(t->constructor);
+    if (t->validator)
+      unrefexp(t->validator);
+    if (t->schema)
+      unrefexp(t->schema);
+    if (g_global_env && g_global_env->d && t->name) {
+      del_keyval_dict(g_global_env->d, t->name);
+      GEN_BUMP();
+    }
+    free(t->name);
+    free(t);
+    return;
+  }
+}
+
+static int alc_bind_global_type(const char *name, uint32_t id) {
+  if (!g_global_env)
+    return 0;
+  if (!g_global_env->d)
+    g_global_env->d = create_dict();
+  set_get_keyval_dict(g_global_env->d, (char *)name, MAKE_TYPE(id));
+  GEN_BUMP();
+  return 1;
+}
+
+static exp_t *alc_global_value(const char *name) {
+  if (!g_global_env || !g_global_env->d)
+    return NULL;
+  keyval_t *kv = set_get_keyval_dict(g_global_env->d, (char *)name, NULL);
+  return kv ? kv->val : NULL;
+}
+
+static int alc_user_type_set_metadata(uint32_t id, exp_t *constructor,
+                                      exp_t *validator, exp_t *schema) {
+  alc_user_type_t *t = alc_user_type_by_id(id);
+  if (!t)
+    return 0;
+  if (t->constructor)
+    unrefexp(t->constructor);
+  if (t->validator)
+    unrefexp(t->validator);
+  if (t->schema)
+    unrefexp(t->schema);
+  t->constructor = constructor ? refexp(constructor) : NULL;
+  t->validator = validator ? refexp(validator) : NULL;
+  t->schema = schema ? refexp(schema) : NULL;
+  return 1;
+}
+
+static exp_t *alc_user_type_constructor(uint32_t id) {
+  alc_user_type_t *t = alc_user_type_by_id(id);
+  return t ? t->constructor : NULL;
+}
+
+static uint32_t dict_user_type_id(exp_t *x) {
+  if (!isdict(x) || !x->ptr)
+    return 0;
+  keyval_t *kv = set_get_keyval_dict((dict_t *)x->ptr, "__type__", NULL);
+  if (!kv || !istype(kv->val))
+    return 0;
+  uint32_t id = TYPE_ID(kv->val);
+  return alc_user_type_by_id(id) ? id : 0;
+}
+
+static int alc_user_type_instance_p(exp_t *x, uint32_t id) {
+  return dict_user_type_id(x) == id;
+}
+
+static void alc_user_types_destroy(void) {
+  alc_user_type_t *t = g_user_types;
+  while (t) {
+    alc_user_type_t *next = t->next;
+    if (t->constructor)
+      unrefexp(t->constructor);
+    if (t->validator)
+      unrefexp(t->validator);
+    if (t->schema)
+      unrefexp(t->schema);
+    free(t->name);
+    free(t);
+    t = next;
+  }
+  g_user_types = NULL;
+}
+
 /* Embedder helpers — evaluate the Nth argument of an in-flight builtin
    call and return it as a plain C type. Companion to alcove_register_cmd
    so a host (e.g. the WASM build's JS shim) can implement builtins with
@@ -2933,8 +3084,10 @@ finish:
    shadowed by the builtin (the classic make_counter-with-`count` footgun).
    Fail fast at definition/eval time with a clear message instead. */
 static int is_reserved_name(const char *name) {
-  return name && reserved_symbol &&
-         set_get_keyval_dict(reserved_symbol, (char *)name, NULL) != NULL;
+  return name &&
+         ((reserved_symbol &&
+           set_get_keyval_dict(reserved_symbol, (char *)name, NULL) != NULL) ||
+          alc_user_type_id_by_name(name) != 0);
 }
 
 /* Return the first reserved name used in a param spec, or NULL. Handles a
@@ -2944,6 +3097,7 @@ static int is_reserved_name(const char *name) {
    destructuring pattern. A bare type-name symbol is a stripped type
    annotation ONLY at top level (`(n Int)`); a type name in a destructuring
    position (`((Int))`) is a genuine binding and must still be rejected. */
+static uint32_t alc_any_type_from_name(const char *nm); /* defined below */
 static const char *reserved_param_name_ex(exp_t *params, int top) {
   if (issymbol(params)) {
     /* A lone symbol is a rest param or a let/each binding name — never an
@@ -2957,7 +3111,7 @@ static const char *reserved_param_name_ex(exp_t *params, int top) {
       const char *nm = (const char *)exp_text(el);
       /* Skip a top-level type-name annotation; still reject a reserved name
          bound in a nested pattern (top == 0). */
-      if (strcmp(nm, ".") != 0 && !(top && alc_type_from_name(nm)) &&
+      if (strcmp(nm, ".") != 0 && !(top && alc_any_type_from_name(nm)) &&
           is_reserved_name(nm))
         return nm;
     } else if (ispair(el) && istrue(el)) {
@@ -3049,13 +3203,21 @@ static int is_keyword_exp(exp_t *x) {
    Type names are reserved, so a type name in a param list is ALWAYS an
    annotation for the preceding param, never a bound parameter — this is what
    lets the reserved-name scan skip it. Keywords (:int) take the other path. */
+/* Resolve a bare type-name symbol's text to a type id, accepting both builtin
+   type names (Int, String, …) and user-class names from defclass. Used
+   everywhere a bare symbol may be an annotation so a user class behaves exactly
+   like a builtin type in annotation position. */
+static uint32_t alc_any_type_from_name(const char *nm) {
+  uint32_t id = alc_type_from_name(nm);
+  return id ? id : alc_user_type_id_by_name(nm);
+}
 static uint32_t param_type_annotation(exp_t *x) {
   if (!is_ptr(x) || !issymbol(x))
     return 0;
   const char *nm = (const char *)exp_text(x);
   if (nm[0] == ':')
     return 0;
-  return alc_type_from_name(nm);
+  return alc_any_type_from_name(nm);
 }
 /* True if a param list carries any trailing-keyword hint (top-level keyword).
    Only a real list (pair chain) can; a bare-symbol rest param (fn xs ...) or
@@ -3142,7 +3304,10 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
         return NULL;
       }
       if (hints_out && kept >= 0 && kept < ENV_INLINE_SLOTS)
-        hints_out[kept] = (uint8_t)tann;
+        /* User-class annotations are documentation/strip-only for now —
+           JIT-inert (the hint is a uint8_t; user ids >= TYPE_USER_MIN don't
+           fit). Runtime checking is a future phase. */
+        hints_out[kept] = tann >= TYPE_USER_MIN ? TYPE_HINT_NONE : (uint8_t)tann;
       prev_bindable = 0;
       continue;
     }
@@ -3182,7 +3347,10 @@ static exp_t *strip_return_hint(exp_t *body, exp_t *form, env_t *env,
     uint32_t tid = param_type_annotation(h); /* `... Int body` return type */
     if (!tid)
       return body; /* not a return annotation — h is the first body form */
-    code = (int)tid;
+    /* User-class return annotations are documentation/strip-only for now —
+       JIT-inert (the hint is a uint8_t; user ids >= TYPE_USER_MIN don't fit).
+       Runtime checking is a future phase. */
+    code = tid >= TYPE_USER_MIN ? TYPE_HINT_NONE : (int)tid;
   }
   if (ret_out)
     *ret_out = (uint8_t)code;
@@ -3478,7 +3646,11 @@ exp_t *defncmd(exp_t *e, env_t *env) {
               return herr;
             }
             if (kept >= 0 && kept < ENV_INLINE_SLOTS)
-              phints[kept] = (uint8_t)tann;
+              /* User-class annotations are documentation/strip-only for now —
+                 JIT-inert (the hint is a uint8_t; user ids >= TYPE_USER_MIN
+                 don't fit). Runtime checking is a future phase. */
+              phints[kept] =
+                  tann >= TYPE_USER_MIN ? TYPE_HINT_NONE : (uint8_t)tann;
             prev_bindable = 0;
             p = p->next;
             continue; /* strip the annotation */
@@ -5583,7 +5755,10 @@ const char *alc_type_name(uint32_t id) {
     case TYPE_PORT: return "Port"; case TYPE_WEAK: return "Weak";
     case TYPE_CONTINUATION: return "Continuation";
     case TYPE_TYPE: return "Type";
-    default: return "Unknown";
+    default: {
+      const char *user = alc_user_type_name(id);
+      return user ? user : "Unknown";
+    }
   }
 }
 
@@ -8471,6 +8646,7 @@ endcleanly:
   free(g_reader_dir); /* top-level script dir (eval_file_forms frees nested) */
   g_reader_dir = NULL;
   destroy_dict(dict);
+  alc_user_types_destroy();
   destroy_env(global);
   destroy_dict(reserved_symbol);
   /* Free every exp_tfunc slot we allocated in the type-fn registration

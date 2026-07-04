@@ -554,6 +554,8 @@ static uint32_t get_actual_type_id(exp_t *a) {
   if (!a || a == NIL_EXP) return TYPE_NIL;
   if (a == TRUE_EXP) return TYPE_BOOL;
   if (istype(a)) return TYPE_TYPE;
+  uint32_t user_type = dict_user_type_id(a);
+  if (user_type) return user_type;
   if (isnumber(a)) return TYPE_INT;
   if (isfloat(a)) return TYPE_FLOAT;
   if (isrational(a)) return TYPE_RATIONAL;
@@ -598,8 +600,11 @@ exp_t *is_acmd(exp_t *e, env_t *env) {
   uint32_t actual = get_actual_type_id(x);
 
   int match = (target == TYPE_ANY) || (actual == target) ||
+              (target == TYPE_BOOL && (!x || x == NIL_EXP || x == TRUE_EXP)) ||
               (target == TYPE_NUMBER && (actual == TYPE_INT || actual == TYPE_FLOAT || actual == TYPE_RATIONAL || actual == TYPE_DECIMAL)) ||
               (target == TYPE_LIST && is_proper_list(x)) ||
+              (target == TYPE_DICT && isdict(x)) ||
+              (target >= TYPE_USER_MIN && alc_user_type_instance_p(x, target)) ||
               (target == TYPE_FN && (actual == TYPE_LAMBDA || actual == TYPE_BUILTIN || actual == TYPE_FFI));
 
   CLEAN_RETURN_2(x, t, refexp(match ? TRUE_EXP : NIL_EXP));
@@ -682,6 +687,293 @@ exp_t *defstructcmd(exp_t *e, env_t *env) {
     }
   }
   free(src);
+  unrefexp(e);
+  return ret;
+}
+
+typedef struct {
+  char *s;
+  size_t len;
+  size_t cap;
+  int ok;
+} defclass_buf_t;
+
+static int defclass_buf_addf(defclass_buf_t *b, const char *fmt, ...) {
+  if (!b->ok)
+    return 0;
+  if (!b->s) {
+    b->cap = 1024;
+    b->s = malloc(b->cap);
+    if (!b->s) {
+      b->ok = 0;
+      return 0;
+    }
+    b->s[0] = 0;
+  }
+  for (;;) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(b->s + b->len, b->cap - b->len, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+      b->ok = 0;
+      return 0;
+    }
+    if ((size_t)n < b->cap - b->len) {
+      b->len += (size_t)n;
+      return 1;
+    }
+    size_t need = b->len + (size_t)n + 1;
+    size_t ncap = b->cap;
+    while (ncap < need)
+      ncap *= 2;
+    char *ns = realloc(b->s, ncap);
+    if (!ns) {
+      b->ok = 0;
+      return 0;
+    }
+    b->s = ns;
+    b->cap = ncap;
+  }
+}
+
+static int defclass_ident_ok(const char *s) {
+  if (!s || !*s || s[0] == ':' || s[0] == '.')
+    return 0;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if (!(isalnum(*p) || *p == '_' || *p == '-' || *p == '/'))
+      return 0;
+  }
+  return 1;
+}
+
+typedef struct {
+  const char *name;
+  const char *type_name;
+} defclass_field_t;
+
+static char *defclass_suffix_name(const char *cname, const char *suffix) {
+  size_t cn = strlen(cname);
+  size_t sn = strlen(suffix);
+  char *s = malloc(cn + sn + 1);
+  if (!s)
+    return NULL;
+  memcpy(s, cname, cn);
+  memcpy(s + cn, suffix, sn + 1);
+  return s;
+}
+
+/* (defclass NAME (field Type)...) — typed record class.
+   MVP implementation: instances are the same tagged hash-maps as defstruct,
+   but the constructor validates every field and installs a PRE-write validator
+   so later assoc!/generated setters preserve the schema. */
+const char doc_defclass[] =
+    "(defclass Account (owner String) (balance Decimal)) — typed dict-backed "
+    "class: constructor, predicate, getters, setters, and checked mutation. "
+    "Zero fields is (defclass Name) — a trailing () is a malformed field. "
+    "Classes cannot be redefined in a session. savedb/loaddb round-trips the "
+    "instance data and type tag but NOT the validator, so schema enforcement is "
+    "lost on a loaded instance, and loading where the class is undefined (or "
+    "was defined in a different order) misidentifies the tag — persistence of "
+    "class instances is an MVP limitation. Future class-body directives "
+    "(inheritance, methods, optional fields) will be keyword-headed clauses like "
+    "(:extends P) — bare (name Type) pairs are always fields.";
+exp_t *defclasscmd(exp_t *e, env_t *env) {
+  exp_t *nm = cadr(e);
+  if (!nm || !is_ptr(nm) || !issymbol(nm)) {
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, e, env, "(defclass name (field Type)...)");
+    unrefexp(e);
+    return err;
+  }
+  const char *cname = (const char *)exp_text(nm);
+  if (!defclass_ident_ok(cname) || is_reserved_name(cname)) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                       "defclass: class name must be a non-reserved symbol");
+    unrefexp(e);
+    return err;
+  }
+  /* Refuse to clobber any existing global binding (a user fn, a value, …).
+     Reserved names — which includes every already-registered class — are
+     rejected above, so redefinition is intentionally impossible here; the
+     class_id is always a fresh id (see the rollback in the failure paths). */
+  if (alc_global_value(cname)) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                       "defclass: '%s' is already bound — choose another name",
+                       cname);
+    unrefexp(e);
+    return err;
+  }
+  uint32_t class_id = alc_next_user_type_id();
+
+  int nfields = 0;
+  for (exp_t *p = cddr(e); p && p->content; p = p->next)
+    nfields++;
+  defclass_field_t *fields =
+      nfields ? calloc((size_t)nfields, sizeof(defclass_field_t)) : NULL;
+  if (nfields && !fields) {
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "defclass: out of memory");
+    unrefexp(e);
+    return err;
+  }
+
+  int i = 0;
+  for (exp_t *p = cddr(e); p && p->content; p = p->next, i++) {
+    exp_t *spec = p->content;
+    exp_t *fname = ispair(spec) ? car(spec) : NULL;
+    exp_t *tname = ispair(spec) ? cadr(spec) : NULL;
+    if (!fname || !tname || (cddr(spec) && cddr(spec)->content) ||
+        !issymbol(fname) || !issymbol(tname)) {
+      free(fields);
+      exp_t *err =
+          error(ERROR_ILLEGAL_VALUE, e, env,
+                "defclass: each field must be (name Type)");
+      unrefexp(e);
+      return err;
+    }
+    const char *fn = (const char *)exp_text(fname);
+    const char *tn = (const char *)exp_text(tname);
+    uint32_t tid = alc_type_from_name(tn);
+    if (!tid) {
+      if (strcmp(tn, cname) == 0)
+        tid = class_id;
+      else
+        tid = alc_user_type_id_by_name(tn);
+    }
+    if (!defclass_ident_ok(fn) || is_reserved_name(fn)) {
+      free(fields);
+      exp_t *err =
+          error(ERROR_ILLEGAL_VALUE, e, env,
+                "defclass: field names must be non-reserved symbols");
+      unrefexp(e);
+      return err;
+    }
+    for (int j = 0; j < i; j++) {
+      if (!strcmp(fields[j].name, fn)) {
+        free(fields);
+        exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                           "defclass: duplicate field '%s'", fn);
+        unrefexp(e);
+        return err;
+      }
+    }
+    if (!tid) {
+      free(fields);
+      exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
+                         "defclass: unknown field type '%s'", tn);
+      unrefexp(e);
+      return err;
+    }
+    fields[i].name = fn;
+    fields[i].type_name = tn;
+  }
+
+  defclass_buf_t b = {0};
+  b.ok = 1;
+  if (!alc_register_user_type(cname) || !alc_bind_global_type(cname, class_id)) {
+    free(fields);
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, e, env, "defclass: cannot register class");
+    unrefexp(e);
+    return err;
+  }
+  defclass_buf_addf(&b, "(do ");
+  defclass_buf_addf(&b, "(= %s__class (hash-map \"__type__\" (quote Class) "
+                           "\"name\" (quote %s) \"type\" %s \"fields\" (list",
+                     cname, cname, cname);
+  for (i = 0; i < nfields; i++)
+    defclass_buf_addf(&b, " (list \"%s\" %s)", fields[i].name,
+                      fields[i].type_name);
+  defclass_buf_addf(&b, "))) ");
+
+  defclass_buf_addf(&b, "(def %s__validator (o op k v) ", cname);
+  defclass_buf_addf(&b, "(if (is op (quote assoc!)) ");
+  for (i = 0; i < nfields; i++) {
+    defclass_buf_addf(&b, "(if (is k \"%s\") ", fields[i].name);
+    defclass_buf_addf(&b,
+                      "(if (is-a? v %s) t (raise (quote type-error) "
+                      "\"%s.%s expected %s\")) ",
+                      fields[i].type_name, cname, fields[i].name,
+                      fields[i].type_name);
+  }
+  defclass_buf_addf(&b, "(raise (quote illegal-value) \"%s: unknown field\")",
+                    cname);
+  for (i = 0; i < nfields; i++)
+    defclass_buf_addf(&b, ")");
+  defclass_buf_addf(&b, " (if (is op (quote dissoc!)) "
+                         "(raise (quote illegal-value) "
+                         "\"%s: fields cannot be deleted\") t))) ",
+                    cname);
+
+  defclass_buf_addf(&b, "(def %s__new (", cname);
+  for (i = 0; i < nfields; i++)
+    defclass_buf_addf(&b, "%s ", fields[i].name);
+  defclass_buf_addf(&b, ") (do ");
+  for (i = 0; i < nfields; i++)
+    defclass_buf_addf(&b,
+                      "(if (is-a? %s %s) t (raise (quote type-error) "
+                      "\"%s.%s expected %s\")) ",
+                      fields[i].name, fields[i].type_name, cname,
+                      fields[i].name, fields[i].type_name);
+  defclass_buf_addf(&b, "(let obj (hash-map \"__type__\" %s", cname);
+  for (i = 0; i < nfields; i++)
+    defclass_buf_addf(&b, " \"%s\" %s", fields[i].name, fields[i].name);
+  defclass_buf_addf(&b, ") (set-validator! obj %s__validator) obj))) ", cname);
+
+  defclass_buf_addf(&b,
+                    "(def %s? (o) (is-a? o %s)) ",
+                    cname, cname);
+  for (i = 0; i < nfields; i++) {
+    const char *fn = fields[i].name;
+    defclass_buf_addf(&b,
+                      "(def %s-%s (o) (if (%s? o) (get o \"%s\") "
+                      "(raise (quote illegal-value) "
+                      "\"%s-%s: expected %s\"))) ",
+                      cname, fn, cname, fn, cname, fn, cname);
+    defclass_buf_addf(&b,
+                      "(def %s-%s! (o v) (if (%s? o) "
+                      "(assoc! o \"%s\" v) "
+                      "(raise (quote illegal-value) "
+                      "\"%s-%s!: expected %s\"))) ",
+                      cname, fn, cname, fn, cname, fn, cname);
+  }
+  defclass_buf_addf(&b, ")");
+
+  exp_t *ret;
+  if (!b.ok) {
+    /* Registration already succeeded above — roll it back so the name stays
+       reusable (it would otherwise be permanently reserved with a NULL
+       constructor). Same on the two failure paths below. */
+    alc_unregister_user_type(class_id);
+    ret = error(ERROR_ILLEGAL_VALUE, e, env, "defclass: out of memory");
+  } else {
+    exp_t *r = alcove_eval_string(b.s);
+    if (iserror(r)) {
+      alc_unregister_user_type(class_id);
+      ret = r;
+    } else {
+      unrefexp(r);
+      char *ctor_name = defclass_suffix_name(cname, "__new");
+      char *validator_name = defclass_suffix_name(cname, "__validator");
+      char *schema_name = defclass_suffix_name(cname, "__class");
+      exp_t *ctor = ctor_name ? alc_global_value(ctor_name) : NULL;
+      exp_t *validator = validator_name ? alc_global_value(validator_name) : NULL;
+      exp_t *schema = schema_name ? alc_global_value(schema_name) : NULL;
+      if (!ctor_name || !validator_name || !schema_name || !islambda(ctor) ||
+          !islambda(validator) || !isdict(schema) ||
+          !alc_user_type_set_metadata(class_id, ctor, validator, schema)) {
+        alc_unregister_user_type(class_id);
+        ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                    "defclass: generated class metadata is invalid");
+      } else
+        ret = refexp(MAKE_TYPE(class_id));
+      free(ctor_name);
+      free(validator_name);
+      free(schema_name);
+    }
+  }
+  free(b.s);
+  free(fields);
   unrefexp(e);
   return ret;
 }
@@ -1297,6 +1589,8 @@ exp_t *applycmd(exp_t *e, env_t *env) {
 static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   if (islambda(fn))
     return vm_invoke_values(fn, nargs, argv, env);
+  if (istype(fn) && alc_user_type_constructor(TYPE_ID(fn)))
+    return alc_apply_n(alc_user_type_constructor(TYPE_ID(fn)), nargs, argv, env);
   if (isinternal(fn)) {
     /* Build the canonical (fn args...) form and let fn->fnc evaluate it.
        The args are already VALUES; for self-evaluating ones (numbers, floats,
@@ -1338,6 +1632,30 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   for (int i = 0; i < nargs; i++)
     unrefexp(argv[i]);
   return error(ERROR_ILLEGAL_VALUE, fn, env, "not a callable");
+}
+static exp_t *alc_apply_form_args(exp_t *fn, exp_t *args, env_t *env) {
+  int n = 0;
+  for (exp_t *c = args; c && c->content; c = c->next)
+    n++;
+  exp_t **argv = (n > 0) ? memalloc(n, sizeof(exp_t *)) : NULL;
+  int was_tail = in_tail_position;
+  in_tail_position = 0;
+  int i = 0;
+  for (exp_t *c = args; c && c->content && i < n; c = c->next, i++) {
+    argv[i] = EVAL(c->content, env);
+    if (iserror(argv[i])) {
+      exp_t *err = argv[i];
+      for (int j = 0; j < i; j++)
+        unrefexp(argv[j]);
+      free(argv);
+      in_tail_position = was_tail;
+      return err;
+    }
+  }
+  in_tail_position = was_tail;
+  exp_t *ret = alc_apply_n(fn, n, argv, env);
+  free(argv);
+  return ret;
 }
 static exp_t *alc_apply1(exp_t *fn, exp_t *arg, env_t *env) {
   exp_t *argv[1] = {refexp(arg)};

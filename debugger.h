@@ -864,6 +864,11 @@ exp_t *evaluate(exp_t *e, env_t *env) {
                closures, pinning the closure↔frame cycle alive. */
             unrefexp(tmpexp2);
             goto finisht;
+          } else if (istype(tmpexp2) &&
+                     alc_user_type_constructor(TYPE_ID(tmpexp2))) {
+            ret = alc_apply_form_args(tmpexp2, e->next, env);
+            unrefexp(tmpexp2);
+            goto finish;
           } else if (iscont(tmpexp2)) {
             /* (k v) — invoking an escape continuation: yields an escape token
                that propagates up to the matching call/cc frame. */
@@ -973,6 +978,9 @@ exp_t *evaluate(exp_t *e, env_t *env) {
         }
         ret = invoke(e, tmpexp, env);
         goto finisht;
+      } else if (istype(tmpexp) && alc_user_type_constructor(TYPE_ID(tmpexp))) {
+        ret = alc_apply_form_args(tmpexp, e->next, env);
+        goto finish;
       } else if (iscont(tmpexp)) {
         ret = eval_cont_call(tmpexp, e, env); /* tmpexp borrowed from e */
         goto finish;
