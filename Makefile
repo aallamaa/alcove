@@ -737,6 +737,14 @@ resp-tsan:
 resp-expiry-test: jit
 	sh tools/test_resp_expiry.sh
 
+# defclass persistence gate: three separate processes share one db file to prove
+# instances persist by class NAME (dump v5) — a load in a different class-def
+# order keeps identity, and loading before the class is defined pre-registers a
+# claimable type that a later defclass claims (validators reattached on load).
+# See tools/test_defclass_persist.sh.
+defclass-persist-test: jit
+	sh tools/test_defclass_persist.sh
+
 # Swarm smoke: a multi-process worker swarm over the RESP keyspace blackboard
 # (examples/swarm). Starts a server, seeds candidates, runs 2 workers that claim
 # + score them via atomic INCR tickets, and asserts convergence. Pure alcove (no
@@ -847,4 +855,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

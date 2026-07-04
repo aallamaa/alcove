@@ -515,6 +515,50 @@ assert "user-class return annotation" (Account? (_uc_g "Zoe")) t
 assert "user-class nested annotation still rejected" (error? (try (def _uc_bad ((Account)) 1) (fn (e) e))):
   t
 
+setf _pacct (Account "Nadia" 42.0m t)
+
+setf _ptx (Transfer _pacct (Account "Omar" 7.0m t) 3.0m)
+
+persist '_pacct
+
+persist '_ptx
+
+savedb "/tmp/alcove-test-cls.db"
+
+forget '_pacct
+
+forget '_ptx
+
+setf _pacct nil
+
+setf _ptx nil
+
+loaddb "/tmp/alcove-test-cls.db"
+
+assert "defclass persist predicate" (Account? _pacct) t
+
+assert "defclass persist type-of" (type-of _pacct) Account
+
+assert "defclass persist getter" (Account-owner _pacct) "Nadia"
+
+assert "defclass persist validator restored — bad type rejects" (error? (try (assoc! _pacct "balance" "bad") (fn (e) e))):
+  t
+
+assert "defclass persist validator restored — unknown field rejects" (error? (try (assoc! _pacct "extra" 1) (fn (e) e))):
+  t
+
+assert "defclass persist nested predicate" (Transfer? _ptx) t
+
+assert "defclass persist nested getter" (Account-owner (Transfer-from _ptx)):
+  "Nadia"
+
+assert "defclass persist nested validator restored" (error? (try (assoc! (Transfer-from _ptx) "balance" "bad") (fn (e) e))):
+  t
+
+forget '_pacct
+
+forget '_ptx
+
 defstruct tcirc cr
 
 defmulti tarea type-of

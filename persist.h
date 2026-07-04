@@ -214,6 +214,10 @@ exp_t *load_dict_value(exp_t *e, FILE *stream) {
     free(key);
     unrefexp(val);
   }
+  /* If this dict is a defclass instance and its class is defined in this
+     process, restore the schema validator (not carried in the dump). Runs
+     per-dict, so instances nested in lists/dicts are covered too. */
+  alc_reattach_class_validator(ret);
   return ret;
 }
 

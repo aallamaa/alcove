@@ -771,11 +771,14 @@ const char doc_defclass[] =
     "(defclass Account (owner String) (balance Decimal)) — typed dict-backed "
     "class: constructor, predicate, getters, setters, and checked mutation. "
     "Zero fields is (defclass Name) — a trailing () is a malformed field. "
-    "Classes cannot be redefined in a session. savedb/loaddb round-trips the "
-    "instance data and type tag but NOT the validator, so schema enforcement is "
-    "lost on a loaded instance, and loading where the class is undefined (or "
-    "was defined in a different order) misidentifies the tag — persistence of "
-    "class instances is an MVP limitation. Future class-body directives "
+    "Classes cannot be redefined in a session. savedb/loaddb persists instances "
+    "by class NAME (dump v5), so a load in a different class-definition order "
+    "keeps the right identity; if the class is defined BEFORE loaddb its "
+    "validator is reattached and schema enforcement is fully restored. Loading "
+    "an instance BEFORE its class is defined preserves identity via a claimable "
+    "pre-registration (type-of / is-a? work, and a later defclass claims it), "
+    "but such an instance is not retroactively validated. Future class-body "
+    "directives "
     "(inheritance, methods, optional fields) will be keyword-headed clauses like "
     "(:extends P) — bare (name Type) pairs are always fields.";
 exp_t *defclasscmd(exp_t *e, env_t *env) {
@@ -787,24 +790,36 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
     return err;
   }
   const char *cname = (const char *)exp_text(nm);
-  if (!defclass_ident_ok(cname) || is_reserved_name(cname)) {
+  /* A name may already be registered as a claimable, constructorless
+     pre-registration: loaddb creates one when an instance is loaded before its
+     class is defined, so the instance keeps its identity. This defclass CLAIMS
+     that entry (reuses its id, keeps loaded instances valid). A fully-defined
+     class (constructor != NULL) still reserves the name and cannot be redefined.
+     A builtin-reserved name is always rejected. */
+  alc_user_type_t *claim = alc_user_type_by_name(cname);
+  int is_claim = claim && !claim->constructor;
+  int reserved_hit =
+      reserved_symbol &&
+      set_get_keyval_dict(reserved_symbol, (char *)cname, NULL) != NULL;
+  if (!defclass_ident_ok(cname) || reserved_hit || (claim && claim->constructor)) {
     exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
                        "defclass: class name must be a non-reserved symbol");
     unrefexp(e);
     return err;
   }
-  /* Refuse to clobber any existing global binding (a user fn, a value, …).
-     Reserved names — which includes every already-registered class — are
-     rejected above, so redefinition is intentionally impossible here; the
-     class_id is always a fresh id (see the rollback in the failure paths). */
-  if (alc_global_value(cname)) {
+  /* Refuse to clobber any existing global binding (a user fn, a value, …) —
+     EXCEPT the type-object binding a claimable pre-registration itself
+     installed, which this defclass is expected to claim. */
+  exp_t *existing_bind = alc_global_value(cname);
+  if (existing_bind &&
+      !(is_claim && existing_bind == MAKE_TYPE(claim->id))) {
     exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
                        "defclass: '%s' is already bound — choose another name",
                        cname);
     unrefexp(e);
     return err;
   }
-  uint32_t class_id = alc_next_user_type_id();
+  uint32_t class_id = is_claim ? claim->id : alc_next_user_type_id();
 
   int nfields = 0;
   for (exp_t *p = cddr(e); p && p->content; p = p->next)
@@ -941,15 +956,19 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
 
   exp_t *ret;
   if (!b.ok) {
-    /* Registration already succeeded above — roll it back so the name stays
-       reusable (it would otherwise be permanently reserved with a NULL
-       constructor). Same on the two failure paths below. */
-    alc_unregister_user_type(class_id);
+    /* On failure, fully unregister ONLY a fresh entry (so its name stays
+       reusable — it would otherwise be permanently reserved with a NULL
+       constructor). A CLAIMED pre-registration is left constructorless with its
+       global binding intact: rolling it back would orphan already-loaded
+       instances that reference the id. Same on the two failure paths below. */
+    if (!is_claim)
+      alc_unregister_user_type(class_id);
     ret = error(ERROR_ILLEGAL_VALUE, e, env, "defclass: out of memory");
   } else {
     exp_t *r = alcove_eval_string(b.s);
     if (iserror(r)) {
-      alc_unregister_user_type(class_id);
+      if (!is_claim)
+        alc_unregister_user_type(class_id);
       ret = r;
     } else {
       unrefexp(r);
@@ -962,7 +981,8 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
       if (!ctor_name || !validator_name || !schema_name || !islambda(ctor) ||
           !islambda(validator) || !isdict(schema) ||
           !alc_user_type_set_metadata(class_id, ctor, validator, schema)) {
-        alc_unregister_user_type(class_id);
+        if (!is_claim)
+          alc_unregister_user_type(class_id);
         ret = error(ERROR_ILLEGAL_VALUE, e, env,
                     "defclass: generated class metadata is invalid");
       } else

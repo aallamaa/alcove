@@ -22,9 +22,10 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   constructor. Every field write (constructor, setter, or a raw `assoc!`) is
   schema-enforced through the mutation-validator layer, and field types may be
   builtin types or other user classes. Zero fields is `(defclass Name)`. Classes
-  **cannot be redefined** in a session, and persistence of instances is an MVP
-  limitation: `savedb`/`loaddb` carries the data and type tag but not the
-  validator, so schema enforcement is lost on a reloaded instance.
+  **cannot be redefined** in a session. `savedb`/`loaddb` persists instances by
+  class **name** (dump **v5**): a load in a different class-definition order
+  keeps the right identity, and when the class is defined before `loaddb` the
+  schema validator is reattached so enforcement is fully restored (see Fixed).
 - **`(gc-cycles)` — on-demand cycle collector** (new fragment `gc.h`).
   Reference cycles (only constructible through the mutating containers:
   `assoc!`, `push-right!`/`push-left!`, `vec-set!`) previously leaked with no
@@ -115,7 +116,16 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   bails out safely (`nil`) at the existing depth cap.
 
 ### Fixed
-- **Keyspace expiry: value and deadline now publish atomically** — a reader
+- **`defclass` instance persistence** — `savedb`/`loaddb` now round-trips class
+  instances portably. The dump format bumps to **v5**: a user (`defclass`) type
+  object is written by class **name** (builtin type ids keep the v4 encoding),
+  so a load in a different class-definition order — or before the class is
+  defined — no longer misidentifies the instance's type or degrades it to a
+  plain dict. Loading before the class exists pre-registers a *claimable*,
+  constructorless type entry (identity via `type-of` / `is-a?` survives, and a
+  later `defclass` claims it); loading after the class is defined **reattaches
+  the schema validator**, restoring checked mutation on the reloaded instance
+  (nested instances too). Two-process gate: `make defclass-persist-test`.
   could combine a fresh value with a stale expiry from a previous write;
   both now live in one atomically-swapped entry, expiry is honored
   consistently across every read path (`GET`/`EXISTS`/`TTL`/`DEL`/`SET

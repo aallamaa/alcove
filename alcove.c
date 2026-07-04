@@ -144,7 +144,12 @@ static unsigned short g_type_remap[ALCOVE_TYPE_CAP];
    any load fn runs (the initializer is just a safe default). Defined here so
    load_exp_t and persist.h both see it. Kept in sync with ALCOVE_DUMP_VERSION.
  */
-static int alcove_load_dump_version = 4;
+static int alcove_load_dump_version = 5;
+
+/* Reattach a defclass validator to a freshly loaded instance dict (see
+   definition after #include "watch.h"). Forward-declared here so persist.h's
+   load_dict_value — included well before watch.h — can call it. */
+static void alc_reattach_class_validator(exp_t *d);
 
 /* Canonical singletons — pointer set at main() startup. */
 exp_t *nil_singleton = NULL;
@@ -2492,6 +2497,33 @@ exp_t *load_exp_t(FILE *stream) {
       unrefexp(resp);
       return NULL;
     }
+    if (id == 0xFFFFFFFFu && alcove_load_dump_version >= 5) {
+      /* v5 user-type object: a sentinel followed by [u32 namelen][name]. The
+         raw dump id was session-ordinal; remap by durable class name. */
+      uint32_t namelen;
+      if (fread(&namelen, sizeof(namelen), 1, stream) != 1 || namelen > 4096) {
+        unrefexp(resp);
+        return NULL;
+      }
+      char *name = memalloc(1, (size_t)namelen + 1);
+      if (namelen && fread(name, 1, namelen, stream) != namelen) {
+        free(name);
+        unrefexp(resp);
+        return NULL;
+      }
+      name[namelen] = '\0';
+      unrefexp(resp);
+      uint32_t uid = alc_user_type_id_by_name(name);
+      if (!uid) {
+        /* Class not defined in this process: pre-register a claimable,
+           constructorless entry so the loaded instance keeps its identity
+           (type-of / is-a? work) and a later defclass can claim it. */
+        uid = alc_register_user_type(name);
+        alc_bind_global_type(name, uid);
+      }
+      free(name);
+      return MAKE_TYPE(uid);
+    }
     unrefexp(resp);
     return MAKE_TYPE(id);
   }
@@ -4333,8 +4365,13 @@ static void alcove_set_db_path(const char *p) {
    foreign module types persist: the body keeps the 2-byte runtime id, the table
    maps it to a durable name, and the loader remaps id→name→this-process's-id
    (auto-(require)ing the module unless --safe). v4 reserves 0xffff as the
-   first-class type-object marker. v1/v2/v3 dumps still load. */
-#define ALCOVE_DUMP_VERSION 4
+   first-class type-object marker. v5 makes user (defclass) type objects
+   portable: builtin type ids keep the v4 [0xffff][u32 id] encoding, but a
+   user id (>= TYPE_USER_MIN, session-ordinal and unstable across processes)
+   is written as [0xffff][u32 0xFFFFFFFF sentinel][u32 namelen][name] and the
+   loader remaps it by class name (pre-registering a claimable, constructorless
+   entry when the class is not yet defined). v1/v2/v3/v4 dumps still load. */
+#define ALCOVE_DUMP_VERSION 5
 #define ALCOVE_DUMP_VERSION_MIN 1
 static void auto_require_native(const char *spec); /* defined after require */
 #define ALCOVE_SEC_LISP 'L'
@@ -5458,6 +5495,34 @@ exp_t *sqrtcmd(exp_t *e, env_t *env) {
    fragments (vector.h, builtins_dict.h, set.h, deque.h) so their mutator
    builtins can call watch_notify. */
 #include "watch.h"
+
+/* Reattach a defclass validator to a freshly loaded instance dict. A loaded
+   instance is a plain dict whose "__type__" is the (name-remapped) type
+   object; its schema validator lived only in the TLS watch registry, which is
+   not persisted. If the class is defined in THIS process (registry entry has a
+   validator) and the dict isn't already watched, install the validator exactly
+   as set-validator! does — restoring schema enforcement on the loaded value.
+   Called per-dict on the load path (persist.h load_dict_value) so nested
+   instances (inside lists/dicts) are covered too. */
+static void alc_reattach_class_validator(exp_t *d) {
+  if (!isdict(d) || !d->ptr)
+    return;
+  keyval_t *kv = set_get_keyval_dict((dict_t *)d->ptr, "__type__", NULL);
+  if (!kv || !istype(kv->val))
+    return;
+  uint32_t id = TYPE_ID(kv->val);
+  if (id < TYPE_USER_MIN)
+    return;
+  alc_user_type_t *ut = alc_user_type_by_id(id);
+  if (!ut || !ut->validator)
+    return;
+  watch_slot_t *slot = watch_ensure_slot(d);
+  if (!slot || slot->validator)
+    return; /* OOM, or a validator is already present — don't clobber */
+  slot->validator = refexp(ut->validator);
+  d->flags |= FLAG_WATCHED;
+}
+
 #include "vector.h"
 
 /* (sqrt-int n) — floor(sqrt(n)) on a non-negative fixnum. Built-in to
@@ -5800,7 +5865,22 @@ exp_t *dump_type_obj(exp_t *e, FILE *stream) {
   unsigned short t = ALCOVE_DUMP_TAG_TYPE_OBJECT;
   if (dumptype(stream, &t) <= 0) return NULL;
   uint32_t id = TYPE_ID(e);
-  if (fwrite(&id, sizeof(id), 1, stream) != 1) return NULL;
+  if (id < TYPE_USER_MIN) {
+    /* Builtin type: id is a stable enum — v4 encoding [0xffff][u32 id]. */
+    if (fwrite(&id, sizeof(id), 1, stream) != 1) return NULL;
+    return e;
+  }
+  /* User (defclass) type: the id is session-ordinal, so persist by class NAME
+     (v5) — [0xffff][u32 0xFFFFFFFF sentinel][u32 namelen][name]. A live type
+     object always has a registry entry; if somehow it does not, abort this
+     value's dump (matching other dump-failure paths). */
+  const char *name = alc_user_type_name(id);
+  if (!name) return NULL;
+  uint32_t sentinel = 0xFFFFFFFFu;
+  if (fwrite(&sentinel, sizeof(sentinel), 1, stream) != 1) return NULL;
+  uint32_t namelen = (uint32_t)strlen(name);
+  if (fwrite(&namelen, sizeof(namelen), 1, stream) != 1) return NULL;
+  if (namelen && fwrite(name, 1, namelen, stream) != namelen) return NULL;
   return e;
 }
 
