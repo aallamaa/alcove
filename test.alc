@@ -1955,6 +1955,14 @@
              (error? (try (eval (quote (def _nd1 ((Int)) 1))) (fn (e) e))))
 (def _nd_ok ((a b)) (+ a b))     ; non-reserved nested destructuring still fine
 (assert "non-reserved nested destructuring unaffected" (_nd_ok (list 3 4)) 7)
+;; generated code uses synthetic param names, so fields may shadow what the
+;; old generator used as its own identifiers (op/k/v, or each other):
+(defclass _EvtC (op String) (k Int) (v Int))
+(= _evt (_EvtC "click" 1 2))
+(assert "defclass field named op works"   (_EvtC-op _evt) "click")
+(assert "defclass field named v works"    (_EvtC-v _evt)  2)
+(assert "defclass op/v field setter still validates"
+        (error? (try (_EvtC-v! _evt "bad") (fn (e) e))) t)
 (assert-true "type hint: unknown keyword errors at def"
              (error? (try (def ta-bad (x :nope) x) (fn (e) e))))
 (assert-true "type hint: keyword without param errors"

@@ -3092,6 +3092,17 @@ def _nd_ok ((a b)):
 
 assert "non-reserved nested destructuring unaffected" (_nd_ok (list 3 4)) 7
 
+defclass _EvtC (op String) (k Int) (v Int)
+
+setf _evt (_EvtC "click" 1 2)
+
+assert "defclass field named op works" (_EvtC-op _evt) "click"
+
+assert "defclass field named v works" (_EvtC-v _evt) 2
+
+assert "defclass op/v field setter still validates" (error? (try (_EvtC-v! _evt "bad") (fn (e) e))):
+  t
+
 assert-true "type hint: unknown keyword errors at def" (error? (try (def ta-bad (x :nope) x) (fn (e) e)))
 
 assert-true "type hint: keyword without param errors" (error? (try (def ta-bad2 (:int) 1) (fn (e) e)))

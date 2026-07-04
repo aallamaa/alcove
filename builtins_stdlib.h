@@ -886,12 +886,12 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
                       fields[i].type_name);
   defclass_buf_addf(&b, "))) ");
 
-  defclass_buf_addf(&b, "(def %s__validator (o op k v) ", cname);
-  defclass_buf_addf(&b, "(if (is op (quote assoc!)) ");
+  defclass_buf_addf(&b, "(def %s__validator (_o _op _k _v) ", cname);
+  defclass_buf_addf(&b, "(if (is _op (quote assoc!)) ");
   for (i = 0; i < nfields; i++) {
-    defclass_buf_addf(&b, "(if (is k \"%s\") ", fields[i].name);
+    defclass_buf_addf(&b, "(if (is _k \"%s\") ", fields[i].name);
     defclass_buf_addf(&b,
-                      "(if (is-a? v %s) t (raise (quote type-error) "
+                      "(if (is-a? _v %s) t (raise (quote type-error) "
                       "\"%s.%s expected %s\")) ",
                       fields[i].type_name, cname, fields[i].name,
                       fields[i].type_name);
@@ -900,39 +900,39 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
                     cname);
   for (i = 0; i < nfields; i++)
     defclass_buf_addf(&b, ")");
-  defclass_buf_addf(&b, " (if (is op (quote dissoc!)) "
+  defclass_buf_addf(&b, " (if (is _op (quote dissoc!)) "
                          "(raise (quote illegal-value) "
                          "\"%s: fields cannot be deleted\") t))) ",
                     cname);
 
   defclass_buf_addf(&b, "(def %s__new (", cname);
   for (i = 0; i < nfields; i++)
-    defclass_buf_addf(&b, "%s ", fields[i].name);
+    defclass_buf_addf(&b, "_a%d ", i);
   defclass_buf_addf(&b, ") (do ");
   for (i = 0; i < nfields; i++)
     defclass_buf_addf(&b,
-                      "(if (is-a? %s %s) t (raise (quote type-error) "
+                      "(if (is-a? _a%d %s) t (raise (quote type-error) "
                       "\"%s.%s expected %s\")) ",
-                      fields[i].name, fields[i].type_name, cname,
+                      i, fields[i].type_name, cname,
                       fields[i].name, fields[i].type_name);
-  defclass_buf_addf(&b, "(let obj (hash-map \"__type__\" %s", cname);
+  defclass_buf_addf(&b, "(let _obj (hash-map \"__type__\" %s", cname);
   for (i = 0; i < nfields; i++)
-    defclass_buf_addf(&b, " \"%s\" %s", fields[i].name, fields[i].name);
-  defclass_buf_addf(&b, ") (set-validator! obj %s__validator) obj))) ", cname);
+    defclass_buf_addf(&b, " \"%s\" _a%d", fields[i].name, i);
+  defclass_buf_addf(&b, ") (set-validator! _obj %s__validator) _obj))) ", cname);
 
   defclass_buf_addf(&b,
-                    "(def %s? (o) (is-a? o %s)) ",
+                    "(def %s? (_o) (is-a? _o %s)) ",
                     cname, cname);
   for (i = 0; i < nfields; i++) {
     const char *fn = fields[i].name;
     defclass_buf_addf(&b,
-                      "(def %s-%s (o) (if (%s? o) (get o \"%s\") "
+                      "(def %s-%s (_o) (if (%s? _o) (get _o \"%s\") "
                       "(raise (quote illegal-value) "
                       "\"%s-%s: expected %s\"))) ",
                       cname, fn, cname, fn, cname, fn, cname);
     defclass_buf_addf(&b,
-                      "(def %s-%s! (o v) (if (%s? o) "
-                      "(assoc! o \"%s\" v) "
+                      "(def %s-%s! (_o _v) (if (%s? _o) "
+                      "(assoc! _o \"%s\" _v) "
                       "(raise (quote illegal-value) "
                       "\"%s-%s!: expected %s\"))) ",
                       cname, fn, cname, fn, cname, fn, cname);
