@@ -8,6 +8,32 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **`defclass` phase 7 — compound field schemas, field defaults, `super`, and
+  `(instance? T)`.** Field types may now be compound: `(optional TE)` also
+  admits nil, `(list-of TE)` admits a proper list (or nil) of TE, and
+  `(or TE TE …)` admits any arm — TEs nest, class names (including the class
+  being defined) work inside compounds, and subsumption flows through them.
+  Compounds are parsed as syntax at defclass time (unknown combinator/type
+  names and arity mistakes are definition errors), checks stay **shallow**
+  (they fire at construction/assignment of the field; mutating a nested
+  container afterwards is not tracked), and compounds are not first-class
+  types — `(is-a? x (list-of Int))` does not exist. A field clause may carry a
+  **default**: `(name Type default-expr)` makes the constructor argument
+  optional; the default is evaluated at **call time** (a `(list)` default
+  yields a fresh list per construction), must pass the field's type check, and
+  once a field (in inherited-then-own order) has a default all later fields
+  must too. `(optional T)` does **not** imply a default. The `Name__class`
+  schema records compound type expressions (as quoted sexprs) and defaults (as
+  their unevaluated expression under a `"default"` marker). Inside `(:method …)`
+  bodies of a class with a parent, **`(super name args…)`** resumes generic
+  dispatch for `name` at the *defining* class's parent — rewritten at
+  class-definition time (never inside quoted forms; an error in a parentless
+  class; any parent generic may be named), so a grandchild running an inherited
+  method cannot loop. New builtin **`(instance? T)`** returns a predicate
+  closure `(fn (v) …)` testing `(is-a? v T)` — for `filter`, `match` guards
+  `(? (instance? T))`, and other HOFs. (Optional `(param default)` parameters
+  now also bind on the unified VM callee path, so constructors with defaults
+  work identically across tiers.)
 - **First-class type objects** — `Int`, `Float`, `String`, … are now real
   runtime values (`TAG_TYPE` immediates), not just JIT annotations. `(type x)`
   returns the type object for a value, `(type? v)` tests for one, `(type-name t)`

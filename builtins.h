@@ -65,6 +65,7 @@ extern const char doc_seq[], doc_first[], doc_rest[];
 extern const char doc_conj[], doc_into[];
 extern const char doc_typeof[];
 extern const char doc_type_name[], doc_type[], doc_is_a[], doc_is_type[];
+extern const char doc_instance_p[];
 extern const char doc_defstruct[], doc_defclass[], doc_defmulti[], doc_defmethod[];
 extern const char doc_mm_lookup[];
 extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];

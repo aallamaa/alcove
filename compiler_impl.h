@@ -3510,6 +3510,32 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
     exp_t *p = lambda_params(fn);
     int i = 0;
     while (p && p->content) {
+      /* Optional param (name default-expr) — the same shape var2env accepts:
+         the 2nd element is NOT a symbol (a symbol 2nd element makes the pair
+         a destructuring pattern). Bind the arg when supplied; when omitted,
+         evaluate the default in the frame being built (so it can reference
+         earlier params) — matching the AST tier exactly. Reached e.g. by a
+         defclass constructor with field defaults, whose type-object callee
+         dispatches through this path. */
+      if (is_ptr(p->content) && ispair(p->content) && istrue(p->content) &&
+          issymbol(car(p->content)) && cadr(p->content) &&
+          !issymbol(cadr(p->content))) {
+        if (i < nargs) {
+          var2env_bind((char *)exp_text(car(p->content)), argv[i], newenv);
+          i++;
+        } else {
+          exp_t *dv = EVAL(cadr(p->content), newenv);
+          if (!dv)
+            dv = NIL_EXP;
+          if (iserror(dv)) {
+            destroy_env(newenv);
+            return dv;
+          }
+          var2env_bind((char *)exp_text(car(p->content)), dv, newenv);
+        }
+        p = p->next;
+        continue;
+      }
       if (!is_ptr(p->content) || !issymbol(p->content)) {
         int j;
         for (j = i; j < nargs; j++)

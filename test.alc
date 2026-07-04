@@ -441,6 +441,133 @@
 (defmethod speak Int (x) "an integer")
 (assert "method: builtin-type key beats Any" (speak 99) "an integer")
 (assert "method: Any still applies to unmatched type" (speak "hi") "???")
+;; ── defclass phase 7: compound field schemas ──────────────────────────────
+(defclass Wisp (note (optional String)))
+(assert "compound: optional holds nil"       (Wisp-note (Wisp nil)) nil)
+(assert "compound: optional holds value"     (Wisp-note (Wisp "hi")) "hi")
+(assert "compound: optional rejects other"   (error? (try (Wisp 42) (fn (e) e))) t)
+(assert "compound: optional error message"
+        (try (Wisp 42) (fn (e) (error-message e))) "Wisp.note expected (optional String)")
+(defclass IntBag (xs (list-of Int)))
+(assert "compound: list-of accepts list"     (IntBag-xs (IntBag (list 1 2))) (list 1 2))
+(assert "compound: list-of accepts nil"      (IntBag-xs (IntBag nil)) nil)
+(assert "compound: list-of accepts empty"    (IntBag-xs (IntBag (list))) nil)
+(assert "compound: list-of rejects bad elem" (error? (try (IntBag (list 1 "x")) (fn (e) e))) t)
+(assert "compound: list-of rejects non-list" (error? (try (IntBag 42) (fn (e) e))) t)
+(= _bag (IntBag (list 1)))
+(IntBag-xs! _bag (list 2 3))
+(assert "compound: setter good lands"        (IntBag-xs _bag) (list 2 3))
+(assert "compound: setter rejects bad"       (error? (try (IntBag-xs! _bag (list 2 "x")) (fn (e) e))) t)
+(assert "compound: rejected setter leaves value" (IntBag-xs _bag) (list 2 3))
+(defclass Tag7 (v (or Int String)))
+(assert "compound: or arm 1"   (Tag7-v (Tag7 5)) 5)
+(assert "compound: or arm 2"   (Tag7-v (Tag7 "s")) "s")
+(assert "compound: or rejects" (error? (try (Tag7 1.5) (fn (e) e))) t)
+(defclass Nest7 (a (list-of (optional Int))) (b (optional (or Int String))))
+(assert "compound: nested list-of optional"  (Nest7-a (Nest7 (list 1 nil 3) nil)) (list 1 nil 3))
+(assert "compound: nested rejects"           (error? (try (Nest7 (list 1 "s") nil) (fn (e) e))) t)
+(assert "compound: optional-or arm"          (Nest7-b (Nest7 nil "ok")) "ok")
+(assert "compound: optional-or rejects"      (error? (try (Nest7 nil 1.5) (fn (e) e))) t)
+;; self-reference: the class's own name resolves inside a compound
+(defclass Node7 (val Int) (next (optional Node7) nil))
+(assert "compound: recursive construct"      (Node7-val (Node7 5)) 5)
+(assert "compound: recursive chain"          (Node7-val (Node7-next (Node7 4 (Node7 5)))) 5)
+(assert "compound: recursive next default"   (Node7-next (Node7 9)) nil)
+(assert "compound: recursive rejects"        (error? (try (Node7 4 "x") (fn (e) e))) t)
+;; subsumption flows through compounds (Car extends Vehicle above)
+(defclass Fleet (cars (list-of Vehicle)))
+(assert "compound: subsumption through list-of"
+        (Vehicle-name (first (Fleet-cars (Fleet (list _car _veh))))) "Beetle")
+;; schema-syntax errors at defclass time
+(assert "compound: unknown combinator errors"
+        (error? (try (defclass BadK1 (x (maybe Int))) (fn (e) e))) t)
+(assert "compound: optional arity-0 errors"
+        (error? (try (defclass BadK2 (x (optional))) (fn (e) e))) t)
+(assert "compound: optional arity-2 errors"
+        (error? (try (defclass BadK3 (x (optional Int String))) (fn (e) e))) t)
+(assert "compound: or arity errors"
+        (error? (try (defclass BadK4 (x (or Int))) (fn (e) e))) t)
+(assert "compound: unknown name inside errors"
+        (error? (try (defclass BadK5 (x (list-of Nope))) (fn (e) e))) t)
+;; inheritance carries the full compound schema into the child
+(defclass OptBase (note (optional String)))
+(defclass OptKid (:extends OptBase) (extra Int))
+(assert "compound: inherited compound works"     (OptKid-note (OptKid "n" 3)) "n")
+(assert "compound: inherited compound nil"       (OptKid-note (OptKid nil 3)) nil)
+(assert "compound: inherited compound validates" (error? (try (OptKid 42 3) (fn (e) e))) t)
+(assert "compound: child schema keeps compound sexpr"
+        (nth (first (get OptKid__class "fields")) 1) '(optional String))
+;; ── defclass phase 7: field defaults ──────────────────────────────────────
+(defclass Acct7 (owner String) (balance Int 100) (memo (optional String) nil))
+(assert "default: fills"                  (Acct7-balance (Acct7 "Ada")) 100)
+(assert "default: nil default"            (Acct7-memo (Acct7 "Ada")) nil)
+(assert "default: explicit override"      (Acct7-balance (Acct7 "Ada" 5)) 5)
+(assert "default: required still required" (error? (try (Acct7) (fn (e) e))) t)
+;; defaults are recorded as their UNEVALUATED expression — a source-level nil
+;; is the symbol nil (so absence of the "default" marker stays distinguishable
+;; from a recorded (default nil)).
+(assert "default: schema records defaults" (get Acct7__class "fields")
+        (list (list "owner" String) (list "balance" Int "default" 100)
+              (list "memo" '(optional String) "default" 'nil)))
+;; an ill-typed default errors at CONSTRUCTION (call time), not at defclass
+(defclass IllD7 (x Int "oops"))
+(assert "default: ill-typed default errors at construction"
+        (error? (try (IllD7) (fn (e) e))) t)
+(assert "default: ill-typed default fine when overridden" (IllD7-x (IllD7 5)) 5)
+;; call-time evaluation: each construction evaluates the default afresh
+(defclass Purse7 (coins Dict (hash-map)))
+(= _p71 (Purse7))
+(= _p72 (Purse7))
+(assoc! (Purse7-coins _p71) "gold" 3)
+(assert "default: call-time eval — mutation stays local" (get (Purse7-coins _p72) "gold") nil)
+(assert "default: call-time eval — fresh identity"
+        (is (Purse7-coins (Purse7)) (Purse7-coins (Purse7))) nil)
+;; trailing rule: a defaulted field cannot be followed by a required one
+(assert "default: trailing rule violation"
+        (try (defclass BadTrail7 (x Int 1) (y Int)) (fn (e) (error-message e)))
+        "defclass: field 'y' needs a default — it follows defaulted field 'x'")
+(defclass DfltBase7 (n Int 1))
+(assert "default: inheritance trailing violation names child field"
+        (try (defclass BadKid7 (:extends DfltBase7) (m Int)) (fn (e) (error-message e)))
+        "defclass: child field 'm' needs a default — inherited field 'n' (from DfltBase7) has one")
+(defclass DfltKid7 (:extends DfltBase7) (m Int 2))
+(assert "default: inherited default fills"
+        (list (DfltKid7-n (DfltKid7)) (DfltKid7-m (DfltKid7))) (list 1 2))
+(assert "default: inherited default override" (DfltKid7-n (DfltKid7 7 8)) 7)
+(assert "default: 4-element field clause errors"
+        (error? (try (defclass Bad47 (x Int 1 2)) (fn (e) e))) t)
+;; orthogonality: (optional T) does NOT imply a default
+(defclass Edge7 (to (optional Node7)))
+(assert "default: optional does not imply default" (error? (try (Edge7) (fn (e) e))) t)
+(assert "default: optional-required takes nil"     (Edge7-to (Edge7 nil)) nil)
+;; ── defclass phase 7: super ────────────────────────────────────────────────
+(defclass Animal7 (nm String) (:method speak7 (self) "..."))
+(defclass Dog7 (:extends Animal7) (:method speak7 (self) (str (super speak7 self) " woof")))
+(defclass Puppy7 (:extends Dog7))
+(assert "super: parent-suffix pattern"        (speak7 (Dog7 "d")) "... woof")
+;; grandchild runs Dog7's speak7 via the chain; its (super ...) was baked to
+;; Animal7 (the DEFINING class's parent) at emission — no infinite loop.
+(assert "super: grandchild inherits, no loop" (speak7 (Puppy7 "p")) "... woof")
+(assert "super: parentless class errors at defclass"
+        (error? (try (defclass Lone7 (x Int) (:method m7 (self) (super m7 self))) (fn (e) e))) t)
+(defclass Multi7 (:extends Animal7)
+  (:method greet7 (self) (str "hi:" (super speak7 self))))
+(assert "super: different generic name"       (greet7 (Multi7 "m")) "hi:...")
+(defclass Quot7 (:extends Animal7) (:method qq7 (self) '(super speak7 self)))
+(assert "super: quoted form not rewritten"    (qq7 (Quot7 "q")) '(super speak7 self))
+(assert "super: no-name errors at defclass"
+        (error? (try (defclass NoName7 (:extends Animal7) (:method z7 (self) (super))) (fn (e) e))) t)
+(assert "super: not a global outside methods" (error? (try (super speak7 1) (fn (e) e))) t)
+;; ── (instance? T): predicate-maker ─────────────────────────────────────────
+(assert "instance?: class predicate t"   ((instance? Animal7) (Dog7 "d")) t)
+(assert "instance?: class predicate nil" ((instance? Dog7) (Animal7 "a")) nil)
+(assert "instance?: builtin type"        ((instance? Int) 5) t)
+(assert "instance?: builtin type nil"    ((instance? Int) "x") nil)
+(assert "instance?: with filter"
+        (length (filter (instance? Animal7) (list (Dog7 "a") 5 (Animal7 "b") "s"))) 2)
+(assert "instance?: with match guard"
+        (match (Dog7 "r") (? (instance? Animal7)) "beast" _ "other") "beast")
+(assert "instance?: non-type errors"     (error? (try (instance? 5) (fn (e) e))) t)
 ;; iso on dict/set: structural (content) equality, order-independent
 (assert "iso dict same"          (iso (hash-map "a" 1 "b" 2) (hash-map "b" 2 "a" 1)) t)
 (assert "iso dict diff val"      (iso (hash-map "a" 1) (hash-map "a" 2)) nil)

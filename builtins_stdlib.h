@@ -611,6 +611,35 @@ exp_t *is_acmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(x, t, refexp(match ? TRUE_EXP : NIL_EXP));
 }
 
+/* (instance? T) — a predicate-MAKER: returns a closure (fn (v) (is-a? v T)).
+   Built by constructing the (fn (_iv) (is-a? _iv <T>)) form with the type
+   object embedded directly (type immediates self-evaluate) and evaluating it,
+   which yields a first-class callable for filter / HOFs / match guards. */
+const char doc_instance_p[] =
+    "(instance? T) — returns a predicate closure (fn (v) -> t/nil) testing "
+    "(is-a? v T). T must be a type object (a class or a builtin type). For "
+    "match guards ((? (instance? Account))), filter, and other HOFs.";
+exp_t *instance_pcmd(exp_t *e, env_t *env) {
+  exp_t *t = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  if (iserror(t)) {
+    unrefexp(e);
+    return t;
+  }
+  if (!istype(t))
+    CLEAN_RETURN_1(t, error(ERROR_ILLEGAL_VALUE, e, env,
+                            "instance?: argument must be a type object"));
+  /* (fn (_iv) (is-a? _iv T)) — T embedded as a self-evaluating immediate. */
+  exp_t *body = make_node(make_symbol("is-a?", 5));
+  body->next = make_node(make_symbol("_iv", 3));
+  body->next->next = make_node(t); /* transfers our ref on t */
+  exp_t *form = make_node(make_symbol("fn", 2));
+  form->next = make_node(make_node(make_symbol("_iv", 3)));
+  form->next->next = make_node(body);
+  exp_t *fnv = evaluate(form, env);
+  unrefexp(e);
+  return fnv;
+}
+
 /* (defstruct NAME field...) — define a record type. Expands (by building source
    and evaluating it) to: a constructor NAME, a predicate NAME?, and per-field
    accessors NAME-field. Instances are dicts tagged with "__type__" → NAME, so
@@ -750,8 +779,25 @@ static int defclass_ident_ok(const char *s) {
 
 typedef struct {
   const char *name;
-  const char *type_name;
+  exp_t *schema;    /* field TYPE EXPRESSION: a type-name symbol (own bare
+                       field), a type-object immediate (inherited bare field),
+                       or a (optional/list-of/or ...) list. BORROWED — from the
+                       defclass form or the parent's live schema; never freed
+                       here. */
+  char *schema_src; /* malloc'd reader-faithful source text ("Int",
+                       "(optional Node)") for error messages and child-class
+                       re-emission; freed by defclass_free_srcs. */
+  exp_t *dflt;      /* default-value EXPRESSION (borrowed), meaningful only
+                       when has_dflt (a literal nil default is legal). */
+  int has_dflt;
 } defclass_field_t;
+
+static void defclass_free_srcs(defclass_field_t *f, int n) {
+  if (!f)
+    return;
+  for (int i = 0; i < n; i++)
+    free(f[i].schema_src);
+}
 
 static char *defclass_suffix_name(const char *cname, const char *suffix) {
   size_t cn = strlen(cname);
@@ -762,6 +808,253 @@ static char *defclass_suffix_name(const char *cname, const char *suffix) {
   memcpy(s, cname, cn);
   memcpy(s + cn, suffix, sn + 1);
   return s;
+}
+
+/* ---- defclass schema expressions: writer / validator / check emitter ---- */
+
+/* Reader-faithful source writer for field type expressions and field DEFAULT
+   expressions. Defaults, unlike type expressions, may contain string literals
+   — and exp_to_string_buf emits strings UNQUOTED, so it cannot be used here.
+   Handles exactly the shapes the reader produces inside a defclass form: nil,
+   fixnums, floats, rationals, decimals, chars, strings, symbols, type
+   objects, and (possibly dotted) lists. Anything else (a vector literal, a
+   blob, ...) marks the buffer failed, which surfaces as a defclass error. */
+static void defclass_write_form(defclass_buf_t *b, exp_t *v) {
+  if (!b->ok)
+    return;
+  if (!v || v == NIL_EXP) {
+    defclass_buf_addf(b, "nil");
+    return;
+  }
+  if (isnumber(v)) {
+    defclass_buf_addf(b, "%lld", (long long)FIX_VAL(v));
+    return;
+  }
+  if (ischar(v)) {
+    uint32_t c = CHAR_VAL(v);
+    if (c >= 0x80) {
+      char u[5] = {0};
+      int k = utf8_encode(c, u);
+      u[k] = 0;
+      defclass_buf_addf(b, "#\\%s", u);
+    } else if (c > 32 && c < 127) {
+      defclass_buf_addf(b, "#\\%c", (char)c);
+    } else {
+      b->ok = 0; /* no readable spelling for a control/space char literal */
+    }
+    return;
+  }
+  if (istype(v)) {
+    const char *n = alc_type_name(TYPE_ID(v));
+    defclass_buf_addf(b, "%s", n);
+    return;
+  }
+  if (!is_ptr(v)) {
+    b->ok = 0;
+    return;
+  }
+  switch (v->type) {
+  case EXP_SYMBOL:
+    defclass_buf_addf(b, "%s", (const char *)exp_text(v));
+    return;
+  case EXP_STRING: {
+    const char *s = (const char *)exp_text(v);
+    defclass_buf_addf(b, "\"");
+    for (; s && *s; s++) {
+      unsigned char c = (unsigned char)*s;
+      if (c == '"' || c == '\\')
+        defclass_buf_addf(b, "\\%c", c);
+      else if (c == '\n')
+        defclass_buf_addf(b, "\\n");
+      else if (c == '\t')
+        defclass_buf_addf(b, "\\t");
+      else if (c == '\r')
+        defclass_buf_addf(b, "\\r");
+      else
+        defclass_buf_addf(b, "%c", c);
+    }
+    defclass_buf_addf(b, "\"");
+    return;
+  }
+  case EXP_FLOAT:
+    defclass_buf_addf(b, "%.17g", v->f);
+    return;
+  case EXP_RATIONAL: {
+    alc_rat_t *r = (alc_rat_t *)v->ptr;
+    defclass_buf_addf(b, "%lld/%lld", (long long)r->num, (long long)r->den);
+    return;
+  }
+  case EXP_DECIMAL: {
+    char db[48];
+    dec_to_str((alc_dec_t *)v->ptr, db);
+    defclass_buf_addf(b, "%sm", db);
+    return;
+  }
+  case EXP_PAIR: {
+    if (!istrue(v)) {
+      defclass_buf_addf(b, "nil");
+      return;
+    }
+    defclass_buf_addf(b, "(");
+    exp_t *n = v;
+    int first = 1;
+    while (n && ispair(n) && istrue(n)) {
+      if (!first)
+        defclass_buf_addf(b, " ");
+      first = 0;
+      defclass_write_form(b, n->content);
+      n = n->next;
+    }
+    if (n && !ispair(n) && istrue(n)) { /* dotted tail */
+      defclass_buf_addf(b, " . ");
+      defclass_write_form(b, n);
+    }
+    defclass_buf_addf(b, ")");
+    return;
+  }
+  default:
+    b->ok = 0;
+    return;
+  }
+}
+
+/* malloc'd source text of a field type expression (a symbol, a type object,
+   or a compound list). NULL on OOM/unserializable. */
+static char *defclass_src_of(exp_t *te) {
+  defclass_buf_t tb = {0};
+  tb.ok = 1;
+  defclass_write_form(&tb, te);
+  if (!tb.ok || !tb.s) {
+    free(tb.s);
+    return NULL;
+  }
+  return tb.s;
+}
+
+/* Validate a field TYPE EXPRESSION as pure SYNTAX at defclass time (never
+   evaluated). Accepts a bare type-name symbol or, recursively,
+   (optional TE) / (list-of TE) / (or TE TE ...). `cname` lets a class
+   reference itself ((next (optional Node)) inside defclass Node). On failure
+   writes a message into err and returns 0. */
+static int defclass_schema_ok(exp_t *te, const char *cname, char *err,
+                              size_t errsz) {
+  if (te && issymbol(te)) {
+    const char *tn = (const char *)exp_text(te);
+    if (strcmp(tn, cname) == 0)
+      return 1; /* self-reference: the class's own (in-progress) name */
+    uint32_t tid = alc_type_from_name(tn);
+    if (!tid)
+      tid = alc_user_type_id_by_name(tn);
+    if (!tid) {
+      snprintf(err, errsz, "unknown field type '%s'", tn);
+      return 0;
+    }
+    return 1;
+  }
+  if (te && ispair(te) && te->content && issymbol(car(te))) {
+    const char *hd = (const char *)exp_text(car(te));
+    int n = 0;
+    for (exp_t *p = cdr(te); p && p->content; p = p->next)
+      n++;
+    if (!strcmp(hd, "optional") || !strcmp(hd, "list-of")) {
+      if (n != 1) {
+        snprintf(err, errsz, "(%s TE) takes exactly one type expression", hd);
+        return 0;
+      }
+    } else if (!strcmp(hd, "or")) {
+      if (n < 2) {
+        snprintf(err, errsz,
+                 "(or TE TE ...) needs at least two type expressions");
+        return 0;
+      }
+    } else {
+      snprintf(err, errsz,
+               "unknown type combinator '%s' — expected optional/list-of/or",
+               hd);
+      return 0;
+    }
+    for (exp_t *p = cdr(te); p && p->content; p = p->next)
+      if (!defclass_schema_ok(p->content, cname, err, errsz))
+        return 0;
+    return 1;
+  }
+  snprintf(err, errsz,
+           "field type must be a type name or (optional/list-of/or ...)");
+  return 0;
+}
+
+/* Emit the CHECK EXPRESSION over the value named `var` for a (validated)
+   field type expression. Used identically by the constructor argument checks
+   and the mutation validator:
+     bare T        -> (is-a? VAR T)
+     (optional TE) -> (if (no VAR) t <check TE VAR>)
+     (list-of TE)  -> (if (list? VAR) (all? (fn (_eN) <check TE _eN>) VAR) nil)
+     (or TE ...)   -> (or <check TE VAR> ...)
+   nil passes (list? nil), so an empty/nil list satisfies list-of. `depth`
+   uniquifies the element variable of nested list-ofs (_e0, _e1, ...). Checks
+   are SHALLOW: they fire when the field is constructed/assigned; mutating a
+   nested container afterwards is not tracked. */
+static void defclass_emit_check(defclass_buf_t *b, exp_t *te, const char *var,
+                                int depth) {
+  if (istype(te)) {
+    defclass_buf_addf(b, "(is-a? %s %s)", var, alc_type_name(TYPE_ID(te)));
+    return;
+  }
+  if (issymbol(te)) {
+    defclass_buf_addf(b, "(is-a? %s %s)", var, (const char *)exp_text(te));
+    return;
+  }
+  const char *hd = (const char *)exp_text(car(te));
+  if (!strcmp(hd, "optional")) {
+    defclass_buf_addf(b, "(if (no %s) t ", var);
+    defclass_emit_check(b, cadr(te), var, depth);
+    defclass_buf_addf(b, ")");
+  } else if (!strcmp(hd, "list-of")) {
+    char ev[24];
+    snprintf(ev, sizeof ev, "_e%d", depth);
+    defclass_buf_addf(b, "(if (list? %s) (all? (fn (%s) ", var, ev);
+    defclass_emit_check(b, cadr(te), ev, depth + 1);
+    defclass_buf_addf(b, ") %s) nil)", var);
+  } else { /* or */
+    defclass_buf_addf(b, "(or");
+    for (exp_t *p = cdr(te); p && p->content; p = p->next) {
+      defclass_buf_addf(b, " ");
+      defclass_emit_check(b, p->content, var, depth);
+    }
+    defclass_buf_addf(b, ")");
+  }
+}
+
+/* Pre-scan a :method body form for (super ...) validity at DEFCLASS time:
+   super needs a parent class and a symbol NAME, and is never inspected
+   inside (quote ...) forms. Returns 0 with a message in err on violation. */
+static int defclass_scan_super(exp_t *form, int has_parent, char *err,
+                               size_t errsz) {
+  if (!form || !ispair(form) || !istrue(form) || !form->content)
+    return 1;
+  exp_t *hd = car(form);
+  if (hd && issymbol(hd)) {
+    const char *h = (const char *)exp_text(hd);
+    if (!strcmp(h, "quote"))
+      return 1;
+    if (!strcmp(h, "super")) {
+      if (!has_parent) {
+        snprintf(err, errsz,
+                 "(super ...) in a :method of a class with no parent class");
+        return 0;
+      }
+      exp_t *nmn = form->next;
+      if (!nmn || !nmn->content || !issymbol(nmn->content)) {
+        snprintf(err, errsz,
+                 "(super name args...) needs a generic-function name");
+        return 0;
+      }
+    }
+  }
+  for (exp_t *p = form; p && ispair(p) && istrue(p); p = p->next)
+    if (p->content && !defclass_scan_super(p->content, has_parent, err, errsz))
+      return 0;
+  return 1;
 }
 
 /* (defclass NAME (field Type)...) — typed record class.
@@ -779,8 +1072,23 @@ const char doc_defclass[] =
     "field may not shadow an inherited one. (:method name (self args...) "
     "body...) clauses, AFTER all fields, define generic functions dispatched on "
     "the first arg's type: (name inst ...); a child inherits a parent method it "
-    "does not override, and a method for the Any type is the default. There is "
-    "no `super` yet. Classes cannot be redefined in a session. savedb/loaddb "
+    "does not override, and a method for the Any type is the default. "
+    "FIELD TYPES may be compound: (optional TE) also admits nil, (list-of TE) "
+    "admits a proper list (or nil) of TE, (or TE TE ...) admits any arm; TEs "
+    "nest. Compound checks are SHALLOW — they fire at construction/assignment "
+    "of the field; mutating a nested container afterwards is not tracked — and "
+    "compounds are not first-class types: (is-a? x (list-of Int)) does not "
+    "exist. FIELD DEFAULTS: (name Type default-expr) makes the constructor "
+    "argument optional; the default expression is evaluated at CALL time and "
+    "must pass the field's type check. Once a field (in parent-then-own order) "
+    "has a default, all later fields must too. (optional T) does NOT imply a "
+    "default — the field stays required, just nilable. "
+    "SUPER: inside a (:method ...) body of a class with a parent, "
+    "(super name args...) resumes generic dispatch for `name` at the DEFINING "
+    "class's parent (any parent generic may be named, not just the enclosing "
+    "method's); it is rewritten at class-definition time — not inside quoted "
+    "forms — and is an error in a parentless class. `super` is not a global. "
+    "Classes cannot be redefined in a session. savedb/loaddb "
     "persists instances by class NAME (dump v5), so a load in a different "
     "class-definition order keeps the right identity; if the class is defined "
     "BEFORE loaddb its validator is reattached and schema enforcement is fully "
@@ -796,7 +1104,8 @@ const char doc_defclass[] =
    that fails to register (the class itself stays defined — methods are
    additive), else NULL. Defined after sx_lst/sx_sym below. */
 static exp_t *defclass_emit_methods(const char *cname, exp_t **methods,
-                                    int nmethods, env_t *env);
+                                    int nmethods, uint32_t parent_id,
+                                    env_t *env);
 exp_t *defclasscmd(exp_t *e, env_t *env) {
   exp_t *nm = cadr(e);
   if (!nm || !is_ptr(nm) || !issymbol(nm)) {
@@ -896,38 +1205,53 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
         DC_FAIL("defclass: (:method %s ...) needs a param list with at least "
                 "the dispatch (self) parameter",
                 (char *)exp_text(mn));
+      /* (super ...) validity is a DEFCLASS-time property: it needs a parent
+         class and a symbol name. Scan the body now (quote forms excluded) so
+         a violation aborts before the class is registered. */
+      {
+        char superr[192];
+        for (exp_t *bp = cdddr(spec); bp && bp->content; bp = bp->next)
+          if (!defclass_scan_super(bp->content, parent_name != NULL, superr,
+                                   sizeof superr))
+            DC_FAIL("defclass: %s", superr);
+      }
       methods[nmethods++] = spec;
       seen_method = 1;
       continue;
     }
 
-    /* A field clause (name Type). Fields must precede all methods. */
+    /* A field clause: (name TYPE-EXPR) or (name TYPE-EXPR DEFAULT-EXPR).
+       Fields must precede all methods. TYPE-EXPR is a bare type-name symbol
+       or a compound (optional/list-of/or ...) — validated as SYNTAX, never
+       evaluated. */
     if (seen_method)
       DC_FAIL("defclass: a field clause cannot follow a (:method ...) — put "
               "all fields before the methods");
     exp_t *fname = ispair(spec) ? car(spec) : NULL;
-    exp_t *tname = ispair(spec) ? cadr(spec) : NULL;
-    if (!fname || !tname || (cddr(spec) && cddr(spec)->content) ||
-        !issymbol(fname) || !issymbol(tname))
-      DC_FAIL("defclass: each field must be (name Type)");
+    exp_t *ftype = ispair(spec) ? cadr(spec) : NULL;
+    int nel = 0;
+    if (ispair(spec))
+      for (exp_t *q = spec; q && q->content; q = q->next)
+        nel++;
+    if (!fname || !ftype || nel < 2 || nel > 3 || !issymbol(fname))
+      DC_FAIL("defclass: each field must be (name Type) or "
+              "(name Type default)");
     const char *fn = (const char *)exp_text(fname);
-    const char *tn = (const char *)exp_text(tname);
-    uint32_t tid = alc_type_from_name(tn);
-    if (!tid) {
-      if (strcmp(tn, cname) == 0)
-        tid = class_id;
-      else
-        tid = alc_user_type_id_by_name(tn);
-    }
     if (!defclass_ident_ok(fn) || is_reserved_name(fn))
       DC_FAIL("defclass: field names must be non-reserved symbols");
     for (int j = 0; j < nfields; j++)
       if (!strcmp(fields[j].name, fn))
         DC_FAIL("defclass: duplicate field '%s'", fn);
-    if (!tid)
-      DC_FAIL("defclass: unknown field type '%s'", tn);
+    {
+      char scherr[192];
+      if (!defclass_schema_ok(ftype, cname, scherr, sizeof scherr))
+        DC_FAIL("defclass: %s", scherr);
+    }
     fields[nfields].name = fn;
-    fields[nfields].type_name = tn;
+    fields[nfields].schema = ftype;
+    fields[nfields].schema_src = NULL; /* filled after the parent merge */
+    fields[nfields].has_dflt = (nel == 3);
+    fields[nfields].dflt = (nel == 3) ? caddr(spec) : NULL;
     nfields++;
   }
 
@@ -980,14 +1304,23 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   {
     int k = 0;
     for (exp_t *p = parent_fields; ispair(p) && p->content; p = p->next) {
+      /* Parent entry: (name TYPE) or (name TYPE "default" DFLT-EXPR) — TYPE
+         is a type object (bare field) or a compound schema list. */
       exp_t *pair = p->content;
       exp_t *pnm = car(pair);
       exp_t *pty = cadr(pair);
-      if (!pnm || !isstring(pnm) || !pty || !istype(pty))
+      if (!pnm || !isstring(pnm) || !pty || !(istype(pty) || ispair(pty)))
         DC_FAIL("defclass: parent '%s' has a corrupt field schema",
                 parent_name);
       eff[k].name = (const char *)exp_text(pnm);
-      eff[k].type_name = alc_type_name(TYPE_ID(pty));
+      eff[k].schema = pty;
+      eff[k].schema_src = NULL;
+      exp_t *dn = cddr(pair);
+      if (dn && dn->content && isstring(dn->content) &&
+          !strcmp((const char *)exp_text(dn->content), "default") && dn->next) {
+        eff[k].has_dflt = 1;
+        eff[k].dflt = dn->next->content;
+      }
       k++;
     }
     for (int j = 0; j < nfields; j++) {
@@ -995,9 +1328,40 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
         if (!strcmp(eff[m].name, fields[j].name))
           DC_FAIL("defclass: field '%s' duplicates an inherited field",
                   fields[j].name);
-      eff[k].name = fields[j].name;
-      eff[k].type_name = fields[j].type_name;
+      eff[k] = fields[j];
       k++;
+    }
+  }
+
+  /* TRAILING-DEFAULTS RULE over the EFFECTIVE (parent-then-own) order: once a
+     field has a default, every later field must too — otherwise the generated
+     constructor would put an optional param before a required one. */
+  {
+    int firstd = -1;
+    for (int k = 0; k < neff; k++) {
+      if (eff[k].has_dflt) {
+        if (firstd < 0)
+          firstd = k;
+      } else if (firstd >= 0) {
+        if (firstd < nparent && k >= nparent)
+          DC_FAIL("defclass: child field '%s' needs a default — inherited "
+                  "field '%s' (from %s) has one",
+                  eff[k].name, eff[firstd].name, parent_name);
+        DC_FAIL("defclass: field '%s' needs a default — it follows defaulted "
+                "field '%s'",
+                eff[k].name, eff[firstd].name);
+      }
+    }
+  }
+
+  /* Source text of every effective field's type expression — used in error
+     messages and re-emitted (quoted) into the child-visible schema. Type
+     expressions are string-free by grammar, so the text is reader-faithful. */
+  for (int k = 0; k < neff; k++) {
+    eff[k].schema_src = defclass_src_of(eff[k].schema);
+    if (!eff[k].schema_src) {
+      defclass_free_srcs(eff, neff);
+      DC_FAIL("defclass: out of memory");
     }
   }
 #undef DC_FAIL
@@ -1005,6 +1369,7 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   defclass_buf_t b = {0};
   b.ok = 1;
   if (!alc_register_user_type(cname) || !alc_bind_global_type(cname, class_id)) {
+    defclass_free_srcs(eff, neff);
     free(fields);
     free(methods);
     free(eff);
@@ -1026,19 +1391,36 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   if (parent_name)
     defclass_buf_addf(&b, "\"parent\" %s ", parent_name);
   defclass_buf_addf(&b, "\"fields\" (list");
-  for (i = 0; i < neff; i++)
-    defclass_buf_addf(&b, " (list \"%s\" %s)", eff[i].name, eff[i].type_name);
+  for (i = 0; i < neff; i++) {
+    /* Entry: (name TYPE) or (name TYPE "default" DFLT-EXPR). A bare type
+       emits its NAME (evaluates to the type object — the pre-compound
+       representation); a compound emits its QUOTED source (a sexpr, never
+       evaluated). Defaults are stored as their quoted expression, so absence
+       (no "default" marker) stays distinguishable from (default nil). */
+    if (ispair(eff[i].schema))
+      defclass_buf_addf(&b, " (list \"%s\" (quote %s)", eff[i].name,
+                        eff[i].schema_src);
+    else
+      defclass_buf_addf(&b, " (list \"%s\" %s", eff[i].name, eff[i].schema_src);
+    if (eff[i].has_dflt) {
+      defclass_buf_addf(&b, " \"default\" (quote ");
+      defclass_write_form(&b, eff[i].dflt);
+      defclass_buf_addf(&b, ")");
+    }
+    defclass_buf_addf(&b, ")");
+  }
   defclass_buf_addf(&b, "))) ");
 
   defclass_buf_addf(&b, "(def %s__validator (_o _op _k _v) ", cname);
   defclass_buf_addf(&b, "(if (is _op (quote assoc!)) ");
   for (i = 0; i < neff; i++) {
     defclass_buf_addf(&b, "(if (is _k \"%s\") ", eff[i].name);
+    defclass_buf_addf(&b, "(if ");
+    defclass_emit_check(&b, eff[i].schema, "_v", 0);
     defclass_buf_addf(&b,
-                      "(if (is-a? _v %s) t (raise (quote type-error) "
+                      " t (raise (quote type-error) "
                       "\"%s.%s expected %s\")) ",
-                      eff[i].type_name, cname, eff[i].name,
-                      eff[i].type_name);
+                      cname, eff[i].name, eff[i].schema_src);
   }
   defclass_buf_addf(&b, "(raise (quote illegal-value) \"%s: unknown field\")",
                     cname);
@@ -1050,15 +1432,39 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
                     cname);
 
   defclass_buf_addf(&b, "(def %s__new (", cname);
-  for (i = 0; i < neff; i++)
-    defclass_buf_addf(&b, "_a%d ", i);
+  for (i = 0; i < neff; i++) {
+    if (eff[i].has_dflt) {
+      /* (param DEFAULT-EXPR) — def's optional-param machinery evaluates the
+         default at CALL time, so e.g. a (list) default yields a fresh list
+         per construction. The trailing rule (checked above) guarantees no
+         required param follows. A (name SYMBOL) param is a DESTRUCTURING
+         pattern to def, not an optional — so a bare-symbol or nil default is
+         wrapped in (do ...) to keep the optional-param shape (the wrap is
+         emission-only; the schema records the raw expression). */
+      int wrap =
+          !eff[i].dflt || eff[i].dflt == NIL_EXP || issymbol(eff[i].dflt);
+      defclass_buf_addf(&b, "(_a%d ", i);
+      if (wrap)
+        defclass_buf_addf(&b, "(do ");
+      defclass_write_form(&b, eff[i].dflt);
+      if (wrap)
+        defclass_buf_addf(&b, ")");
+      defclass_buf_addf(&b, ") ");
+    } else {
+      defclass_buf_addf(&b, "_a%d ", i);
+    }
+  }
   defclass_buf_addf(&b, ") (do ");
-  for (i = 0; i < neff; i++)
+  for (i = 0; i < neff; i++) {
+    char av[24];
+    snprintf(av, sizeof av, "_a%d", i);
+    defclass_buf_addf(&b, "(if ");
+    defclass_emit_check(&b, eff[i].schema, av, 0);
     defclass_buf_addf(&b,
-                      "(if (is-a? _a%d %s) t (raise (quote type-error) "
+                      " t (raise (quote type-error) "
                       "\"%s.%s expected %s\")) ",
-                      i, eff[i].type_name, cname,
-                      eff[i].name, eff[i].type_name);
+                      cname, eff[i].name, eff[i].schema_src);
+  }
   defclass_buf_addf(&b, "(let _obj (hash-map \"__type__\" %s", cname);
   for (i = 0; i < neff; i++)
     defclass_buf_addf(&b, " \"%s\" _a%d", eff[i].name, i);
@@ -1092,7 +1498,9 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
        instances that reference the id. Same on the two failure paths below. */
     if (!is_claim)
       alc_unregister_user_type(class_id);
-    ret = error(ERROR_ILLEGAL_VALUE, e, env, "defclass: out of memory");
+    ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                "defclass: could not generate class code (out of memory or "
+                "an unserializable field default)");
   } else {
     exp_t *r = alcove_eval_string(b.s);
     if (iserror(r)) {
@@ -1118,7 +1526,8 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
         /* Class fields/accessors are live; now register the (:method ...)
            generics. A method-registration failure returns the error but leaves
            the class defined (methods are additive; no rollback of the type). */
-        exp_t *merr = defclass_emit_methods(cname, methods, nmethods, env);
+        exp_t *merr =
+            defclass_emit_methods(cname, methods, nmethods, parent_id, env);
         ret = merr ? merr : refexp(MAKE_TYPE(class_id));
       }
       free(ctor_name);
@@ -1127,6 +1536,7 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
     }
   }
   free(b.s);
+  defclass_free_srcs(eff, neff);
   free(fields);
   free(methods);
   free(eff);
@@ -1159,10 +1569,62 @@ static exp_t *sx_lst(int n, ...) { /* build a proper list from n owned exps */
   return head ? head : refexp(NIL_EXP);
 }
 
+/* Rewrite (super NAME args...) forms inside a :method body AT EMISSION TIME:
+     (super NAME a...) -> ((__mm-lookup NAME__m <ParentTypeObj>) a...)
+   __mm-lookup with a TYPE-OBJECT dispatch value already starts its lookup at
+   that class's own entry and walks the (:extends) chain, then Any — so
+   passing the DEFINING class's parent P resumes generic dispatch at P,
+   skipping the class itself. P is baked in as a self-evaluating type
+   immediate: a grandchild running an inherited method still resumes at the
+   method's DEFINING class's parent (no infinite loop), and rebinding the
+   parent's global name cannot hijack the call. Recurses through the whole
+   body but NOT into (quote ...) forms. Returns a NEW owned form; shape
+   validity was established by defclass_scan_super. */
+static exp_t *defclass_rewrite_super(exp_t *form, uint32_t parent_id) {
+  if (!form || !ispair(form) || !istrue(form) || !form->content)
+    return refexp(form);
+  exp_t *hd = car(form);
+  const char *h = (hd && issymbol(hd)) ? (const char *)exp_text(hd) : NULL;
+  if (h && !strcmp(h, "quote"))
+    return refexp(form);
+  if (h && !strcmp(h, "super") && cadr(form) && issymbol(cadr(form)) &&
+      parent_id) {
+    const char *mname = (const char *)exp_text(cadr(form));
+    size_t tn = strlen(mname) + 4;
+    char *tbl = malloc(tn);
+    if (!tbl)
+      return refexp(form);
+    snprintf(tbl, tn, "%s__m", mname);
+    exp_t *callee = sx_lst(3, sx_sym("__mm-lookup"), sx_sym(tbl),
+                           refexp(MAKE_TYPE(parent_id)));
+    free(tbl);
+    exp_t *out = make_node(callee);
+    exp_t *tl = out;
+    for (exp_t *p = cddr(form); p && ispair(p) && istrue(p); p = p->next)
+      tl = tl->next = make_node(defclass_rewrite_super(p->content, parent_id));
+    return out;
+  }
+  /* An ordinary form: rebuild the spine with rewritten elements. */
+  exp_t *out = NULL, *tl = NULL;
+  exp_t *p = form;
+  for (; p && ispair(p) && istrue(p); p = p->next) {
+    exp_t *node = make_node(defclass_rewrite_super(p->content, parent_id));
+    if (tl)
+      tl->next = node;
+    else
+      out = node;
+    tl = node;
+  }
+  if (p && istrue(p) && tl) /* dotted tail: keep it, shared */
+    tl->next = refexp(p);
+  return out ? out : refexp(form);
+}
+
 /* Emit a defclass body's (:method name (params) body...) clauses. See the
    forward-declared banner near defclasscmd. */
 static exp_t *defclass_emit_methods(const char *cname, exp_t **methods,
-                                    int nmethods, env_t *env) {
+                                    int nmethods, uint32_t parent_id,
+                                    env_t *env) {
   for (int m = 0; m < nmethods; m++) {
     exp_t *spec = methods[m]; /* (:method NAME PARAMS body...) */
     exp_t *mn = cadr(spec);
@@ -1186,7 +1648,7 @@ static exp_t *defclass_emit_methods(const char *cname, exp_t **methods,
     tl = tl->next = make_node(sx_sym(cname));
     tl = tl->next = make_node(refexp(mp));
     for (exp_t *bp = bodyforms; bp && bp->content; bp = bp->next)
-      tl = tl->next = make_node(refexp(bp->content));
+      tl = tl->next = make_node(defclass_rewrite_super(bp->content, parent_id));
     exp_t *r2 = evaluate(dm, env);
     if (iserror(r2))
       return r2;

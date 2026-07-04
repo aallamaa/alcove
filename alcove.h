@@ -1178,6 +1178,7 @@ exp_t *is_typecmd(exp_t *e, env_t *env);
 exp_t *type_namecmd(exp_t *e, env_t *env);
 exp_t *typecmd(exp_t *e, env_t *env);
 exp_t *is_acmd(exp_t *e, env_t *env);
+exp_t *instance_pcmd(exp_t *e, env_t *env);
 exp_t *defstructcmd(exp_t *e, env_t *env);
 exp_t *defclasscmd(exp_t *e, env_t *env);
 exp_t *defmulticmd(exp_t *e, env_t *env);

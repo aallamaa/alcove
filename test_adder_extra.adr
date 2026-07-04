@@ -273,3 +273,26 @@ assert "dot: float literal add"         (+ 1.5 2.5) 4.0
 assert "dot: decimal literal add"       (+ 100.0m 0.5m) 100.5m
 # a standalone `.` (dotted-pair spelling) is not attribute sugar
 assert "dot: standalone dot untouched"  (length (quote (1 . 2))) 3
+
+# ====================================================================
+# defclass PHASE 7 in Adder block form: compound field schemas
+# ((optional TE) / (list-of TE) / (or TE...)), trailing field defaults
+# (call-time evaluated), (super name args...) in :method bodies, and the
+# (instance? T) predicate-maker.
+# ====================================================================
+defclass AdrCritter:
+  name String
+  nick (optional String) nil
+  scores (list-of Int) (list)
+  :method yell (self): (str (AdrCritter-name self) "!")
+
+defclass AdrHero:
+  :extends AdrCritter
+  :method yell (self): (str "** " (super yell self) " **")
+
+assert "block: default fills"           (AdrCritter-nick (AdrCritter "Rex")) nil
+assert "block: compound optional value" (AdrCritter-nick (AdrCritter "Rex" "R")) "R"
+assert "block: compound rejects"        (error? (try (AdrCritter "Rex" 42) (fn (e) e))) t
+assert "block: super parent-suffix"     (yell (AdrHero "Ada")) "** Ada! **"
+assert "block: instance? filter"        (length (filter (instance? AdrCritter) (list (AdrHero "h") 1 (AdrCritter "c")))) 2
+assert "block: instance? predicate"     ((instance? AdrHero) (AdrCritter "c")) nil

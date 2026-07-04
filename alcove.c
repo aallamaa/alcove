@@ -770,6 +770,7 @@ lispProc lispProcList[] = {
     LISPCMD("type", typecmd, doc_type),
     LISPCMD("type-name", type_namecmd, doc_type_name),
     LISPCMD("is-a?", is_acmd, doc_is_a),
+    LISPCMD("instance?", instance_pcmd, doc_instance_p),
     LISPCMD("defstruct", defstructcmd, doc_defstruct),
     LISPCMD("defclass", defclasscmd, doc_defclass),
     LISPCMD("defmulti", defmulticmd, doc_defmulti),
