@@ -205,3 +205,71 @@ assert "block: own getter"              (Wolf-pack (Wolf "canis" 4 "alpha")) "al
 assert "block: is-a? parent"            (is-a? (Wolf "c" 4 "p") Beast) t
 assert "block: parent method on parent" (noise (Beast "cat" 4)) "cat has 4 legs"
 assert "block: child overrides method"  (noise (Wolf "c" 4 "p")) "awooo"
+
+# ====================================================================
+# Adder-only DOT SYNTAX (attribute access). A '.' BETWEEN identifier chars in
+# ONE token is attribute sugar. Three desugarings, all context-sensitive at the
+# transpile layer:
+#   read    a.owner      -> (a "owner")            a.b.c -> ((a "b") "c")
+#   write   a.owner = v   -> (assoc! a "owner" v)   (assignment-statement LHS)
+#   method  a.speak(x y)  -> (speak a x y)          (dotted token glued to '(')
+# The LAST dotted segment before '(' is the generic-function name; the rest is
+# the receiver read-chain. Receivers are dynamic (instances are callable dicts);
+# assoc! writes are schema-validated by the class validator. A standalone `.`
+# (dotted pair), floats (1.5, 100.0m) and keywords (:k) are UNTOUCHED, and the
+# Alcove reader is unchanged — this sugar is Adder-only.
+# ====================================================================
+defclass DotOwner:
+  name String
+
+defclass DotBox:
+  owner DotOwner
+  size Int
+  :method dot-describe (self): (str (DotBox-size self) "-box")
+  :method dot-grow (self a b): (+ (DotBox-size self) (+ a b))
+
+defclass DotCub:
+  :extends DotBox
+
+= dot-o (DotOwner "Ada")
+= dot-box (DotBox dot-o 5)
+= dot-cub (DotCub dot-o 7)
+
+# read: a.field -> (a "field")
+assert "dot read: field"                dot-box.size 5
+# read: chained a.b.c -> ((a "b") "c") over a class-typed field
+assert "dot read: chained"              dot-box.owner.name "Ada"
+# read: an unknown field on an instance reads unvalidated -> nil
+assert "dot read: unknown -> nil"       dot-box.ghost nil
+# read: a dotted token NOT glued to '(' is a field read even for a method name
+# (methods live in the generic table, not the instance dict) -> nil
+assert "dot read: method name as field" dot-box.dot-describe nil
+# method call via dot with 0 extra args: a.m() -> (m a)
+assert "dot method: 0 args"             dot-box.dot-describe() "5-box"
+# method call via dot with 2 extra args: a.m(x y) -> (m a x y)
+assert "dot method: 2 args"             dot-box.dot-grow(3 4) 12
+# inherited method via dot on a subclass instance
+assert "dot method: inherited"          dot-cub.dot-describe() "7-box"
+
+# write: a.field = v -> (assoc! a "field" v); a good value lands
+dot-box.size = 9
+assert "dot write: good lands"          dot-box.size 9
+# write: a schema-invalid value errors and leaves the field unchanged
+def dot-bad-write (): dot-box.size = "bad"
+assert "dot write: bad errors"          (error? (try (dot-bad-write) (fn (e) e))) t
+assert "dot write: bad leaves unchanged" dot-box.size 9
+# write: an unknown field errors (schema-validated)
+def dot-unknown-write (): dot-box.extra = 1
+assert "dot write: unknown errors"      (error? (try (dot-unknown-write) (fn (e) e))) t
+
+# dot on a PLAIN hash-map is dynamic key access (read + write, no schema)
+= dot-map {"k" 1, "j" 2}
+assert "dot map: read key"              dot-map.k 1
+dot-map.k = 5
+assert "dot map: write key"             dot-map.k 5
+
+# float / decimal literals are digit-adjacent dots -> UNTOUCHED
+assert "dot: float literal add"         (+ 1.5 2.5) 4.0
+assert "dot: decimal literal add"       (+ 100.0m 0.5m) 100.5m
+# a standalone `.` (dotted-pair spelling) is not attribute sugar
+assert "dot: standalone dot untouched"  (length (quote (1 . 2))) 3

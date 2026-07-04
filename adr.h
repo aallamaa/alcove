@@ -152,6 +152,127 @@ static int als_is_delim(char c) {
 
 static als_node *als_read_one(als_lr *r);
 
+/* ---- Adder attribute (dot) sugar ----------------------------------------
+   A '.' BETWEEN identifier characters inside one token is attribute syntax:
+     read:   a.owner        -> (a "owner")            a.b.c -> ((a "b") "c")
+     write:  a.owner = v     -> (assoc! a "owner" v)   (in als_line_node)
+     method: a.speak(x y)    -> (speak a x y)          (in als_read_forms)
+   A standalone `.` (dotted pair), a leading/trailing dot, an empty segment
+   (a..b), a digit-adjacent dot (floats: 1.5, 100.0m, -3.14), or a token that
+   starts with ':' (keyword), '"' (string), '#' (dispatch) or a digit all leave
+   the token untouched — Adder-only sugar, the Alcove reader is unchanged. */
+static int als_is_attr_token(const char *s, size_t n) {
+  if (n < 3)
+    return 0;
+  if (s[0] == ':' || s[0] == '.' || s[0] == '"' || s[0] == '#')
+    return 0; /* keyword / leading dot / string / dispatch token */
+  if (s[0] >= '0' && s[0] <= '9')
+    return 0; /* a number-leading token is never attribute access */
+  if (s[n - 1] == '.')
+    return 0; /* trailing dot */
+  int dots = 0;
+  for (size_t k = 0; k < n; k++) {
+    if (s[k] != '.')
+      continue;
+    char pv = s[k - 1], nx = s[k + 1]; /* k is interior (0 < k < n-1) here */
+    if (pv == '.' || nx == '.')
+      return 0; /* empty segment a..b */
+    if ((pv >= '0' && pv <= '9') || (nx >= '0' && nx <= '9'))
+      return 0; /* digit-adjacent -> float, not attribute */
+    dots++;
+  }
+  return dots > 0;
+}
+
+/* Split a dotted token into its '.'-separated segments. Fills seg[]/seglen[]
+   for up to `maxseg` segments and returns the total segment count. */
+static int als_dot_segments(const char *s, size_t n, const char **seg,
+                            size_t *seglen, int maxseg) {
+  int c = 0;
+  size_t start = 0;
+  for (size_t k = 0; k <= n; k++) {
+    if (k == n || s[k] == '.') {
+      if (c < maxseg) {
+        seg[c] = s + start;
+        seglen[c] = k - start;
+      }
+      c++;
+      start = k + 1;
+    }
+  }
+  return c;
+}
+
+/* Build a string-literal atom node holding "seg" (with the quotes). */
+static als_node *als_str_atom(const char *s, size_t n) {
+  als_node *a = (als_node *)als_xcalloc(1, sizeof *a);
+  a->atom = (char *)als_xmalloc(n + 3);
+  a->atom[0] = '"';
+  memcpy(a->atom + 1, s, n);
+  a->atom[n + 1] = '"';
+  a->atom[n + 2] = 0;
+  return a;
+}
+
+/* Build the attribute READ-chain over the first `count` segments:
+   [a] -> a ; [a,b] -> (a "b") ; [a,b,c] -> ((a "b") "c"). */
+static als_node *als_read_chain(const char **seg, const size_t *seglen,
+                                int count) {
+  als_node *node = als_atom(seg[0], seglen[0]);
+  for (int k = 1; k < count; k++) {
+    als_node *L = als_list();
+    als_push(L, node);
+    als_push(L, als_str_atom(seg[k], seglen[k]));
+    node = L;
+  }
+  return node;
+}
+
+#define ALS_MAXSEG 64
+
+/* If `a` (a non-list atom) is an attribute token, replace it with its READ
+   chain (freeing `a`); otherwise return it unchanged. */
+static als_node *als_desugar_atom(als_node *a) {
+  if (a->is_list || !a->atom)
+    return a;
+  size_t n = strlen(a->atom);
+  if (!als_is_attr_token(a->atom, n))
+    return a;
+  const char *seg[ALS_MAXSEG];
+  size_t seglen[ALS_MAXSEG];
+  int c = als_dot_segments(a->atom, n, seg, seglen, ALS_MAXSEG);
+  if (c < 2 || c > ALS_MAXSEG)
+    return a; /* pathological — leave as a plain atom */
+  als_node *chain = als_read_chain(seg, seglen, c);
+  als_free(a);
+  return chain;
+}
+
+/* Recursively desugar bare attribute-read atoms in a form tree, in place.
+   Method calls (glued paren) and assignment writes (assoc!) are lowered
+   earlier by the caller; this pass only rewrites the remaining bare reads. */
+static void als_desugar_dots(als_node *node) {
+  if (!node || !node->is_list)
+    return;
+  for (int i = 0; i < node->n; i++) {
+    if (node->kid[i]->is_list)
+      als_desugar_dots(node->kid[i]);
+    else
+      node->kid[i] = als_desugar_atom(node->kid[i]);
+  }
+}
+
+/* Top-level entry: desugar a node that may itself be a bare atom. */
+static als_node *als_desugar_node(als_node *node) {
+  if (!node)
+    return node;
+  if (node->is_list) {
+    als_desugar_dots(node);
+    return node;
+  }
+  return als_desugar_atom(node);
+}
+
 /* read forms until end (term==0) or until `term` char consumed.
    Inside a brace container ({…} map, #{…} set — both close with '}') a comma
    is an entry separator and counts as whitespace; everywhere else ',' stays
@@ -175,6 +296,43 @@ static void als_read_forms(als_lr *r, char term, als_node *out) {
       r->i++; /* consume ( */
       als_node *args = als_list();
       als_read_forms(r, ')', args);
+      /* Adder attribute method call: a.speak(x y) -> (speak a x y). The LAST
+         dotted segment is the generic-function name; the earlier segments are
+         the receiver read-chain (a.b.speak(x) -> (speak (a "b") x)). A dotted
+         token NOT glued to '(' is a field read, handled by the desugar walk. */
+      {
+        const char *seg[ALS_MAXSEG];
+        size_t seglen[ALS_MAXSEG];
+        size_t flen = f->atom ? strlen(f->atom) : 0;
+        int c = (flen && als_is_attr_token(f->atom, flen))
+                    ? als_dot_segments(f->atom, flen, seg, seglen, ALS_MAXSEG)
+                    : 0;
+        if (c >= 2 && c <= ALS_MAXSEG) {
+          als_node *call = als_list();
+          als_push(call, als_atom(seg[c - 1], seglen[c - 1])); /* generic fn */
+          als_push(call, als_read_chain(seg, seglen, c - 1));  /* receiver */
+          for (int k = 0; k < args->n; k++)
+            als_push(call, args->kid[k]);
+          args->n = 0; /* kids moved into call */
+          als_free(args);
+          als_free(f);
+          /* trailing chained call groups a.speak(x)(y), mirroring plain path */
+          while (r->i < r->n && r->s[r->i] == '(') {
+            r->i++;
+            als_node *more = als_list();
+            als_read_forms(r, ')', more);
+            als_node *outer = als_list();
+            als_push(outer, call);
+            for (int k = 0; k < more->n; k++)
+              als_push(outer, more->kid[k]);
+            more->n = 0;
+            als_free(more);
+            call = outer;
+          }
+          als_push(out, call);
+          continue;
+        }
+      }
       /* ALT2: a name glued to `(...)` is a CALL of ANY arity -> (name args...),
          EXCEPT in a binder context, where `(...)` is a PARAMETER LIST: after a
          name-binder (def/defn/defc/defmacro/macro -> def f(x):), or when `name`
@@ -409,30 +567,49 @@ static als_node *als_line_node(const char *text) {
     als_node *only = forms->kid[0];
     forms->kid[0] = NULL;
     als_free(forms);
-    return only; /* lone atom -> value; lone list -> as-is */
+    return als_desugar_node(only); /* lone atom -> value; lone list -> as-is */
   }
   /* Infix assignment: `lhs = rhs...` -> (= lhs rhs...), Python-style. Fires
      only when `=` is the SECOND form on the line, so the prefix form `= place
      val` (where `=` is first) is untouched. A multi-token RHS is wrapped:
-     `a = + b c` -> (= a (+ b c)). */
+     `a = + b c` -> (= a (+ b c)). A dotted LHS is an attribute WRITE:
+     `a.owner = v` -> (assoc! a "owner" v); `a.b.c = v` -> (assoc! (a "b") "c" v). */
   if (forms->n >= 3 && !forms->kid[1]->is_list && forms->kid[1]->atom &&
       !strcmp(forms->kid[1]->atom, "=")) {
-    als_node *asn = als_list();
-    als_push(asn, forms->kid[1]); /* the `=` atom, as the head */
-    als_push(asn, forms->kid[0]); /* lhs */
+    /* build the RHS first (single token, or a wrapped (rhs...) list) */
+    als_node *rhs;
     if (forms->n == 3) {
-      als_push(asn, forms->kid[2]); /* single-token RHS */
+      rhs = forms->kid[2]; /* single-token RHS */
     } else {
-      als_node *rhs = als_list();
+      rhs = als_list();
       for (int i = 2; i < forms->n; i++)
-        als_push(rhs, forms->kid[i]);
-      als_push(asn, rhs); /* (rhs...) */
+        als_push(rhs, forms->kid[i]); /* (rhs...) */
     }
-    forms->n = 0; /* all kids moved into asn; free only the forms shell */
+    als_node *lhs = forms->kid[0];
+    const char *seg[ALS_MAXSEG];
+    size_t seglen[ALS_MAXSEG];
+    size_t llen = (!lhs->is_list && lhs->atom) ? strlen(lhs->atom) : 0;
+    int c = (llen && als_is_attr_token(lhs->atom, llen))
+                ? als_dot_segments(lhs->atom, llen, seg, seglen, ALS_MAXSEG)
+                : 0;
+    als_node *asn = als_list();
+    if (c >= 2 && c <= ALS_MAXSEG) { /* attribute write via assoc! */
+      als_push(asn, als_atom("assoc!", 6));
+      als_push(asn, als_read_chain(seg, seglen, c - 1)); /* receiver chain */
+      als_push(asn, als_str_atom(seg[c - 1], seglen[c - 1])); /* "field" */
+      als_push(asn, rhs);
+      als_free(lhs);             /* kid[0] consumed */
+      als_free(forms->kid[1]);   /* the unused `=` atom */
+    } else {                     /* plain infix assignment -> (= lhs rhs) */
+      als_push(asn, forms->kid[1]); /* the `=` atom, as the head */
+      als_push(asn, lhs);           /* lhs */
+      als_push(asn, rhs);
+    }
+    forms->n = 0; /* remaining kids moved into asn/rhs; free the shell only */
     als_free(forms);
-    return asn;
+    return als_desugar_node(asn);
   }
-  return forms; /* many -> (f f ...) */
+  return als_desugar_node(forms); /* many -> (f f ...) */
 }
 
 /* ---- comment / colon handling ---- */

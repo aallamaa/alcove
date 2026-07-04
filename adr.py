@@ -75,6 +75,62 @@ class Bracket(list):
     matching alcove's `[body]` shorthand for `(fn (_) body)`."""
 
 
+# --- Adder attribute (dot) sugar -------------------------------------------
+# A '.' BETWEEN identifier characters inside one token is attribute syntax:
+#   read:   a.owner      -> (a "owner")           a.b.c -> ((a "b") "c")
+#   method: a.speak(x y) -> (speak a x y)         (handled in read_forms)
+# A standalone `.` (dotted pair), a leading/trailing dot, an empty segment
+# (a..b), a digit-adjacent dot (floats: 1.5, 100.0m), or a token starting with
+# ':' (keyword), '"' (string), '#' (dispatch) or a digit is left untouched.
+# (The WRITE case `a.owner = v` -> (assoc! …) is statement-level and lives in
+# adr.h only, alongside infix `=`, which this reference reader also lacks.)
+
+def dot_segments(name):
+    """Return the '.'-separated segments if `name` is an attribute token,
+    else None."""
+    n = len(name)
+    if n < 3:
+        return None
+    if name[0] in ':."#' or name[0].isdigit():
+        return None
+    if name[-1] == ".":
+        return None
+    dots = 0
+    for k, ch in enumerate(name):
+        if ch != ".":
+            continue
+        pv, nx = name[k - 1], name[k + 1]
+        if pv == "." or nx == ".":
+            return None            # empty segment a..b
+        if pv.isdigit() or nx.isdigit():
+            return None            # digit-adjacent -> float, not attribute
+        dots += 1
+    return name.split(".") if dots else None
+
+
+def read_chain(segs):
+    """Build the attribute READ-chain over `segs`: [a]->a, [a,b]->(a "b")."""
+    node = Sym(segs[0])
+    for s in segs[1:]:
+        node = [node, Str(s)]
+    return node
+
+
+def desugar_dots(node):
+    """Rewrite bare attribute-read symbols to read-chains, recursively. Method
+    calls (glued paren) are lowered earlier in read_forms; this only touches
+    the remaining bare reads."""
+    if isinstance(node, list):
+        for k in range(len(node)):
+            node[k] = desugar_dots(node[k])
+        return node
+    if isinstance(node, Sym):
+        segs = dot_segments(node.name)
+        if segs is not None and len(segs) >= 2:
+            return read_chain(segs)
+    return node
+
+
 # --- inline reader: one physical line of text -> list of forms -------------
 
 class LineReader:
@@ -118,7 +174,13 @@ class LineReader:
                     and self.s[self.i] == "("):
                 self.i += 1
                 args = self.read_forms(terminator=")")
-                if args == []:
+                segs = dot_segments(form.name)
+                if segs is not None and len(segs) >= 2:
+                    # attribute method call: a.speak(x y) -> (speak a x y);
+                    # a.b.speak(x) -> (speak (a "b") x).
+                    forms.append([Sym(segs[-1]), read_chain(segs[:-1])]
+                                 + list(args))
+                elif args == []:
                     forms.append([form])          # name()  -> (name)
                 else:
                     forms.append(form)            # name(a b) -> name (a b)
@@ -296,8 +358,8 @@ def line_to_list(text):
     """A line's text -> the list it denotes, per the spec line rule."""
     forms = LineReader(text).read_forms()
     if len(forms) == 1:
-        return forms[0]           # lone atom -> value; lone list -> as-is
-    return forms                  # many forms -> (f f ...)
+        return desugar_dots(forms[0])  # lone atom -> value; lone list -> as-is
+    return desugar_dots(forms)         # many forms -> (f f ...)
 
 
 HEAD_MAP = {"macro": "defmacro"}

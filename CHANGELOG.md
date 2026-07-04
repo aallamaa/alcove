@@ -44,6 +44,21 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   builtin — works the same way. There is no `super` yet. In Adder, write the
   block form (`defclass Dog:` / `  :extends Animal` / `  :method speak (self):`
   with the body indented under a trailing-colon method line).
+- **Adder-only dot syntax — `a.field` attribute access.** A `.` **between
+  identifier characters inside one token** is attribute sugar; the transpiler
+  lowers it three ways, context-sensitively: a **read** `a.owner` →
+  `(a "owner")` (chained `a.b.c` → `((a "b") "c")`); an **assignment-statement
+  write** `a.owner = v` → `(assoc! a "owner" v)` (chained LHS
+  `a.b.c = v` → `(assoc! (a "b") "c" v)`); and a **method call** — a dotted token
+  glued to `(` — `a.speak(x y)` → `(speak a x y)` (`a.speak()` → `(speak a)`,
+  chained receiver `a.b.speak(x)` → `(speak (a "b") x)`), where the last dotted
+  segment is the generic-function name and the earlier segments are the receiver
+  read-chain. Receivers are dynamic (instances are callable dicts, so reads use
+  the existing container access and writes go through the schema validator).
+  A standalone `.` (dotted pair), a leading/trailing dot (`.foo`, `foo.`), an
+  empty segment (`a..b`), a digit-adjacent dot (floats: `1.5`, `100.0m`), and
+  keywords/strings/dispatch tokens are all left untouched. This is **Adder-only**
+  — the Alcove s-expression reader is unchanged.
 - **`(gc-cycles)` — on-demand cycle collector** (new fragment `gc.h`).
   Reference cycles (only constructible through the mutating containers:
   `assoc!`, `push-right!`/`push-left!`, `vec-set!`) previously leaked with no
