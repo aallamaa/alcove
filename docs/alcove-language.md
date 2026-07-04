@@ -795,6 +795,103 @@ of `no`), `not` (alias of `no`), `isnt` (the complement of `is`). So
 `(not nil)`, `(yes 5)`, `(zero? 0)`, `(isnt 1 2)` are all `t`. Note `0`
 is falsey, so `(zero? 0)` is `t` but `(yes 0)` is `nil`.
 
+### First-class types and defclass
+
+The predicates above answer "what shape is this" one type at a time. `Int`,
+`Float`, `String`, `Number`, `List`, `Bool`, … `Type` itself are also **runtime
+values** — 30 immediate type objects, one per `alc_type_id` — so you can hold a
+type, compare it, and query with it:
+
+```
+(type 42)              ; Int
+(type 3.14)             ; Float
+(type "hi")             ; String
+(type? Int)             ; t     — Int is itself a value of type Type
+(type-name Int)         ; "Int"
+(is-a? 42 Int)          ; t
+(is-a? 42 Number)       ; t     — Number, List, Fn, etc. are supertypes
+(is-a? 1.5m Number)     ; t     — decimal conforms to Number too
+```
+
+Two conformance rules are worth calling out because they follow the language's
+own truthiness rules rather than a naive tag check: `nil` **is** the false
+boolean here (there is no separate false object), so `(is-a? nil Bool)` is `t`
+(and so is `(is-a? t Bool)`, but `(is-a? 0 Bool)` is `nil` — `0` is falsey but
+not boolean-typed); and `nil` **is** the empty list, so `(is-a? nil List)` is
+`t` alongside any proper list. Binding any of the 30 names as an ordinary
+identifier is now rejected — `(= Int 5)`, `(let Int 5 ...)`, `(defmacro Int
+...)` all error; this is the one breaking change of this feature.
+
+**Annotations are the same vocabulary as type objects.** The trailing-keyword
+JIT hints from before (`(x :int)`, return `:f64`) and a bare type name are
+interchangeable — a hint code *is* a type id:
+
+```
+(def f (x Int) Float (+ x 1.0))    ; identical compiled shape to:
+(def f (x :int) :f64 (+ x 1.0))
+```
+
+The JIT only special-cases `Int`/`Float` (`:int`/`:f64`); every other
+annotation — `String`, `Bool`, a user class, `Any` — is parsed, validated by
+name, and recorded on the lambda, but **inert**: nothing checks a `String`
+param against its argument at the call boundary (a wrong-typed argument fails
+later, inside whatever builtin first assumes the shape, not at the annotation).
+
+**`defclass`** builds a typed, dict-backed record on top of this:
+
+```
+(defclass Account (owner String) (balance Decimal) (active Bool))
+(= a (Account "Ada" 100.0m t))
+(Account? a)               ; t
+(type a)                    ; Account       — the class name IS the type object
+(Account-owner a)           ; "Ada"
+(Account-balance! a 125.0m) ; checked setter — mutates in place, returns a
+(Account-balance! a "oops") ; error — "oops" isn't a Decimal
+```
+
+`Account` the constructor **is** the callable type object returned by
+`defclass` — `(Account? a)`, `(type-name Account)`, and `(is-a? a Account)` all
+work on the same value. Dispatch to the constructor is wired uniformly through
+the AST evaluator, `vm_invoke_values`, and compiled calls, so `(Account ...)`,
+`(apply Account (list ...))`, and a call inside a compiled function all reach
+it. The schema is enforced on **every** write to an instance, not just the
+generated setter — a raw `(assoc! a "nope" 1)` on an unknown field errors, and
+so does `(dissoc! a "balance")` (schema fields can't be deleted); only
+`(assoc! a "balance" 130.0m)` — a known field with a conforming value —
+succeeds. Field types may name another class (`(defclass Transfer (from
+Account) (to Account) (amount Decimal))`), checked the same way. `(defclass
+Marker)` with no field list is legal — a zero-field tag type whose only job is
+`(Marker? (Marker))`.
+
+User classes work as annotations exactly like the builtin types — parsed,
+recorded, JIT-inert:
+
+```
+(def describe (a Account) String (Account-owner a))
+(describe 42)   ; NOT rejected at the boundary — errors later, inside
+                ; Account-owner ("Account-owner: expected Account")
+```
+
+Honest limitations, by design for this first cut: a class **cannot be
+redefined** in a session (`(defclass Account ...)` again errors — is-a?
+identity would go stale); `defclass` **refuses to clobber** an already-bound
+name, and rolls registration back on any failure so the name stays available
+for a corrected retry; `savedb`/`loaddb` round-trips an instance's **data and
+type tag** but not the validator, so a reloaded instance answers `(type
+...)`/`(is-a? ...)` correctly but has lost schema enforcement — reassigning
+the class definition before `loaddb` restores the tag mapping but not
+re-validation of old writes. Class-body forms are position-based fields today
+(`(name Type)`); a future directive syntax will be **keyword-headed**
+(`(:extends Parent)`) precisely so it can be added without reparsing existing
+class bodies — a keyword-headed form is already rejected, reserving the space.
+
+**vs. `defstruct`.** The older `defstruct` remains the untyped/legacy record:
+its instances are plain dicts that classify as `Dict` under `type`/`is-a?`
+(there is no `Point` type object to check against), whereas a `defclass`
+instance classifies as its own class. Reach for `defclass` when you want the
+schema and the type identity; `defstruct` is still there for a quick
+unchecked bag of fields.
+
 ### Bitwise
 
 `bit-and bit-or bit-xor` plus aliases `& | ^`, `~` for bitwise NOT,
