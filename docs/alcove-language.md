@@ -880,10 +880,12 @@ for a corrected retry; `savedb`/`loaddb` round-trips an instance's **data and
 type tag** but not the validator, so a reloaded instance answers `(type
 ...)`/`(is-a? ...)` correctly but has lost schema enforcement — reassigning
 the class definition before `loaddb` restores the tag mapping but not
-re-validation of old writes. Class-body forms are position-based fields today
-(`(name Type)`); a future directive syntax will be **keyword-headed**
-(`(:extends Parent)`) precisely so it can be added without reparsing existing
-class bodies — a keyword-headed form is already rejected, reserving the space.
+re-validation of old writes. Class-body forms are position-based fields
+(`(name Type)`) or keyword-headed directives parsed by clause position: at
+most one `(:extends Parent)` **first**, then any number of `(name Type)`
+fields, then any number of `(:method name (params) body...)` clauses last.
+Inheritance is **single** (one parent, no mixins), and there is no `super` —
+an overriding method has no way to call the implementation it replaces.
 
 **vs. `defstruct`.** The older `defstruct` remains the untyped/legacy record:
 its instances are plain dicts that classify as `Dict` under `type`/`is-a?`
@@ -891,6 +893,96 @@ its instances are plain dicts that classify as `Dict` under `type`/`is-a?`
 instance classifies as its own class. Reach for `defclass` when you want the
 schema and the type identity; `defstruct` is still there for a quick
 unchecked bag of fields.
+
+### Inheritance — `(:extends Parent)`
+
+A keyword-headed clause, first in the class body (at most one), inherits a
+fully-defined parent's fields:
+
+```
+(defclass Animal (name String))
+(defclass Dog (:extends Animal) (breed String))
+(defclass Puppy (:extends Dog) (weeks Int))
+(= d (Dog "Rex" "Lab"))
+(Dog-breed d)          ; "Lab"   — own field
+(Dog-name d)           ; "Rex"   — inherited field, child-prefixed accessor
+(Animal-name d)        ; "Rex"   — PARENT's accessor also works on a child
+(is-a? d Dog)          ; t
+(is-a? d Animal)       ; t       — subsumption falls out of the is-a? chain-walk
+(Animal? d)            ; t       — a predicate is-a? underneath
+(type-of d)            ; Dog     — stays most-derived, not Animal
+```
+
+The constructor takes **inherited-then-own** fields positionally (`(Dog name
+breed)`); the child generates accessors and setters for **every** effective
+field (inherited + own) under its own prefix, and a child field **cannot
+shadow** an inherited name — `(defclass Bad (:extends Animal) (name String))`
+errors before any instance exists. Grandchildren compose transitively —
+`Puppy` inherits from `Dog` which inherits from `Animal`, so `(is-a? puppy
+Animal)` is `t` and `(Animal-name puppy)` works. A class-typed field accepts
+any subclass instance, for the same reason subsumption works everywhere else:
+
+```
+(defclass Shelter (pet Animal))
+(Shelter (Dog "Rex" "Lab"))   ; fine — Dog is-a Animal
+```
+
+`Parent` must already be a **fully-defined** class — `(defclass X (:extends
+NoSuchClass) ...)` and `(defclass X (:extends Int) ...)` (a builtin type as
+parent) both error — and `:extends` must be the **first** clause
+(`(defclass X (a Int) (:extends Animal) ...)` errors). The parent's type
+object is recorded on the schema itself: `(get Dog__class "parent")` is
+`Animal`; a base class has no `"parent"` key.
+
+### Methods are generic functions — `(:method name (self args...) body...)`
+
+Method clauses come after all field clauses. `(:method speak (self)
+body...)` does **not** stash a closure inside the instance — it registers
+`speak` as a plain multimethod keyed by `(type self)`, built on the same
+`defmulti`/`defmethod` machinery `type-of`-dispatch already had. Calling it is
+an ordinary call, `(speak x)` — there is no method-lookup syntax, so it costs
+nothing the compiler/JIT doesn't already know how to handle:
+
+```
+(defclass Animal (name String)
+  (:method speak (self) "..."))
+(defclass Dog (:extends Animal) (breed String)
+  (:method speak (self) "woof"))
+(defclass Puppy (:extends Dog) (weeks Int))   ; no speak of its own
+
+(speak (Dog "Rex" "Lab"))      ; "woof"  — Dog's own method
+(speak (Puppy "Bit" "Lab" 6))  ; "woof"  — inherits Dog's, not Animal's
+(speak (Animal "Gen"))         ; "..."   — Animal's own
+```
+
+Overriding is just defining the method again on the more specific class — the
+resolver (`__mm-lookup`) tries the instance's exact type, then walks the
+`:extends` parent chain outward, and finally falls back to a method
+registered for the `Any` type object if one exists:
+
+```
+(defmethod speak Any (x) "???")     ; defmethod OUTSIDE a class body, by type key
+(speak 99)                          ; "???"             — Any is the fallback
+(defmethod speak Int (n) (str "the integer " n))
+(speak 99)                          ; "the integer 99"  — a specific key beats Any
+(speak (Dog "Rex" "Lab"))           ; "woof"  — still Dog's; Any never shadows a hit
+```
+
+`defmethod`'s second argument is the same type-object vocabulary as
+everything else in this section — a user class (`Dog`), a builtin type
+(`Int`), or `Any` — so class methods and ad hoc `defmethod`s on builtin types
+share one dispatch table. `defmulti` is idempotent (redeclaring an existing
+generic keeps its method table), which is what lets several sibling
+`defclass` bodies extend one shared generic name. There is no `super` yet — an
+override has no way to call the implementation it replaces.
+
+Adder writes the same feature with a block form, and note that a
+**multi-line** `:method` body needs a trailing colon on the clause line
+(`:method speak (self):` then an indented body), while a single-line body
+doesn't (`:method speak (self) "woof"`). Adder also layers **dot syntax** on
+top of all of this (`d.speak(x)`, `d.breed`, `d.breed = "Lab"`, all Adder-only
+sugar over the forms shown above) — see the Adder chapter of the book for the
+full desugaring.
 
 ### Bitwise
 
