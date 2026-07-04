@@ -509,6 +509,8 @@ static const char *type_name_of(exp_t *a) {
     return "fn";
   if (iserror(a))
     return "error";
+  if (istype(a))
+    return "type";
   return "unknown";
 }
 
@@ -529,6 +531,78 @@ exp_t *typeofcmd(exp_t *e, env_t *env) {
   }
   const char *t = type_name_of(a);
   CLEAN_RETURN_1(a, make_symbol((char *)t, (int)strlen(t)));
+}
+
+const char doc_is_type[] = "(type? x) — true if x is a type object.";
+exp_t *is_typecmd(exp_t *e, env_t *env) {
+  exp_t *arg = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  exp_t *ret = istype(arg) ? TRUE_EXP : NIL_EXP;
+  CLEAN_RETURN_1(arg, refexp(ret));
+}
+
+const char doc_type_name[] = "(type-name t) — string name of a type object.";
+exp_t *type_namecmd(exp_t *e, env_t *env) {
+  exp_t *arg = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  if (!istype(arg)) CLEAN_RETURN_1(arg, error(ERROR_ILLEGAL_VALUE, e, env, "(type-name t)"));
+  const char *name = alc_type_name(TYPE_ID(arg));
+  CLEAN_RETURN_1(arg, make_string((char *)name, strlen(name)));
+}
+
+static int is_proper_list(exp_t *a);
+
+static uint32_t get_actual_type_id(exp_t *a) {
+  if (!a || a == NIL_EXP) return TYPE_NIL;
+  if (a == TRUE_EXP) return TYPE_BOOL;
+  if (istype(a)) return TYPE_TYPE;
+  if (isnumber(a)) return TYPE_INT;
+  if (isfloat(a)) return TYPE_FLOAT;
+  if (isrational(a)) return TYPE_RATIONAL;
+  if (isdecimal(a)) return TYPE_DECIMAL;
+  if (isstring(a)) return TYPE_STRING;
+  if (issymbol(a)) return ((const char *)exp_text(a))[0] == ':' ? TYPE_KEYWORD : TYPE_SYMBOL;
+  if (ischar(a)) return TYPE_CHAR;
+  if (is_proper_list(a)) return TYPE_LIST;
+  if (ispair(a)) return TYPE_PAIR;
+  if (isvector(a)) return TYPE_VECTOR;
+  if (isblob(a)) return TYPE_BLOB;
+  if (isdict(a)) return TYPE_DICT;
+  if (islist(a)) return TYPE_DEQUE;
+  if (isset(a)) return TYPE_SET;
+  if (ishamt(a)) return TYPE_HAMT;
+  if (islambda(a)) return TYPE_LAMBDA;
+  if (isinternal(a)) return TYPE_BUILTIN;
+  if (ismacro(a)) return TYPE_MACRO;
+  if (is_ptr(a) && a->type == EXP_FFI) return TYPE_FFI;
+  if (iserror(a)) return TYPE_ERROR;
+  if (isport(a)) return TYPE_PORT;
+  if (is_ptr(a) && a->type == EXP_WEAK) return TYPE_WEAK;
+  if (iscont(a)) return TYPE_CONTINUATION;
+  return TYPE_ANY;
+}
+
+const char doc_type[] = "(type x) — returns a type object describing x.";
+exp_t *typecmd(exp_t *e, env_t *env) {
+  exp_t *arg = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  uint32_t id = get_actual_type_id(arg);
+  CLEAN_RETURN_1(arg, refexp(MAKE_TYPE(id)));
+}
+
+const char doc_is_a[] = "(is-a? x t) — true if x conforms to type object t.";
+exp_t *is_acmd(exp_t *e, env_t *env) {
+  exp_t *x = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
+  exp_t *t = (e->next && e->next->next)
+                 ? EVAL(e->next->next->content, env)
+                 : refexp(NIL_EXP);
+  if (!istype(t)) CLEAN_RETURN_2(x, t, error(ERROR_ILLEGAL_VALUE, e, env, "is-a?: t must be a type"));
+  uint32_t target = TYPE_ID(t);
+  uint32_t actual = get_actual_type_id(x);
+
+  int match = (target == TYPE_ANY) || (actual == target) ||
+              (target == TYPE_NUMBER && (actual == TYPE_INT || actual == TYPE_FLOAT || actual == TYPE_RATIONAL || actual == TYPE_DECIMAL)) ||
+              (target == TYPE_LIST && is_proper_list(x)) ||
+              (target == TYPE_FN && (actual == TYPE_LAMBDA || actual == TYPE_BUILTIN || actual == TYPE_FFI));
+
+  CLEAN_RETURN_2(x, t, refexp(match ? TRUE_EXP : NIL_EXP));
 }
 
 /* (defstruct NAME field...) — define a record type. Expands (by building source
@@ -2661,14 +2735,62 @@ static void inspect_value(exp_t *v) {
       printf("\x1B[96m<imm fixnum %lld>\x1B[39m\n", (long long)FIX_VAL(v));
     else if (ischar(v))
       printf("\x1B[96m<imm char %u>\x1B[39m\n", CHAR_VAL(v));
+    else if (istype(v))
+      printf("\x1B[96m<imm type %s>\x1B[39m\n", alc_type_name(TYPE_ID(v)));
     else
       printf("\x1B[96m<imm 0x%lx>\x1B[39m\n", (long)(intptr_t)v);
     return;
   }
-  printf("\x1B[96mtype:\t%d (%s)\nflag:\t%d%s%s\nref:\t%d\x1B[39m\n", v->type,
-         inspect_type_name(v->type), v->flags,
-         (v->flags & FLAG_COMPILED) ? " COMPILED" : "",
-         (v->flags & FLAG_TAIL_AWARE) ? " TAIL_AWARE" : "", v->nref);
+  char flags_str[256] = "";
+  if (v->flags & FLAG_TAILREC) strcat(flags_str, " TAILREC");
+  if (v->flags & FLAG_TAIL_AWARE) strcat(flags_str, " TAIL_AWARE");
+  if (v->flags & FLAG_COMPILED) strcat(flags_str, " COMPILED");
+  if (v->flags & FLAG_SHARED) strcat(flags_str, " SHARED");
+  if (v->flags & FLAG_INLINE_TXT) strcat(flags_str, " INLINE_TXT");
+  if (v->flags & FLAG_MULTI) strcat(flags_str, " MULTI");
+  if (v->flags & FLAG_WEAK_REFERENT) strcat(flags_str, " WEAK_REF");
+  if (v->flags & FLAG_WATCHED) strcat(flags_str, " WATCHED");
+  if (v->flags & FLAG_APPLICATIVE) strcat(flags_str, " APPLICATIVE");
+  if (v->flags & FLAG_UNSAFE) strcat(flags_str, " UNSAFE");
+
+  printf("\x1B[96m"
+         "--- exp_t %p ---\n"
+         "type:\t%d (%s)\n"
+         "flags:\t%d%s\n"
+         "nref:\t%d\n"
+         "next:\t%p\n"
+         "-- meta union --\n",
+         (void *)v, v->type, inspect_type_name(v->type), v->flags, flags_str,
+         v->nref, (void *)v->next);
+  if (v->type == EXP_VECTOR) {
+    printf("vec_win: [%d, %d)\n", v->vec_win.start, v->vec_win.end);
+  } else {
+    printf("meta:\t%p\n", (void *)v->meta);
+  }
+
+  printf("-- data union --\n");
+  if (v->type == EXP_SYMBOL || v->type == EXP_STRING || v->type == EXP_ERROR) {
+    if (v->flags & FLAG_INLINE_TXT) {
+      printf("istr:\t'%.8s'\n", v->istr);
+    } else {
+      printf("ptr:\t%p\n", v->ptr);
+    }
+  } else if (v->type == EXP_LAMBDA || v->type == EXP_MACRO) {
+    if (v->flags & FLAG_COMPILED) {
+      printf("bc:\t%p\n", (void *)v->bc);
+    } else {
+      printf("content: %p\n", (void *)v->content);
+    }
+  } else if (v->type == EXP_INTERNAL || v->type == EXO_MACROINTERNAL) {
+    printf("fnc:\t%p\n", (void *)v->fnc);
+  } else if (v->type == EXP_FLOAT) {
+    printf("f:\t%g\n", (double)v->f);
+  } else if (v->type == EXP_PAIR || v->type == EXP_PAIR_CIRCULAR || v->type == EXP_TREE) {
+    printf("content: %p\n", (void *)v->content);
+  } else {
+    printf("ptr:\t%p\n", v->ptr);
+  }
+  printf("----------------\x1B[39m\n");
   if (v->type == EXP_LAMBDA) {
     if (v->meta)
       printf("\x1B[96mname:\t%s\x1B[39m\n", (char *)v->meta);

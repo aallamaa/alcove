@@ -77,9 +77,10 @@ enum {
    slot instead of heap-allocating a wrapper. This removes the per-integer
    exp_t alloc + refcount round-trip that used to dominate arithmetic.
 
-     tag 000 -> heap exp_t* (or NULL)
-     tag 001 -> fixnum   (61-bit signed, value in bits 63..3)
-     tag 010 -> char     (Unicode codepoint in bits 63..3)
+    tag 000 -> heap exp_t* (or NULL)
+    tag 001 -> fixnum   (61-bit signed, value in bits 63..3)
+    tag 010 -> char     (Unicode codepoint in bits 63..3)
+    tag 011 -> type     (first-class type id in bits 63..3)
 
    Floats, strings, symbols, pairs, lambdas, macros, errors stay on the
    heap — their payload doesn't fit in 61 bits or needs shared structure. */
@@ -88,10 +89,24 @@ enum {
 #define TAG_PTR ((uintptr_t)0x0)
 #define TAG_FIX ((uintptr_t)0x1)
 #define TAG_CHAR ((uintptr_t)0x2)
+#define TAG_TYPE ((uintptr_t)0x3)
 
 #define TAG(e) ((uintptr_t)(e) & TAG_MASK)
 #define is_ptr(e) ((e) != NULL && TAG(e) == TAG_PTR)
 #define is_imm(e) ((e) != NULL && TAG(e) != TAG_PTR)
+
+#define MAKE_TYPE(id) ((exp_t *)((((uintptr_t)(uint32_t)(id)) << 3) | TAG_TYPE))
+#define TYPE_ID(e) ((uint32_t)((uintptr_t)(e) >> 3))
+#define istype(e) ((e) != NULL && TAG(e) == TAG_TYPE)
+
+enum alc_type_id {
+  TYPE_ANY = 1, TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_NUMBER,
+  TYPE_RATIONAL, TYPE_DECIMAL, TYPE_STRING, TYPE_SYMBOL, TYPE_KEYWORD,
+  TYPE_CHAR, TYPE_PAIR, TYPE_LIST, TYPE_VECTOR, TYPE_BLOB, TYPE_DICT,
+  TYPE_DEQUE, TYPE_SET, TYPE_HAMT, TYPE_FN, TYPE_LAMBDA, TYPE_BUILTIN,
+  TYPE_MACRO, TYPE_FFI, TYPE_ERROR, TYPE_PORT, TYPE_WEAK, TYPE_CONTINUATION,
+  TYPE_TYPE, TYPE_USER_MIN = 100
+};
 
 #define MAKE_FIX(v) ((exp_t *)((((uintptr_t)(int64_t)(v)) << 3) | TAG_FIX))
 #define FIX_VAL(e) ((int64_t)((intptr_t)(e)) >> 3) /* arithmetic shift */
@@ -610,11 +625,12 @@ typedef struct bytecode_t {
      borrowed string ptr from the i-th param symbol's ->ptr. */
   uint8_t nparams;
   char *param_keys[ENV_INLINE_SLOTS];
-  /* Optional type-annotation hints (TYPE_HINT_* codes; 0 = none), parallel to
-     param_keys; ret_hint is the declared return type. Recorded from def-time
-     annotations (def f (x :int) :f64 ...). Phase 2: the JIT reads these to emit
-     a guarded specialized fast-path for shapes it would otherwise reject — the
-     guard still deopts on a wrong hint, so they only ever affect speed. */
+  /* Optional type-annotation hints (first-class type ids; 0 = none), parallel
+     to param_keys; ret_hint is the declared return type. Recorded from def-time
+     annotations `(def f (x Int) Float ...)` or the :keyword spellings. The JIT
+     reads Int/Float to seed a slot class and emit a guarded specialized
+     fast-path; the guard still deopts on a wrong hint, so they only ever
+     affect speed. Non-numeric annotations are recorded but JIT-inert. */
   uint8_t param_hints[ENV_INLINE_SLOTS];
   uint8_t ret_hint;
   /* Name of the function this bytecode belongs to (borrowed from
@@ -659,22 +675,14 @@ extern uint64_t alcove_global_gen;
 
 void bytecode_free(bytecode_t *bc);
 void disasm_bytecode(bytecode_t *bc); /* opcode-by-opcode dump for debugging */
-/* Optional type-annotation codes (JIT speculation hints). 0 = unannotated.
-   Single source of truth: this X-macro list generates the enum below AND the
-   code→keyword / keyword→code maps in alcove.c, so a new hint can't be added to
-   one and forgotten in another. (code, keyword) per row. */
-#define ALC_TYPE_HINTS(X)                                                      \
-  X(TYPE_HINT_INT, ":int") /* tagged fixnum */                                 \
-  X(TYPE_HINT_F64, ":f64") /* double */                                        \
-  X(TYPE_HINT_VEC_F64, ":vec-f64")                                             \
-  X(TYPE_HINT_VEC_I64, ":vec-i64")
-enum {
-  TYPE_HINT_NONE = 0,
-#define X(code, kw) code,
-  ALC_TYPE_HINTS(X)
-#undef X
-};
-/* param_hints (ENV_INLINE_SLOTS TYPE_HINT_* codes, or NULL) + ret_hint are the
+/* Type annotations (JIT speculation hints). The per-param hint code IS the
+   first-class type id from `enum alc_type_id` (TYPE_INT, TYPE_FLOAT, ...);
+   0 = unannotated (no TYPE_* id is 0). So `(x :int)` and `(x Int)` record the
+   SAME hint. type_hint_code() maps the legacy :keyword spellings to type ids;
+   a bare type-name symbol maps via alc_type_from_name(). The JIT reads these
+   as slot-class seeds (TYPE_FLOAT → float, else int; see jit_common.h). */
+#define TYPE_HINT_NONE 0
+/* param_hints (ENV_INLINE_SLOTS type ids, or NULL) + ret_hint are the
    def-time type annotations, recorded into the bytecode for the JIT. */
 int compile_lambda(exp_t *fn, int is_closure, const uint8_t *param_hints,
                    uint8_t ret_hint);        /* 1 on success, 0 on fallback */
@@ -707,6 +715,7 @@ typedef struct exp_tfunc {
    (alcove_register_type) get ids EXP_MAXSIZE..ALCOVE_TYPE_CAP-1. The 2-byte
    exp_t->type field holds any of these with room to spare. */
 #define ALCOVE_TYPE_CAP 256
+#define ALCOVE_DUMP_TAG_TYPE_OBJECT ((unsigned short)0xffffu)
 
 #define __CLONE__(e)                                                           \
   (exp_tfuncList[e->type] && exp_tfuncList[e->type]->clone                     \
@@ -727,12 +736,14 @@ typedef struct exp_tfunc {
   (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->load              \
        ? exp_tfuncList[TYPEOF_E(e)]->load(e, s)                                \
        : NULL)
+exp_t *dump_type_obj(exp_t *e, FILE *stream);
 #define __DUMP__(e, s)                                                         \
-  (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump              \
+  (istype(e) ? dump_type_obj(e, s)                                             \
+   : (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump           \
        ? exp_tfuncList[TYPEOF_E(e)]->dump(e, s)                                \
-       : NULL)
+       : NULL))
 #define __DUMPABLE__(e)                                                        \
-  (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump ? 1 : 0)
+  (istype(e) ? 1 : (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump ? 1 : 0))
 
 typedef struct token_t {
   int size;
@@ -962,6 +973,9 @@ exp_t *alcove_make_int(int v);
    which registers its builtins via alcove_register_cmd; on a nonzero return
    the host reports a generic load failure, so the module should print its own
    diagnostic (it has no env_t to call error() with). */
+const char *alc_type_name(uint32_t id);
+uint32_t alc_type_from_name(const char *name);
+
 env_t *alcove_init(void);
 exp_t *alcove_eval_string(const char *src);
 /* Custom (foreign) object types — a native module defines its own value type
@@ -1160,6 +1174,10 @@ exp_t *restcmd(exp_t *e, env_t *env);
 exp_t *conjcmd(exp_t *e, env_t *env);
 exp_t *intocmd(exp_t *e, env_t *env);
 exp_t *typeofcmd(exp_t *e, env_t *env);
+exp_t *is_typecmd(exp_t *e, env_t *env);
+exp_t *type_namecmd(exp_t *e, env_t *env);
+exp_t *typecmd(exp_t *e, env_t *env);
+exp_t *is_acmd(exp_t *e, env_t *env);
 exp_t *defstructcmd(exp_t *e, env_t *env);
 exp_t *defmulticmd(exp_t *e, env_t *env);
 exp_t *defmethodcmd(exp_t *e, env_t *env);
@@ -1337,7 +1355,7 @@ typedef struct compiler_t {
   char *slot_names[ENV_INLINE_SLOTS];
   int nparams;
   const uint8_t
-      *param_hints;      /* borrowed: per-param TYPE_HINT_* (or NULL). Lets
+      *param_hints;      /* borrowed: per-param type-id hint (or NULL). Lets
                             compile_expr treat a hinted param as a known
                             non-callable value for infix->prefix rewriting. */
   int nslots;            /* current total: nparams + active let/with bindings */

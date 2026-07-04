@@ -130,7 +130,7 @@ static unsigned short g_type_remap[ALCOVE_TYPE_CAP];
    any load fn runs (the initializer is just a safe default). Defined here so
    load_exp_t and persist.h both see it. Kept in sync with ALCOVE_DUMP_VERSION.
  */
-static int alcove_load_dump_version = 3;
+static int alcove_load_dump_version = 4;
 
 /* Canonical singletons — pointer set at main() startup. */
 exp_t *nil_singleton = NULL;
@@ -746,6 +746,10 @@ lispProc lispProcList[] = {
     LISPCMD_APP("conj", conjcmd, doc_conj),
     LISPCMD_APP("into", intocmd, doc_into),
     LISPCMD_APP("type-of", typeofcmd, doc_typeof),
+    LISPCMD("type?", is_typecmd, doc_is_type),
+    LISPCMD("type", typecmd, doc_type),
+    LISPCMD("type-name", type_namecmd, doc_type_name),
+    LISPCMD("is-a?", is_acmd, doc_is_a),
     LISPCMD("defstruct", defstructcmd, doc_defstruct),
     LISPCMD("defmulti", defmulticmd, doc_defmulti),
     LISPCMD("defmethod", defmethodcmd, doc_defmethod),
@@ -2330,6 +2334,16 @@ exp_t *load_exp_t(FILE *stream) {
     unrefexp(resp);
     return NULL;
   }
+  if (resp->type == ALCOVE_DUMP_TAG_TYPE_OBJECT) {
+    resp->type = EXP_PAIR; /* keep unrefexp from dispatching on 0xffff */
+    uint32_t id;
+    if (fread(&id, sizeof(id), 1, stream) != 1) {
+      unrefexp(resp);
+      return NULL;
+    }
+    unrefexp(resp);
+    return MAKE_TYPE(id);
+  }
   /* v3: a custom-type id in the body is the DUMP session's id — remap it to
      this process's id by durable name (table built in alcove_load_unified)
      BEFORE validating against exp_tfuncList. Unresolved (module absent /
@@ -2926,8 +2940,14 @@ static int is_reserved_name(const char *name) {
 /* Return the first reserved name used in a param spec, or NULL. Handles a
    flat list (a b c), a bare rest-only symbol (fn xs ...), the dotted rest
    marker (a . rest), and nested destructuring patterns ((x y) z). */
-static const char *reserved_param_name(exp_t *params) {
+/* `top` is 1 for the outermost parameter list, 0 inside a nested
+   destructuring pattern. A bare type-name symbol is a stripped type
+   annotation ONLY at top level (`(n Int)`); a type name in a destructuring
+   position (`((Int))`) is a genuine binding and must still be rejected. */
+static const char *reserved_param_name_ex(exp_t *params, int top) {
   if (issymbol(params)) {
+    /* A lone symbol is a rest param or a let/each binding name — never an
+       annotation, so type names are not skipped here. */
     const char *nm = (const char *)exp_text(params);
     return (strcmp(nm, ".") != 0 && is_reserved_name(nm)) ? nm : NULL;
   }
@@ -2935,7 +2955,10 @@ static const char *reserved_param_name(exp_t *params) {
     exp_t *el = p->content;
     if (issymbol(el)) {
       const char *nm = (const char *)exp_text(el);
-      if (strcmp(nm, ".") != 0 && is_reserved_name(nm))
+      /* Skip a top-level type-name annotation; still reject a reserved name
+         bound in a nested pattern (top == 0). */
+      if (strcmp(nm, ".") != 0 && !(top && alc_type_from_name(nm)) &&
+          is_reserved_name(nm))
         return nm;
     } else if (ispair(el) && istrue(el)) {
       if (issymbol(car(el)) && cadr(el) && !issymbol(cadr(el))) {
@@ -2945,13 +2968,16 @@ static const char *reserved_param_name(exp_t *params) {
         if (strcmp(nm, ".") != 0 && is_reserved_name(nm))
           return nm;
       } else {
-        const char *r = reserved_param_name(el); /* nested destructuring */
+        const char *r = reserved_param_name_ex(el, 0); /* nested: bindings */
         if (r)
           return r;
       }
     }
   }
   return NULL;
+}
+static const char *reserved_param_name(exp_t *params) {
+  return reserved_param_name_ex(params, 1);
 }
 
 /* Reject binding a reserved name. PARAMS is a param spec (a bare symbol or
@@ -2978,34 +3004,58 @@ static const char *reserved_param_name(exp_t *params) {
    doesn't match its hint at runtime just de-opts to the VM. Unknown type
    keywords are a hard error at definition (catches typos). Phase 1 validates
    the hints and strips them so var2env / compile_lambda / arity see plain
-   params and bodies; Phase 2 will record them for the JIT instead of
-   discarding. The vocabulary is C-like: :int (fixnum), :f64 (double), :vec-f64,
-   :vec-i64. The TYPE_HINT_* enum lives in alcove.h (used by bytecode_t /
-   compile_lambda). */
-/* Name of a TYPE_HINT_* code, for disasm / introspection. */
-static const char *type_hint_name(int code) { /* expanded from ALC_TYPE_HINTS */
-  switch (code) {
-#define X(c, kw)                                                               \
-  case c:                                                                      \
-    return kw;
-    ALC_TYPE_HINTS(X)
-#undef X
-  default:
-    return ":any";
-  }
+   params and bodies, and records the type-id hint for the JIT. The vocabulary
+   is the first-class type objects (Int, Float, ...) or their lowercased
+   :keyword spellings (:int, :f64); the recorded hint code IS the type id, so
+   both forms are identical. Element-kind vector aliases (:vec-f64/:vec-i64)
+   collapse to Vector — the flat type id can't carry an element kind. */
+/* Name of a hint code (a type id, or 0) for disasm / introspection. */
+static const char *type_hint_name(int code) {
+  return code == TYPE_HINT_NONE ? "Any" : alc_type_name((uint32_t)code);
 }
-/* Map a type-hint keyword's text to its code, or -1 if not a known type. */
-static int type_hint_code(const char *kw) { /* expanded from ALC_TYPE_HINTS */
-#define X(c, ks)                                                               \
-  if (!strcmp(kw, ks))                                                         \
-    return c;
-  ALC_TYPE_HINTS(X)
-#undef X
-  return -1;
+/* Map a type-annotation keyword's text to its type-id hint code, or -1 if not
+   a known annotation. Accepts the legacy JIT keywords AND the lowercased
+   spelling of any type name (`:int`, `:string`, ...) so the keyword and the
+   `Int`/`String` type-object forms stay one vocabulary. `:vec-f64`/`:vec-i64`
+   are kept as vector aliases (element kind isn't a distinct type id). */
+static int type_hint_code(const char *kw) {
+  if (kw[0] != ':')
+    return -1;
+  const char *n = kw + 1;
+  if (!strcmp(n, "int"))
+    return TYPE_INT;
+  if (!strcmp(n, "f64") || !strcmp(n, "float"))
+    return TYPE_FLOAT;
+  if (!strcmp(n, "vec-f64") || !strcmp(n, "vec-i64") || !strcmp(n, "vec"))
+    return TYPE_VECTOR;
+  /* Any lowercased type name: :string -> String, :symbol -> Symbol, ... */
+  char buf[32];
+  size_t L = strlen(n);
+  if (L == 0 || L >= sizeof buf)
+    return -1;
+  buf[0] = (char)toupper((unsigned char)n[0]);
+  for (size_t i = 1; i < L; i++)
+    buf[i] = n[i];
+  buf[L] = 0;
+  uint32_t tid = alc_type_from_name(buf);
+  return tid ? (int)tid : -1;
 }
 /* A keyword is an EXP_SYMBOL whose text starts with ':'. */
 static int is_keyword_exp(exp_t *x) {
   return is_ptr(x) && issymbol(x) && ((char *)exp_text(x))[0] == ':';
+}
+/* A bare type-name symbol used as a parameter type annotation: `(n Int)`.
+   Returns its type id (the hint code), or 0 if x is not a type-name symbol.
+   Type names are reserved, so a type name in a param list is ALWAYS an
+   annotation for the preceding param, never a bound parameter — this is what
+   lets the reserved-name scan skip it. Keywords (:int) take the other path. */
+static uint32_t param_type_annotation(exp_t *x) {
+  if (!is_ptr(x) || !issymbol(x))
+    return 0;
+  const char *nm = (const char *)exp_text(x);
+  if (nm[0] == ':')
+    return 0;
+  return alc_type_from_name(nm);
 }
 /* True if a param list carries any trailing-keyword hint (top-level keyword).
    Only a real list (pair chain) can; a bare-symbol rest param (fn xs ...) or
@@ -3014,7 +3064,7 @@ static int params_have_hint(exp_t *params) {
   if (!ispair(params))
     return 0;
   for (exp_t *p = params; p && p->content; p = p->next)
-    if (is_keyword_exp(p->content))
+    if (is_keyword_exp(p->content) || param_type_annotation(p->content))
       return 1;
   return 0;
 }
@@ -3023,7 +3073,7 @@ static int params_have_hint(exp_t *params) {
    common case allocates nothing extra. On a bad hint (unknown type, or a
    keyword not following a parameter) sets *errp and returns NULL. When
    hints_out is non-NULL it is filled (zeroed first) with the per-parameter
-   TYPE_HINT_* code, indexed by the cleaned param position, for the JIT. */
+   type-id hint code, indexed by the cleaned param position, for the JIT. */
 static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
                                  exp_t **errp, uint8_t *hints_out) {
   *errp = NULL;
@@ -3060,8 +3110,8 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
       int code = type_hint_code((char *)exp_text(c));
       if (code < 0)
         *errp = error(ERROR_ILLEGAL_VALUE, form, env,
-                      "unknown type hint '%s' (expected :int :f64 :vec-f64 "
-                      ":vec-i64)",
+                      "unknown type hint '%s' (a :keyword like :int/:f64, or "
+                      "a type name like Int/Float)",
                       (char *)exp_text(c));
       else if (!prev_bindable)
         *errp = error(ERROR_ILLEGAL_VALUE, form, env,
@@ -3077,6 +3127,25 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
       prev_bindable = 0; /* at most one hint per parameter */
       continue;          /* strip the hint */
     }
+    uint32_t tann = param_type_annotation(c);
+    if (tann) {
+      /* `(n Int)` — a type-object annotation. Same rule as the :keyword
+         hint: it must follow a parameter, at most one per parameter, and it
+         is stripped from the runtime param list. The stored hint code IS the
+         type id, so `Int` and `:int` are identical. */
+      if (!prev_bindable) {
+        *errp = error(ERROR_ILLEGAL_VALUE, form, env,
+                      "type annotation '%s' must follow a parameter",
+                      (char *)exp_text(c));
+        if (head)
+          unrefexp(head);
+        return NULL;
+      }
+      if (hints_out && kept >= 0 && kept < ENV_INLINE_SLOTS)
+        hints_out[kept] = (uint8_t)tann;
+      prev_bindable = 0;
+      continue;
+    }
     exp_t *node = make_node(refexp(c));
     if (tail)
       tail = tail->next = node;
@@ -3087,29 +3156,37 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
   }
   return head ? head : refexp(NIL_EXP);
 }
-/* If `body` begins with a return-type keyword followed by more forms, validate
-   it and return the body with that keyword skipped (writing its TYPE_HINT_*
-   code to *ret_out); else return body unchanged with *ret_out = 0. On an
-   unknown return-type keyword sets *errp and returns NULL. */
+/* If `body` begins with a return-type annotation (a :keyword or a bare type
+   name) followed by more forms, validate it and return the body with that
+   annotation skipped (writing its type-id code to *ret_out); else return body
+   unchanged with *ret_out = 0. On an unknown return type sets *errp / NULL. */
 static exp_t *strip_return_hint(exp_t *body, exp_t *form, env_t *env,
                                 exp_t **errp, uint8_t *ret_out) {
   *errp = NULL;
   if (ret_out)
     *ret_out = TYPE_HINT_NONE;
-  if (body && is_keyword_exp(car(body)) && cdr(body)) {
-    int code = type_hint_code((char *)exp_text(car(body)));
+  if (!body || !cdr(body))
+    return body; /* a lone final form is the body, never a return type */
+  exp_t *h = car(body);
+  int code;
+  if (is_keyword_exp(h)) {
+    code = type_hint_code((char *)exp_text(h));
     if (code < 0) {
       *errp = error(ERROR_ILLEGAL_VALUE, form, env,
-                    "unknown return-type hint '%s' (expected :int :f64 "
-                    ":vec-f64 :vec-i64)",
-                    (char *)exp_text(car(body)));
+                    "unknown return-type hint '%s' (a :keyword like :int/:f64, "
+                    "or a type name like Int/Float)",
+                    (char *)exp_text(h));
       return NULL;
     }
-    if (ret_out)
-      *ret_out = (uint8_t)code;
-    return cdr(body); /* skip the return-type keyword */
+  } else {
+    uint32_t tid = param_type_annotation(h); /* `... Int body` return type */
+    if (!tid)
+      return body; /* not a return annotation — h is the first body form */
+    code = (int)tid;
   }
-  return body;
+  if (ret_out)
+    *ret_out = (uint8_t)code;
+  return cdr(body); /* skip the return-type annotation */
 }
 
 /* Lambdas here are NOT closures: the returned EXP_LAMBDA stores only
@@ -3366,8 +3443,8 @@ exp_t *defncmd(exp_t *e, env_t *env) {
             int code = type_hint_code((char *)exp_text(p->content));
             if (code < 0)
               herr = error(ERROR_ILLEGAL_VALUE, e, env,
-                           "unknown type hint '%s' (expected :int :f64 "
-                           ":vec-f64 :vec-i64)",
+                           "unknown type hint '%s' (a :keyword like :int/:f64, "
+                           "or a type name like Int/Float)",
                            (char *)exp_text(p->content));
             else if (!prev_bindable)
               herr = error(ERROR_ILLEGAL_VALUE, e, env,
@@ -3384,6 +3461,27 @@ exp_t *defncmd(exp_t *e, env_t *env) {
             prev_bindable = 0;
             p = p->next;
             continue; /* strip the hint */
+          }
+          uint32_t tann = param_type_annotation(p->content);
+          if (tann) {
+            /* `(x Int body...)` — type-object annotation in a leading-symbol
+               defn clause, same rule as the :keyword hint above. Mirrors the
+               (n Int) branch in build_clean_params. */
+            if (!prev_bindable) {
+              exp_t *herr =
+                  error(ERROR_ILLEGAL_VALUE, e, env,
+                        "type annotation '%s' must follow a parameter",
+                        (char *)exp_text(p->content));
+              unrefexp(ph);
+              unrefexp(clauses_head);
+              unrefexp(e);
+              return herr;
+            }
+            if (kept >= 0 && kept < ENV_INLINE_SLOTS)
+              phints[kept] = (uint8_t)tann;
+            prev_bindable = 0;
+            p = p->next;
+            continue; /* strip the annotation */
           }
           exp_t *pn = make_node(refexp(p->content));
           if (pt)
@@ -4062,8 +4160,9 @@ static void alcove_set_db_path(const char *p) {
 /* v3 adds a custom-type table after the header (count + {id, name, spec}) so
    foreign module types persist: the body keeps the 2-byte runtime id, the table
    maps it to a durable name, and the loader remaps id→name→this-process's-id
-   (auto-(require)ing the module unless --safe). v1/v2 dumps still load. */
-#define ALCOVE_DUMP_VERSION 3
+   (auto-(require)ing the module unless --safe). v4 reserves 0xffff as the
+   first-class type-object marker. v1/v2/v3 dumps still load. */
+#define ALCOVE_DUMP_VERSION 4
 #define ALCOVE_DUMP_VERSION_MIN 1
 static void auto_require_native(const char *spec); /* defined after require */
 #define ALCOVE_SEC_LISP 'L'
@@ -5466,6 +5565,70 @@ static void *buf_reserve(void *b, size_t len, size_t n, size_t *cap) {
    return in the body unwinds it. */
 #define STR_BUF_MAX_DEPTH 256
 static ALCOVE_TLS int exp_to_string_depth = 0;
+const char *alc_type_name(uint32_t id) {
+  switch (id) {
+    case TYPE_ANY: return "Any"; case TYPE_NIL: return "Nil";
+    case TYPE_BOOL: return "Bool"; case TYPE_INT: return "Int";
+    case TYPE_FLOAT: return "Float"; case TYPE_NUMBER: return "Number";
+    case TYPE_RATIONAL: return "Rational"; case TYPE_DECIMAL: return "Decimal";
+    case TYPE_STRING: return "String"; case TYPE_SYMBOL: return "Symbol";
+    case TYPE_KEYWORD: return "Keyword"; case TYPE_CHAR: return "Char";
+    case TYPE_PAIR: return "Pair"; case TYPE_LIST: return "List";
+    case TYPE_VECTOR: return "Vector"; case TYPE_BLOB: return "Blob";
+    case TYPE_DICT: return "Dict"; case TYPE_DEQUE: return "Deque";
+    case TYPE_SET: return "Set"; case TYPE_HAMT: return "Hamt";
+    case TYPE_FN: return "Fn"; case TYPE_LAMBDA: return "Lambda";
+    case TYPE_BUILTIN: return "Builtin"; case TYPE_MACRO: return "Macro";
+    case TYPE_FFI: return "Ffi"; case TYPE_ERROR: return "Error";
+    case TYPE_PORT: return "Port"; case TYPE_WEAK: return "Weak";
+    case TYPE_CONTINUATION: return "Continuation";
+    case TYPE_TYPE: return "Type";
+    default: return "Unknown";
+  }
+}
+
+uint32_t alc_type_from_name(const char *name) {
+  if (!strcmp(name, "Any")) return TYPE_ANY;
+  if (!strcmp(name, "Nil")) return TYPE_NIL;
+  if (!strcmp(name, "Bool")) return TYPE_BOOL;
+  if (!strcmp(name, "Int")) return TYPE_INT;
+  if (!strcmp(name, "Float")) return TYPE_FLOAT;
+  if (!strcmp(name, "Number")) return TYPE_NUMBER;
+  if (!strcmp(name, "Rational")) return TYPE_RATIONAL;
+  if (!strcmp(name, "Decimal")) return TYPE_DECIMAL;
+  if (!strcmp(name, "String")) return TYPE_STRING;
+  if (!strcmp(name, "Symbol")) return TYPE_SYMBOL;
+  if (!strcmp(name, "Keyword")) return TYPE_KEYWORD;
+  if (!strcmp(name, "Char")) return TYPE_CHAR;
+  if (!strcmp(name, "Pair")) return TYPE_PAIR;
+  if (!strcmp(name, "List")) return TYPE_LIST;
+  if (!strcmp(name, "Vector")) return TYPE_VECTOR;
+  if (!strcmp(name, "Blob")) return TYPE_BLOB;
+  if (!strcmp(name, "Dict")) return TYPE_DICT;
+  if (!strcmp(name, "Deque")) return TYPE_DEQUE;
+  if (!strcmp(name, "Set")) return TYPE_SET;
+  if (!strcmp(name, "Hamt")) return TYPE_HAMT;
+  if (!strcmp(name, "Fn")) return TYPE_FN;
+  if (!strcmp(name, "Lambda")) return TYPE_LAMBDA;
+  if (!strcmp(name, "Builtin")) return TYPE_BUILTIN;
+  if (!strcmp(name, "Macro")) return TYPE_MACRO;
+  if (!strcmp(name, "Ffi")) return TYPE_FFI;
+  if (!strcmp(name, "Error")) return TYPE_ERROR;
+  if (!strcmp(name, "Port")) return TYPE_PORT;
+  if (!strcmp(name, "Weak")) return TYPE_WEAK;
+  if (!strcmp(name, "Continuation")) return TYPE_CONTINUATION;
+  if (!strcmp(name, "Type")) return TYPE_TYPE;
+  return 0;
+}
+
+exp_t *dump_type_obj(exp_t *e, FILE *stream) {
+  unsigned short t = ALCOVE_DUMP_TAG_TYPE_OBJECT;
+  if (dumptype(stream, &t) <= 0) return NULL;
+  uint32_t id = TYPE_ID(e);
+  if (fwrite(&id, sizeof(id), 1, stream) != 1) return NULL;
+  return e;
+}
+
 static void exp_to_string_buf_1(exp_t *v, char **buf, size_t *len,
                                 size_t *cap);
 static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
@@ -5495,6 +5658,11 @@ static void exp_to_string_buf_1(exp_t *v, char **buf, size_t *len,
     char u[4];
     int k = utf8_encode((uint32_t)CHAR_VAL(v), u);
     str_buf_put(buf, len, cap, u, (size_t)k);
+    return;
+  }
+  if (istype(v)) {
+    const char *name = alc_type_name(TYPE_ID(v));
+    str_buf_put(buf, len, cap, (char *)name, strlen(name));
     return;
   }
   if (!is_ptr(v)) { /* an unknown immediate — deterministic, no pointer */

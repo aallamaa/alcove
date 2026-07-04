@@ -1838,6 +1838,36 @@
 (assert "type hint: defn leading-sym" (ta-dbl 8)                     16)
 (def ta-novel (x) (* x x))
 (assert "no hint: unchanged"          (ta-novel 7)                   49)
+;; type-OBJECT annotations: `(n Int)` is the same hint as `(n :int)` — the
+;; hint code IS the type id now (Int/:int both -> TYPE_INT). Types stay
+;; reserved (unshadowable); a type name in a param list is an annotation.
+(def to-f (x Int) (* x 2))
+(assert "type object: param annotation"    (to-f 5)                    10)
+(def to-g (a Float b Float) (+ a b))
+(assert "type object: two params"          (to-g 1.5 2.5)              4.0)
+(def to-cd (n Int acc Int) (if (is n 0) acc (to-cd (- n 1) (+ acc 1))))
+(assert "type object: deep recursion keeps TCO" (to-cd 200000 0)       200000)
+(assert "type object: fn param"            ((fn (x Int) (* x 3)) 4)    12)
+(defn to-sq ((x Int) (* x x)))
+(assert "type object: defn"                (to-sq 6)                   36)
+(assert-true "type object: annotation without a param errors"
+             (error? (try (def to-bad (Int) 1) (fn (e) e))))
+(assert-true "type name still reserved (cannot shadow as a plain param slot)"
+             (error? (try (eval (quote (let ((Int 5)) Int))) (fn (e) e))))
+;; type-object annotations in the OTHER param positions (review findings):
+(defn to-lead (x Int (* x 2)))          ; leading-symbol defn clause
+(assert "type object: leading-symbol defn clause" (to-lead 3)          6)
+(def to-ret (x Int) Float (+ x 1.0))    ; bare type-name RETURN annotation
+(assert "type object: bare return annotation"     (to-ret 4)           5.0)
+(defn to-multi ((x Int) (* x x)) ((x Int y Int) (+ x y)))
+(assert "type object: multi-arity clause, 1 arg" (to-multi 5)          25)
+(assert "type object: multi-arity clause, 2 args" (to-multi 2 3)       5)
+;; type names in NESTED destructuring positions are bindings, not annotations,
+;; so they are still rejected as reserved (review follow-up):
+(assert-true "reserved type name in nested destructuring is rejected"
+             (error? (try (eval (quote (def _nd1 ((Int)) 1))) (fn (e) e))))
+(def _nd_ok ((a b)) (+ a b))     ; non-reserved nested destructuring still fine
+(assert "non-reserved nested destructuring unaffected" (_nd_ok (list 3 4)) 7)
 (assert-true "type hint: unknown keyword errors at def"
              (error? (try (def ta-bad (x :nope) x) (fn (e) e))))
 (assert-true "type hint: keyword without param errors"
@@ -5070,6 +5100,55 @@
 (def _tco_rev (xs acc) (if (no xs) acc (_tco_rev (cdr xs) (cons (car xs) acc))))
 (assert "nil flows through a tail-call rebind (cdr of last pair)"
         (_tco_rev (list 1 2 3 4 5) (list)) (list 5 4 3 2 1))
+
+;; ====================================================================
+;; Type System (First-Class Type Objects)
+;; ====================================================================
+(assert "global type bindings" (type? Int) t)
+(assert "global type bindings" (type? Decimal) t)
+(assert "global type bindings" (type? String) t)
+(assert "global type bindings" (type? Type) t)
+
+(assert "(type 1) is a type?" (type? (type 1)) t)
+(assert "(type Int) returns Int" (type 1) Int)
+(assert "(type Float) returns Float" (type 1.0) Float)
+(assert "(type Rational) returns Rational" (type 1/2) Rational)
+(assert "(type Decimal) returns Decimal" (type 1.5m) Decimal)
+(assert "(type String) returns String" (type "x") String)
+(assert "(type Keyword) returns Keyword" (type :k) Keyword)
+(assert "(type Symbol) returns Symbol" (type 'x) Symbol)
+(assert "(type List) returns List" (type (list 1)) List)
+(assert "(type Pair) returns Pair" (type (cons 1 2)) Pair)
+(assert "(type Type) returns Type" (type Int) Type)
+(assert "(type Error) returns Error" (type (try (/ 1 0) (fn (e) e))) Error)
+
+(assert "is-a? conforms to supertypes" (is-a? 1 Number) t)
+(assert "is-a? conforms to supertypes" (is-a? 1.5m Number) t)
+(assert "is-a? fails for wrong types" (is-a? "x" Number) nil)
+(assert "is-a? Any matches anything" (is-a? 1 Any) t)
+(assert "is-a? nil conforms to List" (is-a? nil List) t)
+(assert "is-a? proper list conforms to List" (is-a? (list 1) List) t)
+(assert "is-a? improper pair conforms to Pair" (is-a? (cons 1 2) Pair) t)
+(assert "is-a? captured error conforms to Error" (is-a? (try (/ 1 0) (fn (e) e)) Error) t)
+(assert "is-a? type object conforms to Type" (is-a? Int Type) t)
+(assert "type-name returns string" (type-name Int) "Int")
+
+(def _type_ret_fn () Int)
+(assert "compiled function returning a type works" (_type_ret_fn) Int)
+(def _type_err_fn () (type (try (/ 1 0) (fn (e) e))))
+(assert "compiled type preserves error value" (_type_err_fn) Error)
+(def _is_a_err_fn () (is-a? (try (/ 1 0) (fn (e) e)) Error))
+(assert "compiled is-a? preserves error value" (_is_a_err_fn) t)
+(def _is_a_type_fn () (is-a? Int Type))
+(assert "compiled is-a? type object conforms to Type" (_is_a_type_fn) t)
+
+;; persistence test
+(= _my_type_var String)
+(persist '_my_type_var)
+(savedb "/tmp/alcove-test-type.db")
+(= _my_type_var nil)
+(loaddb "/tmp/alcove-test-type.db")
+(assert "type object survives savedb/loaddb" _my_type_var String)
 
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires

@@ -49,6 +49,10 @@ static void print_node_1(exp_t *node) {
     }
     return;
   }
+  if (istype(node)) {
+    printf("\x1B[35m%s\x1B[39m", alc_type_name(TYPE_ID(node)));
+    return;
+  }
   if (!is_ptr(node)) {
     printf("<?imm %p>", (void *)node);
     return;

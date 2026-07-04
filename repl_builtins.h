@@ -789,6 +789,41 @@ env_t *alcove_init(void) {
   gen_done_singleton = make_symbol("*done*", 6);
   set_get_keyval_dict(reserved_symbol, "nil", nil = NIL_EXP);
   set_get_keyval_dict(reserved_symbol, "t", t = TRUE_EXP);
+  /* First-class type constants are RESERVED (unshadowable), like nil/t: a
+     type name is a language keyword, not a rebindable variable. In parameter
+     lists they double as type annotations — `(def fib (n Int) ...)` — read
+     by the param parser (build_clean_params), which is why they must resolve
+     to a stable type immediate everywhere. */
+  set_get_keyval_dict(reserved_symbol, "Any", MAKE_TYPE(TYPE_ANY));
+  set_get_keyval_dict(reserved_symbol, "Nil", MAKE_TYPE(TYPE_NIL));
+  set_get_keyval_dict(reserved_symbol, "Bool", MAKE_TYPE(TYPE_BOOL));
+  set_get_keyval_dict(reserved_symbol, "Int", MAKE_TYPE(TYPE_INT));
+  set_get_keyval_dict(reserved_symbol, "Float", MAKE_TYPE(TYPE_FLOAT));
+  set_get_keyval_dict(reserved_symbol, "Number", MAKE_TYPE(TYPE_NUMBER));
+  set_get_keyval_dict(reserved_symbol, "Rational", MAKE_TYPE(TYPE_RATIONAL));
+  set_get_keyval_dict(reserved_symbol, "Decimal", MAKE_TYPE(TYPE_DECIMAL));
+  set_get_keyval_dict(reserved_symbol, "String", MAKE_TYPE(TYPE_STRING));
+  set_get_keyval_dict(reserved_symbol, "Symbol", MAKE_TYPE(TYPE_SYMBOL));
+  set_get_keyval_dict(reserved_symbol, "Keyword", MAKE_TYPE(TYPE_KEYWORD));
+  set_get_keyval_dict(reserved_symbol, "Char", MAKE_TYPE(TYPE_CHAR));
+  set_get_keyval_dict(reserved_symbol, "Pair", MAKE_TYPE(TYPE_PAIR));
+  set_get_keyval_dict(reserved_symbol, "List", MAKE_TYPE(TYPE_LIST));
+  set_get_keyval_dict(reserved_symbol, "Vector", MAKE_TYPE(TYPE_VECTOR));
+  set_get_keyval_dict(reserved_symbol, "Blob", MAKE_TYPE(TYPE_BLOB));
+  set_get_keyval_dict(reserved_symbol, "Dict", MAKE_TYPE(TYPE_DICT));
+  set_get_keyval_dict(reserved_symbol, "Deque", MAKE_TYPE(TYPE_DEQUE));
+  set_get_keyval_dict(reserved_symbol, "Set", MAKE_TYPE(TYPE_SET));
+  set_get_keyval_dict(reserved_symbol, "Hamt", MAKE_TYPE(TYPE_HAMT));
+  set_get_keyval_dict(reserved_symbol, "Fn", MAKE_TYPE(TYPE_FN));
+  set_get_keyval_dict(reserved_symbol, "Lambda", MAKE_TYPE(TYPE_LAMBDA));
+  set_get_keyval_dict(reserved_symbol, "Builtin", MAKE_TYPE(TYPE_BUILTIN));
+  set_get_keyval_dict(reserved_symbol, "Macro", MAKE_TYPE(TYPE_MACRO));
+  set_get_keyval_dict(reserved_symbol, "Ffi", MAKE_TYPE(TYPE_FFI));
+  set_get_keyval_dict(reserved_symbol, "Error", MAKE_TYPE(TYPE_ERROR));
+  set_get_keyval_dict(reserved_symbol, "Port", MAKE_TYPE(TYPE_PORT));
+  set_get_keyval_dict(reserved_symbol, "Weak", MAKE_TYPE(TYPE_WEAK));
+  set_get_keyval_dict(reserved_symbol, "Continuation", MAKE_TYPE(TYPE_CONTINUATION));
+  set_get_keyval_dict(reserved_symbol, "Type", MAKE_TYPE(TYPE_TYPE));
 
   int N = sizeof(lispProcList) / sizeof(lispProc);
   int i;

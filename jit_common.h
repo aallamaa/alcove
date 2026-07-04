@@ -1884,11 +1884,14 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
   uint8_t *c = bc->code;
   nl->nparams = np;
 
-  /* Seed slot classes from :f64/:int hints; default INT, promote to FLOAT via
-     the tail-self fixed point. (A wrong seed only costs a deopt.) */
+  /* Seed slot classes from the type-id hints. Only Float is numerically
+     meaningful here (→ FLOAT); Int and every other annotation leave the
+     default INT — a non-numeric hint (String, List, ...) is JIT-inert, not a
+     claim that the slot is an integer. Slots promote to FLOAT via the
+     tail-self fixed point regardless, and a wrong seed only costs a deopt. */
   for (int i = 0; i < np; i++)
     nl->slot_class[i] =
-        (bc->param_hints[i] == TYPE_HINT_F64) ? NLC_FLOAT : NLC_INT;
+        (bc->param_hints[i] == TYPE_FLOAT) ? NLC_FLOAT : NLC_INT;
 
   /* Two phases: (1) iterate the abstract sim to a fixed point, PROMOTING slot
      classes (an int op whose operands haven't promoted yet is tolerated); then
