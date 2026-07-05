@@ -126,6 +126,24 @@ static ALCOVE_TLS resp_client_t *resp_clients = NULL;
    uniform; the indirection lets us swap per-shard partitioning in later
    without touching call sites. */
 static lfkv_t *g_resp_kv = NULL;
+
+_Atomic int g_lfkv_watch_enabled = 0;
+_Atomic uint64_t g_lfkv_watch_dropped = 0;
+static _Atomic uint64_t g_lfkv_watch_qsize = 0;
+/* Statically initialized (stub self-links are address constants) so the
+   queue is valid before any keyspace init — no mpsc_init ordering hazard. */
+static mpsc_queue_t g_lfkv_watch_queue = {
+    .head = &g_lfkv_watch_queue.stub,
+    .tail = &g_lfkv_watch_queue.stub,
+    .stub = {NULL},
+};
+
+typedef struct watch_event {
+  mpsc_node_t node;
+  int op;
+  char *key;
+  exp_t *val;
+} watch_event_t;
 /* Default slot count — power of 2. 2^20 = 1M slots ≈ 8MB pointer table.
    Sized to comfortably hold redis-benchmark's `-r 1000000` random-key
    load at <60% fill factor. Tune via RESP_KV_SLOTS env var if needed. */
@@ -3414,6 +3432,173 @@ exp_t *redisvalcmd(exp_t *e, env_t *env) {
              : error(ERROR_ILLEGAL_VALUE, NULL, env,
                      "redis-val: value too deeply nested or unsupported");
 }
+
+/* Saturating decrement, consumer side only. A producer that passed the
+   enabled-check can enqueue after a disable-path drain, so queue contents
+   and qsize can briefly disagree; saturating at 0 keeps a straggler from
+   underflowing the counter (which would read as "full" and drop every
+   subsequent event forever). */
+static void watch_qsize_dec(void) {
+  uint64_t q = atomic_load_explicit(&g_lfkv_watch_qsize, memory_order_relaxed);
+  while (q > 0 &&
+         !atomic_compare_exchange_weak_explicit(&g_lfkv_watch_qsize, &q, q - 1,
+                                                memory_order_acq_rel,
+                                                memory_order_relaxed)) {
+  }
+}
+
+static void watch_event_free(watch_event_t *ev) {
+  free(ev->key);
+  if (ev->val)
+    unrefexp(ev->val);
+  free(ev);
+}
+
+void resp_watch_emit(int op, const char *k, size_t klen, struct exp_t *val) {
+  uint64_t qsize = atomic_load_explicit(&g_lfkv_watch_qsize, memory_order_acquire);
+  if (qsize >= 65536) {
+    atomic_fetch_add_explicit(&g_lfkv_watch_dropped, 1, memory_order_relaxed);
+    return;
+  }
+  watch_event_t *ev = malloc(sizeof(*ev));
+  if (!ev) {
+    atomic_fetch_add_explicit(&g_lfkv_watch_dropped, 1, memory_order_relaxed);
+    return;
+  }
+  ev->op = op;
+  ev->key = malloc(klen + 1);
+  if (!ev->key) {
+    free(ev);
+    atomic_fetch_add_explicit(&g_lfkv_watch_dropped, 1, memory_order_relaxed);
+    return;
+  }
+  memcpy(ev->key, k, klen);
+  ev->key[klen] = '\0';
+  ev->val = val ? resp_exp_clone_for_lisp(val, 0) : NULL;
+
+  atomic_fetch_add_explicit(&g_lfkv_watch_qsize, 1, memory_order_acq_rel);
+  mpsc_enqueue(&g_lfkv_watch_queue, &ev->node);
+}
+
+const char doc_redis_watch_bang[] =
+    "(redis-watch! flag) — truthy enables layer-2 keyspace watch, nil disables and frees queued events. Returns previous state.";
+exp_t *rediswatchbangcmd(exp_t *e, env_t *env) {
+  /* Toggling drains the queue — a consumer op. The MPSC queue allows ONE
+     consumer; the main thread (REPL or post-serve script) is it. Refuse
+     from a concurrent RESP callback, which runs on a reactor thread. */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
+  int was = atomic_load_explicit(&g_lfkv_watch_enabled, memory_order_acquire);
+  exp_t *arg = cadr(e);
+  if (!arg) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, NULL, env, "redis-watch!: missing flag");
+  }
+  exp_t *eval_arg = EVAL(arg, env);
+  int en = istrue(eval_arg);
+  unrefexp(eval_arg);
+
+  if (en && !was) {
+    /* Free stragglers a racing producer enqueued after the disable-path
+       drain. Never blanket-reset qsize: it must stay per-node-accurate. */
+    mpsc_node_t *node;
+    while ((node = mpsc_dequeue(&g_lfkv_watch_queue))) {
+      watch_qsize_dec();
+      watch_event_free((watch_event_t *)node);
+    }
+    atomic_store_explicit(&g_lfkv_watch_dropped, 0, memory_order_release);
+    atomic_store_explicit(&g_lfkv_watch_enabled, 1, memory_order_release);
+  } else if (!en && was) {
+    atomic_store_explicit(&g_lfkv_watch_enabled, 0, memory_order_release);
+    mpsc_node_t *node;
+    while ((node = mpsc_dequeue(&g_lfkv_watch_queue))) {
+      watch_qsize_dec();
+      watch_event_free((watch_event_t *)node);
+    }
+  }
+
+  unrefexp(e);
+  return was ? TRUE_EXP : NIL_EXP;
+}
+
+const char doc_redis_watch_dropped[] =
+    "(redis-watch-dropped) — returns and resets the count of dropped layer-2 keyspace events.";
+exp_t *rediswatchdroppedcmd(exp_t *e, env_t *env) {
+  (void)env;
+  uint64_t dropped = atomic_exchange_explicit(&g_lfkv_watch_dropped, 0, memory_order_acq_rel);
+  unrefexp(e);
+  return make_integeri(dropped);
+}
+
+static exp_t *build_event_plist(watch_event_t *ev) {
+  exp_t *kw_op = make_symbol(":op", 3);
+  exp_t *sym_op = make_symbol(ev->op == 1 ? "set" : "del", 3);
+  exp_t *kw_key = make_symbol(":key", 4);
+  exp_t *str_key = make_string(ev->key, (int)strlen(ev->key));
+
+  exp_t *lst = make_node(kw_op);
+  lst->next = make_node(sym_op);
+  lst->next->next = make_node(kw_key);
+  lst->next->next->next = make_node(str_key);
+
+  if (ev->op == 1) {
+    exp_t *kw_new = make_symbol(":new", 4);
+    lst->next->next->next->next = make_node(kw_new);
+    lst->next->next->next->next->next = make_node(ev->val ? ev->val : NIL_EXP);
+  }
+  return lst;
+}
+
+const char doc_redis_next_event_bang[] =
+    "(redis-next-event!) — drain one layer-2 keyspace event, returning a plist (:op set|del :key str [:new blob]) or nil if empty. :new is the stored (blob) form, matching redis-get. MAIN THREAD ONLY — reactor callbacks must not drain.";
+exp_t *redisnexteventbangcmd(exp_t *e, env_t *env) {
+  /* Consumer op — main thread only; refuse from a RESP callback (see
+     rediswatchbangcmd). */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
+  mpsc_node_t *node = mpsc_dequeue(&g_lfkv_watch_queue);
+  if (!node) {
+    unrefexp(e);
+    return NIL_EXP;
+  }
+  watch_qsize_dec();
+  watch_event_t *ev = (watch_event_t *)node;
+  exp_t *ret = build_event_plist(ev);
+  free(ev->key);
+  free(ev);
+  unrefexp(e);
+  return ret;
+}
+
+const char doc_redis_drain_events_bang[] =
+    "(redis-drain-events!) — drain all pending layer-2 keyspace events into a list (oldest first). MAIN THREAD ONLY — reactor callbacks must not drain.";
+exp_t *redisdraineventsbangcmd(exp_t *e, env_t *env) {
+  /* Consumer op — main thread only; refuse from a RESP callback (see
+     rediswatchbangcmd). */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
+  exp_t *head = NULL, *tail = NULL;
+  mpsc_node_t *node;
+  while ((node = mpsc_dequeue(&g_lfkv_watch_queue))) {
+    watch_qsize_dec();
+    watch_event_t *ev = (watch_event_t *)node;
+    exp_t *plist = build_event_plist(ev);
+    free(ev->key);
+    free(ev);
+    exp_t *cell = make_node(plist);
+    if (!head) head = tail = cell;
+    else { tail->next = cell; tail = cell; }
+  }
+  unrefexp(e);
+  return head ? head : NIL_EXP;
+}
+
 
 static exp_t *resp_lisp_to_blob(exp_t *v) {
   if (isblob(v))

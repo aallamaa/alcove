@@ -6,6 +6,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Layer-2 keyspace watch hooks live in resp.c, which the web build
+   excludes (no pthread/epoll/socket under emscripten) — no-op there. */
+#ifndef ALCOVE_WEB
+extern _Atomic int g_lfkv_watch_enabled;
+extern void resp_watch_emit(int op, const char *k, size_t klen, struct exp_t *val);
+
+#define LFKV_EMIT(op, k, klen, val) do { \
+  if (atomic_load_explicit(&g_lfkv_watch_enabled, memory_order_relaxed)) { \
+    resp_watch_emit((op), (k), (klen), (val)); \
+  } \
+} while (0)
+#else
+#define LFKV_EMIT(op, k, klen, val) ((void)0)
+#endif
+
 static lfentry_t *entry_alloc(exp_t *val, int64_t expiry_us) {
   lfentry_t *e = malloc(sizeof *e);
   if (!e)
@@ -46,6 +61,7 @@ static inline int slot_retire_entry(lfkv_t *kv, lfslot_t *s,
           memory_order_acquire)) {
     atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
     epoch_retire(*expected_e, entry_free_owned);
+    LFKV_EMIT(2, s->key, s->klen, NULL);
     return 1;
   }
   return 0;
@@ -62,6 +78,7 @@ static inline void slot_replace_entry(lfkv_t *kv, lfslot_t *s,
         atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
       else
         epoch_retire(old, entry_free_owned);
+      LFKV_EMIT(1, s->key, s->klen, new_entry->val);
       return;
     }
   }
@@ -165,6 +182,7 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
                                                 memory_order_release,
                                                 memory_order_acquire)) {
       atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
+      LFKV_EMIT(1, k, klen, val);
       return 0;
     }
     if (expected && slot_key_eq(expected, h, k, klen)) {
@@ -349,6 +367,7 @@ static int slot_install_if_null(lfkv_t *kv, lfslot_t *s, lfentry_t *new_entry) {
           &s->entry, &old, new_entry, memory_order_release,
           memory_order_acquire)) {
     atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
+    LFKV_EMIT(1, s->key, s->klen, new_entry->val);
     return 1;
   }
   return 0;
@@ -394,6 +413,7 @@ int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
                                                   fresh, memory_order_release,
                                                   memory_order_acquire)) {
         atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
+        LFKV_EMIT(1, k, klen, val);
         return 1;
       }
       if (expected && slot_key_eq(expected, h, k, klen)) {
@@ -447,6 +467,7 @@ int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
             &s->entry, &expected, new_entry, memory_order_release,
             memory_order_acquire)) {
       epoch_retire(ent, entry_free_owned);
+      LFKV_EMIT(1, s->key, s->klen, new_entry->val);
       return 1;
     }
     entry_free_wrapper(new_entry);
@@ -482,6 +503,7 @@ int lfkv_cas(lfkv_t *kv, const char *k, size_t klen, exp_t *expected,
       if (!new_val)
         atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
       epoch_retire(ent, entry_free_owned);
+      LFKV_EMIT(new_val ? 1 : 2, s->key, s->klen, new_val);
       return 1;
     }
     if (new_entry)

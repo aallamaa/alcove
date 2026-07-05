@@ -1088,6 +1088,10 @@ lispProc lispProcList[] = {
     LISPCMD_UNSAFE("redis-defcmd", rediscmddefcmd, doc_redis_defcmd),
     LISPCMD_UNSAFE("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
     LISPCMD_UNSAFE("redis-cmds", rediscmdscmd, doc_redis_cmds),
+    LISPCMD("redis-watch!", rediswatchbangcmd, doc_redis_watch_bang),
+    LISPCMD("redis-watch-dropped", rediswatchdroppedcmd, doc_redis_watch_dropped),
+    LISPCMD("redis-next-event!", redisnexteventbangcmd, doc_redis_next_event_bang),
+    LISPCMD("redis-drain-events!", redisdraineventsbangcmd, doc_redis_drain_events_bang),
 #endif
 };
 #undef LISPCMD
