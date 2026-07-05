@@ -1,0 +1,45 @@
+# lib/orm.adr — object persistence for the v0.4.0 class system
+#
+# State: global dict `orm/store` (key "<ClassName>:<id>" -> instance) and dict
+# `orm/counters` (key "<ClassName>" -> next id int), plus `orm/path` (string or nil).
+# All three registered with (persist ...) so savedb carries them.
+ns orm
+
+orm/store = (hash-map)
+orm/counters = (hash-map)
+orm/path = nil
+
+(persist (quote orm/store))
+(persist (quote orm/counters))
+(persist (quote orm/path))
+
+# (orm/init path) — set orm/path; if the file exists, loaddb it (classes should be defined BEFORE calling).
+# loaddb reattaches validators then. Returns t.
+def orm/init(path):
+  (do (= orm/path path) (try (loaddb path) (fn (e) nil)) t)
+
+# (orm/commit) — savedb to orm/path (error value if orm/path nil).
+def orm/commit():
+  (if (no orm/path) (raise (quote orm-error) "orm/path is nil") (savedb orm/path))
+
+# (orm/save inst) — inst must be a class instance. Reject non-instances with a raised error value 'orm-error.
+# ID CONVENTION: if (inst "id") is nil, assign the next counter id via the checked setter path
+# (assoc! inst "id" n). Upsert into orm/store under "<ClassName>:<id>"; auto-commit when orm/path is set; return the id.
+def orm/save(inst):
+  (if (no (type? (type-of inst))) (raise (quote orm-error) "not a class instance") (do (= tname (type-name (type-of inst))) (if (no (get inst "id")) (do (= id (get orm/counters tname 1)) (assoc! orm/counters tname (+ id 1)) (assoc! inst "id" id)) nil) (= id (get inst "id")) (assoc! orm/store (str tname ":" id) inst) (if orm/path (orm/commit) nil) id))
+
+# (orm/get Cls id) — instance or nil.
+def orm/get(Cls id):
+  (get orm/store (str (type-name Cls) ":" id))
+
+# (orm/all Cls) — list of instances of that class.
+def orm/all(Cls):
+  (filter (fn (inst) (is (type-name (type-of inst)) (type-name Cls))) (vals orm/store))
+
+# (orm/query Cls pred) — (filter pred (orm/all Cls)).
+def orm/query(Cls pred):
+  (filter pred (orm/all Cls))
+
+# (orm/delete Cls id) — remove; auto-commit when path set; t if removed, nil if absent.
+def orm/delete(Cls id):
+  (if (get orm/store (str (type-name Cls) ":" id)) (do (dissoc! orm/store (str (type-name Cls) ":" id)) (if orm/path (orm/commit) nil) t) nil)

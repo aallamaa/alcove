@@ -1,0 +1,77 @@
+# examples/orm/run.adr — demo of lib/orm.adr
+#
+#   ./adder --noload examples/orm/run.adr
+
+require("lib/orm")
+
+def fail(msg):
+  (do (prn "FAIL: " msg) (exit 1))
+
+def pass(msg):
+  (prn "PASS: " msg)
+
+# The classes should be defined BEFORE calling orm/init
+defclass User (name String) (id (optional Int) nil) (email (optional String) nil)
+
+path = "/tmp/orm-demo.db"
+# idempotent: a previous run's db would otherwise reload via orm/init and
+# shift the auto-ids this demo asserts on
+(try (delete-file path) (fn (e) nil))
+
+# init
+orm/init path
+(pass "orm/init")
+
+# save 1
+u1 = (User "Alice")
+id1 = (orm/save u1)
+(if (is id1 1) (pass "save user 1 (auto-id)") (fail "save user 1 id not 1"))
+
+# save 2
+u2 = (User "Bob")
+id2 = (orm/save u2)
+(if (is id2 2) (pass "save user 2 (auto-id)") (fail "save user 2 id not 2"))
+
+# get
+g1 = (orm/get User 1)
+(if (is (get g1 "name") "Alice") (pass "get by id") (fail "get by id mismatch"))
+
+# all
+all_users = (orm/all User)
+(if (is (length all_users) 2) (pass "all") (fail "all count not 2"))
+
+# query
+bobs = (orm/query User (fn (u) (is (get u "name") "Bob")))
+(if (is (length bobs) 1) (pass "query") (fail "query count not 1"))
+
+# update and re-save
+(assoc! g1 "name" "Alice Updated")
+(orm/save g1)
+g1_upd = (orm/get User 1)
+(if (is (get g1_upd "name") "Alice Updated") (pass "update and re-save") (fail "update failed"))
+
+# delete
+del_ok = (orm/delete User 2)
+(if del_ok (pass "delete returned t") (fail "delete returned nil"))
+g2_del = (orm/get User 2)
+(if (no g2_del) (pass "delete actually removed") (fail "delete did not remove"))
+
+# commit
+(orm/commit)
+(pass "commit")
+
+# restart simulation
+(= orm/store (hash-map))
+(= orm/counters (hash-map))
+(loaddb path)
+(pass "simulated restart (loaddb)")
+
+# verify restart
+r1 = (orm/get User 1)
+(if (is (get r1 "name") "Alice Updated") (pass "reloaded instance intact") (fail "reloaded instance broken"))
+
+# assert validators live
+bad_write = (try (do (assoc! r1 "name" 42) nil) (fn (e) t))
+(if bad_write (pass "validators live on reloaded instance") (fail "validators not live on reloaded instance"))
+
+prn("ORM DEMO OK")

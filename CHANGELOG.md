@@ -7,7 +7,13 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
-(nothing yet)
+### Added
+- **`lib/orm.adr` — object persistence for defclass models.** `orm/init`
+  (path + load), `orm/save` (upsert with auto-ids via the checked-setter
+  path — models declare `(id (optional Int) nil)`), `orm/get`, `orm/all`,
+  `orm/query` (predicate scan), `orm/delete`, `orm/commit`; instances
+  persist by class name (dump v5) with validators live after reload.
+  Demo/test: `examples/orm/run.adr`.
 
 ## [0.4.0] — 2026-07-05
 
