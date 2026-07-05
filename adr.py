@@ -359,6 +359,18 @@ def line_to_list(text):
     forms = LineReader(text).read_forms()
     if len(forms) == 1:
         return desugar_dots(forms[0])  # lone atom -> value; lone list -> as-is
+    
+    if len(forms) >= 3 and isinstance(forms[1], Sym) and forms[1].name == "=":
+        rhs = forms[2] if len(forms) == 3 else forms[2:]
+        lhs = forms[0]
+        if isinstance(lhs, Sym):
+            segs = dot_segments(lhs.name)
+            if segs is not None and len(segs) >= 2:
+                asn = [Sym("assoc!"), read_chain(segs[:-1]), Str(segs[-1]), rhs]
+                return desugar_dots(asn)
+        asn = [forms[1], lhs, rhs]
+        return desugar_dots(asn)
+
     return desugar_dots(forms)         # many forms -> (f f ...)
 
 
