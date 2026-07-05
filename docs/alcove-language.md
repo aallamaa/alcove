@@ -750,8 +750,8 @@ accept a plain integer (returning it and `1`).
 
 ### Decimals (exact base-10)
 
-`(decimal "1.50")` builds an exact base-10 number; the literal `1.5m` (note
-the `m` suffix — `1.5` is a binary float, `1.5m` is a decimal) reads the same.
+`(decimal "1.50")` builds an exact base-10 number; the literal `1.5m` reads the same.
+(The `m` suffix marks the exact-decimal TYPE (C#/Clojure lineage, mnemonic "money"); alcove never scales literals — 1000m is exactly one thousand, never a million; style: prefer a decimal point (1000.0m) so the type-suffix reading is unmistakable.)
 Construct from a string (the normal, exact path), an integer, or another
 decimal. A **float** argument is refused — a binary float can't represent
 `0.1` exactly, so pass a string to say which decimal you mean.
@@ -859,7 +859,13 @@ generated setter — a raw `(assoc! a "nope" 1)` on an unknown field errors, and
 so does `(dissoc! a "balance")` (schema fields can't be deleted); only
 `(assoc! a "balance" 130.0m)` — a known field with a conforming value —
 succeeds. Field types may name another class (`(defclass Transfer (from
-Account) (to Account) (amount Decimal))`), checked the same way. `(defclass
+Account) (to Account) (amount Decimal))`), checked the same way.
+
+The field-type position also accepts compound schemas: `(optional TE)`, `(list-of TE)`, and `(or TE TE...)`, which may be nested. For example, `(defclass Node (val Int) (next (optional Node) nil))` works, then `(Node 5)` and `(Node 4 (Node 5))` construct instances. An `(or Int String)` field or a `(list-of String)` rejects a mixed list via its setter. The honest contract: checks fire on field construction/assignment (incl. raw `assoc!`); mutating the inner list afterwards is NOT tracked; compounds are not values — `(is-a? x (list-of Int))` doesn't exist.
+
+Field defaults use a third element: `(name TYPE DEFAULT)`. These act as trailing-optional constructor args. Evaluation is CALL-TIME (a `(list)` default = fresh list per instance, unlike Python). The trailing rule is enforced at defclass time incl. through inheritance merge. Orthogonality: `(optional T)` = may hold nil, does NOT imply omittable; `(defclass Edge (to (optional Node)))` is required-but-nilable.
+
+`(defclass
 Marker)` with no field list is legal — a zero-field tag type whose only job is
 `(Marker? (Marker))`.
 
@@ -884,8 +890,7 @@ re-validation of old writes. Class-body forms are position-based fields
 (`(name Type)`) or keyword-headed directives parsed by clause position: at
 most one `(:extends Parent)` **first**, then any number of `(name Type)`
 fields, then any number of `(:method name (params) body...)` clauses last.
-Inheritance is **single** (one parent, no mixins), and there is no `super` —
-an overriding method has no way to call the implementation it replaces.
+Inheritance is **single** (one parent, no mixins).
 
 **vs. `defstruct`.** The older `defstruct` remains the untyped/legacy record:
 its instances are plain dicts that classify as `Dict` under `type`/`is-a?`
@@ -934,6 +939,8 @@ parent) both error — and `:extends` must be the **first** clause
 object is recorded on the schema itself: `(get Dog__class "parent")` is
 `Animal`; a base class has no `"parent"` key.
 
+`(instance? T)` returns a predicate closure. `(filter (instance? Dog) xs)` keeps subclasses, and it works as a match guard `(? (instance? T))`.
+
 ### Methods are generic functions — `(:method name (self args...) body...)`
 
 Method clauses come after all field clauses. `(:method speak (self)
@@ -945,14 +952,14 @@ nothing the compiler/JIT doesn't already know how to handle:
 
 ```
 (defclass Animal (name String)
-  (:method speak (self) "..."))
+  (:method speak (self) (str "I am " (Animal-name self))))
 (defclass Dog (:extends Animal) (breed String)
-  (:method speak (self) "woof"))
+  (:method speak (self) (str (super speak self) " the dog")))
 (defclass Puppy (:extends Dog) (weeks Int))   ; no speak of its own
 
-(speak (Dog "Rex" "Lab"))      ; "woof"  — Dog's own method
-(speak (Puppy "Bit" "Lab" 6))  ; "woof"  — inherits Dog's, not Animal's
-(speak (Animal "Gen"))         ; "..."   — Animal's own
+(speak (Dog "Rex" "Lab"))      ; "I am Rex the dog"
+(speak (Puppy "Bit" "Lab" 6))  ; "I am Bit the dog" — composes both!
+(speak (Animal "Gen"))         ; "I am Gen"
 ```
 
 Overriding is just defining the method again on the more specific class — the
@@ -973,8 +980,7 @@ everything else in this section — a user class (`Dog`), a builtin type
 (`Int`), or `Any` — so class methods and ad hoc `defmethod`s on builtin types
 share one dispatch table. `defmulti` is idempotent (redeclaring an existing
 generic keeps its method table), which is what lets several sibling
-`defclass` bodies extend one shared generic name. There is no `super` yet — an
-override has no way to call the implementation it replaces.
+`defclass` bodies extend one shared generic name. `(super NAME self args...)` may be used in `(:method ...)` bodies only; it resumes dispatch at the DEFINING class's parent (grandchild-safe). A `super` call in a parentless class is a defclass-time error.
 
 Adder writes the same feature with a block form, and note that a
 **multi-line** `:method` body needs a trailing colon on the clause line
