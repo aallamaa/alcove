@@ -521,7 +521,7 @@ test-all:
 	  "  that adds NEW uncounted error output trips this gate even though" \
 	  "  'TEST RESULT' still says 0 failed. If you intentionally add/remove a" \
 	  "  recovery test, update the baseline below."; \
-	ALC_BASE=29; ADR_BASE=30; \
+	ALC_BASE=28; ADR_BASE=29; \
 	ae=$$(./alcove --noload test.alc 2>&1 1>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -cE '^test\.alc:[0-9]+:'); \
 	if [ "$$ae" -le "$$ALC_BASE" ]; then echo "  OK — alcove top-level errors: $$ae (baseline $$ALC_BASE)"; \
 	else echo "  ALCOVE STDERR REGRESSION: $$ae top-level errors > baseline $$ALC_BASE — a new uncounted error crept in:"; \

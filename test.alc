@@ -3788,11 +3788,16 @@
 (assert "hex escape \\xff"          (blob-len (string->blob "\xff"))   1)
 
 ;; Bug 2: dump_str treated fwrite(…,0) == 0 as error
-;; Anonymous lambda persistence (indirect test via savedb/loaddb).
-(def _anon_persist (fn (x) (* x x)))
+;; An anonymous lambda (empty meta name) exercises the zero-length write.
+;; NOTE: this used `(def _anon_persist (fn ...))` for years — def is
+;; function-sugar-only, so that line always errored at top level and the
+;; roundtrip persisted nothing. Rewritten to actually cover the bug.
+(= _anon_persist (fn (x) (* x x)))
+(persist '_anon_persist)
 (savedb "/tmp/alcove-bugfix-dump.db")
+(= _anon_persist nil)
 (loaddb "/tmp/alcove-bugfix-dump.db")
-(assert "savedb/loaddb after fix"    1                                 1)
+(assert "anon lambda survives savedb/loaddb" (_anon_persist 6)         36)
 
 ;; Bug 3: (-)  and  (/)  with no args silently returned 0
 (assert "(-) is error"               (error? (- ))                     t) ;; (-) needs >=1 arg; error? inspects without propagating (a bare (- ) would unwind through `no`)
@@ -5477,6 +5482,29 @@
 (assert "type object survives savedb/loaddb" _my_type_var String)
 
 ;; ====================================================================
+;; Layer-2 Keyspace Watch
+;; ====================================================================
+(redis-watch! t)
+(redis-set "_kw_1" "val1")
+(redis-set "_kw_2" "val2")
+(redis-del "_kw_1")
+
+(assert "drain-events returns all queued events" (length (redis-drain-events!)) 3)
+
+(redis-set "_kw_3" "val3")
+(let ((ev (redis-next-event!)))
+  (assert "next-event plist :op" (nth ev 1) 'set)
+  (assert "next-event plist :key" (nth ev 3) "_kw_3")
+  (assert "next-event plist :new" (nth ev 5) #b"val3"))
+
+(assert "next-event on empty returns nil" (nil? (redis-next-event!)) t)
+
+(redis-watch! nil)
+(redis-set "_kw_4" "val4")
+(assert "watch disabled drops events" (nil? (redis-next-event!)) t)
+(assert "watch disabled dropped count is 0" (redis-watch-dropped) 0)
+
+;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires
 ;; "0 failed". Built with str so the digits are plain (no ANSI codes).
 ;; The process also exits 1 if any test failed (0 otherwise), so a runner
@@ -5485,3 +5513,4 @@
 ;; ====================================================================
 (prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed"))
 (exit (if (> _test_fail 0) 1 0))
+
