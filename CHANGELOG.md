@@ -7,6 +7,17 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+(nothing yet)
+
+## [0.4.0] — 2026-07-05
+
+The class-system release: types become first-class runtime values and grow
+into a complete, schema-enforced class system — `defclass` with inheritance,
+generic-function methods, compound field types, defaults, and `super` — plus
+comprehensions, cycle collection, weak references, watches/validators, error
+introspection with a self-healing harness, and Adder dot syntax. The largest
+release to date.
+
 ### Added
 - **`defclass` phase 7 — compound field schemas, field defaults, `super`, and
   `(instance? T)`.** Field types may now be compound: `(optional TE)` also

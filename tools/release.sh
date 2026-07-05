@@ -65,7 +65,7 @@ if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
   aarch64-linux-gnu-gcc -static -Wall -W -fno-strict-aliasing -O3 \
     -DALCOVE_JIT=1 -o /tmp/alcove.a64 alcove.c -lm
   aarch64-linux-gnu-gcc -static -Wall -W -fno-strict-aliasing -O3 \
-    -DALCOVE_JIT=1 -o /tmp/adder.a64 adder.c -lm
+    -DALCOVE_JIT=1 -DADFMT_NO_MAIN -o /tmp/adder.a64 adder.c adfmt.c -lm
   aarch64-linux-gnu-strip /tmp/alcove.a64 /tmp/adder.a64
   if command -v qemu-aarch64 >/dev/null 2>&1; then
     qemu-aarch64 /tmp/alcove.a64 --noload test.alc 2>&1 \

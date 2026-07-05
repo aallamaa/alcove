@@ -3,7 +3,7 @@
 
 /* Release version — printed by `alcove --version` and exported here so a C
    embedder can compile-time-check what it's building against. */
-#define ALCOVE_VERSION "0.3.0"
+#define ALCOVE_VERSION "0.4.0"
 
 /* Embedding API/ABI version. Bump this whenever a change could break a
    separately-compiled consumer of this header: the exp_t/env_t layout, the
