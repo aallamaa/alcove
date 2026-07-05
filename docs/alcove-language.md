@@ -1583,6 +1583,15 @@ Two features unique to alcove that are easy to overlook:
    (SET / GET / INCR / LPUSH / HSET / LRANGE / TTL sweep, etc.) runs
    at 80–99 % of redis-server's throughput with ~5× lower memory.
 
+   Layer-2 keyspace watches provide a mutation event stream for RESP
+   keys. `(redis-watch! flag)` enables/disables the watch, returning the
+   previous state (disable frees queued events). `(redis-next-event!)`
+   polls a single `(:op set|del :key str [:new blob])` plist,
+   `(redis-drain-events!)` returns all pending events oldest-first, and
+   `(redis-watch-dropped)` reads and resets the overflow counter (the
+   queue is bounded at 65536). Consuming is main-thread-only — enforced;
+   see docs/multithreading.md.
+
 If you only want to write scripts you can ignore both. They become
 relevant when alcove is used as an embedded server.
 

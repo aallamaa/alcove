@@ -732,6 +732,12 @@ oom-test:
 resp-tsan:
 	sh tools/resp_tsan.sh
 
+# Layer-2 keyspace watches against a live --threads server: enable, mutate via
+# redis-cli, drain on the main thread. Skips cleanly if redis-cli is absent.
+# See tools/test_resp_watch.sh.
+resp-watch-test: jit
+	sh tools/test_resp_watch.sh
+
 # RESP expiry semantics over a real localhost server. Expired keys must be
 # absent for TTL/PTTL, EXISTS, DEL, SET NX/XX, PERSIST, EXPIRE, and DBSIZE.
 resp-expiry-test: jit

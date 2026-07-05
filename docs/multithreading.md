@@ -291,6 +291,38 @@ list in producer-LIFO order. We reverse it to get FIFO.
 **eventfd is Linux-only.** macOS path: `pipe()` with the read end in
 the reactor's `rfds`. Same shape.
 
+## Layer-2 keyspace watches
+
+The RESP keyspace has a layer-2 watch mechanism: an opt-in event stream
+for every `lfkv` mutation (SET / DEL / CAS / NX / XX / replace /
+expire-retire). Multi-threaded producers feed a strictly single-threaded
+consumer through a lock-free Vyukov MPSC queue.
+
+* **Producers:** when enabled via `(redis-watch! t)`, mutators emit
+  events from any reactor thread. Values are cloned at emit time into
+  their stored blob form (matching `redis-get`). `DEL` events omit the
+  `:new` field. No key-pattern filtering and no `:old` values, by design.
+* **Bounded queue:** capped at 65536 events. Emits beyond the bound —
+  or that hit allocation failure — drop the event and count it; the
+  overflow counter is read and reset via `(redis-watch-dropped)`. The
+  queue-size accounting is per-node and saturating (never blanket-reset),
+  so a producer racing a disable-drain can't wedge the counter.
+* **Main-thread consumers, enforced:** the MPSC queue allows one
+  consumer. All three consumer builtins — `(redis-watch! flag)` (its
+  toggle paths drain), `(redis-next-event!)`, `(redis-drain-events!)` —
+  refuse from a RESP callback (which runs on a reactor thread) with the
+  callback read-only error. Legitimate consumers: the `-r` REPL main
+  thread while serving, or script code after `respN_serve` returns.
+* **Polling:** consumers poll; there is currently no blocking wait.
+* **Lifecycle & teardown:** `(redis-watch! flag)` returns the previous
+  state. Disabling frees all queued events; enabling first drains stale
+  stragglers emitted by racing producers. Server teardown
+  (`resp_kv_clear`) emits one `DEL` per surviving key, so a post-serve
+  drain observes keyspace-wide deletions.
+
+Gate: `tools/test_resp_watch.sh` (also `make resp-watch-test`) exercises
+the layer against a live `--threads 4` server.
+
 ## Shard count
 
 Default `N = ceil(num_cores * 0.75)`, min 1, max 16. Configurable via

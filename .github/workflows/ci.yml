@@ -78,6 +78,18 @@ jobs:
       - name: Multi-reactor RESP under ThreadSanitizer (make resp-tsan)
         run: make resp-tsan
 
+  # Layer-2 keyspace watches over a real --threads 4 server: enable, mutate
+  # through redis-cli, drain on the main thread. Skips cleanly without
+  # redis-cli.
+  resp-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install deps (redis-cli for the client driver)
+        run: sudo apt-get update && sudo apt-get install -y redis-tools libffi-dev libreadline-dev
+      - name: Keyspace watches against a live server (make resp-watch-test)
+        run: make resp-watch-test
+
   # Observability gate: leveled logfmt logging emits exactly one logfmt line per
   # emit on stderr (and is silent below threshold), and the opt-in metrics build
   # (-DALCOVE_METRICS) auto-instruments the RESP server — resp.connections/

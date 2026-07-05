@@ -1,0 +1,38 @@
+;; Layer-2 keyspace watch driver: enable the watch, serve --threads 4,
+;; mutate through redis-cli, SIGINT ourselves, then drain on the main
+;; thread and verify the event stream. Run via tools/test_resp_watch.sh
+;; (make resp-watch-test), which picks the port.
+;;
+;; The client targets (getpid) explicitly. NEVER kill $PPID from the
+;; backgrounded shell: system()'s outer sh exits first, the inner sh
+;; reparents to systemd --user, and the SIGINT logs out the desktop
+;; session (this killed three Wayland sessions on 2026-07-05).
+(= port (read-string-sexpr (or (getenv "WATCH_PORT") "17637")))
+;; pid_t and system()'s status are 32-bit — declare "int", not "long"
+;; (a 64-bit read of a 32-bit return can pick up garbage upper bits).
+(= libc (ffi-fn "" "system" "int" "string"))
+(= getpid (ffi-fn "" "getpid" "int"))
+(= respN_serve (ffi-fn "" "respN_serve" "int" "int" "int"))
+(redis-watch! t)
+(libc (str "sh -c 'for i in $(seq 100); do redis-cli -p " port
+           " PING >/dev/null 2>&1 && break; sleep 0.1; done; "
+           "redis-cli -p " port " SET wk v1 >/dev/null; "
+           "redis-cli -p " port " DEL wk >/dev/null; "
+           "sleep 0.2; kill -INT " (getpid) "' &"))
+(respN_serve port 4)
+(let evs (redis-drain-events!)
+  (let n (length evs)
+    (if (< n 2)
+      (do (prn "RESP WATCH DRIVER FAILED: expected >=2 events, got" n evs)
+          (exit 1)))
+    ;; oldest first: SET wk then DEL wk (wk is gone pre-teardown, so no
+    ;; teardown DELs for it; other keys would only add events).
+    (let ev1 (car evs)
+      (if (no (and (is (nth ev1 1) 'set) (iso (nth ev1 3) "wk")))
+        (do (prn "RESP WATCH DRIVER FAILED: first event not (set wk):" ev1)
+            (exit 1))))
+    (let ev2 (car (cdr evs))
+      (if (no (is (nth ev2 1) 'del))
+        (do (prn "RESP WATCH DRIVER FAILED: second event not del:" ev2)
+            (exit 1))))
+    (prn "RESP WATCH DRIVER OK:" n "events")))

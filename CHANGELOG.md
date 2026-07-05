@@ -8,6 +8,15 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **RESP layer-2 keyspace watches — opt-in event stream for keyspace
+  mutations.** `(redis-watch! flag)` toggles (returns prior state; disable
+  frees queued events), `(redis-next-event!)` polls one
+  `(:op set|del :key str [:new blob])` plist, `(redis-drain-events!)`
+  returns all pending oldest-first, `(redis-watch-dropped)` reads and
+  resets the overflow counter. Producers emit from any reactor thread
+  through a bounded (65536) lock-free MPSC queue; consuming is
+  main-thread-only and enforced (RESP callbacks are refused). Gate:
+  `make resp-watch-test`. See docs/multithreading.md.
 - **`lib/orm.adr` — object persistence for defclass models.** `orm/init`
   (path + load), `orm/save` (upsert with auto-ids via the checked-setter
   path — models declare `(id (optional Int) nil)`), `orm/get`, `orm/all`,
