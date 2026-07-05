@@ -328,7 +328,8 @@ extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
     doc_redis_flush[], doc_redis_port[], doc_redis_defcmd[],
     doc_redis_undefcmd[], doc_redis_cmds[],
     doc_redis_watch_bang[], doc_redis_watch_dropped[],
-    doc_redis_next_event_bang[], doc_redis_drain_events_bang[];
+    doc_redis_next_event_bang[], doc_redis_wait_event_bang[],
+    doc_redis_drain_events_bang[];
 
 /* Forward decls for cmds defined below the table — every callee must be
    visible at table-init time. The original cmds had a top-level
@@ -424,6 +425,7 @@ exp_t *rediscmdscmd(exp_t *e, env_t *env);
 exp_t *rediswatchbangcmd(exp_t *e, env_t *env);
 exp_t *rediswatchdroppedcmd(exp_t *e, env_t *env);
 exp_t *redisnexteventbangcmd(exp_t *e, env_t *env);
+exp_t *rediswaiteventbangcmd(exp_t *e, env_t *env);
 exp_t *redisdraineventsbangcmd(exp_t *e, env_t *env);
 
 /* ---------------- Macros for Builtin Commands ---------------- */

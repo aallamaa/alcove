@@ -5499,10 +5499,20 @@
 
 (assert "next-event on empty returns nil" (nil? (redis-next-event!)) t)
 
+;; redis-wait-event!: single-threaded paths (the cross-thread wake is
+;; exercised by tools/test_resp_watch.sh phase 2 against a live server).
+(redis-set "_kw_w" "vw")
+(assert "wait-event: immediate when queued" (nth (redis-wait-event! 1000) 3) "_kw_w")
+(assert "wait-event: non-blocking probe on empty" (nil? (redis-wait-event! -1)) t)
+(= _kw_t0 (now-ms))
+(assert "wait-event: times out on empty" (nil? (redis-wait-event! 60)) t)
+(assert "wait-event: timeout actually waited" (>= (- (now-ms) _kw_t0) 55) t)
+
 (redis-watch! nil)
 (redis-set "_kw_4" "val4")
 (assert "watch disabled drops events" (nil? (redis-next-event!)) t)
 (assert "watch disabled dropped count is 0" (redis-watch-dropped) 0)
+(assert "wait-event: nil when watch disabled, no hang" (nil? (redis-wait-event! 0)) t)
 
 ;; ====================================================================
 ;; Machine-readable summary — `make test` greps this line and requires

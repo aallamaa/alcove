@@ -313,7 +313,17 @@ consumer through a lock-free Vyukov MPSC queue.
   refuse from a RESP callback (which runs on a reactor thread) with the
   callback read-only error. Legitimate consumers: the `-r` REPL main
   thread while serving, or script code after `respN_serve` returns.
-* **Polling:** consumers poll; there is currently no blocking wait.
+* **Blocking wait:** `(redis-wait-event! ms)` blocks until an event
+  arrives — `ms > 0` waits up to that many milliseconds, `0`/nil waits
+  forever, negative never blocks; returns the event plist or nil on
+  timeout/Ctrl-C/watch-disabled. Producers signal an eventfd only while
+  a waiter is armed (one relaxed load on the mutator path otherwise);
+  seq_cst fences on both sides close the Dekker lost-wakeup window.
+  Topology note: under `-R` (combined REPL+RESP, single reactor) a
+  blocked wait also blocks serving, so a network client can't wake it —
+  the cross-thread wake exists for embedders whose host threads mutate
+  the keyspace while the Lisp main thread waits (the signal→poll cycle
+  is unit-tested in `mpsc_test.c`, TSan-gated).
 * **Lifecycle & teardown:** `(redis-watch! flag)` returns the previous
   state. Disabling frees all queued events; enabling first drains stale
   stragglers emitted by racing producers. Server teardown

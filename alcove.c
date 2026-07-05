@@ -1091,6 +1091,7 @@ lispProc lispProcList[] = {
     LISPCMD("redis-watch!", rediswatchbangcmd, doc_redis_watch_bang),
     LISPCMD("redis-watch-dropped", rediswatchdroppedcmd, doc_redis_watch_dropped),
     LISPCMD("redis-next-event!", redisnexteventbangcmd, doc_redis_next_event_bang),
+    LISPCMD("redis-wait-event!", rediswaiteventbangcmd, doc_redis_wait_event_bang),
     LISPCMD("redis-drain-events!", redisdraineventsbangcmd, doc_redis_drain_events_bang),
 #endif
 };

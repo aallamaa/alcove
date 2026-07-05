@@ -85,8 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install deps (redis-cli for the client driver)
-        run: sudo apt-get update && sudo apt-get install -y redis-tools libffi-dev libreadline-dev
+      - name: Install deps (redis-cli client driver, tmux for the -R REPL phase)
+        run: sudo apt-get update && sudo apt-get install -y redis-tools libffi-dev libreadline-dev tmux
       - name: Keyspace watches against a live server (make resp-watch-test)
         run: make resp-watch-test
 

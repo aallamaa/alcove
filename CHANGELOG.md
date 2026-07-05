@@ -8,6 +8,13 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **`(redis-wait-event! [ms])` — blocking consumption for keyspace
+  watches.** Like `redis-next-event!` but sleeps on an eventfd until a
+  producer emits: `ms > 0` waits up to ms milliseconds, `0`/nil/no-arg
+  waits forever, negative never blocks; nil on timeout, Ctrl-C, or
+  disabled watch. The mutator hot path pays one relaxed load when nobody
+  waits; Dekker fences on both sides prevent lost wakeups. Main-thread
+  only (enforced, like the other consumers).
 - **RESP layer-2 keyspace watches — opt-in event stream for keyspace
   mutations.** `(redis-watch! flag)` toggles (returns prior state; disable
   frees queued events), `(redis-next-event!)` polls one

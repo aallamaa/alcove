@@ -48,6 +48,7 @@
 #include <sys/event.h>
 #define RESP_HAVE_KQUEUE 1
 #endif
+#include <poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -144,6 +145,14 @@ typedef struct watch_event {
   char *key;
   exp_t *val;
 } watch_event_t;
+/* Blocking-wait plumbing for (redis-wait-event!): one wake fd, created
+   lazily on the first (redis-watch! t) and NEVER closed (a close racing a
+   producer's signal would hand the write to a recycled fd). The waiter flag
+   keeps the mutator hot path at one relaxed load when nobody is blocked;
+   emit only pays the eventfd write while a waiter is armed. */
+static alc_wake_t g_lfkv_watch_wake;
+static _Atomic int g_lfkv_watch_wake_ready = 0;
+static _Atomic int g_lfkv_watch_waiter = 0;
 /* Default slot count — power of 2. 2^20 = 1M slots ≈ 8MB pointer table.
    Sized to comfortably hold redis-benchmark's `-r 1000000` random-key
    load at <60% fill factor. Tune via RESP_KV_SLOTS env var if needed. */
@@ -3478,6 +3487,15 @@ void resp_watch_emit(int op, const char *k, size_t klen, struct exp_t *val) {
 
   atomic_fetch_add_explicit(&g_lfkv_watch_qsize, 1, memory_order_acq_rel);
   mpsc_enqueue(&g_lfkv_watch_queue, &ev->node);
+  /* Wake a blocked (redis-wait-event!) consumer. The seq_cst fence pairs
+     with the consumer's fence between arming the waiter flag and its
+     dequeue re-check — without both, the store buffer can hide the enqueue
+     from the consumer AND the waiter flag from us (Dekker), losing the
+     wakeup. */
+  atomic_thread_fence(memory_order_seq_cst);
+  if (atomic_load_explicit(&g_lfkv_watch_waiter, memory_order_relaxed) &&
+      atomic_load_explicit(&g_lfkv_watch_wake_ready, memory_order_acquire))
+    alc_wake_signal(&g_lfkv_watch_wake);
 }
 
 const char doc_redis_watch_bang[] =
@@ -3508,6 +3526,13 @@ exp_t *rediswatchbangcmd(exp_t *e, env_t *env) {
       watch_qsize_dec();
       watch_event_free((watch_event_t *)node);
     }
+    /* Lazily create the (redis-wait-event!) wake fd. Main-thread-only here
+       (callback-guarded above), so no init race; the fd lives for the
+       process (see the declaration). Failure is non-fatal: waits degrade
+       to non-blocking. */
+    if (!atomic_load_explicit(&g_lfkv_watch_wake_ready, memory_order_acquire) &&
+        alc_wake_init(&g_lfkv_watch_wake) == 0)
+      atomic_store_explicit(&g_lfkv_watch_wake_ready, 1, memory_order_release);
     atomic_store_explicit(&g_lfkv_watch_dropped, 0, memory_order_release);
     atomic_store_explicit(&g_lfkv_watch_enabled, 1, memory_order_release);
   } else if (!en && was) {
@@ -3551,6 +3576,18 @@ static exp_t *build_event_plist(watch_event_t *ev) {
   return lst;
 }
 
+/* Take ownership of a dequeued node: account it, build the Lisp plist
+   (which steals ev->val's ref), free the event shell. Shared by the
+   next/wait/drain consumers. */
+static exp_t *watch_take_event(mpsc_node_t *node) {
+  watch_qsize_dec();
+  watch_event_t *ev = (watch_event_t *)node;
+  exp_t *plist = build_event_plist(ev);
+  free(ev->key);
+  free(ev);
+  return plist;
+}
+
 const char doc_redis_next_event_bang[] =
     "(redis-next-event!) — drain one layer-2 keyspace event, returning a plist (:op set|del :key str [:new blob]) or nil if empty. :new is the stored (blob) form, matching redis-get. MAIN THREAD ONLY — reactor callbacks must not drain.";
 exp_t *redisnexteventbangcmd(exp_t *e, env_t *env) {
@@ -3565,13 +3602,93 @@ exp_t *redisnexteventbangcmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return NIL_EXP;
   }
-  watch_qsize_dec();
-  watch_event_t *ev = (watch_event_t *)node;
-  exp_t *ret = build_event_plist(ev);
-  free(ev->key);
-  free(ev);
+  exp_t *ret = watch_take_event(node);
   unrefexp(e);
   return ret;
+}
+
+const char doc_redis_wait_event_bang[] =
+    "(redis-wait-event! [ms]) — like redis-next-event! but blocks until an "
+    "event arrives. ms > 0 waits up to ms milliseconds; 0 or nil (or no arg) "
+    "waits forever; ms < 0 never blocks. Returns the event plist, or nil on "
+    "timeout, Ctrl-C, or when the watch is disabled. MAIN THREAD ONLY — "
+    "reactor callbacks must not wait.";
+exp_t *rediswaiteventbangcmd(exp_t *e, env_t *env) {
+  /* Consumer op — main thread only; refuse from a RESP callback (see
+     rediswatchbangcmd). */
+  if (g_resp_cb_guard) {
+    unrefexp(e);
+    return resp_cb_readonly_error(env);
+  }
+  int64_t ms = 0; /* 0 = forever, matching BLPOP */
+  exp_t *arg = cadr(e);
+  if (arg) {
+    exp_t *ax = EVAL(arg, env);
+    if (iserror(ax)) {
+      unrefexp(e);
+      return ax;
+    }
+    if (isnumber(ax))
+      ms = FIX_VAL(ax);
+    else if (ax != NIL_EXP) {
+      unrefexp(ax);
+      unrefexp(e);
+      return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                   "redis-wait-event!: ms must be a fixnum or nil");
+    }
+    unrefexp(ax);
+  }
+  /* Clamp so ms*1000 can't overflow int64 (2^40 ms ≈ 35 years ≈ forever). */
+  if (ms > ((int64_t)1 << 40))
+    ms = (int64_t)1 << 40;
+  int64_t deadline_us = ms > 0 ? gettimeusec() + ms * 1000 : 0;
+  unrefexp(e);
+  for (;;) {
+    mpsc_node_t *node = mpsc_dequeue(&g_lfkv_watch_queue);
+    if (node)
+      return watch_take_event(node);
+    if (ms < 0)
+      return NIL_EXP; /* non-blocking probe */
+    /* Don't block with no possible producer, or with no fd to sleep on. */
+    if (!atomic_load_explicit(&g_lfkv_watch_enabled, memory_order_acquire) ||
+        !atomic_load_explicit(&g_lfkv_watch_wake_ready, memory_order_acquire))
+      return NIL_EXP;
+    /* Arm, fence, re-check: pairs with emit's enqueue → fence → waiter
+       load. Without both fences the store buffer can hide the enqueue from
+       us and the waiter flag from the producer (Dekker), losing the wake. */
+    atomic_store_explicit(&g_lfkv_watch_waiter, 1, memory_order_relaxed);
+    atomic_thread_fence(memory_order_seq_cst);
+    node = mpsc_dequeue(&g_lfkv_watch_queue);
+    if (node) {
+      atomic_store_explicit(&g_lfkv_watch_waiter, 0, memory_order_relaxed);
+      return watch_take_event(node);
+    }
+    int timeout_ms = -1; /* poll: infinite */
+    if (deadline_us) {
+      int64_t left_ms = (deadline_us - gettimeusec()) / 1000;
+      if (left_ms <= 0) {
+        atomic_store_explicit(&g_lfkv_watch_waiter, 0, memory_order_relaxed);
+        return NIL_EXP;
+      }
+      timeout_ms = left_ms > INT_MAX ? INT_MAX : (int)left_ms;
+    }
+    struct pollfd pfd = {.fd = alc_wake_fd(&g_lfkv_watch_wake),
+                         .events = POLLIN,
+                         .revents = 0};
+    int pr = poll(&pfd, 1, timeout_ms);
+    atomic_store_explicit(&g_lfkv_watch_waiter, 0, memory_order_relaxed);
+    if (pr > 0) {
+      alc_wake_drain(&g_lfkv_watch_wake);
+      continue; /* re-check the queue */
+    }
+    if (pr == 0)
+      continue; /* poll timeout: the deadline check at loop top decides —
+                   handles the INT_MAX clamp waking before the deadline */
+    if (errno == EINTR)
+      return NIL_EXP; /* Ctrl-C must unblock the REPL, not hang */
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-wait-event!: poll failed: %s", strerror(errno));
+  }
 }
 
 const char doc_redis_drain_events_bang[] =
@@ -3586,12 +3703,7 @@ exp_t *redisdraineventsbangcmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   mpsc_node_t *node;
   while ((node = mpsc_dequeue(&g_lfkv_watch_queue))) {
-    watch_qsize_dec();
-    watch_event_t *ev = (watch_event_t *)node;
-    exp_t *plist = build_event_plist(ev);
-    free(ev->key);
-    free(ev);
-    exp_t *cell = make_node(plist);
+    exp_t *cell = make_node(watch_take_event(node));
     if (!head) head = tail = cell;
     else { tail->next = cell; tail = cell; }
   }
