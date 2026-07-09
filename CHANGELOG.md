@@ -7,6 +7,13 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-09
+
+The persistence & events release: object persistence for defclass models
+(`lib/orm.adr`, on the name-based dump v5 machinery) and a reactive keyspace
+— layer-2 watches with polling and blocking consumers over a lock-free MPSC
+queue, gated end-to-end.
+
 ### Added
 - **`--version` prints the build variant** — arch, mono/threads, jit/nojit,
   ffi/readline/metrics, fixnum width (e.g. `alcove 0.4.0 (amd64 threads jit
@@ -421,7 +428,8 @@ what is frozen vs experimental.
   Python-flavored dialect (Adder), with three prebuilt artifacts and an Adder
   playground.
 
-[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/aallamaa/alcove/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aallamaa/alcove/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aallamaa/alcove/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/aallamaa/alcove/releases/tag/v0.2.0
