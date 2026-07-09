@@ -8,6 +8,10 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **`--version` prints the build variant** — arch, mono/threads, jit/nojit,
+  ffi/readline/metrics, fixnum width (e.g. `alcove 0.4.0 (amd64 threads jit
+  ffi readline fixnum61)`). A mono binary silently serving one reactor under
+  `--threads` is now identifiable from the version line alone.
 - **`(redis-wait-event! [ms])` — blocking consumption for keyspace
   watches.** Like `redis-next-event!` but sleeps on an eventfd until a
   producer emits: `ms > 0` waits up to ms milliseconds, `0`/nil/no-arg
@@ -30,6 +34,14 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   `orm/query` (predicate scan), `orm/delete`, `orm/commit`; instances
   persist by class name (dump v5) with validators live after reload.
   Demo/test: `examples/orm/run.adr`.
+
+### Fixed
+- `-R` (combined REPL + RESP) now warns when `--threads` is ignored
+  (it is single-reactor) instead of silently dropping the flag.
+- The "Bug 2" anonymous-lambda persistence regression test never ran
+  (`def` is function-sugar-only, so its `(def name (fn ...))` line always
+  errored); rewritten to a real savedb/loaddb round-trip assert, and the
+  stderr-spew baselines tightened to 28 (alcove) / 29 (adder).
 
 ## [0.4.0] — 2026-07-05
 
@@ -409,7 +421,8 @@ what is frozen vs experimental.
   Python-flavored dialect (Adder), with three prebuilt artifacts and an Adder
   playground.
 
-[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/aallamaa/alcove/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aallamaa/alcove/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/aallamaa/alcove/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aallamaa/alcove/releases/tag/v0.1.0

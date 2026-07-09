@@ -8397,11 +8397,47 @@ int main(int argc, char *argv[]) {
       if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
         auto_load = 0;
       } else if (strcmp(argv[src], "--version") == 0) {
+        /* Print the build variant too: a mono binary silently serves ONE
+           reactor under --threads, and a stale installed binary shadowing a
+           fresh build has burned real debugging time — make every Makefile
+           target distinguishable from the version line alone. */
 #ifdef ALCOVE_ALS
-        printf("adder %s\n", ALCOVE_VERSION);
+        printf("adder %s", ALCOVE_VERSION);
 #else
-        printf("alcove %s\n", ALCOVE_VERSION);
+        printf("alcove %s", ALCOVE_VERSION);
 #endif
+        printf(" (%s"
+#if ALCOVE_SINGLE_THREADED
+               " mono"
+#else
+               " threads"
+#endif
+#ifdef ALCOVE_JIT
+               " jit"
+#else
+               " nojit"
+#endif
+#ifdef ALCOVE_FFI
+               " ffi"
+#endif
+#ifdef ALCOVE_READLINE
+               " readline"
+#endif
+#ifdef ALCOVE_METRICS
+               " metrics"
+#endif
+               " fixnum%d)\n",
+#if defined(__x86_64__)
+               "amd64",
+#elif defined(__aarch64__)
+               "arm64",
+#elif defined(ALCOVE_WEB) || defined(__wasm__)
+               "wasm",
+#else
+               "unknown-arch",
+#endif
+               /* FIX_VAL shifts by 3: fixnums carry pointer-width - 3 bits */
+               (int)(sizeof(intptr_t) * 8 - 3));
         return 0;
       } else if (strcmp(argv[src], "-i") == 0) {
         interactive_after = 1;
@@ -8511,6 +8547,12 @@ int main(int argc, char *argv[]) {
      redis-keys / redis-get / redis-type / redis-count / redis-flush
      / redis-port to inspect the live db. */
   if (resp_combined) {
+    if (resp_threads > 1)
+      fprintf(stderr,
+              ALCOVE_PROGNAME
+              ": --threads %d ignored — -R (combined REPL + RESP) is "
+              "single-reactor; use -r for the reactor pool\n",
+              resp_threads);
     if (auto_load) {
       int loaded = loaddb_from_file_path(global, alcove_db_path);
       if (loaded > 0)
