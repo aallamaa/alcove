@@ -710,3 +710,83 @@ freely; none of the above guards apply.
 
 CI runs the MPSC queue primitive under ThreadSanitizer (`mpsc-test-tsan`); a
 full multi-reactor TSan harness is future work.
+
+## -R reactor pool: thread-safety contract
+
+`alcove -R --threads N` runs an interactive REPL on the main thread
+concurrently with N RESP reactor threads. The REPL may evaluate forms that
+mutate Lisp globals (`def`, `defclass`, `require`), while reactor callbacks
+read those globals lock-free.
+
+### Options: Global Env & REPL Mutation
+
+**Option 1: Global RWLock**
+* **Design:** `pthread_rwlock_t` taken for write by the REPL on global
+  mutations, and for read by reactor callbacks on every global lookup.
+* **Cost:** High. `rdlock` bounces a cache line on the reader atomic count,
+  destroying multicore scaling for the 99% pure-read callback workload.
+* **Migration:** Easy, but permanently impairs throughput.
+
+**Option 2: Keep Current Contract (Strict Read-Only)**
+* **Design:** Refuse all mutating forms (`def`, `require`, `=`/`setq`) from the
+  REPL while the `-R` pool is running.
+* **Cost:** Zero runtime overhead.
+* **Migration:** Trivial (re-use `g_resp_cb_guard` on the main thread), but
+  defeats the UX goal of a live-coding `-R` environment.
+
+**Option 3: Stop-the-world (Freeze Reactors)**
+* **Design:** REPL mutates globals lock-free. When a mutating form is
+  evaluated, the main thread signals all reactors (via their MPSC inbox or
+  a global epoch flag) to park. Once all reactors ack, the REPL mutates,
+  increments `alcove_global_gen`, and unparks them.
+* **Cost:** Zero steady-state overhead for callbacks. High latency for REPL
+  mutations (human-speed).
+* **Migration:** Requires a park/unpark handshake mechanism wired into the
+  reactor `select()` loop.
+
+**Decision: Option 3 (Stop-the-world).**
+Optimizing for steady-state reactor throughput is strictly better than an
+RWLock. REPL mutations are human-driven and rare; paying a handshake
+latency penalty is acceptable to preserve wait-free reactor reads.
+
+### Enforcement Mechanism
+* **REPL Mutations:** The stop-the-world handshake is triggered
+  automatically by `def`/`require` eval on the main thread.
+* **Mono builds:** Refuse `-R --threads N>1` entirely at startup with a
+  fatal error if compiled without atomics.
+* **Callback Restrictions:** Reactor callbacks are strictly read-only.
+  `g_resp_cb_guard` continues to enforce this by trapping `def`/`require`
+  attempts from reactor threads with a read-only error.
+
+### Forbidden (Even in Recommended Design)
+* **Reactor-driven global mutation:** Callbacks cannot mutate globals.
+  Period.
+* **In-place mutation of shared objects:** `vec-set!` or `assoc!` on
+  structures reachable from the global env from within a callback remains
+  UB (unenforced, user responsibility).
+
+### Migration Path from Today
+1. Restrict mono builds from launching `-R --threads N>1`.
+2. Implement the reactor park/unpark handshake (e.g., `SHARD_MSG_PARK`).
+3. Wrap main-thread global mutations (`set_get_keyval_dict` on
+   `g_global_env`) with the park/unpark barrier.
+4. Apply the `FLAG_SHARED` write barrier (from "Refcount duality") during
+   the parked window so REPL-allocated `exp_t`s are atomic before reactors
+   see them.
+
+### TLS allocator & epoch reclamation
+
+* **Cross-thread unref:** `exp_freelist` is per-thread (`__thread`). A
+  REPL-allocated `exp_t` dropped to 0 by a reactor is pushed to the
+  reactor's TLS freelist. This is memory safe because chunks are
+  process-lived and never freed. The push is single-threaded (no tearing),
+  and concurrent access before the drop is protected by atomic refcounting.
+  However, cycle-collection `(gc-cycles)` walks `exp_chunk_bases` which is
+  also TLS. The consequence: the main thread's collector cannot see reactor
+  chunks. Any garbage cycle spanning the REPL and a reactor will leak.
+* **Epoch reclamation:** The `-R` REPL main thread blocks in `readline()`.
+  If registered as an epoch participant (`epoch_register`), its blocked
+  state will stall `epoch_min_quiescent`, preventing memory reclamation
+  across all reactors. Rule: the main thread must remain unregistered (and
+  thus never touch `lfkv` entries outside a stop-the-world window) or
+  explicitly park its epoch state (e.g., `quiescent = 0`) before blocking.
