@@ -1,0 +1,9 @@
+; perf-gate kernel: hash-map insert/overwrite/read pressure with string
+; keys, enough distinct keys to force several rehashes. Checksum printed.
+(= d (hash-map))
+(= total 0)
+(each i (range 0 1200000)
+  (let k (str "key:" (mod i 50000))
+    (assoc! d k i)
+    (= total (+ total (get d k)))))
+(prn total)

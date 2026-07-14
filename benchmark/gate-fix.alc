@@ -1,0 +1,7 @@
+; perf-gate kernel: fixnum arithmetic + deep TCO (the countdown shape,
+; scaled for the gate). Checksum printed.
+(def countdown (n)
+  (if (> n 0) (countdown (- n 1)) n))
+(def loop (k acc)
+  (if (> k 0) (loop (- k 1) (+ acc (countdown 3000))) acc))
+(prn (loop 500000 0))

@@ -1,0 +1,8 @@
+; perf-gate kernel: cons/refcount pressure — build and reduce fresh lists
+; repeatedly (allocation, freelist churn, traversal, HOF calls). Checksum.
+(def build (i n acc) (if (> i n) acc (build (+ i 1) n (cons i acc))))
+(= total 0)
+(each r (range 0 400)
+  (let xs (build 1 100000 (list))
+    (= total (+ total (reduce (fn (a b) (+ a b)) 0 xs)))))
+(prn total)

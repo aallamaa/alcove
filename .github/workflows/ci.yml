@@ -90,6 +90,21 @@ jobs:
       - name: Keyspace watches against a live server (make resp-watch-test)
         run: make resp-watch-test
 
+  # Perf-regression gate: build baseline (merge-base / parent commit) AND
+  # HEAD on the same runner, run 5 gate kernels interleaved min-of-15, fail
+  # on >15% regression or checksum divergence. Noise-robust by construction:
+  # only same-runner ratios are ever compared.
+  bench-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libffi-dev libreadline-dev
+      - name: Perf gate vs baseline (make bench-gate)
+        run: make bench-gate
+
   # Observability gate: leveled logfmt logging emits exactly one logfmt line per
   # emit on stderr (and is silent below threshold), and the opt-in metrics build
   # (-DALCOVE_METRICS) auto-instruments the RESP server — resp.connections/

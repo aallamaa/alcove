@@ -1,0 +1,12 @@
+; perf-gate kernel: dense 128x128 float mat-mul via the tensor builtins.
+; Sized ~0.5s on a dev box so the interleaved min-of-N in
+; tools/bench_gate.sh sits well above timer/startup noise.
+; Prints a checksum so a wrong answer fails the gate too.
+(= n 256)
+(= a (vec (* n n) 1.5))
+(= b (vec (* n n) 0.25))
+(= acc 0.0)
+(each i (range 0 120)
+  (= c (mat-mul a b n))
+  (= acc (+ acc (vec-sum c))))
+(prn acc)

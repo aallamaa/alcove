@@ -732,6 +732,13 @@ oom-test:
 resp-tsan:
 	sh tools/resp_tsan.sh
 
+# Perf-regression gate: HEAD vs a baseline ref (default: merge-base with
+# origin/master, or HEAD^ on master pushes), built and run interleaved on
+# the same machine so runner noise cancels. Fails on >15% regression or a
+# checksum divergence on any gate kernel. See tools/bench_gate.sh.
+bench-gate:
+	bash tools/bench_gate.sh $(BENCH_BASE_REF)
+
 # Layer-2 keyspace watches against a live --threads server: enable, mutate via
 # redis-cli, drain on the main thread. Skips cleanly if redis-cli is absent.
 # See tools/test_resp_watch.sh.

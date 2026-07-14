@@ -1,0 +1,8 @@
+; perf-gate kernel: float arithmetic in a tight loop (the logistic-map
+; shape, scaled for the gate — the float JIT path). Checksum printed.
+(def iterate (x r i n)
+  (if (< i n) (iterate (* r (* x (- 1.0 x))) r (+ i 1) n) x))
+(= acc 0.0)
+(each s (range 0 40)
+  (= acc (+ acc (iterate 0.5 3.57 0 400000))))
+(prn acc)
