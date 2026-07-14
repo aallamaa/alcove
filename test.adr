@@ -2778,6 +2778,43 @@ assert "jit float-acc 0-iter int" (iso (jc-facc-add 200000 7) 7) t
 
 assert "jit float-acc mul (2 iters)" (jc-facc-mul 39998 1.0) 4.0
 
+def jc-nlmix (x :f64 r :f64 i :int n :int):
+  if (< i n):
+    jc-nlmix (* r (* x (- 1.0 x))) r (+ i 1) n
+    x
+
+assert-jits "jit numloop: mixed int/float" jc-nlmix
+
+assert "numloop mixed result == VM" (jc-nlmix 0.5 3.57 0 1000):
+  jc-nlmix 0.5 3.57 0 1000
+
+assert "numloop mixed deterministic" (iso (jc-nlmix 0.5 2.0 0 3) (jc-nlmix 0.5 2.0 0 3)):
+  t
+
+assert "numloop mixed 0-iter float" (jc-nlmix 1.5 9.9 5 3) 1.5
+
+def jc-nlint (i :int n :int):
+  if (< i n):
+    jc-nlint (+ i 1) n
+    i
+
+assert-jits "jit numloop: int pair" jc-nlint
+
+assert "numloop int-pair result" (jc-nlint 0 250000) 250000
+
+assert "numloop overflow raises like VM" (error? (try (jc-nlint 1152921504606846973 1152921504606846975) (fn (e) e))):
+  nil
+
+def jc-nlovf (i :int n :int):
+  if (< i n):
+    jc-nlovf (+ i 3) n
+    i
+
+assert-jits "jit numloop: step-3 int" jc-nlovf
+
+assert "numloop step overflow raises" (error? (try (jc-nlovf 1152921504606846973 1152921504606846975) (fn (e) e))):
+  t
+
 assert "str concatenates values" (str "a" 12 'b #\c) "a12bc"
 
 assert "string-append" (string-append "ab" "cd" "") "abcd"

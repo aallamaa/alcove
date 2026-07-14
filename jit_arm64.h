@@ -1010,10 +1010,9 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   numloop_t nl;
   if (!numloop_analyze(bc, &nl))
     return 0;
-  if (nl.nislots > 1)
-    return 0; /* float-box guard uses x9/x10; one int home (x1) keeps it simple
-               */
-  /* arm64 budget: float homes+temps over d0-d7 + d16-d31 = 24 caller-saved. */
+  /* arm64 budget: float homes+temps over d0-d7 + d16-d31 = 24 caller-saved;
+     int homes+temps over x1-x4 (disjoint from the x9/x10 guard scratch, so
+     multiple int slots — counter + limit — coexist with float guards). */
   if (nl.nfslots + nl.max_ftmp > 24 || nl.nislots + nl.max_itmp > 4)
     return 0;
   uint8_t *c = bc->code;
@@ -1031,7 +1030,8 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   int framed = nl.float_result;
   int n = 0;
   int dj0[64], ndj0 = 0;  /* pre-frame deopt (b.cond/cbz/tbz placeholders) */
-  int djf[300], ndjf = 0; /* framed deopt (div-by-0) */
+  int djf[300], ndjf = 0; /* framed deopt slots (div-by-0, int overflow) */
+  uint8_t djfc[300];      /* per-slot cond: EQ for div-by-0, VS for overflow */
 #define DJ0(t_at) (dj0[ndj0++] = (t_at))
 #define DJF(t_at) (djf[ndjf++] = (t_at))
 
@@ -1042,8 +1042,12 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
       int hr = ipool[nl.iidx[s]];
       out[n++] = arm64_ldr_imm(hr, 0, off);
       dj0[ndj0++] = n;
-      out[n++] = 0;                        /* tbz hr,#0,deopt0 (not fixnum) */
-      out[n++] = arm64_asr_imm(hr, hr, 3); /* untag */
+      out[n++] = 0; /* tbz hr,#0,deopt0 (not fixnum) */
+      /* Stay TAGGED ((v<<3)|1) in the register: tagged compares preserve
+         order, SLOT_ADD/SUB_FIX adds imm<<3 so B.VS catches exactly a
+         61-bit fixnum overflow (the VM raises there — deopt, never wrap),
+         and RET pays no retag. Same representation as the amd64 backend
+         and the tail-counter shapes. */
     } else {
       int hd = DFR(nl.fidx[s]);
       out[n++] = arm64_ldr_imm(9, 0, off); /* x9 = slot ptr */
@@ -1106,15 +1110,16 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
         n += emit_mov64(out + n, 9, bits);
         out[n++] = arm64_fmov_d_x(DFR(nl_freg(st, d, nl.nfslots)), 9);
       } else {
+        /* tagged: the fixnum exp_t* IS (v<<3)|1 */
         n += emit_mov64(out + n, ipool[nl_ireg(st, d, nl.nislots)],
-                        (uint64_t)FIX_VAL(k));
+                        (uint64_t)(uintptr_t)k);
       }
       break;
     }
     case OP_LOAD_FIX: {
       int16_t v = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
       n += emit_mov64(out + n, ipool[nl_ireg(st, d, nl.nislots)],
-                      (uint64_t)(int64_t)v);
+                      (uint64_t)((((int64_t)v) << 3) | 1)); /* tagged */
       break;
     }
     case OP_ADD:
@@ -1126,6 +1131,7 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
       if (op == OP_DIV) {
         out[n++] =
             arm64_fcmp_d_zero(rb); /* divisor ±0 → deopt (NaN→fdiv=NaN) */
+        djfc[ndjf] = 0 /*EQ*/;
         djf[ndjf++] = n;
         out[n++] = 0; /* b.eq deopt_framed */
       }
@@ -1186,9 +1192,16 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
         else
           cond = br_true ? 10 /*GE*/ : 11 /*LT*/;
       } else {
-        if (pf_slotimm)
-          out[n++] = arm64_cmp_imm(pf_ra, pf_imm);
-        else
+        if (pf_slotimm) {
+          /* tagged compare imm: (imm<<3)|1 — u12 when small, else via x9 */
+          int64_t ti = (((int64_t)pf_imm) << 3) | 1;
+          if (ti >= 0 && ti <= 4095) {
+            out[n++] = arm64_cmp_imm(pf_ra, (int)ti);
+          } else {
+            n += emit_mov64(out + n, 9, (uint64_t)ti);
+            out[n++] = arm64_cmp_reg(pf_ra, 9);
+          }
+        } else
           out[n++] = arm64_cmp_reg(pf_ra, pf_rb);
         switch (pf_op) {
         case OP_LT:
@@ -1228,12 +1241,17 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
       int16_t imm = (int16_t)(c[pc + 2] | (c[pc + 3] << 8));
       if (nl.slot_class[s] != NLC_INT)
         return 0;
-      if (imm < 0 || imm > 4095)
-        return 0; /* add/sub imm is u12 */
+      if (imm < 0 || (imm << 3) > 4095)
+        return 0; /* tagged delta imm<<3 must fit the u12 add/sub field */
       int dst = ipool[nl_ireg(st, d, nl.nislots)], src = ipool[nl.iidx[s]];
       out[n++] = arm64_mov_reg(dst, src);
-      out[n++] = op == OP_SLOT_ADD_FIX ? arm64_add_imm(dst, dst, imm)
-                                       : arm64_sub_imm(dst, dst, imm);
+      /* tagged add: (v<<3|1) + (imm<<3) = ((v+imm)<<3)|1; V flag fires
+         exactly on a 61-bit fixnum overflow → deopt so the VM raises. */
+      out[n++] = op == OP_SLOT_ADD_FIX ? arm64_adds_imm(dst, dst, imm << 3)
+                                       : arm64_subs_imm(dst, dst, imm << 3);
+      djfc[ndjf] = ARM64_COND_VS;
+      djf[ndjf++] = n;
+      out[n++] = 0; /* b.vs deopt */
       break;
     }
     case OP_TAIL_SELF: {
@@ -1265,8 +1283,12 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
         out[n++] = arm64_blr(9);
       } else {
         int rr = ipool[nl_ireg(st, d - 1, nl.nislots)];
-        out[n++] = arm64_lsl_imm(0, rr, 3);  /* v << 3 */
-        out[n++] = arm64_orr_imm_bit0(0, 0); /* | 1 */
+        /* tagged: the register already holds the fixnum exp_t* bits.
+           (The old lsl/orr retag here could silently WRAP a counter that
+           left the fixnum range — the tagged representation deopts at the
+           add site instead, matching the VM's overflow error.) */
+        if (rr != 0)
+          out[n++] = arm64_mov_reg(0, rr);
       }
       if (framed)
         out[n++] = arm64_ldp_post_sp(29, 30, 16);
@@ -1298,7 +1320,7 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
      per-kind: */
   /* (handled inline below) */
   for (int i = 0; i < ndjf; i++)
-    out[djf[i]] = arm64_b_cond(0 /*EQ*/, deoptf_pc - djf[i]);
+    out[djf[i]] = arm64_b_cond(djfc[i], deoptf_pc - djf[i]);
   for (int i = 0; i < npatch; i++) {
     int tgt = patch[i].target_pc < 0 ? loop_top : noff[patch[i].target_pc];
     if (tgt < 0)

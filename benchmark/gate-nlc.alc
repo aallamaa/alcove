@@ -1,0 +1,10 @@
+; perf-gate kernel: the HINTED mixed numeric loop — :f64 accumulators +
+; :int counter compiled by the numloop JIT (types-for-JIT payoff path).
+; If the NLC stops firing this runs ~20x slower in the VM and the gate
+; ratio trips. Checksum printed.
+(def gate-nl (x :f64 r :f64 i :int n :int)
+  (if (< i n) (gate-nl (* r (* x (- 1.0 x))) r (+ i 1) n) x))
+(= acc 0.0)
+(each s (range 0 25)
+  (= acc (+ acc (gate-nl 0.5 3.57 0 4000000))))
+(prn acc)

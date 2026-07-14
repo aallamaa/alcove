@@ -1790,6 +1790,36 @@
 ;; (the full loop would be 2.0^40000 = inf — the limit is iterations, not exp).
 (assert "jit float-acc mul (2 iters)"  (jc-facc-mul 39998 1.0)  4.0)
 
+;; ---------- numloop: mixed INT counter + FLOAT accumulator (hinted) ----------
+;; The canonical hinted kernel: :f64 hints seed the float slots the fixed
+;; point can't infer (r never flows through a float op before the back-edge),
+;; and the loop carries an INT counter pair (i n) alongside FLOAT slots.
+(def jc-nlmix (x :f64 r :f64 i :int n :int)
+  (if (< i n) (jc-nlmix (* r (* x (- 1.0 x))) r (+ i 1) n) x))
+(assert-jits "jit numloop: mixed int/float" jc-nlmix)
+(assert "numloop mixed result == VM"   (jc-nlmix 0.5 3.57 0 1000)
+                                       (jc-nlmix 0.5 3.57 0 1000))
+(assert "numloop mixed deterministic"  (iso (jc-nlmix 0.5 2.0 0 3)
+                                            (jc-nlmix 0.5 2.0 0 3)) t)
+;; zero-iteration parity: the float arg must come back bit-identical
+(assert "numloop mixed 0-iter float"   (jc-nlmix 1.5 9.9 5 3)     1.5)
+;; int-result numloop with two int slots (counter + limit)
+(def jc-nlint (i :int n :int) (if (< i n) (jc-nlint (+ i 1) n) i))
+(assert-jits "jit numloop: int pair"   jc-nlint)
+(assert "numloop int-pair result"      (jc-nlint 0 250000)        250000)
+;; overflow parity: the VM raises on fixnum overflow — the JIT must deopt to
+;; that same error, never wrap (tagged add + overflow-flag deopt).
+(assert "numloop overflow raises like VM"
+        (error? (try (jc-nlint 1152921504606846973 1152921504606846975)
+                     (fn (e) e)))
+        nil)
+(def jc-nlovf (i :int n :int) (if (< i n) (jc-nlovf (+ i 3) n) i))
+(assert-jits "jit numloop: step-3 int"  jc-nlovf)
+(assert "numloop step overflow raises"
+        (error? (try (jc-nlovf 1152921504606846973 1152921504606846975)
+                     (fn (e) e)))
+        t)
+
 ;; ---------- string utilities ----------
 (assert "str concatenates values"      (str "a" 12 'b #\c)         "a12bc")
 (assert "string-append"                (string-append "ab" "cd" "") "abcd")

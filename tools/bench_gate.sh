@@ -24,7 +24,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-KERNELS="gate-fix gate-float gate-mat gate-cons gate-dict"
+KERNELS="gate-fix gate-float gate-mat gate-cons gate-dict gate-nlc"
 RUNS=15
 WARMUPS=2
 THRESHOLD=115 # percent: HEAD_min*100/BASE_min above this fails

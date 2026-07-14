@@ -922,16 +922,16 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   if (!numloop_analyze(bc, &nl))
     return 0;
   /* amd64 register budget: float homes+temps must fit xmm0-15 (all caller-saved
-     on SysV — the encoders emit REX for xmm8-15); int homes+temps the small GPR
-     pool rcx/rax/rdx. */
-  if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > 3)
+     on SysV — the encoders emit REX for xmm8-15); int homes+temps the GPR pool
+     rcx/rbx/rdx/rax (low-8 only: the GPR encoders emit no REX.B). rbx is
+     callee-saved — pushed below when the pool reaches it. rax/rdx double as
+     the float-box ENTRY-guard scratch, which is why float slots are guarded
+     before int homes are loaded (see the two entry passes). */
+  if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > 4)
     return 0;
-  if (nl.nislots > 1)
-    return 0; /* >1 int slot: the float-box guard scratch (rax/rdx) would clash
-                 with a second int home — defer */
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
-  const int ipool[3] = {X64_RCX, X64_RAX, X64_RDX};
+  const int ipool[4] = {X64_RCX, X64_RBX, X64_RDX, X64_RAX};
   const int FIMM = X64_RSI; /* scratch GPR for float-const imm → xmm */
   int toff = (int)offsetof(exp_t, type), foff = (int)offsetof(exp_t, f);
 
@@ -956,38 +956,55 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   int framed = nl.float_result;
   int n = 0;
-  int dj0[64], ndj0 = 0;  /* pre-frame deopt jumps */
-  int djf[300], ndjf = 0; /* framed deopt jumps (div-by-0) */
+  int dj0[64], ndj0 = 0;  /* deopt jumps BEFORE the rbx push */
+  int djf[300], ndjf = 0; /* deopt jumps AFTER the rbx push (int entry
+                             guards, int-overflow jo, div-by-0) — the sled
+                             pops rbx when it was saved */
 
-  /* ---- entry: load + guard each slot home ---- */
+  /* rbx is callee-saved: save it when the int pool reaches it (index 1) or
+     when the framed make_floatf call needs the 16-alignment push anyway.
+     One push serves both; every post-push exit must pop (see the sleds). */
+  int use_rbx = (nl.nislots + nl.max_itmp) >= 2;
+  int save_rbx = framed || use_rbx;
+
+  /* ---- entry: load + guard each slot home, FLOAT SLOTS FIRST ----
+     The float-box guards clobber rax/rdx as scratch; both are also int-pool
+     homes/temps, so int homes load only after every float guard is done. */
   for (int s = 0; s < np; s++) {
+    if (nl.slot_class[s] != NLC_FLOAT)
+      continue;
     int off = env_slot_off((uint8_t)s);
-    if (nl.slot_class[s] == NLC_INT) {
-      int hr = ipool[nl.iidx[s]];
-      n += x64_mov_reg_mem(buf + n, hr, X64_RDI, off);
-      n += x64_test_reg8_imm8(buf + n, hr, 1);
-      dj0[ndj0++] = n;
-      n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt0 (not fixnum) */
-      n += x64_sar_imm8(buf + n, hr, 3);    /* untag counter */
-    } else {
-      int hx = nl.fidx[s];
-      n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off);
-      n += x64_test_reg8_imm8(buf + n, X64_RAX,
-                              7); /* low-3 tag != 0 → not ptr */
-      dj0[ndj0++] = n;
-      n += x64_jcc_rel32(buf + n, 0x05, 0); /* jnz deopt0 */
-      n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
-      dj0[ndj0++] = n;
-      n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt0 (null) */
-      n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX, toff);
-      n += x64_cmp_imm32(buf + n, X64_RDX, EXP_FLOAT);
-      dj0[ndj0++] = n;
-      n += x64_jcc_rel32(buf + n, 0x05, 0); /* jne deopt0 (not EXP_FLOAT) */
-      n += x64_movsd_xmm_mem(buf + n, hx, X64_RAX, foff); /* home = box->f */
-    }
+    int hx = nl.fidx[s];
+    n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off);
+    n += x64_test_reg8_imm8(buf + n, X64_RAX, 7); /* low-3 tag != 0 → not ptr */
+    dj0[ndj0++] = n;
+    n += x64_jcc_rel32(buf + n, 0x05, 0); /* jnz deopt0 */
+    n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+    dj0[ndj0++] = n;
+    n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz deopt0 (null) */
+    n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX, toff);
+    n += x64_cmp_imm32(buf + n, X64_RDX, EXP_FLOAT);
+    dj0[ndj0++] = n;
+    n += x64_jcc_rel32(buf + n, 0x05, 0); /* jne deopt0 (not EXP_FLOAT) */
+    n += x64_movsd_xmm_mem(buf + n, hx, X64_RAX, foff); /* home = box->f */
   }
-  if (framed)
-    n += x64_push_reg(buf + n, X64_RBX); /* 16-align for make_floatf */
+  if (save_rbx)
+    n += x64_push_reg(buf + n, X64_RBX);
+  for (int s = 0; s < np; s++) {
+    if (nl.slot_class[s] != NLC_INT)
+      continue;
+    int off = env_slot_off((uint8_t)s);
+    int hr = ipool[nl.iidx[s]];
+    n += x64_mov_reg_mem(buf + n, hr, X64_RDI, off);
+    n += x64_test_reg8_imm8(buf + n, hr, 1);
+    djf[ndjf++] = n;
+    n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz post-push deopt (not fixnum) */
+    /* Stay TAGGED ((v<<3)|1) in the register: compares between two tagged
+       fixnums preserve order, SLOT_ADD/SUB_FIX adds imm<<3 so `jo` catches
+       exactly a 61-bit fixnum overflow (the VM raises there — the JIT must
+       deopt, never wrap), and RET/entry pay no retag. Same representation
+       as try_jit_tail_loop_with_call. */
+  }
   if (has_div) {
     n += x64_mov_imm64(buf + n, FIMM, 0);
     n += x64_movq_xmm_reg(buf + n, zero_xmm, FIMM); /* zero_xmm = 0.0 */
@@ -1041,14 +1058,16 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
         n += x64_movq_xmm_reg(buf + n, dst, FIMM);
       } else {
         int dst = ipool[nl_ireg(st, d, nl.nislots)];
-        n += x64_mov_imm64(buf + n, dst, (uint64_t)FIX_VAL(k));
+        /* tagged representation: the fixnum exp_t* IS (v<<3)|1 */
+        n += x64_mov_imm64(buf + n, dst, (uint64_t)(uintptr_t)k);
       }
       break;
     }
     case OP_LOAD_FIX: {
       int16_t v = (int16_t)(c[pc + 1] | (c[pc + 2] << 8));
       int dst = ipool[nl_ireg(st, d, nl.nislots)];
-      n += x64_mov_imm64(buf + n, dst, (uint64_t)(int64_t)v);
+      n += x64_mov_imm64(buf + n, dst,
+                         (uint64_t)((((int64_t)v) << 3) | 1)); /* tagged */
       break;
     }
     case OP_ADD:
@@ -1126,7 +1145,8 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
           cc = br_true ? 0x03 /*jae*/ : 0x02 /*jb*/;
       } else {
         if (pf_slotimm)
-          n += x64_cmp_imm32(buf + n, pf_ra, pf_imm);
+          /* tagged slot vs tagged imm — order-preserving */
+          n += x64_cmp_imm32(buf + n, pf_ra, (pf_imm << 3) | 1);
         else
           n += x64_cmp_reg_reg(buf + n, pf_ra, pf_rb);
         switch (pf_op) {
@@ -1168,10 +1188,16 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
       if (nl.slot_class[s] == NLC_INT) {
         int dst = ipool[nl_ireg(st, d, nl.nislots)], src = ipool[nl.iidx[s]];
         n += x64_mov_reg_reg(buf + n, dst, src);
+        /* tagged add: (v<<3|1) + (imm<<3) = ((v+imm)<<3)|1, and `jo` fires
+           exactly when v+imm leaves the 61-bit fixnum range — where the VM
+           raises an overflow error. Deopt so the VM raises it; the env is
+           untouched mid-loop, so the re-run is exact. */
         if (op == OP_SLOT_ADD_FIX)
-          n += x64_add_imm32(buf + n, dst, imm);
+          n += x64_add_imm32(buf + n, dst, (int32_t)imm << 3);
         else
-          n += x64_sub_imm32(buf + n, dst, imm);
+          n += x64_sub_imm32(buf + n, dst, (int32_t)imm << 3);
+        djf[ndjf++] = n;
+        n += x64_jcc_rel32(buf + n, 0x00, 0); /* jo post-push deopt */
       } else {
         return 0; /* float SLOT_*_FIX: defer (rare for these kernels) */
       }
@@ -1208,16 +1234,12 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
         n += x64_call_reg(buf + n, X64_RAX);
       } else {
         int rr = ipool[nl_ireg(st, d - 1, nl.nislots)];
-        n += x64_imul_reg_reg_imm32(buf + n, X64_RAX, rr, 8); /* re-tag: v<<3 */
-        /* If the untagged int result left the 61-bit fixnum range, the v<<3
-           overflows int64 here — deopt to the VM, which raises (overflow is an
-           error, not a wrap or implicit float). Float results never reach this
-           path, so the perf-critical float kernels gain nothing. */
-        dj0[ndj0++] = n;
-        n += x64_jcc_rel32(buf + n, 0x00, 0);    /* jo deopt0 */
-        n += x64_add_imm32(buf + n, X64_RAX, 1); /* | 1 */
+        /* tagged representation: the register already holds the fixnum
+           exp_t* bits — overflow was deopted at the add site. */
+        if (rr != X64_RAX)
+          n += x64_mov_reg_reg(buf + n, X64_RAX, rr);
       }
-      if (framed)
+      if (save_rbx)
         n += x64_pop_reg(buf + n, X64_RBX);
       n += x64_ret(buf + n);
       break;
@@ -1228,9 +1250,11 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     pc += len;
   }
 
-  /* framed deopt sled (div-by-0): pop frame, return NULL */
+  /* post-push deopt sled (int entry guards, jo overflow, div-by-0):
+     restore rbx if it was saved, return NULL → the caller re-runs the VM
+     on the untouched entry env. */
   int deoptf_pc = n;
-  if (framed)
+  if (save_rbx)
     n += x64_pop_reg(buf + n, X64_RBX);
   n += x64_zero_reg(buf + n, X64_RAX);
   n += x64_ret(buf + n);

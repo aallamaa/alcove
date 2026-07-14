@@ -7,6 +7,27 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+### Added
+- **Types-for-JIT payoff: the numeric-loop JIT now compiles mixed
+  int/float kernels.** The canonical hinted loop — `:f64` accumulators
+  driven by an `:int` counter pair, e.g.
+  `(def f (x :f64 r :f64 i :int n :int) (if (< i n) (f (* r (* x (- 1.0 x))) r (+ i 1) n) x))`
+  — previously ran in the VM (the emitters allowed only one integer
+  slot); it now compiles native on amd64 and arm64 (measured ~22x). Int
+  slots live TAGGED in registers so a fixnum overflow deopts to the VM's
+  overflow error instead of wrapping — this also fixes a latent arm64
+  numloop bug where an int result that left the fixnum range was silently
+  re-tagged wrong. The analyzer also gained a strict back-edge class
+  check (an int arg feeding a float slot home now bails instead of
+  moving the wrong register). New `gate-nlc` kernel in the perf gate
+  pins the path; tier-parity asserts (incl. overflow) in both corpora.
+- **CI perf-regression gate** (`make bench-gate`): baseline-vs-HEAD built
+  and run interleaved on the same machine, min-of-15, fails on >15%
+  regression or checksum divergence across 6 kernels.
+- **docs/multithreading.md: `-R` reactor-pool thread-safety contract**
+  (design only): stop-the-world park/unpark on REPL global mutation,
+  with rulings on the TLS allocator and epoch-reclamation corners.
+
 ## [0.5.0] — 2026-07-09
 
 The persistence & events release: object persistence for defclass models

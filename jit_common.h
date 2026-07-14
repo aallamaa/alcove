@@ -2072,6 +2072,14 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
             nl->slot_class[i] = NLC_FLOAT;
             changed = 1;
           }
+          /* Strict pass: classes are final — a remaining mismatch is an INT
+             arg feeding a FLOAT slot home. The emitters index disjoint
+             register files by class, so letting this through would move the
+             wrong register (silent corruption, not a deopt). Bail. */
+          if (strict && ac != nl->slot_class[i]) {
+            ok = 0;
+            goto stop;
+          }
         }
         nd -= n;
         saw_tail = 1;
