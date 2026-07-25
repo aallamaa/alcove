@@ -2815,6 +2815,38 @@ assert-jits "jit numloop: step-3 int" jc-nlovf
 assert "numloop step overflow raises" (error? (try (jc-nlovf 1152921504606846973 1152921504606846975) (fn (e) e))):
   t
 
+def jc-nl3i (i :int j :int k :int n :int):
+  if (< i n):
+    jc-nl3i (+ i 1) (+ j 2) (+ k 3) n
+    k
+
+assert-jits "jit numloop: 3 int slots" jc-nl3i
+
+assert "numloop 3-int result" (jc-nl3i 0 0 0 1000) 3000
+
+assert "numloop 3-int 0-iter" (jc-nl3i 9 7 5 3) 5
+
+def jc-nl3n (i :int j :int n :int):
+  if (< i n):
+    jc-nl3n (+ i 1) (- j 2) n
+    j
+
+assert-jits "jit numloop: neg int step" jc-nl3n
+
+assert "numloop neg-step result" (jc-nl3n 0 0 500) -1000
+
+def jc-nlif (i :int j :int a :f64 n :int):
+  if (< i n):
+    jc-nlif (+ i 1) (+ j 5) (+ 0.5 (* a 0.5)) n
+    j
+
+assert-jits "jit numloop: int+float mix" jc-nlif
+
+assert "numloop int+float int-ret" (jc-nlif 0 0 0.5 100) 500
+
+assert "numloop multi-int overflow raises" (error? (try (jc-nl3i 0 0 1152921504606846975 10) (fn (e) e))):
+  t
+
 assert "str concatenates values" (str "a" 12 'b #\c) "a12bc"
 
 assert "string-append" (string-append "ab" "cd" "") "abcd"

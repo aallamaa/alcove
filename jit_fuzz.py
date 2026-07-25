@@ -255,13 +255,22 @@ def gen_numloop_hinted(rng, idx):
         9800696) that the float-returning shapes could not expose. `ret_int`
         forces that path half the time.
 
-    Budget note: amd64's int GPR pool is 4 and the `(< i n)` slot-vs-slot
-    compare burns 2 as temps, so 2 int slots (counter + limit) is the ceiling
-    that JITs today. Float slots are cheap (xmm0-15). Kept inside that budget
-    so expect_jit=True is a real assertion rather than a coin flip."""
+    Budget note: the amd64 int pool is 8 (rcx/rbx/rdx/rax + r8-r11) and every
+    tail-call update materializes a temp, so `nislots + updates` must stay
+    inside it. `ni` extra int slots are generated within that bound, which is
+    what exercises the widened pool — before it, anything past counter+limit
+    fell to the VM. Float slots are cheap (xmm0-15). Staying inside the budget
+    keeps expect_jit=True a real assertion rather than a coin flip."""
     name = f"nlh{idx}"
     nf = rng.randint(1, 3)
+    # Extra int slots beyond counter+limit. Every tail-call update materializes
+    # a temp alongside its home, so int slots and float slots contend for their
+    # respective files at roughly 2x; ni + nf <= 4 is the empirically measured
+    # envelope that still JITs on amd64 (the tighter of the two backends).
+    ni = rng.randint(0, min(2, 4 - nf))
     fs = [f"a{j}" for j in range(nf)]
+    ints = [f"b{j}" for j in range(ni)]
+    isteps = [rng.choice([1, 2, 3, -1, -2]) for _ in ints]
     limit = rng.choice([40000, 50000, 100000])
     start = limit - rng.randint(0, 5)      # few iterations → exact, finite
     fc = lambda: rng.choice(FLOAT_CONSTS)
@@ -269,12 +278,16 @@ def gen_numloop_hinted(rng, idx):
     # gen_numloop_mixed case (must bail), which this generator is not testing.
     upds = [f"(+ {fc()} (* {rng.choice(fs)} {fc()}))" for _ in fs]
     ret_int = rng.random() < 0.5
-    ret = "i" if ret_int else rng.choice(fs)
-    params = " ".join(["i :int"] + [f"{f} :f64" for f in fs] + ["n :int"])
+    ret = (rng.choice(["i"] + ints) if ret_int else rng.choice(fs))
+    params = " ".join(["i :int"] + [f"{b} :int" for b in ints]
+                      + [f"{f} :f64" for f in fs] + ["n :int"])
+    iupds = " ".join(f"(+ {b} {st})" for b, st in zip(ints, isteps))
     defn = (f"(def {name} ({params}) "
-            f"(if (< i n) ({name} (+ i 1) {' '.join(upds)} n) {ret}))")
+            f"(if (< i n) ({name} (+ i 1) {iupds} {' '.join(upds)} n) {ret}))")
     seeds = ["0.5", "1.5", "-0.5", "2.0", "0.25", "-1.5"]
-    args = [(f"{start} " + " ".join(rng.choice(seeds) for _ in fs) + f" {limit}",
+    iseeds = lambda: " ".join(str(rng.randint(-50, 50)) for _ in ints)
+    args = [(f"{start} " + iseeds() + " "
+             + " ".join(rng.choice(seeds) for _ in fs) + f" {limit}",
              True) for _ in range(3)]
     return name, defn, args, "numloop-hinted"
 

@@ -1,0 +1,9 @@
+; Perf gate: multi-int-slot numeric loop. Carries 3 int slots (i j k) plus the
+; limit, which exceeded the old 4-wide amd64 GPR pool once the (< i n) compare
+; took 2 as temps — so this whole shape ran in the VM. Pins the widened pool.
+(def gate-nlmi (i :int j :int k :int n :int)
+  (if (< i n) (gate-nlmi (+ i 1) (+ j 2) (+ k 3) n) k))
+(= acc 0)
+(each s (range 0 100)
+  (= acc (+ acc (gate-nlmi 0 0 0 4000000))))
+(prn acc)

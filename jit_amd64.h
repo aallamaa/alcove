@@ -21,10 +21,30 @@
 #define X64_RBX 3
 #define X64_RSI 6
 #define X64_RDI 7
+/* r8-r11: caller-saved (SysV), so the numeric-loop compiler can take them for
+   int slot homes with no prologue save/restore. Reaching them needs REX.R/.B,
+   which is why the GPR encoders below take the bits rather than assuming the
+   low 8 (they emit byte-identical code for r0-r7 — REXR/REXB return 0). */
+/* Size of the numeric-loop int register pool (see ipool[] in
+   try_jit_numloop). NL_MAXSTK in jit_common.h bounds the analyzer's stack
+   arrays; this is the amd64-specific physical budget. */
+#define NL_X64_IPOOL 8
+
+#define X64_R8 8
+#define X64_R9 9
+#define X64_R10 10
+#define X64_R11 11
+
+/* REX.R for an xmm/gp in the ModRM.reg field, REX.B for the ModRM.r/m field —
+   the low 3 bits go in the ModRM byte, the 4th bit here. Only xmm8-15 (or
+   r8-15) set a bit, so callers using xmm0-7 stay byte-identical (these return
+   0). */
+#define X64_REXR(reg) (((reg) >= 8) ? 0x04 : 0)
+#define X64_REXB(rm) (((rm) >= 8) ? 0x01 : 0)
 
 /* mov r64, [base + disp32]   →  REX.W 0x8B /r disp32 */
 static int x64_mov_reg_mem(uint8_t *buf, int dst, int base, int32_t disp) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(dst) | X64_REXB(base));
   buf[1] = 0x8B;
   buf[2] = (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7));
   memcpy(buf + 3, &disp, 4);
@@ -32,7 +52,7 @@ static int x64_mov_reg_mem(uint8_t *buf, int dst, int base, int32_t disp) {
 }
 /* mov [base + disp32], r64   →  REX.W 0x89 /r disp32 */
 static int x64_mov_mem_reg(uint8_t *buf, int src, int base, int32_t disp) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(src) | X64_REXB(base));
   buf[1] = 0x89;
   buf[2] = (uint8_t)(0x80 | ((src & 7) << 3) | (base & 7));
   memcpy(buf + 3, &disp, 4);
@@ -40,27 +60,32 @@ static int x64_mov_mem_reg(uint8_t *buf, int src, int base, int32_t disp) {
 }
 /* mov r64, imm64   →  REX.W 0xB8+r imm64 (10 bytes) */
 static int x64_mov_imm64(uint8_t *buf, int dst, uint64_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(dst));
   buf[1] = (uint8_t)(0xB8 + (dst & 7));
   memcpy(buf + 2, &imm, 8);
   return 10;
 }
 /* mov r64, r64   →  REX.W 0x89 /r */
 static int x64_mov_reg_reg(uint8_t *buf, int dst, int src) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(src) | X64_REXB(dst));
   buf[1] = 0x89;
   buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
   return 3;
 }
 /* xor r32, r32 — zero-idiom; clears the full r64 in 2 bytes. */
 static int x64_zero_reg(uint8_t *buf, int dst) {
-  buf[0] = 0x31;
-  buf[1] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (dst & 7));
-  return 2;
+  int n = 0;
+  /* r8-r15 need REX.R+REX.B (both operands are dst); r0-r7 keep the 2-byte
+     form byte-for-byte. */
+  if (dst >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXR(dst) | X64_REXB(dst));
+  buf[n++] = 0x31;
+  buf[n++] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (dst & 7));
+  return n;
 }
 /* add r64, sign-extended imm32   →  REX.W 0x81 /0 imm32 */
 static int x64_add_imm32(uint8_t *buf, int dst, int32_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(dst));
   buf[1] = 0x81;
   buf[2] = (uint8_t)(0xC0 | (dst & 7)); /* /0, mod=11 */
   memcpy(buf + 3, &imm, 4);
@@ -68,7 +93,7 @@ static int x64_add_imm32(uint8_t *buf, int dst, int32_t imm) {
 }
 /* sub r64, sign-extended imm32   →  REX.W 0x81 /5 imm32 */
 static int x64_sub_imm32(uint8_t *buf, int dst, int32_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(dst));
   buf[1] = 0x81;
   buf[2] = (uint8_t)(0xE8 | (dst & 7)); /* /5, mod=11 */
   memcpy(buf + 3, &imm, 4);
@@ -76,7 +101,7 @@ static int x64_sub_imm32(uint8_t *buf, int dst, int32_t imm) {
 }
 /* cmp r64, sign-extended imm32   →  REX.W 0x81 /7 imm32 */
 static int x64_cmp_imm32(uint8_t *buf, int dst, int32_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(dst));
   buf[1] = 0x81;
   buf[2] = (uint8_t)(0xF8 | (dst & 7)); /* /7, mod=11 */
   memcpy(buf + 3, &imm, 4);
@@ -86,7 +111,7 @@ static int x64_cmp_imm32(uint8_t *buf, int dst, int32_t imm) {
    when r=r/m). 64-bit signed multiply, low 64 bits of result, no flags
    relevant for our use. */
 static int x64_imul_reg_reg_imm32(uint8_t *buf, int dst, int src, int32_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(dst) | X64_REXB(src));
   buf[1] = 0x69;
   buf[2] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
   memcpy(buf + 3, &imm, 4);
@@ -94,10 +119,13 @@ static int x64_imul_reg_reg_imm32(uint8_t *buf, int dst, int src, int32_t imm) {
 }
 /* test r/m8, imm8   →  0xF6 /0 imm8.  Used for tag-bit check on AL/CL. */
 static int x64_test_reg8_imm8(uint8_t *buf, int reg, uint8_t imm) {
-  buf[0] = 0xF6;
-  buf[1] = (uint8_t)(0xC0 | (reg & 7));
-  buf[2] = imm;
-  return 3;
+  int n = 0;
+  if (reg >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXB(reg)); /* r8b-r11b */
+  buf[n++] = 0xF6;
+  buf[n++] = (uint8_t)(0xC0 | (reg & 7));
+  buf[n++] = imm;
+  return n;
 }
 static int x64_ret(uint8_t *buf) {
   buf[0] = 0xC3;
@@ -144,13 +172,19 @@ static int x64_cmovz_reg_reg(uint8_t *buf, int dst, int src) {
 
 /* push r64 (low 8 regs only) — 1 byte: 0x50+r */
 static int x64_push_reg(uint8_t *buf, int reg) {
-  buf[0] = (uint8_t)(0x50 + (reg & 7));
-  return 1;
+  int n = 0;
+  if (reg >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXB(reg));
+  buf[n++] = (uint8_t)(0x50 + (reg & 7));
+  return n;
 }
 /* pop r64 (low 8 regs only) — 1 byte: 0x58+r */
 static int x64_pop_reg(uint8_t *buf, int reg) {
-  buf[0] = (uint8_t)(0x58 + (reg & 7));
-  return 1;
+  int n = 0;
+  if (reg >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXB(reg));
+  buf[n++] = (uint8_t)(0x58 + (reg & 7));
+  return n;
 }
 /* call r/m64 — 0xFF /2. Register form for low 8 regs: 0xFF 0xD0+r (2 bytes). */
 static int x64_call_reg(uint8_t *buf, int reg) {
@@ -176,7 +210,7 @@ static int x64_call_rel32(uint8_t *buf, int32_t disp) {
 /* test r64, r64 — REX.W 0x85 /r (3 bytes). Sets ZF=1 iff value is zero;
    we use it to test the trampoline's exp_t* return for NULL. */
 static int x64_test_reg_reg(uint8_t *buf, int dst, int src) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(src) | X64_REXB(dst));
   buf[1] = 0x85;
   buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
   return 3;
@@ -217,7 +251,7 @@ static int x64_mov_rsp_reg(uint8_t *buf, int src) {
    imm8. We use this to untag fixnums (sar reg, 3) where the LSB is the
    tag bit and the value is in the upper 61 bits with sign-extension. */
 static int x64_sar_imm8(uint8_t *buf, int dst, uint8_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(dst));
   buf[1] = 0xC1;
   buf[2] = (uint8_t)(0xF8 | (dst & 7));
   buf[3] = imm;
@@ -227,7 +261,7 @@ static int x64_sar_imm8(uint8_t *buf, int dst, uint8_t imm) {
    dst = dst * src. No flags-on-overflow paranoia: alcove fixnums are
    61-bit, products that would overflow get truncated (caller's problem). */
 static int x64_imul_reg_reg(uint8_t *buf, int dst, int src) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(dst) | X64_REXB(src));
   buf[1] = 0x0F;
   buf[2] = 0xAF;
   buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
@@ -246,12 +280,6 @@ static int x64_add_reg_rsp(uint8_t *buf, int dst) {
    We restrict ourselves to XMM0/XMM1 (no REX.B/REX.R extension needed) and
    GP regs in the low 8. Byte patterns verified against the GNU assembler. */
 
-/* REX.R for an xmm/gp in the ModRM.reg field, REX.B for the ModRM.r/m field —
-   the low 3 bits go in the ModRM byte, the 4th bit here. Only xmm8-15 (or
-   r8-15) set a bit, so callers using xmm0-7 stay byte-identical (these return
-   0). */
-#define X64_REXR(reg) (((reg) >= 8) ? 0x04 : 0)
-#define X64_REXB(rm) (((rm) >= 8) ? 0x01 : 0)
 /* cvtsi2sd xmm, r64  →  F2 REX.W 0F 2A /r.  Signed int64 → double. */
 static int x64_cvtsi2sd_xmm_reg(uint8_t *buf, int xmm, int gp) {
   buf[0] = 0xF2;
@@ -327,7 +355,7 @@ static int x64_sse_arith_xmm(uint8_t *buf, uint8_t op2, int dst, int src) {
    used by the numeric-loop compiler for integer slot/temp comparisons. */
 __attribute__((unused)) static int x64_cmp_reg_reg(uint8_t *buf, int dst,
                                                    int src) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(src) | X64_REXB(dst));
   buf[1] = 0x39;
   buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
   return 3;
@@ -335,15 +363,18 @@ __attribute__((unused)) static int x64_cmp_reg_reg(uint8_t *buf, int dst,
 /* movzx r32, word [base + disp32]  →  0F B7 /r disp32 (mod=10).  Used to
    read the 16-bit exp_t.type field for the float-box guard. */
 static int x64_movzx_reg_mem16(uint8_t *buf, int dst, int base, int32_t disp) {
-  buf[0] = 0x0F;
-  buf[1] = 0xB7;
-  buf[2] = (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7));
-  memcpy(buf + 3, &disp, 4);
-  return 7;
+  int n = 0;
+  if (dst >= 8 || base >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXR(dst) | X64_REXB(base));
+  buf[n++] = 0x0F;
+  buf[n++] = 0xB7;
+  buf[n++] = (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7));
+  memcpy(buf + n, &disp, 4);
+  return n + 4;
 }
 /* and r64, imm32 (sign-extended)  →  REX.W 0x81 /4 imm32 (mod=11). */
 static int x64_and_imm32(uint8_t *buf, int dst, int32_t imm) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(dst));
   buf[1] = 0x81;
   buf[2] = (uint8_t)(0xE0 | (dst & 7)); /* /4, mod=11 */
   memcpy(buf + 3, &imm, 4);
@@ -927,11 +958,18 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
      callee-saved — pushed below when the pool reaches it. rax/rdx double as
      the float-box ENTRY-guard scratch, which is why float slots are guarded
      before int homes are loaded (see the two entry passes). */
-  if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > 4)
+  if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > NL_X64_IPOOL)
     return 0;
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
-  const int ipool[4] = {X64_RCX, X64_RBX, X64_RDX, X64_RAX};
+  /* Int homes+temps. rcx/rbx/rdx/rax first (rbx is the only callee-saved one
+     and is pushed on demand), then r8-r11 — all caller-saved on SysV, so
+     widening past 4 costs no prologue. This is what lets a kernel carry more
+     than a counter+limit in integers: a slot-vs-slot compare like (< i n)
+     burns 2 of these as temps, so the old 4-wide pool capped useful kernels at
+     2 int slots. */
+  const int ipool[NL_X64_IPOOL] = {X64_RCX, X64_RBX, X64_RDX, X64_RAX,
+                                   X64_R8,  X64_R9,  X64_R10, X64_R11};
   const int FIMM = X64_RSI; /* scratch GPR for float-const imm → xmm */
   int toff = (int)offsetof(exp_t, type), foff = (int)offsetof(exp_t, f);
 

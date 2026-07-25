@@ -1820,6 +1820,31 @@
                      (fn (e) e)))
         t)
 
+;; ---------- numloop: MULTIPLE int slots (widened amd64 GPR pool) ----------
+;; Before the pool widened past 4 GPRs, a slot-vs-slot compare like (< i n)
+;; burned 2 as temps, so anything beyond a counter+limit pair fell to the VM.
+;; These carry 3-4 int slots and must both JIT and agree with the VM.
+(def jc-nl3i (i :int j :int k :int n :int)
+  (if (< i n) (jc-nl3i (+ i 1) (+ j 2) (+ k 3) n) k))
+(assert-jits "jit numloop: 3 int slots"  jc-nl3i)
+(assert "numloop 3-int result"           (jc-nl3i 0 0 0 1000)      3000)
+(assert "numloop 3-int 0-iter"           (jc-nl3i 9 7 5 3)         5)
+;; negative steps + returning a NON-counter int slot
+(def jc-nl3n (i :int j :int n :int)
+  (if (< i n) (jc-nl3n (+ i 1) (- j 2) n) j))
+(assert-jits "jit numloop: neg int step" jc-nl3n)
+(assert "numloop neg-step result"        (jc-nl3n 0 0 500)         -1000)
+;; int slots alongside float slots: the two live in DISJOINT register files,
+;; so a class mix-up here moves the wrong register (wrong-but-finite result).
+(def jc-nlif (i :int j :int a :f64 n :int)
+  (if (< i n) (jc-nlif (+ i 1) (+ j 5) (+ 0.5 (* a 0.5)) n) j))
+(assert-jits "jit numloop: int+float mix" jc-nlif)
+(assert "numloop int+float int-ret"      (jc-nlif 0 0 0.5 100)     500)
+;; overflow still deopts with several int slots live
+(assert "numloop multi-int overflow raises"
+        (error? (try (jc-nl3i 0 0 1152921504606846975 10) (fn (e) e)))
+        t)
+
 ;; ---------- string utilities ----------
 (assert "str concatenates values"      (str "a" 12 'b #\c)         "a12bc")
 (assert "string-append"                (string-append "ab" "cd" "") "abcd")
