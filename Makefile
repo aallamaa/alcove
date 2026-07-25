@@ -706,6 +706,46 @@ fuzz:
 # own two binaries; pass options via JITFUZZ_ARGS (e.g. --seed N --count N).
 # The always-on guard is the self-gating JIT-coverage block in test.alc (run
 # by every test-all variant); this is the deeper opt-in differential check.
+# ---------------------------------------------------------------------------
+# arm64 cross-check lane. The arm64 JIT backend (jit_arm64.h) has no native
+# host here, so it is validated by cross-compiling and running the real corpus
+# under qemu-user. This was a manual recipe in CLAUDE.md until 2026-07-25;
+# promoting it to a target + CI job means arm64 backend regressions surface on
+# push instead of on release day (two of the last three JIT bugs were
+# arm64-only, incl. a silent fixnum-wrap in the numloop RET path).
+#
+# No FFI/readline: cross libffi isn't present, and the FFI-gated corpus blocks
+# skip themselves, so the arm64 pass count is legitimately lower than the
+# native one. The gate is "0 failed", not a fixed total, so the corpus can
+# grow without touching this.
+ARM64_CC   ?= aarch64-linux-gnu-gcc
+ARM64_QEMU ?= qemu-aarch64
+ARM64_BIN  := /tmp/alcove.arm64
+arm64-test:
+	@command -v $(ARM64_CC)   >/dev/null 2>&1 || { echo "SKIP: no $(ARM64_CC)";   exit 0; }
+	@command -v $(ARM64_QEMU) >/dev/null 2>&1 || { echo "SKIP: no $(ARM64_QEMU)"; exit 0; }
+	$(ARM64_CC) -O2 -DALCOVE_JIT=1 -static -o $(ARM64_BIN) alcove.c -lm
+	@echo "--- test.alc under $(ARM64_QEMU) (arm64 JIT active) ---"
+	@res=$$($(ARM64_QEMU) $(ARM64_BIN) --noload --no-init test.alc 2>/dev/null \
+	        | sed 's/\x1b\[[0-9;]*m//g' | grep 'TEST RESULT'); \
+	  echo "  $$res"; \
+	  case "$$res" in \
+	    *" 0 failed") : ;; \
+	    "") echo "  CRASH / early exit — no TEST RESULT line"; exit 1;; \
+	    *) echo "  FAILURES on arm64"; exit 1;; \
+	  esac
+	@echo "--- arm64 JIT actually fires on the hinted numloop shapes ---"
+	@out=$$($(ARM64_QEMU) $(ARM64_BIN) --noload --no-init -e \
+	  '(def m (x :f64 r :f64 i :int n :int) (if (< i n) (m (* r (* x (- 1.0 x))) r (+ i 1) n) x)) \
+	   (def c (i :int n :int) (if (< i n) (c (+ i 1) n) i)) \
+	   (pr (jit? m) " " (jit? c) " " (m 0.5 3.57 0 1000))' 2>/dev/null \
+	  | sed 's/\x1b\[[0-9;]*m//g'); \
+	  echo "  jit?(mixed) jit?(int-pair) result = $$out"; \
+	  case "$$out" in \
+	    "t t 0.47511") echo "  OK — both numloop shapes JIT on arm64, result matches amd64";; \
+	    *) echo "  ARM64 JIT REGRESSION: expected 't t 0.47511'"; exit 1;; \
+	  esac
+
 jit-fuzz:
 	python3 jit_fuzz.py $(JITFUZZ_ARGS)
 
@@ -879,4 +919,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

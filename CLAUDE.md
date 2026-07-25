@@ -185,6 +185,14 @@ into `adder`) and the `*_test.c` unit harnesses.
 
 ## ARM / cross checks
 
-`aarch64-linux-gnu-gcc` + `qemu-aarch64` are available for validating the arm64
-JIT backend and weak-memory atomics without ARM hardware:
+**`make arm64-test`** is the gate (and a CI job as of 2026-07-25): it
+cross-compiles with `aarch64-linux-gnu-gcc`, runs the whole corpus under
+`qemu-aarch64`, and asserts the hinted numloop shapes actually JIT there and
+return the same value as amd64. It skips cleanly if the toolchain is absent.
+Use it after ANY `jit_arm64.h` edit — arm64 is the backend with no native host,
+so nothing else on x86-64 will catch a regression in it.
+
+The raw recipe, if you need to poke at something by hand:
 `aarch64-linux-gnu-gcc -O2 -DALCOVE_JIT=1 -static -o /tmp/a alcove.c -lm && qemu-aarch64 /tmp/a test.alc`.
+The arm64 pass count is legitimately lower than native (no cross libffi, so the
+FFI corpus blocks skip themselves) — the gate is "0 failed", not a fixed total.
