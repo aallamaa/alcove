@@ -236,6 +236,74 @@ def gen_numloop_mixed(rng, idx):
     return name, defn, args, "numloop-mixed"
 
 
+def gen_numloop_hinted(rng, idx):
+    """HINTED mixed int/float self-tail loop — the shape 9800696 unlocked.
+
+    (def f (i :int a0 :f64 ... n :int)
+      (if (< i n) (f (+ i 1) <float updates> n) <ret>))
+
+    Distinct from gen_numloop (which types its slots by inference from float
+    seeds) in that the classes come from EXPLICIT :int/:f64 param hints, and
+    from gen_numloop_mixed (unhinted, expected to bail). Two properties this is
+    the only generative coverage for:
+
+      * INT and FLOAT slots are held in DISJOINT register files (GPR vs xmm/d).
+        A class mix-up moves the wrong register and yields a wrong-but-finite
+        result — invisible to anything except a byte-exact differential.
+      * the INT return path. Returning an int from a hinted numloop is exactly
+        where arm64 carried a silent fixnum-wrap (the RET retag, fixed in
+        9800696) that the float-returning shapes could not expose. `ret_int`
+        forces that path half the time.
+
+    Budget note: amd64's int GPR pool is 4 and the `(< i n)` slot-vs-slot
+    compare burns 2 as temps, so 2 int slots (counter + limit) is the ceiling
+    that JITs today. Float slots are cheap (xmm0-15). Kept inside that budget
+    so expect_jit=True is a real assertion rather than a coin flip."""
+    name = f"nlh{idx}"
+    nf = rng.randint(1, 3)
+    fs = [f"a{j}" for j in range(nf)]
+    limit = rng.choice([40000, 50000, 100000])
+    start = limit - rng.randint(0, 5)      # few iterations → exact, finite
+    fc = lambda: rng.choice(FLOAT_CONSTS)
+    # float updates stay float-only: an int literal in float arithmetic is the
+    # gen_numloop_mixed case (must bail), which this generator is not testing.
+    upds = [f"(+ {fc()} (* {rng.choice(fs)} {fc()}))" for _ in fs]
+    ret_int = rng.random() < 0.5
+    ret = "i" if ret_int else rng.choice(fs)
+    params = " ".join(["i :int"] + [f"{f} :f64" for f in fs] + ["n :int"])
+    defn = (f"(def {name} ({params}) "
+            f"(if (< i n) ({name} (+ i 1) {' '.join(upds)} n) {ret}))")
+    seeds = ["0.5", "1.5", "-0.5", "2.0", "0.25", "-1.5"]
+    args = [(f"{start} " + " ".join(rng.choice(seeds) for _ in fs) + f" {limit}",
+             True) for _ in range(3)]
+    return name, defn, args, "numloop-hinted"
+
+
+def gen_numloop_overflow(rng, idx):
+    """Hinted INT self-tail loop driven to the edge of the fixnum range.
+
+    Int slots live TAGGED ((v<<3)|1) in registers, so a step that leaves the
+    61-bit range must deopt (jo / B.VS) into the VM's overflow error rather
+    than wrapping. This generator straddles the boundary: some cases overflow,
+    some stop just short, and the probe is whether the JIT and the VM AGREE on
+    which — encoded as a boolean so an error value is comparable at all
+    (msgpack-encode of an error is not meaningful).
+
+    A wrap instead of a deopt shows up here as t-vs-nil. Nothing else in the
+    suite covers the overflow edge generatively."""
+    name = f"nlo{idx}"
+    step = rng.choice([1, 2, 3, 7])
+    # FIX_MAX for a 3-bit tag on 64-bit: 2^60 - 1.
+    fixmax = (1 << 60) - 1
+    # straddle: land just below the edge, or step clean over it
+    gap = rng.choice([0, 1, 2, step, step * 2, step * 3])
+    start = fixmax - gap
+    defn = (f"(def {name} (i :int n :int) "
+            f"(if (< i n) ({name} (+ i {step}) n) i))")
+    args = [(f"{start} {fixmax}", True)]
+    return name, defn, args, "numloop-overflow"
+
+
 def gen_mandelbrot(rng, idx):
     """Mandelbrot escape loop: an int counter + FOUR :f64 float locals
     (cr ci zr zi) with a |z|^2 > 4 escape guard. This is the canonical kernel the
@@ -258,7 +326,8 @@ def gen_mandelbrot(rng, idx):
 
 
 GENERATORS = [gen_counter_loop, gen_leaf, gen_float_acc, gen_eq_countdown,
-              gen_float_series, gen_numloop, gen_numloop_mixed, gen_mandelbrot]
+              gen_float_series, gen_numloop, gen_numloop_mixed, gen_mandelbrot,
+              gen_numloop_hinted, gen_numloop_overflow]
 
 
 def generate(rng, count):
@@ -273,15 +342,22 @@ def generate(rng, count):
         probes.append((name, cat, exp_any))
         for a, _exp in args:
             call = f"({name} {a})" if a else f"({name})"
-            checks.append(call)
+            checks.append((call, cat))
     lines = list(defs)
     # coverage probes: "JITQ <cat> <name> <exp|noexp> <t|nil>"
     for name, cat, exp_any in probes:
         lines.append(f'(prn (str "JITQ {cat} {name} '
                      f'{"exp" if exp_any else "noexp"} " (jit? {name})))')
-    # result checks
-    for call in checks:
-        lines.append(f"(prn (msgpack-encode {call}))")
+    # result checks. numloop-overflow deliberately straddles the fixnum edge,
+    # so the call may legitimately RAISE; an error value has no meaningful
+    # msgpack encoding, and the property under test is only whether the JIT and
+    # the VM agree on overflow-vs-not. Compare that boolean instead.
+    for call, cat in checks:
+        if cat == "numloop-overflow":
+            lines.append(f"(prn (msgpack-encode "
+                         f"(error? (try {call} (fn (e) e)))))")
+        else:
+            lines.append(f"(prn (msgpack-encode {call}))")
     lines.append("(quit)")
     return "\n".join(lines) + "\n"
 
