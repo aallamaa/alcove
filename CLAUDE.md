@@ -100,7 +100,7 @@ contracts; prefer `grep '^name'` (definitions start at column 0) and the
 | `pp.h` | Source pretty-printer (both Alcove and Adder dialects) |
 | `builtins_control.h` | control-flow builtins: `cond`, `match`, generators |
 | `compiler.h` | bytecode VM disassembly and location helpers |
-| `jit_common.h` | JIT runtime glue: W^X mmap, gcache trampolines, shape-matcher helpers |
+| `jit_common.h` | JIT runtime glue: W^X mmap, gcache trampolines, shape-matcher helpers, `numloop_analyze` (the numeric-loop typer — see `docs/jit-type-hints.md`) |
 | `jit_arm64.h` | arm64 JIT backend: encoders + shape matchers (selected by `__aarch64__`) |
 | `jit_amd64.h` | amd64 JIT backend: encoders + shape matchers (selected by `__x86_64__`) |
 | `compiler_impl.h` | Core compiler emit helpers, AST-to-bytecode compiler, VM execution dispatch loop |
