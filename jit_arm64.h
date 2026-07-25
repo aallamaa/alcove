@@ -150,6 +150,10 @@ static uint32_t arm64_cmp_reg_asr(int rn, int rm, int sh) {
   return 0xEB800000u | ((uint32_t)rm << 16) | ((uint32_t)(sh & 0x3f) << 10) |
          ((uint32_t)rn << 5) | 31u;
 }
+/* Size of the numeric-loop int register pool (see ipool[] below). Matches
+   NL_X64_IPOOL so both backends accept the same kernels. */
+#define NL_A64_IPOOL 8
+
 #define ARM64_COND_NE 0x1
 #define ARM64_COND_VS 0x6 /* overflow set */
 /* ASR Xd, Xn, #shift  (arithmetic shift right; sign-extends top bit).
@@ -1011,13 +1015,18 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   if (!numloop_analyze(bc, &nl))
     return 0;
   /* arm64 budget: float homes+temps over d0-d7 + d16-d31 = 24 caller-saved;
-     int homes+temps over x1-x4 (disjoint from the x9/x10 guard scratch, so
-     multiple int slots — counter + limit — coexist with float guards). */
-  if (nl.nfslots + nl.max_ftmp > 24 || nl.nislots + nl.max_itmp > 4)
+     int homes+temps over the NL_A64_IPOOL x-regs below. Kept in step with the
+     amd64 pool (8) so a kernel's JIT-vs-VM decision does not differ by arch —
+     the corpus asserts `assert-jits` on these shapes and runs on both. */
+  if (nl.nfslots + nl.max_ftmp > 24 || nl.nislots + nl.max_itmp > NL_A64_IPOOL)
     return 0;
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
-  const int ipool[4] = {1, 2, 3, 4}; /* x1 = counter home; x2-x4 int temps */
+  /* x1-x7 and x11 are all caller-saved (AAPCS) and disjoint from the x9/x10
+     float-box guard scratch, x0 (env in / result out) and x29/x30. The only
+     call this emits is make_floatf at OP_RET, by which point every int slot is
+     dead, so caller-saved homes are safe. */
+  const int ipool[NL_A64_IPOOL] = {1, 2, 3, 4, 5, 6, 7, 11};
   int toff = (int)offsetof(exp_t, type), foff = (int)offsetof(exp_t, f);
 /* float vreg → d-reg (skip the callee-saved d8-d15) */
 #define DFR(v) ((v) < 8 ? (v) : (v) + 8)
