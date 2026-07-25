@@ -164,8 +164,8 @@ exp_t *weakcmd(exp_t *e, env_t *env) {
     if (!weak_insert(v, w)) {
       w->ptr = NULL;
       unrefexp(w);
-      CLEAN_RETURN_1(v, error(ERROR_ILLEGAL_VALUE, e, env,
-                              "weak: out of memory"));
+      CLEAN_RETURN_1(v,
+                     error(ERROR_ILLEGAL_VALUE, e, env, "weak: out of memory"));
     }
     v->flags |= FLAG_WEAK_REFERENT;
   }

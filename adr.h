@@ -573,7 +573,8 @@ static als_node *als_line_node(const char *text) {
      only when `=` is the SECOND form on the line, so the prefix form `= place
      val` (where `=` is first) is untouched. A multi-token RHS is wrapped:
      `a = + b c` -> (= a (+ b c)). A dotted LHS is an attribute WRITE:
-     `a.owner = v` -> (assoc! a "owner" v); `a.b.c = v` -> (assoc! (a "b") "c" v). */
+     `a.owner = v` -> (assoc! a "owner" v); `a.b.c = v` -> (assoc! (a "b") "c"
+     v). */
   if (forms->n >= 3 && !forms->kid[1]->is_list && forms->kid[1]->atom &&
       !strcmp(forms->kid[1]->atom, "=")) {
     /* build the RHS first (single token, or a wrapped (rhs...) list) */
@@ -598,9 +599,9 @@ static als_node *als_line_node(const char *text) {
       als_push(asn, als_read_chain(seg, seglen, c - 1)); /* receiver chain */
       als_push(asn, als_str_atom(seg[c - 1], seglen[c - 1])); /* "field" */
       als_push(asn, rhs);
-      als_free(lhs);             /* kid[0] consumed */
-      als_free(forms->kid[1]);   /* the unused `=` atom */
-    } else {                     /* plain infix assignment -> (= lhs rhs) */
+      als_free(lhs);                /* kid[0] consumed */
+      als_free(forms->kid[1]);      /* the unused `=` atom */
+    } else {                        /* plain infix assignment -> (= lhs rhs) */
       als_push(asn, forms->kid[1]); /* the `=` atom, as the head */
       als_push(asn, lhs);           /* lhs */
       als_push(asn, rhs);

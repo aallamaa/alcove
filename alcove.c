@@ -24,8 +24,9 @@
 #endif
 /* On macOS, _XOPEN_SOURCE puts the system headers into strict-POSIX mode, which
    hides the BSD/Darwin extensions this codebase relies on (vasprintf/asprintf,
-   timegm, MAP_ANONYMOUS, MAP_JIT, pthread_jit_write_protect_np, INADDR_LOOPBACK).
-   _DARWIN_C_SOURCE re-exposes them — the Darwin analogue of _GNU_SOURCE. */
+   timegm, MAP_ANONYMOUS, MAP_JIT, pthread_jit_write_protect_np,
+   INADDR_LOOPBACK). _DARWIN_C_SOURCE re-exposes them — the Darwin analogue of
+   _GNU_SOURCE. */
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
 #endif
@@ -1089,10 +1090,14 @@ lispProc lispProcList[] = {
     LISPCMD_UNSAFE("redis-undefcmd", rediscmdundefcmd, doc_redis_undefcmd),
     LISPCMD_UNSAFE("redis-cmds", rediscmdscmd, doc_redis_cmds),
     LISPCMD("redis-watch!", rediswatchbangcmd, doc_redis_watch_bang),
-    LISPCMD("redis-watch-dropped", rediswatchdroppedcmd, doc_redis_watch_dropped),
-    LISPCMD("redis-next-event!", redisnexteventbangcmd, doc_redis_next_event_bang),
-    LISPCMD("redis-wait-event!", rediswaiteventbangcmd, doc_redis_wait_event_bang),
-    LISPCMD("redis-drain-events!", redisdraineventsbangcmd, doc_redis_drain_events_bang),
+    LISPCMD("redis-watch-dropped", rediswatchdroppedcmd,
+            doc_redis_watch_dropped),
+    LISPCMD("redis-next-event!", redisnexteventbangcmd,
+            doc_redis_next_event_bang),
+    LISPCMD("redis-wait-event!", rediswaiteventbangcmd,
+            doc_redis_wait_event_bang),
+    LISPCMD("redis-drain-events!", redisdraineventsbangcmd,
+            doc_redis_drain_events_bang),
 #endif
 };
 #undef LISPCMD
@@ -3373,7 +3378,8 @@ static exp_t *build_clean_params(exp_t *params, exp_t *form, env_t *env,
         /* User-class annotations are documentation/strip-only for now —
            JIT-inert (the hint is a uint8_t; user ids >= TYPE_USER_MIN don't
            fit). Runtime checking is a future phase. */
-        hints_out[kept] = tann >= TYPE_USER_MIN ? TYPE_HINT_NONE : (uint8_t)tann;
+        hints_out[kept] =
+            tann >= TYPE_USER_MIN ? TYPE_HINT_NONE : (uint8_t)tann;
       prev_bindable = 0;
       continue;
     }
@@ -5838,70 +5844,146 @@ static void *buf_reserve(void *b, size_t len, size_t n, size_t *cap) {
 static ALCOVE_TLS int exp_to_string_depth = 0;
 const char *alc_type_name(uint32_t id) {
   switch (id) {
-    case TYPE_ANY: return "Any"; case TYPE_NIL: return "Nil";
-    case TYPE_BOOL: return "Bool"; case TYPE_INT: return "Int";
-    case TYPE_FLOAT: return "Float"; case TYPE_NUMBER: return "Number";
-    case TYPE_RATIONAL: return "Rational"; case TYPE_DECIMAL: return "Decimal";
-    case TYPE_STRING: return "String"; case TYPE_SYMBOL: return "Symbol";
-    case TYPE_KEYWORD: return "Keyword"; case TYPE_CHAR: return "Char";
-    case TYPE_PAIR: return "Pair"; case TYPE_LIST: return "List";
-    case TYPE_VECTOR: return "Vector"; case TYPE_BLOB: return "Blob";
-    case TYPE_DICT: return "Dict"; case TYPE_DEQUE: return "Deque";
-    case TYPE_SET: return "Set"; case TYPE_HAMT: return "Hamt";
-    case TYPE_FN: return "Fn"; case TYPE_LAMBDA: return "Lambda";
-    case TYPE_BUILTIN: return "Builtin"; case TYPE_MACRO: return "Macro";
-    case TYPE_FFI: return "Ffi"; case TYPE_ERROR: return "Error";
-    case TYPE_PORT: return "Port"; case TYPE_WEAK: return "Weak";
-    case TYPE_CONTINUATION: return "Continuation";
-    case TYPE_TYPE: return "Type";
-    default: {
-      const char *user = alc_user_type_name(id);
-      return user ? user : "Unknown";
-    }
+  case TYPE_ANY:
+    return "Any";
+  case TYPE_NIL:
+    return "Nil";
+  case TYPE_BOOL:
+    return "Bool";
+  case TYPE_INT:
+    return "Int";
+  case TYPE_FLOAT:
+    return "Float";
+  case TYPE_NUMBER:
+    return "Number";
+  case TYPE_RATIONAL:
+    return "Rational";
+  case TYPE_DECIMAL:
+    return "Decimal";
+  case TYPE_STRING:
+    return "String";
+  case TYPE_SYMBOL:
+    return "Symbol";
+  case TYPE_KEYWORD:
+    return "Keyword";
+  case TYPE_CHAR:
+    return "Char";
+  case TYPE_PAIR:
+    return "Pair";
+  case TYPE_LIST:
+    return "List";
+  case TYPE_VECTOR:
+    return "Vector";
+  case TYPE_BLOB:
+    return "Blob";
+  case TYPE_DICT:
+    return "Dict";
+  case TYPE_DEQUE:
+    return "Deque";
+  case TYPE_SET:
+    return "Set";
+  case TYPE_HAMT:
+    return "Hamt";
+  case TYPE_FN:
+    return "Fn";
+  case TYPE_LAMBDA:
+    return "Lambda";
+  case TYPE_BUILTIN:
+    return "Builtin";
+  case TYPE_MACRO:
+    return "Macro";
+  case TYPE_FFI:
+    return "Ffi";
+  case TYPE_ERROR:
+    return "Error";
+  case TYPE_PORT:
+    return "Port";
+  case TYPE_WEAK:
+    return "Weak";
+  case TYPE_CONTINUATION:
+    return "Continuation";
+  case TYPE_TYPE:
+    return "Type";
+  default: {
+    const char *user = alc_user_type_name(id);
+    return user ? user : "Unknown";
+  }
   }
 }
 
 uint32_t alc_type_from_name(const char *name) {
-  if (!strcmp(name, "Any")) return TYPE_ANY;
-  if (!strcmp(name, "Nil")) return TYPE_NIL;
-  if (!strcmp(name, "Bool")) return TYPE_BOOL;
-  if (!strcmp(name, "Int")) return TYPE_INT;
-  if (!strcmp(name, "Float")) return TYPE_FLOAT;
-  if (!strcmp(name, "Number")) return TYPE_NUMBER;
-  if (!strcmp(name, "Rational")) return TYPE_RATIONAL;
-  if (!strcmp(name, "Decimal")) return TYPE_DECIMAL;
-  if (!strcmp(name, "String")) return TYPE_STRING;
-  if (!strcmp(name, "Symbol")) return TYPE_SYMBOL;
-  if (!strcmp(name, "Keyword")) return TYPE_KEYWORD;
-  if (!strcmp(name, "Char")) return TYPE_CHAR;
-  if (!strcmp(name, "Pair")) return TYPE_PAIR;
-  if (!strcmp(name, "List")) return TYPE_LIST;
-  if (!strcmp(name, "Vector")) return TYPE_VECTOR;
-  if (!strcmp(name, "Blob")) return TYPE_BLOB;
-  if (!strcmp(name, "Dict")) return TYPE_DICT;
-  if (!strcmp(name, "Deque")) return TYPE_DEQUE;
-  if (!strcmp(name, "Set")) return TYPE_SET;
-  if (!strcmp(name, "Hamt")) return TYPE_HAMT;
-  if (!strcmp(name, "Fn")) return TYPE_FN;
-  if (!strcmp(name, "Lambda")) return TYPE_LAMBDA;
-  if (!strcmp(name, "Builtin")) return TYPE_BUILTIN;
-  if (!strcmp(name, "Macro")) return TYPE_MACRO;
-  if (!strcmp(name, "Ffi")) return TYPE_FFI;
-  if (!strcmp(name, "Error")) return TYPE_ERROR;
-  if (!strcmp(name, "Port")) return TYPE_PORT;
-  if (!strcmp(name, "Weak")) return TYPE_WEAK;
-  if (!strcmp(name, "Continuation")) return TYPE_CONTINUATION;
-  if (!strcmp(name, "Type")) return TYPE_TYPE;
+  if (!strcmp(name, "Any"))
+    return TYPE_ANY;
+  if (!strcmp(name, "Nil"))
+    return TYPE_NIL;
+  if (!strcmp(name, "Bool"))
+    return TYPE_BOOL;
+  if (!strcmp(name, "Int"))
+    return TYPE_INT;
+  if (!strcmp(name, "Float"))
+    return TYPE_FLOAT;
+  if (!strcmp(name, "Number"))
+    return TYPE_NUMBER;
+  if (!strcmp(name, "Rational"))
+    return TYPE_RATIONAL;
+  if (!strcmp(name, "Decimal"))
+    return TYPE_DECIMAL;
+  if (!strcmp(name, "String"))
+    return TYPE_STRING;
+  if (!strcmp(name, "Symbol"))
+    return TYPE_SYMBOL;
+  if (!strcmp(name, "Keyword"))
+    return TYPE_KEYWORD;
+  if (!strcmp(name, "Char"))
+    return TYPE_CHAR;
+  if (!strcmp(name, "Pair"))
+    return TYPE_PAIR;
+  if (!strcmp(name, "List"))
+    return TYPE_LIST;
+  if (!strcmp(name, "Vector"))
+    return TYPE_VECTOR;
+  if (!strcmp(name, "Blob"))
+    return TYPE_BLOB;
+  if (!strcmp(name, "Dict"))
+    return TYPE_DICT;
+  if (!strcmp(name, "Deque"))
+    return TYPE_DEQUE;
+  if (!strcmp(name, "Set"))
+    return TYPE_SET;
+  if (!strcmp(name, "Hamt"))
+    return TYPE_HAMT;
+  if (!strcmp(name, "Fn"))
+    return TYPE_FN;
+  if (!strcmp(name, "Lambda"))
+    return TYPE_LAMBDA;
+  if (!strcmp(name, "Builtin"))
+    return TYPE_BUILTIN;
+  if (!strcmp(name, "Macro"))
+    return TYPE_MACRO;
+  if (!strcmp(name, "Ffi"))
+    return TYPE_FFI;
+  if (!strcmp(name, "Error"))
+    return TYPE_ERROR;
+  if (!strcmp(name, "Port"))
+    return TYPE_PORT;
+  if (!strcmp(name, "Weak"))
+    return TYPE_WEAK;
+  if (!strcmp(name, "Continuation"))
+    return TYPE_CONTINUATION;
+  if (!strcmp(name, "Type"))
+    return TYPE_TYPE;
   return 0;
 }
 
 exp_t *dump_type_obj(exp_t *e, FILE *stream) {
   unsigned short t = ALCOVE_DUMP_TAG_TYPE_OBJECT;
-  if (dumptype(stream, &t) <= 0) return NULL;
+  if (dumptype(stream, &t) <= 0)
+    return NULL;
   uint32_t id = TYPE_ID(e);
   if (id < TYPE_USER_MIN) {
     /* Builtin type: id is a stable enum — v4 encoding [0xffff][u32 id]. */
-    if (fwrite(&id, sizeof(id), 1, stream) != 1) return NULL;
+    if (fwrite(&id, sizeof(id), 1, stream) != 1)
+      return NULL;
     return e;
   }
   /* User (defclass) type: the id is session-ordinal, so persist by class NAME
@@ -5909,17 +5991,20 @@ exp_t *dump_type_obj(exp_t *e, FILE *stream) {
      object always has a registry entry; if somehow it does not, abort this
      value's dump (matching other dump-failure paths). */
   const char *name = alc_user_type_name(id);
-  if (!name) return NULL;
+  if (!name)
+    return NULL;
   uint32_t sentinel = 0xFFFFFFFFu;
-  if (fwrite(&sentinel, sizeof(sentinel), 1, stream) != 1) return NULL;
+  if (fwrite(&sentinel, sizeof(sentinel), 1, stream) != 1)
+    return NULL;
   uint32_t namelen = (uint32_t)strlen(name);
-  if (fwrite(&namelen, sizeof(namelen), 1, stream) != 1) return NULL;
-  if (namelen && fwrite(name, 1, namelen, stream) != namelen) return NULL;
+  if (fwrite(&namelen, sizeof(namelen), 1, stream) != 1)
+    return NULL;
+  if (namelen && fwrite(name, 1, namelen, stream) != namelen)
+    return NULL;
   return e;
 }
 
-static void exp_to_string_buf_1(exp_t *v, char **buf, size_t *len,
-                                size_t *cap);
+static void exp_to_string_buf_1(exp_t *v, char **buf, size_t *len, size_t *cap);
 static void exp_to_string_buf(exp_t *v, char **buf, size_t *len, size_t *cap) {
   if (exp_to_string_depth >= STR_BUF_MAX_DEPTH) {
     str_buf_put(buf, len, cap, "...", 3);
@@ -6296,7 +6381,8 @@ static exp_t *make_filled_string(int64_t n, uint32_t cp) {
   char enc[4];
   int k = utf8_encode(cp, enc);
 #if UINTPTR_MAX <= 0xffffffff
-  /* Cap total allocation to 64 MiB to prevent overflow/excessive memory usage */
+  /* Cap total allocation to 64 MiB to prevent overflow/excessive memory usage
+   */
   if (n < 0 || (n > 0 && (size_t)n > (size_t)(64 * 1024 * 1024) / (size_t)k))
     return NULL;
 #else
@@ -8177,23 +8263,24 @@ static void repl_readline_setup(env_t *global) {
   rl_attempted_completion_function = alcove_rl_completer;
   /* TAB indents at line start (only whitespace precedes), else completes. */
   rl_bind_key('\t', alcove_smart_tab);
-  /* List all candidates immediately on an ambiguous TAB. Required because TAB is
-     bound to alcove_smart_tab, not rl_complete directly: readline's "list on the
-     2nd consecutive TAB" check compares rl_last_func against rl_complete, which
-     is never the dispatched key here, so the match list would otherwise never
-     show (e.g. `redis-<TAB>` would ring the bell instead of listing redis-*).
-     The debugger sets this the same way for its own completion. */
+  /* List all candidates immediately on an ambiguous TAB. Required because TAB
+     is bound to alcove_smart_tab, not rl_complete directly: readline's "list on
+     the 2nd consecutive TAB" check compares rl_last_func against rl_complete,
+     which is never the dispatched key here, so the match list would otherwise
+     never show (e.g. `redis-<TAB>` would ring the bell instead of listing
+     redis-*). The debugger sets this the same way for its own completion. */
   rl_variable_bind("show-all-if-ambiguous", "on");
-  /* Ctrl-C cancels the current input (or aborts a multi-line form) and reprompts;
-     on an empty line it exits. Takes over SIGINT from readline — see the handler
-     in debugger.h. */
+  /* Ctrl-C cancels the current input (or aborts a multi-line form) and
+     reprompts; on an empty line it exits. Takes over SIGINT from readline — see
+     the handler in debugger.h. */
   repl_install_sigint();
   /* Reassert the common Emacs editing keys after inputrc has loaded. M-f is
-     language-aware: readline's stock forward-word skips punctuation operators. */
-  rl_bind_key('\001', rl_beg_of_line);   /* C-a */
-  rl_bind_key('\013', rl_kill_line);     /* C-k */
+     language-aware: readline's stock forward-word skips punctuation operators.
+   */
+  rl_bind_key('\001', rl_beg_of_line);             /* C-a */
+  rl_bind_key('\013', rl_kill_line);               /* C-k */
   rl_bind_keyseq("\033b", alcove_backward_symbol); /* M-b / ESC b */
-  rl_bind_keyseq("\033f", alcove_forward_symbol); /* M-f / ESC f */
+  rl_bind_keyseq("\033f", alcove_forward_symbol);  /* M-f / ESC f */
   /* Shift-TAB (back-tab, ESC[Z) dedents by up to one indent level. */
   rl_bind_keyseq("\033[Z", alcove_back_tab);
   rl_basic_word_break_characters = " \t\n()'`,;\"";

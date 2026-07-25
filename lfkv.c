@@ -10,13 +10,15 @@
    excludes (no pthread/epoll/socket under emscripten) — no-op there. */
 #ifndef ALCOVE_WEB
 extern _Atomic int g_lfkv_watch_enabled;
-extern void resp_watch_emit(int op, const char *k, size_t klen, struct exp_t *val);
+extern void resp_watch_emit(int op, const char *k, size_t klen,
+                            struct exp_t *val);
 
-#define LFKV_EMIT(op, k, klen, val) do { \
-  if (atomic_load_explicit(&g_lfkv_watch_enabled, memory_order_relaxed)) { \
-    resp_watch_emit((op), (k), (klen), (val)); \
-  } \
-} while (0)
+#define LFKV_EMIT(op, k, klen, val)                                            \
+  do {                                                                         \
+    if (atomic_load_explicit(&g_lfkv_watch_enabled, memory_order_relaxed)) {   \
+      resp_watch_emit((op), (k), (klen), (val));                               \
+    }                                                                          \
+  } while (0)
 #else
 #define LFKV_EMIT(op, k, klen, val) ((void)0)
 #endif
@@ -293,9 +295,9 @@ int lfkv_set_expiry(lfkv_t *kv, const char *k, size_t klen, int64_t ts_us) {
       return 0;
     refexp(ent->val);
     lfentry_t *expected = ent;
-    if (atomic_compare_exchange_strong_explicit(
-            &s->entry, &expected, new_entry, memory_order_release,
-            memory_order_acquire)) {
+    if (atomic_compare_exchange_strong_explicit(&s->entry, &expected, new_entry,
+                                                memory_order_release,
+                                                memory_order_acquire)) {
       epoch_retire(ent, entry_free_owned);
       return 1;
     }
@@ -328,9 +330,9 @@ int lfkv_touch_if_value(lfkv_t *kv, const char *k, size_t klen, exp_t *expected,
       return 0;
     refexp(expected);
     lfentry_t *old = ent;
-    if (atomic_compare_exchange_strong_explicit(
-            &s->entry, &old, new_entry, memory_order_release,
-            memory_order_acquire)) {
+    if (atomic_compare_exchange_strong_explicit(&s->entry, &old, new_entry,
+                                                memory_order_release,
+                                                memory_order_acquire)) {
       epoch_retire(ent, entry_free_owned);
       return 1;
     }
@@ -363,9 +365,9 @@ int64_t lfkv_get_expiry(lfkv_t *kv, const char *k, size_t klen) {
  * (caller keeps ref). Helper for set_nx — only stores when current is NULL. */
 static int slot_install_if_null(lfkv_t *kv, lfslot_t *s, lfentry_t *new_entry) {
   lfentry_t *old = NULL;
-  if (atomic_compare_exchange_strong_explicit(
-          &s->entry, &old, new_entry, memory_order_release,
-          memory_order_acquire)) {
+  if (atomic_compare_exchange_strong_explicit(&s->entry, &old, new_entry,
+                                              memory_order_release,
+                                              memory_order_acquire)) {
     atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
     LFKV_EMIT(1, s->key, s->klen, new_entry->val);
     return 1;
@@ -423,8 +425,8 @@ int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
       }
       i = (i + 1) & kv->mask;
       for (size_t p = 0; p < kv->nslots; p++, i = (i + 1) & kv->mask) {
-        lfslot_t *s2 = atomic_load_explicit(&kv->slots[i],
-                                            memory_order_acquire);
+        lfslot_t *s2 =
+            atomic_load_explicit(&kv->slots[i], memory_order_acquire);
         if (s2 == NULL)
           goto try_claim;
         if (slot_key_eq(s2, h, k, klen)) {
@@ -463,9 +465,9 @@ int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     if (!new_entry)
       return -1;
     lfentry_t *expected = ent;
-    if (atomic_compare_exchange_strong_explicit(
-            &s->entry, &expected, new_entry, memory_order_release,
-            memory_order_acquire)) {
+    if (atomic_compare_exchange_strong_explicit(&s->entry, &expected, new_entry,
+                                                memory_order_release,
+                                                memory_order_acquire)) {
       epoch_retire(ent, entry_free_owned);
       LFKV_EMIT(1, s->key, s->klen, new_entry->val);
       return 1;
@@ -497,9 +499,9 @@ int lfkv_cas(lfkv_t *kv, const char *k, size_t klen, exp_t *expected,
         return -1;
     }
     lfentry_t *old = ent;
-    if (atomic_compare_exchange_strong_explicit(
-            &s->entry, &old, new_entry, memory_order_release,
-            memory_order_acquire)) {
+    if (atomic_compare_exchange_strong_explicit(&s->entry, &old, new_entry,
+                                                memory_order_release,
+                                                memory_order_acquire)) {
       if (!new_val)
         atomic_fetch_sub_explicit(&kv->count, 1, memory_order_relaxed);
       epoch_retire(ent, entry_free_owned);

@@ -146,9 +146,11 @@ into `adder`) and the `*_test.c` unit harnesses.
   recipe: write `fooCmd` + `doc_foo` in the fragment, declare both in the header,
   add one `LISPCMD("foo", foocmd, doc_foo)` row, add a `test.alc` assert,
   `make gen-test-adr`.
-- **Formatting:** `.clang-format` is committed; run `make fmt` (or rely on the
-  `fmt-check` gate) so diffs stay minimal and predictable. C code only — the
-  `*.adr`/`*.alc` corpus is formatted by `adder fmt` (`make adfmt-test`).
+- **Formatting:** `.clang-format` is committed and **`make fmt-check` is a CI
+  gate** (as of 2026-07-25). The tree is clean, so `make fmt` is a safe no-op
+  on an unmodified checkout and only touches what you actually edited — run it
+  before committing. C code only; the `*.adr`/`*.alc` corpus is formatted by
+  `adder fmt` (`make adfmt-test`).
 
 ---
 

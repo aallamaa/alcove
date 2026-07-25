@@ -44,6 +44,13 @@ jobs:
           echo "::group::resp-expiry-test";      make resp-expiry-test;      echo "::endgroup::"
       - name: Formatter verification (make adfmt-test)
         run: make adfmt-test
+      # C formatting. This gate did not exist until 2026-07-25, and in its
+      # absence the tree accumulated ~368 clang-format violations across 16
+      # files — which in turn made `make fmt` a landmine (it would reformat
+      # the whole repo mid-change). The tree was normalized in one commit;
+      # this keeps it that way so `make fmt` stays a no-op on clean trees.
+      - name: C formatting (make fmt-check)
+        run: make fmt-check
       - name: MPSC primitive under ThreadSanitizer
         # The lock-free MPSC queue backing RESP --threads. gcc ships libtsan on
         # ubuntu-latest, so build+run directly and FAIL the job on any race or

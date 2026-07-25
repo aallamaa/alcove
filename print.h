@@ -240,8 +240,8 @@ static void print_node_1(exp_t *node) {
     printf("\x1B[92m#<ffi>\x1B[39m");
   } else if (node->type == EXP_PORT) {
     alc_port_t *p = (alc_port_t *)node->ptr;
-    printf("#<port %s %c%s>", p && p->path ? p->path : "?",
-           p ? p->mode : '?', p && p->closed ? " closed" : "");
+    printf("#<port %s %c%s>", p && p->path ? p->path : "?", p ? p->mode : '?',
+           p && p->closed ? " closed" : "");
   } else if (node->type >= EXP_MAXSIZE && node->type < ALCOVE_TYPE_CAP &&
              exp_tfuncList[node->type]) {
     /* Custom (foreign) module type: use its print hook, else a default

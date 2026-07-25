@@ -206,7 +206,8 @@ static exp_t *watch_validate(exp_t *obj, const char *op, exp_t *k, exp_t *nw,
   call->next = make_node(refexp(obj));
   call->next->next = make_node(make_quote(make_symbol((char *)op, strlen(op))));
   call->next->next->next = make_node(make_quote(k ? refexp(k) : NIL_EXP));
-  call->next->next->next->next = make_node(make_quote(nw ? refexp(nw) : NIL_EXP));
+  call->next->next->next->next =
+      make_node(make_quote(nw ? refexp(nw) : NIL_EXP));
   exp_t *r = EVAL(call, env);
   unrefexp(call);
   if (watch_find(obj)) /* validator may have removed itself */
@@ -217,8 +218,7 @@ static exp_t *watch_validate(exp_t *obj, const char *op, exp_t *k, exp_t *nw,
   unrefexp(r);
   if (ok)
     return NULL;
-  return error(ERROR_ILLEGAL_VALUE, NULL, env, "%s: rejected by validator",
-               op);
+  return error(ERROR_ILLEGAL_VALUE, NULL, env, "%s: rejected by validator", op);
 }
 
 /* ---- builtins ---- */
@@ -240,8 +240,9 @@ exp_t *watchcmd(exp_t *e, env_t *env) {
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "watch!: obj must be a hash-map/deque/vector/set"));
   if (!is_ptr(fn) || !(fn->type == EXP_LAMBDA || fn->type == EXP_INTERNAL))
-    CLEAN_RETURN_2(obj, fn, error(ERROR_ILLEGAL_VALUE, e, env,
-                                  "watch!: fn must be a function"));
+    CLEAN_RETURN_2(
+        obj, fn,
+        error(ERROR_ILLEGAL_VALUE, e, env, "watch!: fn must be a function"));
   if (!watch_insert(obj, refexp(fn)))
     CLEAN_RETURN_2(obj, fn,
                    error(ERROR_ILLEGAL_VALUE, e, env, "watch!: out of memory"));
@@ -325,9 +326,9 @@ exp_t *setvalidatorcmd(exp_t *e, env_t *env) {
   if (!s)
     s = watch_ensure_slot(obj);
   if (!s)
-    CLEAN_RETURN_2(obj, fn,
-                   error(ERROR_ILLEGAL_VALUE, e, env,
-                         "set-validator!: out of memory"));
+    CLEAN_RETURN_2(
+        obj, fn,
+        error(ERROR_ILLEGAL_VALUE, e, env, "set-validator!: out of memory"));
   if (s->validator)
     unrefexp(s->validator);
   s->validator = refexp(fn);

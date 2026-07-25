@@ -184,10 +184,10 @@ static void gc_release_edge(exp_t *child, void *ud) {
   gc_ctx_t *g = (gc_ctx_t *)ud;
   int64_t ci = gc_cell_index(g->sorted, g->nchunks, child);
   if (ci >= 0 && (g->state[ci] & GC_DEAD))
-    return;         /* dies with us — its ref dissolves, never decremented */
-  unrefexp(child);  /* a real counted ref, dropped on the dying owner's
-                       behalf; may legitimately cascade-free live subtrees
-                       whose only holders were dead cells */
+    return;        /* dies with us — its ref dissolves, never decremented */
+  unrefexp(child); /* a real counted ref, dropped on the dying owner's
+                      behalf; may legitimately cascade-free live subtrees
+                      whose only holders were dead cells */
 }
 
 /* Free a dead cell's OWN payload without recursing into children (edges were
@@ -284,8 +284,7 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
         continue; /* freelist tenant or never-allocated bump tail */
       int64_t ci = c * EXP_BUMP_CHUNK + i;
       g.state[ci] |= GC_LIVE;
-      if (p == nil_singleton || p == true_singleton ||
-          p == gen_done_singleton)
+      if (p == nil_singleton || p == true_singleton || p == gen_done_singleton)
         continue; /* immortal: pre-marked as a root below, never walked */
       if (gc_walkable(p)) {
         g.state[ci] |= GC_WALK;

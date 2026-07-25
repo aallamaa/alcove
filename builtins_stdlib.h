@@ -543,7 +543,8 @@ exp_t *is_typecmd(exp_t *e, env_t *env) {
 const char doc_type_name[] = "(type-name t) — string name of a type object.";
 exp_t *type_namecmd(exp_t *e, env_t *env) {
   exp_t *arg = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
-  if (!istype(arg)) CLEAN_RETURN_1(arg, error(ERROR_ILLEGAL_VALUE, e, env, "(type-name t)"));
+  if (!istype(arg))
+    CLEAN_RETURN_1(arg, error(ERROR_ILLEGAL_VALUE, e, env, "(type-name t)"));
   const char *name = alc_type_name(TYPE_ID(arg));
   CLEAN_RETURN_1(arg, make_string((char *)name, strlen(name)));
 }
@@ -551,34 +552,61 @@ exp_t *type_namecmd(exp_t *e, env_t *env) {
 static int is_proper_list(exp_t *a);
 
 static uint32_t get_actual_type_id(exp_t *a) {
-  if (!a || a == NIL_EXP) return TYPE_NIL;
-  if (a == TRUE_EXP) return TYPE_BOOL;
-  if (istype(a)) return TYPE_TYPE;
+  if (!a || a == NIL_EXP)
+    return TYPE_NIL;
+  if (a == TRUE_EXP)
+    return TYPE_BOOL;
+  if (istype(a))
+    return TYPE_TYPE;
   uint32_t user_type = dict_user_type_id(a);
-  if (user_type) return user_type;
-  if (isnumber(a)) return TYPE_INT;
-  if (isfloat(a)) return TYPE_FLOAT;
-  if (isrational(a)) return TYPE_RATIONAL;
-  if (isdecimal(a)) return TYPE_DECIMAL;
-  if (isstring(a)) return TYPE_STRING;
-  if (issymbol(a)) return ((const char *)exp_text(a))[0] == ':' ? TYPE_KEYWORD : TYPE_SYMBOL;
-  if (ischar(a)) return TYPE_CHAR;
-  if (is_proper_list(a)) return TYPE_LIST;
-  if (ispair(a)) return TYPE_PAIR;
-  if (isvector(a)) return TYPE_VECTOR;
-  if (isblob(a)) return TYPE_BLOB;
-  if (isdict(a)) return TYPE_DICT;
-  if (islist(a)) return TYPE_DEQUE;
-  if (isset(a)) return TYPE_SET;
-  if (ishamt(a)) return TYPE_HAMT;
-  if (islambda(a)) return TYPE_LAMBDA;
-  if (isinternal(a)) return TYPE_BUILTIN;
-  if (ismacro(a)) return TYPE_MACRO;
-  if (is_ptr(a) && a->type == EXP_FFI) return TYPE_FFI;
-  if (iserror(a)) return TYPE_ERROR;
-  if (isport(a)) return TYPE_PORT;
-  if (is_ptr(a) && a->type == EXP_WEAK) return TYPE_WEAK;
-  if (iscont(a)) return TYPE_CONTINUATION;
+  if (user_type)
+    return user_type;
+  if (isnumber(a))
+    return TYPE_INT;
+  if (isfloat(a))
+    return TYPE_FLOAT;
+  if (isrational(a))
+    return TYPE_RATIONAL;
+  if (isdecimal(a))
+    return TYPE_DECIMAL;
+  if (isstring(a))
+    return TYPE_STRING;
+  if (issymbol(a))
+    return ((const char *)exp_text(a))[0] == ':' ? TYPE_KEYWORD : TYPE_SYMBOL;
+  if (ischar(a))
+    return TYPE_CHAR;
+  if (is_proper_list(a))
+    return TYPE_LIST;
+  if (ispair(a))
+    return TYPE_PAIR;
+  if (isvector(a))
+    return TYPE_VECTOR;
+  if (isblob(a))
+    return TYPE_BLOB;
+  if (isdict(a))
+    return TYPE_DICT;
+  if (islist(a))
+    return TYPE_DEQUE;
+  if (isset(a))
+    return TYPE_SET;
+  if (ishamt(a))
+    return TYPE_HAMT;
+  if (islambda(a))
+    return TYPE_LAMBDA;
+  if (isinternal(a))
+    return TYPE_BUILTIN;
+  if (ismacro(a))
+    return TYPE_MACRO;
+  if (is_ptr(a) && a->type == EXP_FFI)
+    return TYPE_FFI;
+  if (iserror(a))
+    return TYPE_ERROR;
+  if (isport(a))
+    return TYPE_PORT;
+  if (is_ptr(a) && a->type == EXP_WEAK)
+    return TYPE_WEAK;
+  if (iscont(a))
+    return TYPE_CONTINUATION;
   return TYPE_ANY;
 }
 
@@ -592,21 +620,26 @@ exp_t *typecmd(exp_t *e, env_t *env) {
 const char doc_is_a[] = "(is-a? x t) — true if x conforms to type object t.";
 exp_t *is_acmd(exp_t *e, env_t *env) {
   exp_t *x = e->next ? EVAL(e->next->content, env) : refexp(NIL_EXP);
-  exp_t *t = (e->next && e->next->next)
-                 ? EVAL(e->next->next->content, env)
-                 : refexp(NIL_EXP);
-  if (!istype(t)) CLEAN_RETURN_2(x, t, error(ERROR_ILLEGAL_VALUE, e, env, "is-a?: t must be a type"));
+  exp_t *t = (e->next && e->next->next) ? EVAL(e->next->next->content, env)
+                                        : refexp(NIL_EXP);
+  if (!istype(t))
+    CLEAN_RETURN_2(
+        x, t, error(ERROR_ILLEGAL_VALUE, e, env, "is-a?: t must be a type"));
   uint32_t target = TYPE_ID(t);
   uint32_t actual = get_actual_type_id(x);
 
-  int match = (target == TYPE_ANY) || (actual == target) ||
-              (target == TYPE_BOOL && (!x || x == NIL_EXP || x == TRUE_EXP)) ||
-              (target == TYPE_NUMBER && (actual == TYPE_INT || actual == TYPE_FLOAT || actual == TYPE_RATIONAL || actual == TYPE_DECIMAL)) ||
-              (target == TYPE_LIST && is_proper_list(x)) ||
-              (target == TYPE_DICT && isdict(x)) ||
-              (target >= TYPE_USER_MIN &&
-               alc_user_type_conforms(dict_user_type_id(x), target)) ||
-              (target == TYPE_FN && (actual == TYPE_LAMBDA || actual == TYPE_BUILTIN || actual == TYPE_FFI));
+  int match =
+      (target == TYPE_ANY) || (actual == target) ||
+      (target == TYPE_BOOL && (!x || x == NIL_EXP || x == TRUE_EXP)) ||
+      (target == TYPE_NUMBER &&
+       (actual == TYPE_INT || actual == TYPE_FLOAT || actual == TYPE_RATIONAL ||
+        actual == TYPE_DECIMAL)) ||
+      (target == TYPE_LIST && is_proper_list(x)) ||
+      (target == TYPE_DICT && isdict(x)) ||
+      (target >= TYPE_USER_MIN &&
+       alc_user_type_conforms(dict_user_type_id(x), target)) ||
+      (target == TYPE_FN &&
+       (actual == TYPE_LAMBDA || actual == TYPE_BUILTIN || actual == TYPE_FFI));
 
   CLEAN_RETURN_2(x, t, refexp(match ? TRUE_EXP : NIL_EXP));
 }
@@ -1067,11 +1100,14 @@ const char doc_defclass[] =
     "Zero fields is (defclass Name) — a trailing () is a malformed field. "
     "Keyword-headed clauses extend the body: (:extends Parent) — as the FIRST "
     "clause, at most one — inherits Parent's fields (Parent must be a "
-    "fully-defined class); the constructor takes all inherited-then-own fields, "
+    "fully-defined class); the constructor takes all inherited-then-own "
+    "fields, "
     "(is-a? child Parent) and Parent's accessors work on a child, and a child "
     "field may not shadow an inherited one. (:method name (self args...) "
-    "body...) clauses, AFTER all fields, define generic functions dispatched on "
-    "the first arg's type: (name inst ...); a child inherits a parent method it "
+    "body...) clauses, AFTER all fields, define generic functions dispatched "
+    "on "
+    "the first arg's type: (name inst ...); a child inherits a parent method "
+    "it "
     "does not override, and a method for the Any type is the default. "
     "FIELD TYPES may be compound: (optional TE) also admits nil, (list-of TE) "
     "admits a proper list (or nil) of TE, (or TE TE ...) admits any arm; TEs "
@@ -1119,14 +1155,15 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
      pre-registration: loaddb creates one when an instance is loaded before its
      class is defined, so the instance keeps its identity. This defclass CLAIMS
      that entry (reuses its id, keeps loaded instances valid). A fully-defined
-     class (constructor != NULL) still reserves the name and cannot be redefined.
-     A builtin-reserved name is always rejected. */
+     class (constructor != NULL) still reserves the name and cannot be
+     redefined. A builtin-reserved name is always rejected. */
   alc_user_type_t *claim = alc_user_type_by_name(cname);
   int is_claim = claim && !claim->constructor;
   int reserved_hit =
       reserved_symbol &&
       set_get_keyval_dict(reserved_symbol, (char *)cname, NULL) != NULL;
-  if (!defclass_ident_ok(cname) || reserved_hit || (claim && claim->constructor)) {
+  if (!defclass_ident_ok(cname) || reserved_hit ||
+      (claim && claim->constructor)) {
     exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
                        "defclass: class name must be a non-reserved symbol");
     unrefexp(e);
@@ -1136,11 +1173,10 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
      EXCEPT the type-object binding a claimable pre-registration itself
      installed, which this defclass is expected to claim. */
   exp_t *existing_bind = alc_global_value(cname);
-  if (existing_bind &&
-      !(is_claim && existing_bind == MAKE_TYPE(claim->id))) {
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env,
-                       "defclass: '%s' is already bound — choose another name",
-                       cname);
+  if (existing_bind && !(is_claim && existing_bind == MAKE_TYPE(claim->id))) {
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "defclass: '%s' is already bound — choose another name", cname);
     unrefexp(e);
     return err;
   }
@@ -1158,8 +1194,7 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
     nclauses++;
   defclass_field_t *fields =
       nclauses ? calloc((size_t)nclauses, sizeof(defclass_field_t)) : NULL;
-  exp_t **methods =
-      nclauses ? calloc((size_t)nclauses, sizeof(exp_t *)) : NULL;
+  exp_t **methods = nclauses ? calloc((size_t)nclauses, sizeof(exp_t *)) : NULL;
   if (nclauses && (!fields || !methods)) {
     free(fields);
     free(methods);
@@ -1167,13 +1202,13 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
     unrefexp(e);
     return err;
   }
-#define DC_FAIL(...)                                                            \
-  do {                                                                          \
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, __VA_ARGS__);               \
-    free(fields);                                                               \
-    free(methods);                                                              \
-    unrefexp(e);                                                                \
-    return err;                                                                 \
+#define DC_FAIL(...)                                                           \
+  do {                                                                         \
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, __VA_ARGS__);              \
+    free(fields);                                                              \
+    free(methods);                                                             \
+    unrefexp(e);                                                               \
+    return err;                                                                \
   } while (0)
 
   const char *parent_name = NULL;
@@ -1292,14 +1327,14 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
     return err;
   }
 #undef DC_FAIL
-#define DC_FAIL(...)                                                            \
-  do {                                                                          \
-    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, __VA_ARGS__);               \
-    free(fields);                                                               \
-    free(methods);                                                              \
-    free(eff);                                                                  \
-    unrefexp(e);                                                                \
-    return err;                                                                 \
+#define DC_FAIL(...)                                                           \
+  do {                                                                         \
+    exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, __VA_ARGS__);              \
+    free(fields);                                                              \
+    free(methods);                                                             \
+    free(eff);                                                                 \
+    unrefexp(e);                                                               \
+    return err;                                                                \
   } while (0)
   {
     int k = 0;
@@ -1368,7 +1403,8 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
 
   defclass_buf_t b = {0};
   b.ok = 1;
-  if (!alc_register_user_type(cname) || !alc_bind_global_type(cname, class_id)) {
+  if (!alc_register_user_type(cname) ||
+      !alc_bind_global_type(cname, class_id)) {
     defclass_free_srcs(eff, neff);
     free(fields);
     free(methods);
@@ -1380,14 +1416,16 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   }
   /* Record the (:extends) link now so is-a? chain-walking (and inherited
      methods) see it. A fresh entry's rollback drops it with the entry; a
-     claimed pre-registration keeps it (task: claim WITH :extends sets parent). */
+     claimed pre-registration keeps it (task: claim WITH :extends sets parent).
+   */
   alc_user_type_set_parent(class_id, parent_id);
 
   int i;
   defclass_buf_addf(&b, "(do ");
-  defclass_buf_addf(&b, "(= %s__class (hash-map \"__type__\" (quote Class) "
-                           "\"name\" (quote %s) \"type\" %s ",
-                     cname, cname, cname);
+  defclass_buf_addf(&b,
+                    "(= %s__class (hash-map \"__type__\" (quote Class) "
+                    "\"name\" (quote %s) \"type\" %s ",
+                    cname, cname, cname);
   if (parent_name)
     defclass_buf_addf(&b, "\"parent\" %s ", parent_name);
   defclass_buf_addf(&b, "\"fields\" (list");
@@ -1426,9 +1464,10 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
                     cname);
   for (i = 0; i < neff; i++)
     defclass_buf_addf(&b, ")");
-  defclass_buf_addf(&b, " (if (is _op (quote dissoc!)) "
-                         "(raise (quote illegal-value) "
-                         "\"%s: fields cannot be deleted\") t))) ",
+  defclass_buf_addf(&b,
+                    " (if (is _op (quote dissoc!)) "
+                    "(raise (quote illegal-value) "
+                    "\"%s: fields cannot be deleted\") t))) ",
                     cname);
 
   defclass_buf_addf(&b, "(def %s__new (", cname);
@@ -1468,11 +1507,10 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
   defclass_buf_addf(&b, "(let _obj (hash-map \"__type__\" %s", cname);
   for (i = 0; i < neff; i++)
     defclass_buf_addf(&b, " \"%s\" _a%d", eff[i].name, i);
-  defclass_buf_addf(&b, ") (set-validator! _obj %s__validator) _obj))) ", cname);
+  defclass_buf_addf(&b, ") (set-validator! _obj %s__validator) _obj))) ",
+                    cname);
 
-  defclass_buf_addf(&b,
-                    "(def %s? (_o) (is-a? _o %s)) ",
-                    cname, cname);
+  defclass_buf_addf(&b, "(def %s? (_o) (is-a? _o %s)) ", cname, cname);
   for (i = 0; i < neff; i++) {
     const char *fn = eff[i].name;
     defclass_buf_addf(&b,
@@ -1513,7 +1551,8 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
       char *validator_name = defclass_suffix_name(cname, "__validator");
       char *schema_name = defclass_suffix_name(cname, "__class");
       exp_t *ctor = ctor_name ? alc_global_value(ctor_name) : NULL;
-      exp_t *validator = validator_name ? alc_global_value(validator_name) : NULL;
+      exp_t *validator =
+          validator_name ? alc_global_value(validator_name) : NULL;
       exp_t *schema = schema_name ? alc_global_value(schema_name) : NULL;
       if (!ctor_name || !validator_name || !schema_name || !islambda(ctor) ||
           !islambda(validator) || !isdict(schema) ||
@@ -1684,8 +1723,7 @@ exp_t *defmulticmd(exp_t *e, env_t *env) {
      __mm-lookup is `get` plus, when the dispatch value is a type object, a
      parent-chain + Any fallback (class-method inheritance). */
   exp_t *dispcall = sx_lst(3, sx_sym("apply"), refexp(disp), sx_sym("args"));
-  exp_t *getcall =
-      sx_lst(3, sx_sym("__mm-lookup"), sx_sym(mname), dispcall);
+  exp_t *getcall = sx_lst(3, sx_sym("__mm-lookup"), sx_sym(mname), dispcall);
   exp_t *body = sx_lst(3, sx_sym("apply"), getcall, sx_sym("args"));
   exp_t *params = sx_lst(2, sx_sym("."), sx_sym("args"));
   exp_t *d2 = sx_lst(4, sx_sym("def"), refexp(nm), params, body);
@@ -2310,7 +2348,8 @@ static exp_t *alc_apply_n(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   if (islambda(fn))
     return vm_invoke_values(fn, nargs, argv, env);
   if (istype(fn) && alc_user_type_constructor(TYPE_ID(fn)))
-    return alc_apply_n(alc_user_type_constructor(TYPE_ID(fn)), nargs, argv, env);
+    return alc_apply_n(alc_user_type_constructor(TYPE_ID(fn)), nargs, argv,
+                       env);
   if (isinternal(fn)) {
     /* Build the canonical (fn args...) form and let fn->fnc evaluate it.
        The args are already VALUES; for self-evaluating ones (numbers, floats,
@@ -3780,16 +3819,26 @@ static void inspect_value(exp_t *v) {
     return;
   }
   char flags_str[256] = "";
-  if (v->flags & FLAG_TAILREC) strcat(flags_str, " TAILREC");
-  if (v->flags & FLAG_TAIL_AWARE) strcat(flags_str, " TAIL_AWARE");
-  if (v->flags & FLAG_COMPILED) strcat(flags_str, " COMPILED");
-  if (v->flags & FLAG_SHARED) strcat(flags_str, " SHARED");
-  if (v->flags & FLAG_INLINE_TXT) strcat(flags_str, " INLINE_TXT");
-  if (v->flags & FLAG_MULTI) strcat(flags_str, " MULTI");
-  if (v->flags & FLAG_WEAK_REFERENT) strcat(flags_str, " WEAK_REF");
-  if (v->flags & FLAG_WATCHED) strcat(flags_str, " WATCHED");
-  if (v->flags & FLAG_APPLICATIVE) strcat(flags_str, " APPLICATIVE");
-  if (v->flags & FLAG_UNSAFE) strcat(flags_str, " UNSAFE");
+  if (v->flags & FLAG_TAILREC)
+    strcat(flags_str, " TAILREC");
+  if (v->flags & FLAG_TAIL_AWARE)
+    strcat(flags_str, " TAIL_AWARE");
+  if (v->flags & FLAG_COMPILED)
+    strcat(flags_str, " COMPILED");
+  if (v->flags & FLAG_SHARED)
+    strcat(flags_str, " SHARED");
+  if (v->flags & FLAG_INLINE_TXT)
+    strcat(flags_str, " INLINE_TXT");
+  if (v->flags & FLAG_MULTI)
+    strcat(flags_str, " MULTI");
+  if (v->flags & FLAG_WEAK_REFERENT)
+    strcat(flags_str, " WEAK_REF");
+  if (v->flags & FLAG_WATCHED)
+    strcat(flags_str, " WATCHED");
+  if (v->flags & FLAG_APPLICATIVE)
+    strcat(flags_str, " APPLICATIVE");
+  if (v->flags & FLAG_UNSAFE)
+    strcat(flags_str, " UNSAFE");
 
   printf("\x1B[96m"
          "--- exp_t %p ---\n"
@@ -3823,7 +3872,8 @@ static void inspect_value(exp_t *v) {
     printf("fnc:\t%p\n", (void *)v->fnc);
   } else if (v->type == EXP_FLOAT) {
     printf("f:\t%g\n", (double)v->f);
-  } else if (v->type == EXP_PAIR || v->type == EXP_PAIR_CIRCULAR || v->type == EXP_TREE) {
+  } else if (v->type == EXP_PAIR || v->type == EXP_PAIR_CIRCULAR ||
+             v->type == EXP_TREE) {
     printf("content: %p\n", (void *)v->content);
   } else {
     printf("ptr:\t%p\n", v->ptr);

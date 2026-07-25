@@ -85,15 +85,20 @@ exp_t *readlinecmd(exp_t *e, env_t *env) {
   exp_t *portexp = NULL;
   if (e->next) {
     portexp = EVAL(e->next->content, env);
-    if (iserror(portexp)) { unrefexp(e); return portexp; }
+    if (iserror(portexp)) {
+      unrefexp(e);
+      return portexp;
+    }
     if (!isport(portexp)) {
-      unrefexp(portexp); unrefexp(e);
+      unrefexp(portexp);
+      unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "read-line: argument must be a port");
     }
     alc_port_t *p = (alc_port_t *)portexp->ptr;
     if (!p || p->closed || !p->fp || p->mode != 'r') {
-      unrefexp(portexp); unrefexp(e);
+      unrefexp(portexp);
+      unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "read-line: port is not open for reading");
     }
@@ -102,9 +107,13 @@ exp_t *readlinecmd(exp_t *e, env_t *env) {
   char *line = NULL;
   size_t cap = 0;
   ssize_t n = getline(&line, &cap, fp);
-  if (portexp) unrefexp(portexp);
+  if (portexp)
+    unrefexp(portexp);
   unrefexp(e);
-  if (n < 0) { free(line); return refexp(NIL_EXP); }
+  if (n < 0) {
+    free(line);
+    return refexp(NIL_EXP);
+  }
   while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
     n--;
   exp_t *ret = make_string(line, (int)n);
@@ -324,14 +333,19 @@ const char doc_flush[] =
 exp_t *flushcmd(exp_t *e, env_t *env) {
   if (e->next) {
     exp_t *portexp = EVAL(e->next->content, env);
-    if (iserror(portexp)) { unrefexp(e); return portexp; }
+    if (iserror(portexp)) {
+      unrefexp(e);
+      return portexp;
+    }
     if (!isport(portexp)) {
-      unrefexp(portexp); unrefexp(e);
+      unrefexp(portexp);
+      unrefexp(e);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "flush: argument must be a port");
     }
     alc_port_t *p = (alc_port_t *)portexp->ptr;
-    if (p && !p->closed && p->fp) fflush(p->fp);
+    if (p && !p->closed && p->fp)
+      fflush(p->fp);
     unrefexp(portexp);
   } else {
     fflush(stdout);
@@ -780,8 +794,9 @@ exp_t *writecmd(exp_t *e, env_t *env) {
   const char *s = (const char *)exp_text(strexp);
   size_t n = strlen(s);
   if (n && fwrite(s, 1, n, p->fp) != n)
-    CLEAN_RETURN_2(portexp, strexp,
-                   error(ERROR_ILLEGAL_VALUE, NULL, env, "write: write failed"));
+    CLEAN_RETURN_2(
+        portexp, strexp,
+        error(ERROR_ILLEGAL_VALUE, NULL, env, "write: write failed"));
   CLEAN_RETURN_2(portexp, strexp, refexp(NIL_EXP));
 }
 

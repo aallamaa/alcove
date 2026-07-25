@@ -822,7 +822,8 @@ env_t *alcove_init(void) {
   set_get_keyval_dict(reserved_symbol, "Error", MAKE_TYPE(TYPE_ERROR));
   set_get_keyval_dict(reserved_symbol, "Port", MAKE_TYPE(TYPE_PORT));
   set_get_keyval_dict(reserved_symbol, "Weak", MAKE_TYPE(TYPE_WEAK));
-  set_get_keyval_dict(reserved_symbol, "Continuation", MAKE_TYPE(TYPE_CONTINUATION));
+  set_get_keyval_dict(reserved_symbol, "Continuation",
+                      MAKE_TYPE(TYPE_CONTINUATION));
   set_get_keyval_dict(reserved_symbol, "Type", MAKE_TYPE(TYPE_TYPE));
 
   int N = sizeof(lispProcList) / sizeof(lispProc);

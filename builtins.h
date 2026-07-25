@@ -66,7 +66,8 @@ extern const char doc_conj[], doc_into[];
 extern const char doc_typeof[];
 extern const char doc_type_name[], doc_type[], doc_is_a[], doc_is_type[];
 extern const char doc_instance_p[];
-extern const char doc_defstruct[], doc_defclass[], doc_defmulti[], doc_defmethod[];
+extern const char doc_defstruct[], doc_defclass[], doc_defmulti[],
+    doc_defmethod[];
 extern const char doc_mm_lookup[];
 extern const char doc_vec[], doc_vecref[], doc_vecset[], doc_veclen[];
 extern const char doc_def[], doc_defn[], doc_fn[], doc_defc[], doc_defmacro[],
@@ -326,10 +327,9 @@ extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
 extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
     doc_redis_get[], doc_redis_val[], doc_redis_set[], doc_redis_del[],
     doc_redis_flush[], doc_redis_port[], doc_redis_defcmd[],
-    doc_redis_undefcmd[], doc_redis_cmds[],
-    doc_redis_watch_bang[], doc_redis_watch_dropped[],
-    doc_redis_next_event_bang[], doc_redis_wait_event_bang[],
-    doc_redis_drain_events_bang[];
+    doc_redis_undefcmd[], doc_redis_cmds[], doc_redis_watch_bang[],
+    doc_redis_watch_dropped[], doc_redis_next_event_bang[],
+    doc_redis_wait_event_bang[], doc_redis_drain_events_bang[];
 
 /* Forward decls for cmds defined below the table — every callee must be
    visible at table-init time. The original cmds had a top-level

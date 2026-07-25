@@ -49,7 +49,7 @@ static exp_t *compr_run(exp_t *e, env_t *env, int kind, const char *usage) {
   int haspred = (nrest == need + 1);
   exp_t *pred = haspred ? rest->content : NULL;
   exp_t *r1 = haspred ? rest->next : rest;
-  exp_t *x1 = r1->content;                              /* expr, or dfor key */
+  exp_t *x1 = r1->content; /* expr, or dfor key */
   exp_t *x2 = (kind == COMPR_DICT) ? r1->next->content : NULL; /* dfor val */
 
   exp_t *coll = EVAL(a_coll->content, env);
@@ -221,8 +221,8 @@ exp_t *gforcmd(exp_t *e, env_t *env) {
   exp_t *varname = a_var->content;
   exp_t *ret = NULL;
   if (!issymbol(varname)) {
-    ret = error(ERROR_ILLEGAL_VALUE, e, env,
-                "gfor: first arg must be a symbol");
+    ret =
+        error(ERROR_ILLEGAL_VALUE, e, env, "gfor: first arg must be a symbol");
     unrefexp(e);
     return ret;
   }

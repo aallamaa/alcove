@@ -83,7 +83,7 @@ typedef struct node {
   char open;         /* list: '(' or '[' */
   int vec, set, map; /* #[..], #{..}, {..} */
   char comp; /* l/g/s/d: #l[..]/#g[..]/#s{..}/#d{..} comprehension sugar */
-  int call;          /* glued call group f(args) */
+  int call;  /* glued call group f(args) */
   struct node **kid;
   int n, cap;
   char *lead;  /* full-line comment(s) above (owned, may be NULL) */

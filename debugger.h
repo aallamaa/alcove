@@ -1472,19 +1472,21 @@ static char *alc_readline(const char *prompt) {
 }
 
 /* ---- REPL Ctrl-C: cancel the current input, exit only on an empty line -----
-   While a form is being read interactively, SIGINT (Ctrl-C) abandons whatever is
-   on the line (and the whole multi-line form) and returns to a fresh prompt; on
-   a truly empty prompt it exits. readline's own signal trapping is turned off
-   (see repl_install_sigint) so this handler owns SIGINT during readline — the
-   form reader's longjmp landing pad restores the terminal via
+   While a form is being read interactively, SIGINT (Ctrl-C) abandons whatever
+   is on the line (and the whole multi-line form) and returns to a fresh prompt;
+   on a truly empty prompt it exits. readline's own signal trapping is turned
+   off (see repl_install_sigint) so this handler owns SIGINT during readline —
+   the form reader's longjmp landing pad restores the terminal via
    rl_cleanup_after_signal. Outside a form read (g_repl_reading == 0, e.g. while
    evaluating) Ctrl-C terminates as before. The accumulator is file-scope so the
    landing pad can free it safely after siglongjmp (a modified local would be
    indeterminate). */
 static sigjmp_buf g_repl_sigint_jmp;
-static volatile sig_atomic_t g_repl_reading = 0;  /* 1 while blocked in readline */
-static volatile sig_atomic_t g_repl_has_text = 0; /* line non-empty / mid-form */
-static char *g_repl_acc = NULL;                   /* in-progress form */
+static volatile sig_atomic_t g_repl_reading =
+    0; /* 1 while blocked in readline */
+static volatile sig_atomic_t g_repl_has_text =
+    0;                          /* line non-empty / mid-form */
+static char *g_repl_acc = NULL; /* in-progress form */
 
 static void repl_sigint_handler(int sig) {
   (void)sig;
@@ -1496,9 +1498,9 @@ static void repl_sigint_handler(int sig) {
 }
 
 /* Landing pad for the SIGINT longjmp, shared by both form readers. Restores the
-   terminal readline left in raw mode, ends bracketed paste, drops to a new line,
-   and frees the partial form. Returns NULL (empty line -> the REPL loop exits)
-   or a fresh "" (had text -> the REPL loop skips it and reprompts). */
+   terminal readline left in raw mode, ends bracketed paste, drops to a new
+   line, and frees the partial form. Returns NULL (empty line -> the REPL loop
+   exits) or a fresh "" (had text -> the REPL loop skips it and reprompts). */
 static char *repl_sigint_recover(void) {
   g_repl_reading = 0;
   rl_startup_hook = NULL;
@@ -1514,15 +1516,16 @@ static char *repl_sigint_recover(void) {
 }
 
 /* Install the Ctrl-C handler and stop readline from trapping SIGINT itself.
-   Window-resize (SIGWINCH) handling is independent (rl_catch_sigwinch) and stays
-   on. Called from repl_readline_setup, i.e. only when stdin is a tty. */
+   Window-resize (SIGWINCH) handling is independent (rl_catch_sigwinch) and
+   stays on. Called from repl_readline_setup, i.e. only when stdin is a tty. */
 static void repl_install_sigint(void) {
   rl_catch_signals = 0;
   struct sigaction sa;
   memset(&sa, 0, sizeof sa);
   sa.sa_handler = repl_sigint_handler;
   sigemptyset(&sa.sa_mask);
-  sa.sa_flags = 0; /* persistent; no SA_RESTART so the blocking read is broken */
+  sa.sa_flags =
+      0; /* persistent; no SA_RESTART so the blocking read is broken */
   sigaction(SIGINT, &sa, NULL);
 }
 

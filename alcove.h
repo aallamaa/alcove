@@ -100,12 +100,37 @@ enum {
 #define istype(e) ((e) != NULL && TAG(e) == TAG_TYPE)
 
 enum alc_type_id {
-  TYPE_ANY = 1, TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_NUMBER,
-  TYPE_RATIONAL, TYPE_DECIMAL, TYPE_STRING, TYPE_SYMBOL, TYPE_KEYWORD,
-  TYPE_CHAR, TYPE_PAIR, TYPE_LIST, TYPE_VECTOR, TYPE_BLOB, TYPE_DICT,
-  TYPE_DEQUE, TYPE_SET, TYPE_HAMT, TYPE_FN, TYPE_LAMBDA, TYPE_BUILTIN,
-  TYPE_MACRO, TYPE_FFI, TYPE_ERROR, TYPE_PORT, TYPE_WEAK, TYPE_CONTINUATION,
-  TYPE_TYPE, TYPE_USER_MIN = 100000
+  TYPE_ANY = 1,
+  TYPE_NIL,
+  TYPE_BOOL,
+  TYPE_INT,
+  TYPE_FLOAT,
+  TYPE_NUMBER,
+  TYPE_RATIONAL,
+  TYPE_DECIMAL,
+  TYPE_STRING,
+  TYPE_SYMBOL,
+  TYPE_KEYWORD,
+  TYPE_CHAR,
+  TYPE_PAIR,
+  TYPE_LIST,
+  TYPE_VECTOR,
+  TYPE_BLOB,
+  TYPE_DICT,
+  TYPE_DEQUE,
+  TYPE_SET,
+  TYPE_HAMT,
+  TYPE_FN,
+  TYPE_LAMBDA,
+  TYPE_BUILTIN,
+  TYPE_MACRO,
+  TYPE_FFI,
+  TYPE_ERROR,
+  TYPE_PORT,
+  TYPE_WEAK,
+  TYPE_CONTINUATION,
+  TYPE_TYPE,
+  TYPE_USER_MIN = 100000
 };
 
 #define MAKE_FIX(v) ((exp_t *)((((uintptr_t)(int64_t)(v)) << 3) | TAG_FIX))
@@ -221,8 +246,7 @@ enum alc_type_id {
     "def/defmacro without a name symbol")                                      \
   X(ERROR_ILLEGAL_VALUE, , "illegal-value",                                    \
     "wrong type or value for the operation (the general class)")               \
-  X(ERROR_DIV_BY0, , "div-by-zero",                                            \
-    "division or modulo by zero")                                              \
+  X(ERROR_DIV_BY0, , "div-by-zero", "division or modulo by zero")              \
   X(ERROR_MISSING_PARAMETER, , "missing-parameter",                            \
     "wrong number of arguments in a call")                                     \
   X(ERROR_UNBOUND_VARIABLE, , "unbound-variable",                              \
@@ -739,11 +763,14 @@ typedef struct exp_tfunc {
 exp_t *dump_type_obj(exp_t *e, FILE *stream);
 #define __DUMP__(e, s)                                                         \
   (istype(e) ? dump_type_obj(e, s)                                             \
-   : (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump           \
-       ? exp_tfuncList[TYPEOF_E(e)]->dump(e, s)                                \
-       : NULL))
+             : (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump \
+                    ? exp_tfuncList[TYPEOF_E(e)]->dump(e, s)                   \
+                    : NULL))
 #define __DUMPABLE__(e)                                                        \
-  (istype(e) ? 1 : (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump ? 1 : 0))
+  (istype(e)                                                                   \
+       ? 1                                                                     \
+       : (exp_tfuncList[TYPEOF_E(e)] && exp_tfuncList[TYPEOF_E(e)]->dump ? 1   \
+                                                                         : 0))
 
 typedef struct token_t {
   int size;
@@ -1381,7 +1408,7 @@ typedef struct compiler_t {
 typedef struct {
   FILE *fp;
   char *path;
-  char mode;   /* 'r' | 'w' | 'a' */
+  char mode; /* 'r' | 'w' | 'a' */
   int closed;
 } alc_port_t;
 
