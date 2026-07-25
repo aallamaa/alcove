@@ -1,3 +1,18 @@
+Engineering log + backlog. Tags:
+
+  [DONE]     shipped; the entry is the record of what/why/how it was
+             validated. Kept deliberately — these are the reconstruction
+             notes for decisions made years apart.
+  [TODO]     an actual open work item against this codebase.
+  [READING]  a reference/reading-list bookmark, not scheduled work. Kept
+             for provenance; do not read these as a backlog.
+  [WATCH]    a suspected issue with no repro. Reopen with one if it
+             resurfaces.
+  [REJECTED] considered and deliberately declined; the entry says why.
+
+The forward-looking, sequenced plan lives in docs/ROADMAP.md — this file
+is the historical log.
+
 [DONE] JIT: equality-base tail loops now JIT (2026-06-01, x86-64 host).
        (def cd (n) (if (is n 0) n (cd (- n 1)))) — the natural `is`-base
        countdown — previously ran in the VM (~54x slower than its (> n 0)
@@ -233,10 +248,10 @@
        malformed/truncated/non-string key/trailing data) are catchable.
        Self-contained codec (alcove.c, like the savedb serializer); tests
        "20i" in test.alc.
-[TODO] check added value of http://www.canonware.com/jemalloc/ instead of malloc
-[TODO] see https://www.hackerschool.com/blog/13-list-comprehensions-in-eight-lines-of-clojure
-[TODO] see concatenative stuff: http://blog.fogus.me/2013/01/06/pesto5-a-concatenative-programming-library-in-5-lines-of-clojure/
-[TODO] check qsort http://arclanguage.org/item?id=16705
+[READING] check added value of http://www.canonware.com/jemalloc/ instead of malloc
+[READING] see https://www.hackerschool.com/blog/13-list-comprehensions-in-eight-lines-of-clojure
+[READING] see concatenative stuff: http://blog.fogus.me/2013/01/06/pesto5-a-concatenative-programming-library-in-5-lines-of-clojure/
+[READING] check qsort http://arclanguage.org/item?id=16705
 [DONE] HAMT / persistent map (EXP_HAMT): immutable map with structural
        sharing (32-way bitmap trie, 5 hash bits/level, collision buckets).
        Refcounted C nodes shared across versions (acyclic DAG → no cycles).
@@ -260,16 +275,16 @@
        narrow set of recognized shapes is emitted directly, so the DynASM
        dependency was never needed. (orig ref
        http://blog.reverberate.org/2012_12_01_archive.html)
-[TODO] check http://nanocubes.net/
-[TODO] check http://en.wikipedia.org/wiki/Splay_tree
-[TODO] check http://en.wikipedia.org/wiki/Suffix_trie
-[TODO] check http://en.wikipedia.org/wiki/Rope_%28data_structure%29 
-[TODO] check http://cr.yp.to/critbit.html 
-[TODO] check http://en.wikipedia.org/wiki/Dancing_Links 
-[TODO] check http://en.wikipedia.org/wiki/Skip_list
-[TODO] check http://okasaki.blogspot.co.uk/2008/02/ten-years-of-purely-functional-data.html
-[TODO] check http://en.wikipedia.org/wiki/Binary_space_partitioning 
-[TODO] check http://adtinfo.org/index.html
+[READING] check http://nanocubes.net/
+[READING] check http://en.wikipedia.org/wiki/Splay_tree
+[READING] check http://en.wikipedia.org/wiki/Suffix_trie
+[READING] check http://en.wikipedia.org/wiki/Rope_%28data_structure%29 
+[READING] check http://cr.yp.to/critbit.html 
+[READING] check http://en.wikipedia.org/wiki/Dancing_Links 
+[READING] check http://en.wikipedia.org/wiki/Skip_list
+[READING] check http://okasaki.blogspot.co.uk/2008/02/ten-years-of-purely-functional-data.html
+[READING] check http://en.wikipedia.org/wiki/Binary_space_partitioning 
+[READING] check http://adtinfo.org/index.html
 
 [DONE] REPL: readline tab completion + history + multi-line continuation
        (auto-detected via /usr/include/readline/readline.h presence)

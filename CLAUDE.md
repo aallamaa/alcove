@@ -52,9 +52,10 @@ Consequences for editing:
 - A fragment sees everything `#include`d **before** it in `alcove.c`. Ordering
   encodes forward-reference dependencies — moving an `#include` can break the
   build. The order is listed in the module map below.
-- A new **special form** must be taught to BOTH the AST evaluator *and* the
-  bytecode compiler (`compile_expr`) — otherwise deep tail recursion through it
-  falls back to AST and segfaults the C stack. See "Invariants".
+- A new **special form** must be taught to BOTH the AST evaluator (in
+  `alcove.c`) *and* the bytecode compiler (`compile_expr`, in
+  **`compiler_impl.h`**) — otherwise deep tail recursion through it falls back
+  to AST and segfaults the C stack. See "Invariants".
 - Headers still carry the doc comments: the top-of-file banner in each fragment
   is the API summary. Read it instead of skimming the whole `.c`.
 
@@ -62,12 +63,19 @@ Consequences for editing:
 
 ## Module map (in `alcove.c` include order)
 
-`alcove.c` itself (~14.6k lines — the one real monolith, slated for further
+`alcove.c` itself (~8.9k lines — the largest single file, slated for further
 splitting) holds: the `exp_t` value model + refcounting, the environment arena,
 the AST evaluator, the argument-eval macros (`EVAL_ARG_n` / `CLEAN_RETURN_n`),
-the `lispProcList[]` builtin dispatch table (line ~439), the bytecode
-compiler + VM (`compile_expr` / the run loop, ~7211–10913), the source
-pretty-printer, the debugger, the REPL editing builtins, and `main`.
+the `LISPCMD` macro family + the `lispProcList[]` builtin dispatch table
+(`#define LISPCMD` ~596, the table itself ~618), the type-annotation parser
+(~3219), the debugger's AST hooks (~360), the shared REPL eval core (~8152),
+the programmable key bindings (~8249), and `main` (~8347).
+
+**The bytecode compiler and VM are NOT in `alcove.c`** — they live in
+`compiler_impl.h`: `compile_expr` at ~1077 and the `vm_run` dispatch loop at
+~2092 (computed-goto table ~2258). Line numbers here are navigation hints, not
+contracts; prefer `grep '^name'` (definitions start at column 0) and the
+`/* ---- section ---- */` banners.
 
 | Fragment | Responsibility |
 |---|---|
@@ -113,9 +121,13 @@ pretty-printer, the debugger, the REPL editing builtins, and `main`.
 | `repl_builtins.h` | Lisp-facing REPL editing, diagnostics (check-syntax), and key-binding builtins |
 | `resp.c` | RESP2 (Redis protocol) server; `--threads` multi-reactor |
 
-Other TUs (NOT included into alcove.c): `mpsc.h` (MPSC queue, used by resp under
-threads), `adfmt.c` (`adder fmt`, a **separate** TU linked into `adder`), and the
-`*_test.c` unit harnesses.
+Two fragments are pulled in indirectly rather than by a line in `alcove.c`:
+`char.h` and `mpsc.h` (MPSC queue, used by resp under threads) are `#include`d
+by `alcove.h`; `resp.c` is `#include`d by `repl_builtins.h` (~455). They are
+still part of the one TU — grep for the `#include` if you need the exact spot.
+
+Genuinely separate TUs (NOT part of alcove.c): `adfmt.c` (`adder fmt`, linked
+into `adder`) and the `*_test.c` unit harnesses.
 
 ---
 
@@ -128,7 +140,7 @@ threads), `adfmt.c` (`adder fmt`, a **separate** TU linked into `adder`), and th
   definition (not its call sites). Prefer `static` for fragment-local helpers.
 - **Banner comments** `/* ---- section ---- */` group related functions and are
   the anchors for search and `str_replace` — keep them unique and descriptive.
-- **Builtins** register via the `LISPCMD(name, fn, doc)` family (alcove.c:417)
+- **Builtins** register via the `LISPCMD(name, fn, doc)` family (alcove.c ~596)
   in `lispProcList[]`; the `fn` is `name##cmd`, the `doc_*` string and the
   prototype live in `builtins.h` (or the owning fragment's header). New-builtin
   recipe: write `fooCmd` + `doc_foo` in the fragment, declare both in the header,
