@@ -655,9 +655,16 @@ clean:
 #   make fmt-check  — fail if anything is mis-formatted, change nothing
 #   make tidy       — run clang-tidy on the main TU (config: .clang-tidy)
 #   make hooks      — install the staged-diff pre-commit gate
-# Day-to-day, the pre-commit hook checks only the lines you touch, so the
-# existing whole-file LLVM drift never blocks a commit. `fmt-check` over the
-# whole tree will fail until `make fmt` is run once across everything.
+# The tree was normalized to .clang-format on 2026-07-25 and `fmt-check` is
+# now a CI gate, so `make fmt` is a no-op on a clean checkout and touches only
+# what you actually edited — run it freely before committing.
+#
+# CLANG_FORMAT_VERSION is the pinned formatter. clang-format's output changes
+# between major releases, so an unpinned gate fails on runner-image bumps with
+# no code change. CI installs exactly this version (pip wheel); locally, any
+# 19.x gives the same result. Bumping it means re-running `make fmt` and
+# committing the churn in one isolated commit.
+CLANG_FORMAT_VERSION := 19.1.7
 FMT       ?= clang-format
 TIDY      ?= clang-tidy
 FMT_FILES := $(wildcard *.c *.h)
@@ -856,6 +863,10 @@ fmt:
 fmt-check:
 	$(FMT) --dry-run --Werror $(FMT_FILES)
 
+# Single source of truth for the pinned formatter version (CI reads this).
+print-fmt-version:
+	@echo $(CLANG_FORMAT_VERSION)
+
 # Analyze both translation units: alcove.c (the core) and adder.c (which adds
 # ALCOVE_ALS + #includes adr.h), so the include-only headers — adr.h in
 # particular — are checked in real caller context, not standalone.
@@ -868,4 +879,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

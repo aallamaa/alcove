@@ -49,8 +49,17 @@ jobs:
       # files — which in turn made `make fmt` a landmine (it would reformat
       # the whole repo mid-change). The tree was normalized in one commit;
       # this keeps it that way so `make fmt` stays a no-op on clean trees.
-      - name: C formatting (make fmt-check)
-        run: make fmt-check
+      #
+      # The version is PINNED deliberately. clang-format's output changes
+      # between major releases, so gating on whatever the runner image happens
+      # to ship makes this job fail on image bumps with no code change (the
+      # runner's default disagreed with the normalized tree on first try).
+      # The pip wheel gives the identical binary everywhere; keep it in sync
+      # with CLANG_FORMAT_VERSION in the Makefile.
+      - name: C formatting (make fmt-check, pinned clang-format)
+        run: |
+          pip install --quiet "clang-format==$(make -s print-fmt-version)"
+          make fmt-check FMT="$(python3 -c 'import shutil;print(shutil.which("clang-format"))')"
       - name: MPSC primitive under ThreadSanitizer
         # The lock-free MPSC queue backing RESP --threads. gcc ships libtsan on
         # ubuntu-latest, so build+run directly and FAIL the job on any race or

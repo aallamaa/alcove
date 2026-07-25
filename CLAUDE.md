@@ -149,8 +149,11 @@ into `adder`) and the `*_test.c` unit harnesses.
 - **Formatting:** `.clang-format` is committed and **`make fmt-check` is a CI
   gate** (as of 2026-07-25). The tree is clean, so `make fmt` is a safe no-op
   on an unmodified checkout and only touches what you actually edited — run it
-  before committing. C code only; the `*.adr`/`*.alc` corpus is formatted by
-  `adder fmt` (`make adfmt-test`).
+  before committing. The formatter version is **pinned**
+  (`CLANG_FORMAT_VERSION` in the Makefile, currently 19.1.7) because
+  clang-format's output shifts between major releases; use a 19.x locally, or
+  `make fmt-check FMT=<path>` with the pinned wheel. C code only; the
+  `*.adr`/`*.alc` corpus is formatted by `adder fmt` (`make adfmt-test`).
 
 ---
 
