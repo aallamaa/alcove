@@ -255,6 +255,8 @@ static struct exp_t *vm_invoke_values(struct exp_t *fn, int nargs,
    re-run via the JIT's standard NULL=deopt convention).
    Marked unused because only the amd64 matchers call it today; arm64
    backends will pick it up when they grow equivalent shapes. */
+/* amd64-only caller (the arm64 backend inlines its own callout), so this
+   is legitimately unused in an arm64 build. */
 __attribute__((unused)) static exp_t *jit_call_global1_value(bytecode_t *bc,
                                                              env_t *env,
                                                              uint8_t const_idx,
@@ -283,42 +285,6 @@ __attribute__((unused)) static exp_t *jit_call_global1_value(bytecode_t *bc,
   return ret;
 }
 
-/* JIT-to-runtime callout for the 2-arg case. Same shape as the 1-arg
-   variant but takes a pointer to a 2-element argv on the stack so the
-   JIT site doesn't need an r8 helper. Returns the call's value in the
-   normal way (NULL → deopt; error → propagate).
-   Currently unused: the ackermann/tak shapes do direct intra-buffer
-   CALL into their own entry instead of going through this helper.
-   Kept around because the next 2-arg shape that ISN'T self-recursive
-   will need it. */
-__attribute__((unused)) static exp_t *jit_call_global2_value(bytecode_t *bc,
-                                                             env_t *env,
-                                                             uint8_t const_idx,
-                                                             exp_t **argv2) {
-  exp_t *callee;
-  if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
-    callee = refexp(bc->gcache[const_idx].val);
-  } else {
-    int is_global;
-    callee = lookup_scoped(bc->consts[const_idx], env, &is_global);
-    if (!callee) {
-      unrefexp(argv2[0]);
-      unrefexp(argv2[1]);
-      return error(ERROR_ILLEGAL_VALUE, bc->consts[const_idx], env,
-                   "Unbound variable");
-    }
-    if (is_global) { /* see OP_LOAD_GLOBAL: never cache a local resolution */
-      if (!bc->gcache)
-        bc->gcache = calloc(bc->nconsts, sizeof(gcache_entry));
-      bc->gcache[const_idx].val = callee;
-      bc->gcache[const_idx].gen = alcove_global_gen;
-    }
-  }
-  exp_t *ret = vm_invoke_values(callee, 2, argv2, env);
-  unrefexp(callee);
-  return ret;
-}
-
 /* JIT-to-runtime callout. Mirrors OP_CALL_GLOBAL semantics: looks up
    bc->consts[const_idx] in the global env (going through bc->gcache for
    amortized cost), invokes it with one arg, and drops the success
@@ -326,10 +292,8 @@ __attribute__((unused)) static exp_t *jit_call_global2_value(bytecode_t *bc,
    Returns NULL on success, or an error exp_t* to propagate to the JIT's
    caller — the JIT site checks rax after `call` and bails if non-NULL.
    Marked unused because only the amd64 matchers call it today. */
-__attribute__((unused)) static exp_t *jit_call_global1_drop(bytecode_t *bc,
-                                                            env_t *env,
-                                                            uint8_t const_idx,
-                                                            exp_t *arg) {
+static exp_t *jit_call_global1_drop(bytecode_t *bc, env_t *env,
+                                    uint8_t const_idx, exp_t *arg) {
   exp_t *callee;
   if (bc->gcache && bc->gcache[const_idx].gen == alcove_global_gen) {
     callee = refexp(bc->gcache[const_idx].val);

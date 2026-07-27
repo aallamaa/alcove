@@ -120,7 +120,7 @@ static uint32_t arm64_add_reg(int rd, int rn, int rm) {
          (uint32_t)rd;
 }
 /* SUB Xd, Xn, Xm — register form (no shift). */
-__attribute__((unused)) static uint32_t arm64_sub_reg(int rd, int rn, int rm) {
+static uint32_t arm64_sub_reg(int rd, int rn, int rm) {
   return 0xCB000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) |
          (uint32_t)rd;
 }
@@ -207,18 +207,11 @@ static uint32_t arm64_ldp_off_sp(int rt1, int rt2, int byte_offset) {
 static uint32_t arm64_mov_from_sp(int rd) {
   return 0x91000000u | (31u << 5) | (uint32_t)rd; /* add Rd, SP, #0 */
 }
-/* BL #imm  — branch with link, signed 26-bit instruction offset (±128MB).
-   Caller computes off_insns relative to this BL's PC. */
-__attribute__((unused)) static uint32_t arm64_bl(int off_insns) {
-  return 0x94000000u | ((uint32_t)off_insns & 0x3FFFFFFu);
-}
 /* BLR Xn  — branch with link to register (indirect call). */
-__attribute__((unused)) static uint32_t arm64_blr(int rn) {
-  return 0xD63F0000u | ((uint32_t)rn << 5);
-}
+static uint32_t arm64_blr(int rn) { return 0xD63F0000u | ((uint32_t)rn << 5); }
 /* BR Xn  — branch to register, no link (tail call; callee's RET returns to
    our caller). */
-__attribute__((unused)) static uint32_t arm64_br(int rn) {
+static uint32_t arm64_br(int rn) {
   return 0xD61F0000u | ((uint32_t)(rn & 0x1f) << 5);
 }
 /* SDIV Xd, Xn, Xm  — signed 64-bit divide. */
@@ -270,7 +263,7 @@ static uint32_t arm64_sub_w_imm(int rd, int rn, int imm) {
          (uint32_t)rd;
 }
 /* CMP Wn, Wm — alias for SUBS WZR, Wn, Wm. */
-__attribute__((unused)) static uint32_t arm64_cmp_reg_w(int rn, int rm) {
+static uint32_t arm64_cmp_reg_w(int rn, int rm) {
   return 0x6B000000u | ((uint32_t)rm << 16) | ((uint32_t)rn << 5) | 31u;
 }
 /* CBZ Wt, label — 32-bit variant. */
@@ -336,17 +329,17 @@ static uint32_t arm64_fdiv_d(int dd, int dn, int dm) {
          ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
 }
 /* FMOV Dd, Dn — double register copy: 0x1E604000 | (Dn<<5) | Dd. */
-__attribute__((unused)) static uint32_t arm64_fmov_d_d(int dd, int dn) {
+static uint32_t arm64_fmov_d_d(int dd, int dn) {
   return 0x1E604000u | ((uint32_t)(dn & 0x1f) << 5) | (uint32_t)(dd & 0x1f);
 }
 /* FCMP Dn, Dm — double compare, sets NZCV (unordered/NaN → N=0,Z=0,C=1,V=1):
    0x1E602000 | (Dm<<16) | (Dn<<5). Used by the numeric-loop compiler. */
-__attribute__((unused)) static uint32_t arm64_fcmp_d(int dn, int dm) {
+static uint32_t arm64_fcmp_d(int dn, int dm) {
   return 0x1E602000u | ((uint32_t)(dm & 0x1f) << 16) |
          ((uint32_t)(dn & 0x1f) << 5);
 }
 /* FCMP Dn, #0.0 — compare a double to zero: 0x1E602008 | (Dn<<5). */
-__attribute__((unused)) static uint32_t arm64_fcmp_d_zero(int dn) {
+static uint32_t arm64_fcmp_d_zero(int dn) {
   return 0x1E602008u | ((uint32_t)(dn & 0x1f) << 5);
 }
 
@@ -404,8 +397,6 @@ __attribute__((unused)) static uint32_t arm64_fcmp_d_zero(int dn) {
 /* Patch a reserved B.cond branch word toward the shared deopt_pc. */
 #define PATCH_DEOPT_BNE(slot)                                                  \
   (out[(slot)] = arm64_b_cond(ARM64_COND_NE, deopt_pc - (slot)))
-#define PATCH_DEOPT_BVS(slot)                                                  \
-  (out[(slot)] = arm64_b_cond(ARM64_COND_VS, deopt_pc - (slot)))
 
 /* Materialize an arbitrary 64-bit immediate into Xd via MOVZ + up-to-3 MOVKs.
  */

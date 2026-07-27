@@ -9,7 +9,10 @@
 #define ISCONSTITUENT 32
 #define ISDIGIT 64
 
-/* The tables below are hand-laid: one entry per ASCII byte (chrmap/schrmap
+/* Originally emitted by a generator script (char.py, removed 2026-07-27: it
+   was Python 2 and had not reproduced this file since the tables were taken
+   over by hand — running it would have reverted those edits).
+   The tables below are hand-laid: one entry per ASCII byte (chrmap/schrmap
    carry a per-byte name comment; chr2hex is a 0..255 lookup). Read by index —
    they must stay a fixed grid, never reflowed by clang-format. */
 // clang-format off

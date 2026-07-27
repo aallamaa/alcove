@@ -53,7 +53,6 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 
-#define RESP_DEFAULT_PORT 6379
 #define RESP_RBUF_INIT 4096
 #define RESP_RBUF_MAX (16 * 1024 * 1024)
 /* Output-buffer ceiling. The read side is bounded above; without a matching
@@ -68,8 +67,6 @@
 #define RESP_LISTEN_BACKLOG 64
 #define RESP_MAX_BULK (512 * 1024 * 1024)
 #define RESP_MAX_ARGS 1048576
-#define RESP_TABLE_INIT 64
-#define RESP_HASH_INIT 8
 #define RESP_ARGV_POOL_INIT 8 /* covers SET k v, HSET h f v, etc. */
 
 /* ---------- value model ----------

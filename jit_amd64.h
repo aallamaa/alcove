@@ -314,8 +314,7 @@ static int x64_movq_xmm_reg(uint8_t *buf, int xmm, int gp) {
    sets ZF/PF/CF (PF=1 on NaN/unordered). After it, `ja` = ordered strictly-
    greater (NaN → not taken, matching the VM's `>`/`<` which are false for NaN).
    Used by the numeric-loop compiler for float comparisons. */
-__attribute__((unused)) static int x64_ucomisd_xmm_xmm(uint8_t *buf, int a,
-                                                       int b) {
+static int x64_ucomisd_xmm_xmm(uint8_t *buf, int a, int b) {
   int n = 0;
   buf[n++] = 0x66;
   if (a >= 8 || b >= 8)
@@ -353,8 +352,7 @@ static int x64_sse_arith_xmm(uint8_t *buf, uint8_t op2, int dst, int src) {
 }
 /* cmp dst, src  →  REX.W 39 /r (mod=11).  Sets flags for a signed compare;
    used by the numeric-loop compiler for integer slot/temp comparisons. */
-__attribute__((unused)) static int x64_cmp_reg_reg(uint8_t *buf, int dst,
-                                                   int src) {
+static int x64_cmp_reg_reg(uint8_t *buf, int dst, int src) {
   buf[0] = (uint8_t)(0x48 | X64_REXR(src) | X64_REXB(dst));
   buf[1] = 0x39;
   buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
@@ -2664,8 +2662,8 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
      - tag-check m, n
      - m == 0 → return tagged (n + 1)
      - n == 0 → tail-self with (m-1, 1)
-     - else: call jit_call_global2_value(bc, env, idx, [m, n-1]),
-       then tail-self with (m-1, result)
+     - else: direct intra-buffer CALL back into our own entry to get
+       (ack m (n-1)), then tail-self with (m-1, result)
    Both tail self-calls become a `jmp entry` after writing new slot
    values — no env churn. The single non-tail call still goes through
    the helper but everything else is native.
