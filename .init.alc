@@ -1,7 +1,8 @@
 ;; Project-local Alcove startup.
 ;; Keep the REPL quiet: no "In [n]:" input prompt and no "Out[n]:" result label.
-;; Continuation rows show only two spaces; the reader's actual input remains
-;; exactly what the user types after that display prompt.
+;; The continuation prompt is EMPTY on purpose: prompt columns are undeletable,
+;; so spaces there make a line at column 0 still look indented (and confuse the
+;; REPL's own auto-indent). With "" the screen shows the real buffer.
 (= *prompt-in* (fn (n) ""))
 (= *prompt-out* (fn (n) ""))
-(= *prompt-cont* (fn (n) "  "))
+(= *prompt-cont* (fn (n) ""))

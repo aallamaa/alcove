@@ -1,7 +1,10 @@
 # Project-local Adder startup.
 # Keep the REPL quiet: no "In [n]:" input prompt and no "Out[n]:" result label.
-# Continuation rows show only two spaces; Adder's own auto-indent still inserts
-# the block indentation after that display prompt.
+# The continuation prompt is EMPTY on purpose. Adder's indentation is
+# significant, so a prompt made of spaces is actively harmful: those columns
+# are undeletable, so backspacing to column 0 still LOOKS indented, and a
+# correctly-aligned `else:` renders as if it were nested one level in.
+# With "" the indentation on screen is the indentation in the buffer.
 setf *prompt-in* (fn (n) "")
 setf *prompt-out* (fn (n) "")
-setf *prompt-cont* (fn (n) "  ")
+setf *prompt-cont* (fn (n) "")
