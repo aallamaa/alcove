@@ -269,6 +269,7 @@ def take-gen(n gen):
     v = (next! gen)
     if (done? v):
       i = n
+    else:
       acc = (cons v acc)
     i = (i + 1)
   reverse acc
@@ -282,6 +283,7 @@ def running-sum(gen):
     v = (next! gen)
     if (done? v):
       *done*()
+    else:
       acc = (acc + v)
       acc
 

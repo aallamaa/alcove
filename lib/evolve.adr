@@ -58,10 +58,12 @@ def evolve/compile-adder-unsafe(src):
 def evolve/score(cand fitness):
   if cand:
     try (evolve/finite (with-time-limit evolve/time-limit-ms (fn () (fitness cand)))) (fn (e) evolve/worst)
+  else:
     evolve/worst
 def evolve/finite(s):
   if (number? s):
     s
+  else:
     evolve/worst
 
 # ---- one selection step --------------------------------------------
@@ -74,6 +76,7 @@ def evolve/consider(state fitness src cand):
 def evolve/select(state src cand sc):
   if (sc > (get state "score")):
     hash-map "src" src "fn" cand "score" sc
+  else:
     state
 
 # ---- the loop ------------------------------------------------------

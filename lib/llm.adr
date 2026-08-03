@@ -53,10 +53,12 @@ def llm/build-body(prompt):
 def llm/extract-text(decoded):
   if decoded:
     llm/text-of (filter (fn (b) ((get b "type") iso "text")) (get decoded "content"))
+  else:
     nil
 def llm/text-of(texts):
   if texts:
     get (car texts) "text"
+  else:
     nil
 
 # ---- FFI libcurl bindings (bound once, lazily) --------------------
@@ -83,6 +85,7 @@ llm/hdrs = nil
 def llm/ensure-curl():
   if llm/curl-ready:
     t
+  else:
     llm/bind-curl()
 def llm/bind-curl():
   llm/curl-init = (ffi-fn llm/curl-lib "curl_easy_init" "ptr")
@@ -138,6 +141,7 @@ def llm/post-or-nil(prompt):
 def llm/parse-response(resp):
   if resp:
     llm/extract-text (llm/decode resp)
+  else:
     nil
 def llm/complete(prompt): llm/parse-response (llm/post-or-nil prompt)
 
@@ -154,12 +158,14 @@ llm/c-sleep = nil
 def llm/ensure-sleep():
   if llm/c-sleep:
     t
+  else:
     llm/bind-sleep()
 def llm/bind-sleep(): llm/c-sleep = (ffi-fn "" "sleep" "int" "int")
 def llm/sleep(secs):
   llm/ensure-sleep()
   if (secs > 0):
     (llm/c-sleep secs)
+  else:
     nil
 
 # ---- retry with exponential backoff ------------------------------
@@ -173,10 +179,12 @@ def llm/retry-loop(prompt tries backoff):
 def llm/retry-check(reply prompt tries backoff):
   if reply:
     reply
+  else:
     llm/retry-more prompt tries backoff
 def llm/retry-more(prompt tries backoff):
   if (tries <= 1):
     nil
+  else:
     llm/retry-wait prompt tries backoff
 def llm/retry-wait(prompt tries backoff):
   llm/sleep backoff

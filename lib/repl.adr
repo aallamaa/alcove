@@ -49,6 +49,7 @@ def repl/hud():
 def repl/show(v):
   if (error? v):
     str "Error: " (error-message v)
+  else:
     str v
 
 # ---- the shared output hook (record + ring + status + log + stats) -

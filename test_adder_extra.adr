@@ -296,3 +296,38 @@ assert "block: compound rejects"        (error? (try (AdrCritter "Rex" 42) (fn (
 assert "block: super parent-suffix"     (yell (AdrHero "Ada")) "** Ada! **"
 assert "block: instance? filter"        (length (filter (instance? AdrCritter) (list (AdrHero "h") 1 (AdrCritter "c")))) 2
 assert "block: instance? predicate"     ((instance? AdrHero) (AdrCritter "c")) nil
+
+# ====================================================================
+# `if` block bodies are STATEMENT SEQUENCES (Python-shaped), not Arc
+# branch lists. A two-statement then-branch must NOT fold its second
+# statement into the else slot — that silently pushed a following
+# `else:` into a fourth arm that could never run. See CHANGELOG
+# [Unreleased] / adder-spec.md §8.
+# ====================================================================
+def adr-if-seq (x):
+  n = 0
+  if x:
+    n = 1
+    n = (n + 10)
+  else:
+    n = 100
+    n = (n + 1)
+  n
+
+assert "if block: then-arm runs both statements" (adr-if-seq t) 11
+assert "if block: else-arm runs both statements" (adr-if-seq nil) 101
+
+def adr-if-ladder (x):
+  if (x < 0):
+    "neg"
+  elif (x is 0):
+    "zero"
+  else:
+    "pos"
+
+assert "if ladder: elif arm"      (adr-if-ladder 0) "zero"
+assert "if ladder: first arm"     (adr-if-ladder -3) "neg"
+assert "if ladder: default arm"   (adr-if-ladder 7) "pos"
+# A one-statement branch is emitted bare -- no (do ...) wrapper.
+assert "if block: one statement stays bare" (string-trim (adder->sexpr "if c:\n  return x\n")) "(if c (return x))"
+assert "if block: two statements wrap in do" (string-trim (adder->sexpr "if c:\n  a\n  b\n")) "(if c (do a b))"

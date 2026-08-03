@@ -7,6 +7,20 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (Adder): an `if` block body is now a statement sequence, as in
+  Python.** Previously the general "a `:`-block appends its indented forms to
+  the line's list" rule applied to `if` too, so a two-statement then-branch
+  silently became then/else — `if c:` / `A` / `B` read as `(if c A B)`, and an
+  `else:` after it landed in the *third* arm where it could never run. Writing
+  `when` instead was the only way to get a multi-statement guard. Now a branch
+  with 2+ statements is wrapped in `(do ...)`; a single-statement branch is
+  emitted bare, so existing one-statement `if` forms are byte-identical.
+  `elif`/`else` chains still flatten to alcove's Arc-style multi-arg `if`.
+  The `adder fmt` printer, the `.alc`→Adder converter, and `alc2adr.py` all
+  emit if/elif/else ladders to match. Shipped `lib/*.adr` and the examples
+  were migrated; code relying on the old folding must add an explicit `else:`.
+
 ### Added
 - **Types-for-JIT payoff: the numeric-loop JIT now compiles mixed
   int/float kernels.** The canonical hinted loop — `:f64` accumulators

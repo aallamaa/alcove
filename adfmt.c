@@ -971,6 +971,29 @@ static void emit_form(const node *x, int col, buf *o) {
   if (x->lead)
     put_comment_block(x->lead, col, o);
 
+  /* A flat multi-arm `(if c1 t1 c2 t2 … else)` — Arc-style — cannot render as
+     one `if c1:` block: an indented Adder body is a STATEMENT SEQUENCE, so the
+     arms would fold into a single then-branch. Ladder them into if/elif/else,
+     which reads the same way back. (A source `:`-block already carries its own
+     elif/else structure and is left to the normal header path.) */
+  if (!x->block && x->is_list && x->open == '(' && !x->call && x->n > 3 &&
+      head_tok(x) && !strcmp(head_tok(x), "if")) {
+    int k = 1;
+    for (; k + 1 < x->n; k += 2) {
+      put_indent(o, col);
+      buf_puts(o, k == 1 ? "if " : "elif ");
+      emit_inline(x->kid[k], o);
+      buf_puts(o, ":\n");
+      emit_form(x->kid[k + 1], col + INDENT_STEP, o);
+    }
+    if (k < x->n) { /* trailing default arm */
+      put_indent(o, col);
+      buf_puts(o, "else:\n");
+      emit_form(x->kid[k], col + INDENT_STEP, o);
+    }
+    return;
+  }
+
   int hn = header_hn(x);
   if (hn == 0) { /* plain form: one inline statement line */
     put_indent(o, col);

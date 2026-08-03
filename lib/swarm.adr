@@ -40,18 +40,22 @@ def swarm/encode(args):
 def swarm/parse(s):
   if (starts-with? s ":"):
     read-string-sexpr (car (string-split (substr s 1 (length s)) "\r\n"))
+  else:
     swarm/parse-bulk s
 def swarm/parse-bulk(s):
   if (starts-with? s "$"):
     swarm/bulk s
+  else:
     swarm/parse-simple s
 def swarm/bulk(s):
   if ((car (string-split (substr s 1 (length s)) "\r\n")) iso "-1"):
     nil
+  else:
     nth 1 (string-split s "\r\n")
 def swarm/parse-simple(s):
   if (starts-with? s "+"):
     car (string-split (substr s 1 (length s)) "\r\n")
+  else:
     nil
 
 # ---- complete-reply detection (a single recv can return a PARTIAL reply) ----
@@ -62,31 +66,37 @@ def swarm/parse-simple(s):
 def swarm/complete?(buf):
   if ((length buf) < 1):
     nil
+  else:
     swarm/complete-typed buf
 def swarm/complete-typed(buf):
   if (starts-with? buf "$"):
     swarm/bulk-complete? buf
+  else:
     string-contains? buf "\r\n"
 def swarm/bulk-complete?(buf):
   if (string-contains? buf "\r\n"):
     swarm/bulk-len-ok buf (string-index buf "\r\n")
+  else:
     nil
 def swarm/bulk-len-ok(buf p):
   swarm/bulk-need buf p (read-string-sexpr (substr buf 1 p))
 def swarm/bulk-need(buf p len):
   if (len < 0):
     t
+  else:
     (length buf) >= ((p + 2) + (len + 2))
 
 def swarm/recv-reply(fd): swarm/recv-acc fd ""
 def swarm/recv-acc(fd buf):
   if (swarm/complete? buf):
     buf
+  else:
     swarm/recv-more fd buf
 def swarm/recv-more(fd buf): swarm/recv-acc2 fd buf (tcp-recv fd 65536)
 def swarm/recv-acc2(fd buf chunk):
   if ((length chunk) < 1):
     buf
+  else:
     swarm/recv-acc fd (str buf chunk)
 
 # ---- RESP client over tcp-connect (network) ---------------------

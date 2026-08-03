@@ -14,4 +14,5 @@ prn("calling " llm/model " ...")
 reply = (llm/complete "In one short sentence, what is a Lisp s-expression?")
 if reply:
   prn("reply: " reply)
+else:
   prn("no reply — set ANTHROPIC_API_KEY and check connectivity.")

@@ -21,9 +21,10 @@ def ext-of(name):
   with (i (string-index name ".")):
     if (no i):
       "(none)"
-      if (i is 0):
-        "(dotfile)"
-        substr name (i + 1) (length name)
+    elif (i is 0):
+      "(dotfile)"
+    else:
+      substr name (i + 1) (length name)
 
 def walk(d acc): # NB `dir` is a reserved builtin
   each name (list-dir d):
@@ -31,6 +32,7 @@ def walk(d acc): # NB `dir` is a reserved builtin
       with (info (file-info path)):
         if (get info "dir?"):
           walk path acc
+        else:
           vec-push! acc (list (ext-of name) (get info "size"))
   acc
 

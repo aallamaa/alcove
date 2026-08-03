@@ -297,6 +297,20 @@ def stmt(f, indent, lines):
         lines.append(pad + head_tok(head) + "()")    # no-arg call
         return
 
+    # `if` is Arc-style multi-arg -- (if c1 t1 c2 t2 ... else) -- but in Adder
+    # an indented block body is a STATEMENT SEQUENCE, not a branch list, so the
+    # arms must travel as an if/elif/else ladder rather than as siblings.
+    if isinstance(head, Sym) and head.t == "if" and len(f) > 2:
+        k = 1
+        while k + 1 < len(f):
+            lines.append(f"{pad}{'if' if k == 1 else 'elif'} {expr(f[k])}:")
+            stmt(f[k + 1], indent + 2, lines)
+            k += 2
+        if k < len(f):                       # trailing default arm
+            lines.append(f"{pad}else:")
+            stmt(f[k], indent + 2, lines)
+        return
+
     # body-bearing form -> header line + indented child statements
     if isinstance(head, Sym) and head.t in HEADER_ARITY:
         ha = HEADER_ARITY[head.t]

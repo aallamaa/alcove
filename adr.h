@@ -827,6 +827,27 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
   int sp = 0;
   memset(if_stack, 0, sizeof(if_stack));
   als_node *roots = als_list();
+  /* Branch bodies of a block `if` are wrapped in a synthesized (do ...) so a
+     multi-statement arm stays ONE arm (alcove's `if` is Arc-style multi-arg).
+     A one-statement arm needs no wrapper, but we only know the count once the
+     block is closed — so record every wrapper and collapse the singletons at
+     the end. Keeps (if c (return x)) exact instead of (if c (do (return x))).
+   */
+  struct als_wrap {
+    als_node *parent;
+    int idx;
+  } *wraps = NULL;
+  int nwrap = 0, cwrap = 0;
+#define ALS_NOTE_WRAP(p, i)                                                    \
+  do {                                                                         \
+    if (nwrap == cwrap) {                                                      \
+      cwrap = cwrap ? cwrap * 2 : 16;                                          \
+      wraps = (struct als_wrap *)als_xrealloc(wraps, cwrap * sizeof *wraps);   \
+    }                                                                          \
+    wraps[nwrap].parent = (p);                                                 \
+    wraps[nwrap].idx = (i);                                                    \
+    nwrap++;                                                                   \
+  } while (0)
 
   size_t i = 0;
   while (i <= slen) {
@@ -889,6 +910,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
         als_node *do_node = als_list();
         als_push(do_node, als_atom("do", 2));
         als_push(target, do_node);
+        ALS_NOTE_WRAP(target, target->n - 1);
         if (sp < MAXD) {
           ind_stack[sp] = indent;
           node_stack[sp] = do_node;
@@ -935,11 +957,23 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
 
     /* Track if/when/unless nodes for subsequent elif/else attachment. */
     if_stack[iidx] = NULL;
+    /* Where an indented block body gets appended. Normally the node itself
+       (when/unless/def/... all take an implicit body sequence), but `if` does
+       NOT: alcove's `if` is Arc-style multi-arg, so a two-statement then-body
+       would silently become (if c THEN ELSE). Give block `if` its own (do ...)
+       so the branch is a statement sequence, exactly like the else branch. */
+    als_node *body_target = node;
     if (block && node->is_list && node->n > 0 && !node->kid[0]->is_list) {
       const char *head = node->kid[0]->atom;
       if (head && (strcmp(head, "if") == 0 || strcmp(head, "when") == 0 ||
                    strcmp(head, "unless") == 0))
         if_stack[iidx] = node;
+      if (head && strcmp(head, "if") == 0) {
+        body_target = als_list();
+        als_push(body_target, als_atom("do", 2));
+        als_push(node, body_target);
+        ALS_NOTE_WRAP(node, node->n - 1);
+      }
     }
 
     if (sp > 0) {
@@ -951,10 +985,24 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
 
     if (block && sp < MAXD) {
       ind_stack[sp] = indent;
-      node_stack[sp] = node;
+      node_stack[sp] = body_target;
       sp++;
     }
   }
+
+  /* Collapse (do X) -> X for the synthesized branch wrappers. An empty
+     wrapper (a `pass`-less arm) is left alone: (do) is a valid nil. */
+  for (int k = 0; k < nwrap; k++) {
+    als_node *p = wraps[k].parent, *d = p->kid[wraps[k].idx];
+    if (d->is_list && d->n == 2) {
+      p->kid[wraps[k].idx] = d->kid[1];
+      als_free(d->kid[0]); /* the "do" atom */
+      free(d->kid);
+      free(d);
+    }
+  }
+  free(wraps);
+#undef ALS_NOTE_WRAP
 
   for (int k = 0; k < roots->n; k++) {
     als_emit(roots->kid[k], &out);

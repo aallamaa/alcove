@@ -10,11 +10,13 @@ require("lib/evolve")
 def swarm/range(n):
   if (n > 0):
     append (swarm/range (n - 1)) (list (n - 1))
+  else:
     nil
 def rscore(fd i): read-string-sexpr (swarm/get fd (str "result:" i))
 def better(fd b i):
   if ((rscore fd i) > (rscore fd b)):
     i
+  else:
     b
 def best-idx(fd idxs): reduce (fn (b i) (better fd b i)) (car idxs) (cdr idxs)
 

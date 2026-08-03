@@ -952,6 +952,7 @@ assert "iso cyclic vec bails" (let (a (vector) b (vector)) (vec-push! a a) (vec-
 def _deepbuild (n acc):
   if (is n 0):
     acc
+  else:
     _deepbuild (- n 1) (list acc)
 
 assert "iso deep nested ok" (iso (_deepbuild 400 (list)) (_deepbuild 400 (list))):
@@ -1224,6 +1225,7 @@ assert "(if (odd 2) 'a 'b) -> b" (if (odd 2) 'a 'b) 'b
 def mylen (xs):
   if (no xs):
     0
+  else:
     + 1 (mylen (cdr xs))
 
 assert "mylen nil -> 0" (mylen nil) 0
@@ -1311,23 +1313,27 @@ assert "unless true -> nil" (unless t 99) nil
 def tco-let (n):
   if (is n 0):
     'ok
+  else:
     let m (- n 1):
       tco-let m
 
 def tco-lets (n):
   if (is n 0):
     'ok
+  else:
     let* (m (- n 1)) (tco-lets m)
 
 def tco-with (n):
   if (is n 0):
     'ok
+  else:
     with (m (- n 1)):
       tco-with m
 
 def tco-when (n):
   if (is n 0):
     'ok
+  else:
     when t:
       tco-when (- n 1)
 
@@ -1348,11 +1354,13 @@ assert "tco through unless" (tco-unless 1000000) nil
 def tco-and (n a):
   if (< n 1):
     a
+  else:
     and t (tco-and (- n 1) (+ a 1))
 
 def tco-or (n a):
   if (< n 1):
     a
+  else:
     or nil (tco-or (- n 1) (+ a 1))
 
 def tco-cond (n a):
@@ -1375,12 +1383,14 @@ assert "tco through case" (tco-case 1000000 0) 1000000
 def tco-builtin (n a):
   if (< n 1):
     a
+  else:
     tco-builtin (- n 1) (max a 1)
 
 def tco-let-builtin (n a):
   let b (abs a):
     if (< n 1):
       b
+    else:
       tco-let-builtin (- n 1) (+ a 1)
 
 assert "tco around builtin (max)" (tco-builtin 1000000 5) 5
@@ -1396,11 +1406,13 @@ assert "compiled reverse of let-local" (rev-let (list 1 2 3)) (list 3 2 1)
 def is-cd (n):
   if (is n 0):
     'ok
+  else:
     is-cd (- n 1)
 
 def is-cdn (n):
   if (is n 0):
     n
+  else:
     is-cdn (- n 1)
 
 assert "is-fused tail loop (const base)" (is-cd 1000000) 'ok
@@ -1416,8 +1428,10 @@ assert "is 5 5   → t" (is 5 5) t
 def is-ack (m n):
   if (is m 0):
     + n 1
+  else:
     if (is n 0):
       is-ack (- m 1) 1
+    else:
       is-ack (- m 1) (is-ack m (- n 1))
 
 assert "is-fused ackermann (jit shape)" (is-ack 3 6) 509
@@ -1425,6 +1439,7 @@ assert "is-fused ackermann (jit shape)" (is-ack 3 6) 509
 def _nontail_sum (n):
   if (< n 1):
     0
+  else:
     + n (_nontail_sum (- n 1))
 
 assert "deep non-tail recursion → catchable error, not segfault" (try (_nontail_sum 1000000) (fn (e) (error? e))):
@@ -1438,6 +1453,7 @@ assert "shallow non-tail recursion still computes" (_nontail_sum 100) 5050
 def _tail_sum (n acc):
   if (< n 1):
     acc
+  else:
     _tail_sum (- n 1) (+ acc 1)
 
 assert "deep tail recursion unaffected by the guard" (_tail_sum 2000000 0):
@@ -1535,6 +1551,7 @@ def ts-let (n acc):
   let s (+ acc n):
     if (is n 0):
       s
+    else:
       ts-let (- n 1) s
 
 def ts-lets (n acc):
@@ -1544,6 +1561,7 @@ def ts-with (n acc):
   with (s (+ acc n)):
     if (is n 0):
       s
+    else:
       ts-with (- n 1) s
 
 def ts-nest (n acc):
@@ -1551,12 +1569,14 @@ def ts-nest (n acc):
     let b 1:
       if (is n 0):
         acc
+      else:
         ts-nest (- n 1) (+ acc a b)
 
 def ts-multi (n acc):
   with (p 1 q 2 r 3):
     if (is n 0):
       acc
+    else:
       ts-multi (- n 1) (+ acc p q r)
 
 assert "tail-self let (small)" (ts-let 100 0) 5050
@@ -1583,6 +1603,7 @@ def ts-cap (n acc):
   let s n:
     if (is n 0):
       cons (fn () s) acc
+    else:
       ts-cap (- n 1) (cons (fn () s) acc)
 
 assert "tail-self bail on capture" (map (fn (g) (g)) (ts-cap 3 ())):
@@ -1592,6 +1613,7 @@ def ts-eval (n acc):
   let s (car (reverse (cons (+ acc 1) ()))):
     if (is n 0):
       s
+    else:
       ts-eval (- n 1) s
 
 assert "tail-self w/ eval-ast body" (ts-eval 1000000 0) 1000001
@@ -1614,6 +1636,7 @@ assert "setf into let slot" (let c 10 (setf c 20) c) 20
 def setf-acc (n a):
   if (is n 0):
     a
+  else:
     do:
       setf a (+ a n)
       setf-acc (- n 1) a
@@ -1644,11 +1667,13 @@ assert "compiled fsum 100 -> 5050" (fsum 100) 5050
 def even? (n):
   if (< n 1):
     t
+  else:
     odd? (- n 1)
 
 def odd? (n):
   if (< n 1):
     nil
+  else:
     even? (- n 1)
 
 assert "mutual even? 1000" (even? 1000) t
@@ -1680,6 +1705,7 @@ assert "vm list 3" (iso (listit 1 2 5) (list 1 2 10)) t
 def myrev (xs acc):
   if (no xs):
     acc
+  else:
     myrev (cdr xs) (cons (car xs) acc)
 
 assert "vm tail-recursive reverse" (iso (myrev (list 1 2 3 4 5) (list)) (list 5 4 3 2 1)):
@@ -1704,6 +1730,7 @@ assert "JIT identity heap list safe" (iso (idheap (list 1 2)) (list 1 2)) t
 def cdn (n):
   if (> n 0):
     cdn (- n 1)
+  else:
     n
 
 assert "JIT loop fix to 0" (cdn 1000) 0
@@ -1715,6 +1742,7 @@ assert "JIT loop after deopt" (cdn 500) 0
 def jitbuild (i n acc):
   if (> i n):
     acc
+  else:
     jitbuild (+ i 1) n (cons i acc)
 
 assert "JIT build inc cons" (jitbuild 1 5 (list)) (list 5 4 3 2 1)
@@ -1754,6 +1782,7 @@ def lpcall (k):
     do:
       addbump 99
       lpcall (- k 1)
+  else:
     k
 
 assert "JIT loop+call to 0" (lpcall 100) 0
@@ -1765,6 +1794,7 @@ assert "JIT loop+call after deopt" (lpcall 50) 0
 def jfib (n):
   if (< n 2):
     n
+  else:
     + (jfib (- n 1)) (jfib (- n 2))
 
 assert "JIT fib base 0" (jfib 0) 0
@@ -1883,6 +1913,7 @@ setf g-mul (make-mul 7)
 def churn (k):
   if (is k 0):
     0
+  else:
     do:
       def tmp (x):
         + x 1
@@ -1899,10 +1930,12 @@ def parity (n):
     def ev (k):
       if (is k 0):
         t
+      else:
         od (- k 1)
     def od (k):
       if (is k 0):
         nil
+      else:
         ev (- k 1)
     ev n
 
@@ -1916,6 +1949,7 @@ def usemac (k):
       list '+ x 1
     if (is k 0):
       0
+    else:
       + (m1 k) (usemac (- k 1))
 
 assert "cycle: macro-in-fn usemac 4" (usemac 4) 14
@@ -2097,8 +2131,10 @@ assert "call/cc loop early-exit" (call/cc (fn (return) (do (setf _cci 0) (while 
 def _ccprod (xs f):
   if (no xs):
     1
+  else:
     if (is (car xs) 0):
       f 0
+    else:
       * (car xs) (_ccprod (cdr xs) f)
 
 assert "call/cc escape recursion" (call/cc (fn (k) (_ccprod '(1 2 0 4 5) k))):
@@ -2141,6 +2177,7 @@ assert "tail-call builtin non-tail" (+ (_applyop - 10 3) 100) 107
 def _redop (op acc xs):
   if (no xs):
     acc
+  else:
     _redop op (op acc (car xs)) (cdr xs)
 
 assert "recur with builtin operand" (_redop + 0 (list 1 2 3 4 5)) 15
@@ -2201,6 +2238,7 @@ assert "hinted infix value" (_isq 7) 49
 def _ifib (n :int):
   if (n < 2):
     n
+  else:
     (_ifib (n - 1)) + (_ifib (n - 2))
 
 assert "hinted infix fib compiles" (compiled? _ifib) t
@@ -2212,6 +2250,7 @@ assert "subform-head infix" (((fn (x) (* x 2)) 3) + ((fn (y) (+ y 1)) 4)) 11
 def _myfold (op acc xs):
   if (no xs):
     acc
+  else:
     _myfold op (op acc (car xs)) (cdr xs)
 
 assert "operator passed to user HOF" (_myfold + 0 (list 1 2 3 4)) 10
@@ -2226,6 +2265,7 @@ assert "cc find-first miss" (_cc_find (fn (l) (> (car l) 99)) '(1 2 3)) nil
 def _cc_sdiv (a b k):
   if (is b 0):
     k 'div0
+  else:
     / a b
 
 assert "cc safe-div ok" (call/cc (fn (k) (_cc_sdiv 10 2 k))) 5
@@ -2424,8 +2464,10 @@ def jit-sieve-fn (i n):
   def jit-sieve-up (j acc):
     if (> j n):
       acc
+    else:
       if (any? (fn (d) (is (mod j d) 0)) acc):
         jit-sieve-up (+ j 1) acc
+      else:
         jit-sieve-up (+ j 1) (cons j acc)
   length (jit-sieve-up i (list))
 
@@ -2444,8 +2486,9 @@ assert "if 2-arg false -> nil" (if nil 'yes) nil
 def compiled-if-ladder (x):
   if (is x 1):
     'one
-    is x 2
+  elif (is x 2):
     'two
+  else:
     'other
 
 assert "compiled if cond-style: 1st clause" (compiled-if-ladder 1) 'one
@@ -2572,58 +2615,70 @@ def jc-mul (s):
 def jc-lt (n):
   if (< n 1000):
     jc-lt (+ n 1)
+  else:
     n
 
 def jc-le (n):
   if (<= n 1000):
     jc-le (+ n 1)
+  else:
     n
 
 def jc-gt (n):
   if (> n 0):
     jc-gt (- n 1)
+  else:
     n
 
 def jc-ge (n):
   if (>= n 1):
     jc-ge (- n 1)
+  else:
     n
 
 def jc-eqcd (n):
   if (is n 0):
     n
+  else:
     jc-eqcd (- n 1)
 
 def jc-equp (n):
   if (is n 100):
     n
+  else:
     jc-equp (+ n 5)
 
 def jc-wide (n):
   if (< n 5000000):
     jc-wide (+ n 1)
+  else:
     n
 
 def jc-fact (n):
   if (< n 2):
     1
+  else:
     * n (jc-fact (- n 1))
 
 def jc-fib (n):
   if (< n 2):
     n
+  else:
     + (jc-fib (- n 1)) (jc-fib (- n 2))
 
 def jc-ack (m n):
   if (is m 0):
     + n 1
+  else:
     if (is n 0):
       jc-ack (- m 1) 1
+    else:
       jc-ack (- m 1) (jc-ack m (- n 1))
 
 def jc-tak (x y z):
   if (no (< y x)):
     z
+  else:
     jc-tak (jc-tak (- x 1) y z) (jc-tak (- y 1) z x) (jc-tak (- z 1) x y)
 
 def jc-loopcall (k):
@@ -2631,6 +2686,7 @@ def jc-loopcall (k):
     do:
       jc-fact 19
       jc-loopcall (- k 1)
+  else:
     k
 
 def jc-forsum (n):
@@ -2641,11 +2697,13 @@ def jc-forsum (n):
 def jc-build (i n acc):
   if (> i n):
     acc
+  else:
     jc-build (+ i 1) n (cons i acc)
 
 def jc-markfrom (step j n marks):
   if (> j n):
     nil
+  else:
     do:
       vec-set! marks j nil
       jc-markfrom step (+ j step) n marks
@@ -2653,31 +2711,40 @@ def jc-markfrom (step j n marks):
 def jc-countprimes (i n marks acc):
   if (> i n):
     acc
+  else:
     jc-countprimes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc)
 
 def jc-isprime (acc i):
   if (no acc):
     t
+  else:
     if (is (mod i (car acc)) 0):
       nil
+    else:
       jc-isprime (cdr acc) i
 
 def jc-primes (i n acc):
   if (> i n):
     acc
+  else:
     if (jc-isprime acc i):
       jc-primes (+ i 1) n (cons i acc)
+    else:
       jc-primes (+ i 1) n acc
 
 def jc-safe (c qs offset):
   if (no qs):
     t
+  else:
     if (is c (car qs)):
       nil
+    else:
       if (is (+ c offset) (car qs)):
         nil
+      else:
         if (is (- c offset) (car qs)):
           nil
+        else:
           jc-safe c (cdr qs) (+ offset 1)
 
 def jc-divides (a b):
@@ -2686,16 +2753,19 @@ def jc-divides (a b):
 def jc-facc-add (n acc):
   if (< n 100000):
     jc-facc-add (+ n 1) (+ acc 0.5)
+  else:
     acc
 
 def jc-facc-sub (n acc):
   if (< n 100000):
     jc-facc-sub (+ n 1) (- acc 0.5)
+  else:
     acc
 
 def jc-facc-mul (n acc):
   if (< n 40000):
     jc-facc-mul (+ n 1) (* acc 2.0)
+  else:
     acc
 
 assert-jits "jit leaf: (fn () K)" jc-const
@@ -2781,6 +2851,7 @@ assert "jit float-acc mul (2 iters)" (jc-facc-mul 39998 1.0) 4.0
 def jc-nlmix (x :f64 r :f64 i :int n :int):
   if (< i n):
     jc-nlmix (* r (* x (- 1.0 x))) r (+ i 1) n
+  else:
     x
 
 assert-jits "jit numloop: mixed int/float" jc-nlmix
@@ -2796,6 +2867,7 @@ assert "numloop mixed 0-iter float" (jc-nlmix 1.5 9.9 5 3) 1.5
 def jc-nlint (i :int n :int):
   if (< i n):
     jc-nlint (+ i 1) n
+  else:
     i
 
 assert-jits "jit numloop: int pair" jc-nlint
@@ -2808,6 +2880,7 @@ assert "numloop overflow raises like VM" (error? (try (jc-nlint 1152921504606846
 def jc-nlovf (i :int n :int):
   if (< i n):
     jc-nlovf (+ i 3) n
+  else:
     i
 
 assert-jits "jit numloop: step-3 int" jc-nlovf
@@ -2818,6 +2891,7 @@ assert "numloop step overflow raises" (error? (try (jc-nlovf 1152921504606846973
 def jc-nl3i (i :int j :int k :int n :int):
   if (< i n):
     jc-nl3i (+ i 1) (+ j 2) (+ k 3) n
+  else:
     k
 
 assert-jits "jit numloop: 3 int slots" jc-nl3i
@@ -2829,6 +2903,7 @@ assert "numloop 3-int 0-iter" (jc-nl3i 9 7 5 3) 5
 def jc-nl3n (i :int j :int n :int):
   if (< i n):
     jc-nl3n (+ i 1) (- j 2) n
+  else:
     j
 
 assert-jits "jit numloop: neg int step" jc-nl3n
@@ -2838,6 +2913,7 @@ assert "numloop neg-step result" (jc-nl3n 0 0 500) -1000
 def jc-nlif (i :int j :int a :f64 n :int):
   if (< i n):
     jc-nlif (+ i 1) (+ j 5) (+ 0.5 (* a 0.5)) n
+  else:
     j
 
 assert-jits "jit numloop: int+float mix" jc-nlif
@@ -3477,6 +3553,7 @@ assert "type hint: with rest param" (ta-r 10 1 2) 12
 def ta-cd (n :int acc :int):
   if (is n 0):
     acc
+  else:
     ta-cd (- n 1) (+ acc 1)
 
 assert "type hint: deep recursion keeps TCO" (ta-cd 200000 0) 200000
@@ -3509,6 +3586,7 @@ assert "type object: two params" (to-g 1.5 2.5) 4.0
 def to-cd (n Int acc Int):
   if (is n 0):
     acc
+  else:
     to-cd (- n 1) (+ acc 1)
 
 assert "type object: deep recursion keeps TCO" (to-cd 200000 0) 200000
@@ -3679,6 +3757,7 @@ def evenc? (n):
 def evensum (n acc):
   if (< n 1):
     acc
+  else:
     evensum (- n 1) (if (evenc? n) (+ acc n) acc)
 
 assert "case+if mutual: sum evens 100" (evensum 100 0) 2550
@@ -3892,6 +3971,7 @@ assert "tail call wrong arity recovers" 42 42
 def self-tail-few (a b):
   if (< a 1):
     b
+  else:
     self-tail-few 0
 
 self-tail-few 1 42
@@ -3901,6 +3981,7 @@ assert "self-tail wrong arity recovers" 42 42
 def recfib (n):
   if (< n 2):
     n
+  else:
     + (recfib (- n 1)) (recfib (- n 2))
 
 assert "recfib 10" (recfib 10) 55
@@ -3910,6 +3991,7 @@ assert "recfib 20" (recfib 20) 6765
 def recfact (n):
   if (< n 2):
     1
+  else:
     * n (recfact (- n 1))
 
 assert "recfact 5" (recfact 5) 120
@@ -3921,8 +4003,10 @@ assert "recfact 12" (recfact 12) 479001600
 def recack (m n):
   if (is m 0):
     + n 1
+  else:
     if (is n 0):
       recack (- m 1) 1
+    else:
       recack (- m 1) (recack m (- n 1))
 
 assert "ack(2,3) = 9" (recack 2 3) 9
@@ -3934,6 +4018,7 @@ assert "ack(3,5) = 253" (recack 3 5) 253
 def rectak (x y z):
   if (no (< y x)):
     z
+  else:
     rectak (rectak (- x 1) y z) (rectak (- y 1) z x) (rectak (- z 1) x y)
 
 assert "tak(8 4 0) = 1" (rectak 8 4 0) 1
@@ -3946,6 +4031,7 @@ def helperA (n):
 def myfib2 (n):
   if (< n 2):
     n
+  else:
     + (helperA (- n 1)) (helperA (- n 2))
 
 assert "JIT shape match w/ other callee 10" (myfib2 10) 15
@@ -4117,6 +4203,7 @@ forget 'persist_scope
 def countdownr (n):
   if (< n 1):
     'done
+  else:
     countdownr (- n 1)
 
 assert "countdown 1k tail-rec" (countdownr 1000) 'done
@@ -4126,11 +4213,13 @@ assert "countdown 100k tail-rec" (countdownr 100000) 'done
 def evenq (n):
   if (< n 1):
     t
+  else:
     oddq (- n 1)
 
 def oddq (n):
   if (< n 1):
     nil
+  else:
     evenq (- n 1)
 
 assert "evenq 10000" (evenq 10000) t
@@ -5253,6 +5342,7 @@ assert "deque?: no args" (deque?) nil
 def bm-fib (n):
   if (< n 2):
     n
+  else:
     + (bm-fib (- n 1)) (bm-fib (- n 2))
 
 assert "bench fib 33" (bm-fib 33) 3524578
@@ -5260,6 +5350,7 @@ assert "bench fib 33" (bm-fib 33) 3524578
 def bm-fact (n):
   if (< n 2):
     1
+  else:
     * n (bm-fact (- n 1))
 
 assert "bench fact 19" (bm-fact 19) 121645100408832000
@@ -5267,6 +5358,7 @@ assert "bench fact 19" (bm-fact 19) 121645100408832000
 def bm-countdown (n):
   if (> n 0):
     bm-countdown (- n 1)
+  else:
     n
 
 assert "bench countdown 1000" (bm-countdown 1000) 0
@@ -5274,8 +5366,10 @@ assert "bench countdown 1000" (bm-countdown 1000) 0
 def bm-ack (m n):
   if (is m 0):
     + n 1
+  else:
     if (is n 0):
       bm-ack (- m 1) 1
+    else:
       bm-ack (- m 1) (bm-ack m (- n 1))
 
 assert "bench ackermann 3 7" (bm-ack 3 7) 1021
@@ -5290,6 +5384,7 @@ assert "bench forsum 1000000" (bm-forsum 1000000) 1000000
 def bm-build (i n acc):
   if (> i n):
     acc
+  else:
     bm-build (+ i 1) n (cons i acc)
 
 assert "bench listsum 1..100000" (reduce (fn (a b) (+ a b)) 0 (bm-build 1 100000 (list))):
@@ -5298,26 +5393,33 @@ assert "bench listsum 1..100000" (reduce (fn (a b) (+ a b)) 0 (bm-build 1 100000
 def nq-safe? (c qs offset):
   if (no qs):
     t
+  else:
     if (is c (car qs)):
       nil
+    else:
       if (is (+ c offset) (car qs)):
         nil
+      else:
         if (is (- c offset) (car qs)):
           nil
+        else:
           nq-safe? c (cdr qs) (+ offset 1)
 
 def nq-try-cols (n c qs row-acc):
   if (> c n):
     row-acc
+  else:
     nq-try-cols n (+ c 1):
       qs
       if (nq-safe? c qs 1):
         + row-acc (nq-solve n (cons c qs))
+      else:
         row-acc
 
 def nq-solve (n qs):
   if (is (length qs) n):
     1
+  else:
     nq-try-cols n 1 qs 0
 
 assert "bench nqueens 10" (nq-solve 10 (list)) 724
@@ -5325,26 +5427,33 @@ assert "bench nqueens 10" (nq-solve 10 (list)) 724
 def nqv-safe? (col qs row offset):
   if (>= offset row):
     t
+  else:
     if (is col (vec-ref qs offset)):
       nil
+    else:
       if (is (- col (- row offset)) (vec-ref qs offset)):
         nil
+      else:
         if (is (+ col (- row offset)) (vec-ref qs offset)):
           nil
+        else:
           nqv-safe? col qs row (+ offset 1)
 
 def nqv-try-cols (n row col qs acc):
   if (>= col n):
     acc
+  else:
     if (nqv-safe? col qs row 0):
       do:
         vec-set! qs row col
         nqv-try-cols n row (+ col 1) qs (+ acc (nqv-solve n (+ row 1) qs))
+    else:
       nqv-try-cols n row (+ col 1) qs acc
 
 def nqv-solve (n row qs):
   if (>= row n):
     1
+  else:
     nqv-try-cols n row 0 qs 0
 
 assert "bench nqueens-vec 10" (nqv-solve 10 0 (vec 10 0)) 724
@@ -5352,15 +5461,19 @@ assert "bench nqueens-vec 10" (nqv-solve 10 0 (vec 10 0)) 724
 def sv-is-prime-given (acc i):
   if (no acc):
     t
+  else:
     if (is (mod i (car acc)) 0):
       nil
+    else:
       sv-is-prime-given (cdr acc) i
 
 def sv-primes-up-to (i n acc):
   if (> i n):
     acc
+  else:
     if (sv-is-prime-given acc i):
       sv-primes-up-to (+ i 1) n (cons i acc)
+    else:
       sv-primes-up-to (+ i 1) n acc
 
 assert "bench sieve up to 5000" (length (sv-primes-up-to 2 5000 (list))) 669
@@ -5368,15 +5481,18 @@ assert "bench sieve up to 5000" (length (sv-primes-up-to 2 5000 (list))) 669
 def sf-mark-composites (i n marks):
   if (> (* i i) n):
     nil
+  else:
     do:
       if (vec-ref marks i):
         sf-mark-from i (* i i) n marks
+      else:
         nil
       sf-mark-composites (+ i 1) n marks
 
 def sf-mark-from (step j n marks):
   if (> j n):
     nil
+  else:
     do:
       vec-set! marks j nil
       sf-mark-from step (+ j step) n marks
@@ -5384,6 +5500,7 @@ def sf-mark-from (step j n marks):
 def sf-count-primes (i n marks acc):
   if (> i n):
     acc
+  else:
     sf-count-primes (+ i 1) n marks (if (vec-ref marks i) (+ acc 1) acc)
 
 setf sf-n 100000
@@ -5398,6 +5515,7 @@ assert "bench sieve-fast up to 100000" (sf-count-primes 2 sf-n sf-marks 0):
 def bm-tak (x y z):
   if (no (< y x)):
     z
+  else:
     bm-tak (bm-tak (- x 1) y z) (bm-tak (- y 1) z x) (bm-tak (- z 1) x y)
 
 assert "bench tak 24 16 8" (bm-tak 24 16 8) 9
@@ -5405,16 +5523,19 @@ assert "bench tak 24 16 8" (bm-tak 24 16 8) 9
 def bm-faccadd (n acc):
   if (< n 100000):
     bm-faccadd (+ n 1) (+ acc 0.5)
+  else:
     acc
 
 def bm-faccsub (n acc):
   if (< n 100000):
     bm-faccsub (+ n 1) (- acc 0.5)
+  else:
     acc
 
 def bm-faccmul (n acc):
   if (< n 64):
     bm-faccmul (+ n 1) (* acc 2.0)
+  else:
     acc
 
 assert "facc add (float seed)" (bm-faccadd 0 0.0) 50000.0
@@ -6469,6 +6590,7 @@ assert "tail-try reraise ran finally" (_tc_count) 4
 def _try_hraise (n):
   if (is n 0):
     try (/ 1 0) (fn (e) (/ 1 0))
+  else:
     try (_try_hraise (- n 1)) (fn (e) 'outer-caught)
 
 assert "tail-try handler-error caught next-out" (_try_hraise 2) 'outer-caught
@@ -6491,6 +6613,7 @@ assert "sort-by on (cdr 1-elem) = empty" (sort-by (fn (x) x) (cdr (list 6))):
 def rec-filt (xs):
   if (no xs):
     list()
+  else:
     cons (car xs) (rec-filt (filter (fn (x) (> x 3)) (cdr xs)))
 
 assert "filter inside recursion" (iso (rec-filt (list 5 1 6 2 7)) (list 5 6 7)):
@@ -6511,6 +6634,7 @@ def hb-g (x):
 def hb-rec (i):
   if (> i 3):
     i
+  else:
     do:
       hb-g 5
       hb-rec (+ i 1)
@@ -6520,6 +6644,7 @@ assert "do: call then tail recurse" (hb-rec 1) 4
 def hb-rec2 (i):
   if (> i 3):
     i
+  else:
     do:
       any? (fn (d) (is d 0)) (list 1)
       hb-rec2 (+ i 1)
@@ -7140,6 +7265,7 @@ assert "re-replace literal (no backrefs)" (re-replace "a" "aa" "$0") "$0$0"
 if (is (platform) 'linux):
   assert "re-replace empty pattern interleaves" (re-replace "" "abc" "-"):
     "-a-b-c-"
+else:
   assert-true "re-replace empty pattern errors (BSD libc)" (error? (try (re-replace "" "abc" "-") (fn (e) e)))
 
 assert "re-split" (re-split "[ ,]+" "a, b  c") (list "a" "b" "c")
@@ -7461,6 +7587,7 @@ defmacro nsmac (x):
 def nscount (n acc):
   if (is n 0):
     acc
+  else:
     nstest/nscount (- n 1) (+ acc 1)
 
 ns()
@@ -7553,6 +7680,7 @@ assert "int + float stays float" (+ 1152921504606846975 1.0):
 def jfact (n):
   if (< n 2):
     1
+  else:
     * n (jfact (- n 1))
 
 assert-true "JIT factorial overflow" (caught? (fn () (jfact 25)))
@@ -7562,6 +7690,7 @@ assert "JIT factorial in range" (jfact 10) 3628800
 def tfib (n a b):
   if (is n 0):
     a
+  else:
     tfib (- n 1) b (+ a b)
 
 assert-true "tail-fib add overflow" (caught? (fn () (tfib 91 0 1)))
@@ -8255,6 +8384,7 @@ assert "introspection does not re-raise" (do (try (_ei_call 1) (fn (e) (do (erro
 def _tco_else (n acc):
   if (is n 0):
     acc
+  else:
     _tco_else (- n 1) (+ acc 1)
 
 assert "deep else-branch tail recursion" (_tco_else 200000 0) 200000
@@ -8268,6 +8398,7 @@ assert "deep multi-arity cross-clause tail recursion" (_tco_multi 200000):
 def _tco_rev (xs acc):
   if (no xs):
     acc
+  else:
     _tco_rev (cdr xs) (cons (car xs) acc)
 
 assert "nil flows through a tail-call rebind (cdr of last pair)" (_tco_rev (list 1 2 3 4 5) (list)):
@@ -8701,6 +8832,41 @@ assert "block: compound rejects"        (error? (try (AdrCritter "Rex" 42) (fn (
 assert "block: super parent-suffix"     (yell (AdrHero "Ada")) "** Ada! **"
 assert "block: instance? filter"        (length (filter (instance? AdrCritter) (list (AdrHero "h") 1 (AdrCritter "c")))) 2
 assert "block: instance? predicate"     ((instance? AdrHero) (AdrCritter "c")) nil
+
+# ====================================================================
+# `if` block bodies are STATEMENT SEQUENCES (Python-shaped), not Arc
+# branch lists. A two-statement then-branch must NOT fold its second
+# statement into the else slot — that silently pushed a following
+# `else:` into a fourth arm that could never run. See CHANGELOG
+# [Unreleased] / adder-spec.md §8.
+# ====================================================================
+def adr-if-seq (x):
+  n = 0
+  if x:
+    n = 1
+    n = (n + 10)
+  else:
+    n = 100
+    n = (n + 1)
+  n
+
+assert "if block: then-arm runs both statements" (adr-if-seq t) 11
+assert "if block: else-arm runs both statements" (adr-if-seq nil) 101
+
+def adr-if-ladder (x):
+  if (x < 0):
+    "neg"
+  elif (x is 0):
+    "zero"
+  else:
+    "pos"
+
+assert "if ladder: elif arm"      (adr-if-ladder 0) "zero"
+assert "if ladder: first arm"     (adr-if-ladder -3) "neg"
+assert "if ladder: default arm"   (adr-if-ladder 7) "pos"
+# A one-statement branch is emitted bare -- no (do ...) wrapper.
+assert "if block: one statement stays bare" (string-trim (adder->sexpr "if c:\n  return x\n")) "(if c (return x))"
+assert "if block: two statements wrap in do" (string-trim (adder->sexpr "if c:\n  a\n  b\n")) "(if c (do a b))"
 
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 

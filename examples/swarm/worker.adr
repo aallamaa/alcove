@@ -22,6 +22,7 @@ def work-after(fd total i):
 def work-step(fd total i):
   if (i > total):
     nil
+  else:
     work-after fd total i
 def work-loop(fd total): work-step fd total (swarm/incr fd "next")
 

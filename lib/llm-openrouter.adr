@@ -28,10 +28,12 @@ def llm/build-body(prompt):
 def llm/extract-text(decoded):
   if decoded:
     llm/choice-text (get decoded "choices")
+  else:
     nil
 def llm/choice-text(choices):
   if choices:
     get (get (car choices) "message") "content"
+  else:
     nil
 
 # ---- auth headers (Bearer, not x-api-key) -------------------------

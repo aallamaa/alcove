@@ -186,6 +186,7 @@ In Adder the same script reads:
 #!/usr/bin/env adder
 if (no *args*):
   eprn "usage: greet.adr NAME"
+else:
   prn "hello, " (first *args*)
 ```
 

@@ -11,6 +11,7 @@ def assert(txt a b):
   pr txt
   if (iso a b):
     prn "Passed"
+  else:
     prn "Failed"
 ```
 
@@ -70,6 +71,7 @@ For example:
 ```python
 if (iso a b):
   prn "yes"
+else:
   prn "no"
 ```
 
@@ -379,6 +381,7 @@ Inline parentheses are normal Lisp forms.
 ```python
 if (iso a b):
   prn "Passed"
+else:
   prn "Failed"
 ```
 
@@ -477,6 +480,7 @@ def assert(txt a b):
   pr txt
   if (iso a b):
     prn "Passed"
+  else:
     prn "Failed"
 ```
 
@@ -532,6 +536,7 @@ A conditional is written:
 ```python
 if condition:
   then-expression
+else:
   else-expression
 ```
 
@@ -540,6 +545,7 @@ Example:
 ```python
 if (iso a b):
   prn "Passed"
+else:
   prn "Failed"
 ```
 
@@ -551,7 +557,11 @@ reads as:
     (prn "Failed"))
 ```
 
-The reader does not enforce that `if` has exactly two or three arguments. It simply produces a list.
+`if` is the one place the reader deviates from the general "a block appends
+its indented forms to the line's list" rule of §4.2, and it has to: alcove's
+`if` is Arc-style multi-arg, so appending would make the *second* statement of
+a then-branch become the else-branch. An `if` branch body is therefore a
+**statement sequence**, exactly as in Python.
 
 So this:
 
@@ -567,12 +577,13 @@ reads as:
     (then))
 ```
 
-And this:
+and a branch with more than one statement is wrapped in a `do`:
 
 ```python
 if condition:
   a
   b
+else:
   c
 ```
 
@@ -580,12 +591,30 @@ reads as:
 
 ```lisp
 (if condition
-    (a)
-    (b)
+    (do (a) (b))
     (c))
 ```
 
-Whether that is valid depends on the target Lisp semantics.
+The `do` appears only where it is needed — a single-statement branch is
+emitted bare, so the common case round-trips unchanged.
+
+`elif` chains flatten into the multi-arg form, which is what alcove's `if`
+wants anyway:
+
+```python
+if a:
+  b
+elif c:
+  d
+else:
+  e
+```
+
+reads as:
+
+```lisp
+(if a b c d e)
+```
 
 ---
 
@@ -641,6 +670,7 @@ Suggested syntax:
 quote:
   if (iso a b):
     prn "Passed"
+  else:
     prn "Failed"
 ```
 
@@ -996,6 +1026,7 @@ Adder:
 ```python
 if (> x 0):
   prn "positive"
+else:
   prn "not positive"
 ```
 
@@ -1086,6 +1117,7 @@ def assert (txt a b):
   pr txt
   if (iso a b):
     prn "Passed"
+  else:
     prn "Failed"
 ```
 
@@ -1373,6 +1405,7 @@ def assert(txt a b):
   pr txt
   if (iso a b):
     prn "\t: \x1B[92mPassed\x1B[39m"
+  else:
     prn "\t: \x1B[91mFailed\x1B[39m"
 ```
 

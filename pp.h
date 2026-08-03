@@ -275,6 +275,36 @@ static void als_stmt(exp_t *x, int ind) { /* statement position */
     printf("%s()", hs);
     return;
   }
+  /* `if` is Arc-style multi-arg -- (if c1 t1 c2 t2 ... else) -- but an Adder
+     indented block body is a STATEMENT SEQUENCE, not a branch list. Emit the
+     arms as an if/elif/else ladder so the printed source re-reads identically
+     (a flat block would fold the arms into one then-branch). */
+  if (hs && !strcmp(hs, "if") && len > 2) {
+    exp_t *p = x->next;
+    int i = 0;
+    for (; p && ispair(p) && istrue(p) && p->next && ispair(p->next) &&
+           istrue(p->next);
+         p = p->next->next, i++) {
+      if (i) {
+        putchar('\n');
+        pp_indent(ind);
+      }
+      printf("%s ", i ? "elif" : "if");
+      als_expr(p->content);
+      putchar(':');
+      putchar('\n');
+      pp_indent(ind + 2);
+      als_stmt(p->next->content, ind + 2);
+    }
+    if (p && ispair(p) && istrue(p)) { /* trailing default arm */
+      putchar('\n');
+      pp_indent(ind);
+      printf("else:\n");
+      pp_indent(ind + 2);
+      als_stmt(p->content, ind + 2);
+    }
+    return;
+  }
   int ha = als_harity(hs), k = 0;
   if (ha && len > ha) {
     k = ha;

@@ -5,6 +5,7 @@ def assert(txt a b):
   pr txt
   if (a iso b):
     prn "\t: \x1B[92mPassed\x1B[39m"
+  else:
     prn "\t: \x1B[91mFailed\x1B[39m"
 
 def square(x): x * x
@@ -12,6 +13,7 @@ def square(x): x * x
 def fib(n):
   if (n < 2):
     n
+  else:
     (fib (n - 1)) + (fib (n - 2))
 
 def main():

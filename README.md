@@ -105,6 +105,7 @@ prn c() c() c()                      # → 1 2 3
 def fib(n :int):
   if (n < 2):
     n
+  else:
     (fib (n - 1)) + (fib (n - 2))
 prn (map fib (range 0 10))           # → (0 1 1 2 3 5 8 13 21 34)
 jit? fib    # → t
@@ -440,6 +441,7 @@ is sugar for `name (args)`; `'x` is `(quote x)`.
 def fact (n):
   if (< n 2):
     1
+  else:
     * n (fact (- n 1))
 
 def sum-to (n):
@@ -472,11 +474,13 @@ form `(def fib (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))`:
 def fib (n):                 # inline
   if (< n 2):
     n
+  else:
     + (fib (- n 1)) (fib (- n 2))
 
 def fib (n):                 # ladder the + call
   if (< n 2):
     n
+  else:
     +:
       fib (- n 1)
       fib (- n 2)
@@ -484,6 +488,7 @@ def fib (n):                 # ladder the + call
 def fib (n):                 # ladder all the way down
   if (< n 2):
     n
+  else:
     +:
       fib:
         - n 1

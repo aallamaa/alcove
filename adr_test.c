@@ -113,8 +113,17 @@ static void test_comments(void) {
 
 static void test_blocks(void) {
   CHECK_EQ("def sq (x):\n  (* x x)", "(def sq (x) (* x x))");
+  /* An indented `if` body is a STATEMENT SEQUENCE (Python-shaped), not an
+     Arc-style branch list -- so two statements are both in the then-arm. */
   CHECK_EQ("if (> x 0):\n  pr \"pos\"\n  pr \"done\"",
-           "(if (> x 0) (pr \"pos\") (pr \"done\"))");
+           "(if (> x 0) (do (pr \"pos\") (pr \"done\")))");
+  /* A one-statement arm needs no wrapper, so it round-trips exactly. */
+  CHECK_EQ("if (> x 0):\n  pr \"pos\"\nelse:\n  pr \"neg\"",
+           "(if (> x 0) (pr \"pos\") (pr \"neg\"))");
+  CHECK_EQ("if a:\n  b\nelif c:\n  d\nelse:\n  e", "(if a b c d e)");
+  CHECK_EQ("if a:\n  b\n  c\nelse:\n  d", "(if a (do b c) d)");
+  /* Inline form is unaffected: no block, so no (do ...) wrapper. */
+  CHECK_EQ("if (> x 0): pr \"pos\"", "(if (> x 0) (pr \"pos\"))");
 }
 
 static void test_edges(void) {
