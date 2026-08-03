@@ -331,3 +331,12 @@ assert "if ladder: default arm"   (adr-if-ladder 7) "pos"
 # A one-statement branch is emitted bare -- no (do ...) wrapper.
 assert "if block: one statement stays bare" (string-trim (adder->sexpr "if c:\n  return x\n")) "(if c (return x))"
 assert "if block: two statements wrap in do" (string-trim (adder->sexpr "if c:\n  a\n  b\n")) "(if c (do a b))"
+
+# A mis-indented `else:`/`elif:` has no matching `if` at its column. Silently
+# dropping the clause let its (more-indented) body attach to the enclosing
+# block and run as part of the THEN branch — a wrong-branch bug with no
+# diagnostic. It now transpiles to a raise.
+assert "stray else raises"    (string-contains? (adder->sexpr "if a:\n  b\n  else:\n    d\n") "no matching `if`") t
+assert "stray elif raises"    (string-contains? (adder->sexpr "if a:\n  b\n  elif c:\n    d\n") "no matching `if`") t
+assert "aligned else is fine" (string-trim (adder->sexpr "if a:\n  b\nelse:\n  d\n")) "(if a b d)"
+assert "elif-prefixed name is a plain call" (string-trim (adder->sexpr "elifoo x:\n  b\n")) "(elifoo x b)"

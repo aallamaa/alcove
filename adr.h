@@ -918,6 +918,26 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
         }
         if (is_else)
           if_stack[iidx] = NULL; /* else terminates the chain */
+      } else {
+        /* No `if` opens a block at this column. Silently dropping the clause
+           would be the worst outcome: the arm's body is MORE indented, so it
+           would attach to whatever block is open and run as part of the THEN
+           branch — the exact wrong-branch bug this syntax is meant to avoid.
+           Emit a raise so the mistake is loud instead. (The arm's body still
+           parses into the enclosing block — a top-level error is reported and
+           execution continues — but the diagnostic names the line and column
+           problem, and the process exits non-zero.) */
+        als_node *err = als_list();
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "\"adder line %d: `%s:` has no matching `if` at this "
+                 "indentation\"",
+                 cur_line, is_else ? "else" : "elif");
+        als_push(err, als_atom("raise", 5));
+        als_push(err, als_atom("'syntax-error", 13));
+        als_push(err, als_atom(msg, strlen(msg)));
+        als_push(roots, err);
+        als_map_push(map, cur_line);
       }
       free(body);
       continue;
