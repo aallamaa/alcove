@@ -552,7 +552,10 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
    (B.cond EQ, cond=0), recurse when not-equal. Pure mirror reusing the
    already-present EQ codegen; no new hand-assembly.
 
-   NOTE: arm64-mirrored but NOT validated on this x86-64 host — see TODO.lst. */
+   Validated on arm64: `make arm64-test` cross-compiles and runs the corpus
+   under qemu-aarch64 on every CI push, and asserts these shapes actually JIT
+   there rather than silently declining. (This note used to say "NOT validated
+   on this x86-64 host" — true when written, stale since the lane landed.) */
 static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint32_t *out,
                                        int *outn) {
   /* shape walk shared with the amd64 backend via match_simple_tail_loop_eq

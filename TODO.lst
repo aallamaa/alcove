@@ -193,8 +193,17 @@ is the historical log.
 [DONE] fix arm64 sequence-point UB in try_jit_simple_tail_loop branch
        displacement (out[n++] = arm64_b(loop_top - n) was unspecified-order)
 [DONE] fix macro / code expand-macro1 (fixed commit 90a7e69da94ebdd0e2781a22dd559484d216736b )
-[TODO] should we store 8 bytes values directly inside content pointer of pair instead of pointing to another object
-[TODO] fix error handling / freeing ressources with setjmp (gave up using setjmp too many side effects 1d339c702754297eb5b8c324f2713670da125dd2)
+[DONE] (shipped) store 8-byte values directly inside the pointer instead of
+       pointing at another object — this is fixnum tagging, and alcove has it:
+       MAKE_FIX(v) = ((uintptr_t)(v) << 3) | TAG_FIX (alcove.h ~137), with
+       is_ptr() distinguishing a tagged immediate from a heap exp_t. Small
+       integers occupy no heap cell at all.
+[DONE] (superseded) error handling without setjmp. The giving-up was right:
+       errors are first-class VALUES (EXP_ERROR, code in flags) that propagate
+       by return, and (try ...) uses a HEAP handler stack, so it survives deep
+       recursion and composes with call/cc — see docs and the try/catch work
+       (8678db6). setjmp survives only for OOM recovery and the REPL's SIGINT
+       boundary, where there is nothing to unwind by hand.
 [DONE] utf-8 in string indexing and char: length/indexing/substr/
        string-index/split count by codepoint (not byte); chars hold a
        full codepoint and read/print/persist (savedb) as UTF-8; index
@@ -268,7 +277,10 @@ is the historical log.
        builtins — orthogonal).
        Ref: http://en.wikipedia.org/wiki/Hash_array_mapped_trie ;
        clojure PersistentHashMap ; chaelim/HAMT ; Ctries (lock-free).
-[TODO] implement http://gcc.gnu.org/onlinedocs/gcc-4.4.5/gcc/Atomic-Builtins.html for every potentially concurrent objects
+[DONE] (shipped) C11 atomics on the concurrent objects: refcounts are atomic
+       unless ALCOVE_SINGLE_THREADED (alcove.h), and the lock-free keyspace
+       plus its epoch reclamation are built on atomic_* throughout (lfkv.c,
+       epoch.c). Gated by make resp-tsan.
 [DONE] (superseded) "implement JIT with DynASM" — alcove ships a hand-rolled
        shape-matching JIT for arm64 + amd64 (jit_arm64.h / jit_amd64.h /
        jit_common.h; see the JIT [DONE] entries above), not DynASM. The
