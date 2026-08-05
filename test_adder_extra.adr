@@ -347,3 +347,26 @@ assert "elif-prefixed name is a plain call" (string-trim (adder->sexpr "elifoo x
 assert "tabs alone are consistent"  (string-trim (adder->sexpr "if a:\n\tb\nelse:\n\tc\n")) "(if a b c)"
 assert "mixed indent across lines raises" (string-contains? (adder->sexpr "def f():\n  a\n\tb\n") "mixes tabs and spaces") t
 assert "mixed indent within a line raises" (string-contains? (adder->sexpr "def f():\n \tb\n") "mixes tabs and spaces") t
+
+# Implicit line joining: a line with brackets still open continues onto the
+# next physical line (Python's rule inside ( [ { ). Before, every physical
+# line became its own form and `prn (list 1` / `2)` silently emitted two
+# malformed roots. Continuation lines contribute no indentation.
+assert "join: call across 2 lines"  (string-trim (adder->sexpr "prn (list 1\n2)\n")) "(prn (list 1 2))"
+assert "join: call across 3 lines"  (string-trim (adder->sexpr "prn (list 1\n  2\n  3)\n")) "(prn (list 1 2 3))"
+assert "join: vector literal"       (string-trim (adder->sexpr "v = #[1\n2 3]\n")) "(= v (vector 1 2 3))"
+assert "join: dict literal"         (string-trim (adder->sexpr "d = {:a 1\n:b 2}\n")) "(= d (hash-map :a 1 :b 2))"
+assert "join: inside a block"       (string-trim (adder->sexpr "def f():\n  prn (+ 1\n    2)\n  prn 3\n")) "(def f () (prn (+ 1 2)) (prn 3))"
+# A bracket inside a string or a #\X char literal is content, not structure.
+assert "join: bracket in a string"  (string-trim (adder->sexpr "prn \"a (b\"\n")) "(prn \"a (b\")"
+assert "join: char-literal bracket" (string-trim (adder->sexpr "prn #\\( \n")) "(prn #\\()"
+# Whatever depth survives the join is a real error, reported at the line that
+# opened it — not a malformed s-expr the alcove reader rejects elsewhere.
+assert "unterminated bracket raises" (string-contains? (adder->sexpr "prn (list 1\n") "unterminated") t
+assert "stray closer raises"         (string-contains? (adder->sexpr "prn 1)\n") "unexpected") t
+# The transpiler's own syntax errors must reach check-syntax (and so the LSP).
+# They can't come from the reader: the text we emit for them is a valid
+# (raise ...) form, so the map carries them out of band.
+assert "check-syntax sees a stray closer" (car (check-syntax "def f (x):\n  + x 1\nbad ]")) 3
+assert "check-syntax sees a stray else"   (car (check-syntax "if a:\n  b\n  else:\n    d\n")) 3
+assert "check-syntax clean input is nil"  (check-syntax "def f (x):\n  + x 1\n") nil

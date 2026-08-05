@@ -685,6 +685,46 @@ static char *als_strip_comment(const char *line) {
   return out;
 }
 
+/* Net bracket depth of one COMMENT-STRIPPED line: >0 = brackets left open,
+   <0 = a closer with no opener. All three pairs count, since `(f 1`, `#[1 2`
+   and `{:a 1` are equally unfinished. Strings and `#\X` char literals are
+   skipped — the value byte of `#\(` is not a bracket. Input has already been
+   through als_strip_comment, so there are no comments left to skip.
+
+   *in_str_io carries the string state IN and OUT, because a string literal
+   may span physical lines: test.alc has assert names that do. Such a line
+   looks wildly unbalanced on its own (the brackets are text inside the
+   string), so the caller must not join it or judge its depth. */
+static int als_bracket_depth(const char *t, int *in_str_io) {
+  int d = 0, in_str = *in_str_io;
+  for (size_t k = 0; t[k];) {
+    char c = t[k];
+    if (in_str) {
+      if (c == '\\' && t[k + 1])
+        k += 2;
+      else {
+        if (c == '"')
+          in_str = 0;
+        k++;
+      }
+      continue;
+    }
+    if (c == '#' && t[k + 1] == '\\') {
+      k += t[k + 2] ? 3 : 2;
+      continue;
+    }
+    if (c == '"')
+      in_str = 1;
+    else if (c == '(' || c == '[' || c == '{')
+      d++;
+    else if (c == ')' || c == ']' || c == '}')
+      d--;
+    k++;
+  }
+  *in_str_io = in_str;
+  return d;
+}
+
 /* does the trimmed text open a block? returns 1 and trims the ':' */
 static int als_opens_block(char *t) {
   size_t n = strlen(t);
@@ -764,6 +804,13 @@ static void als_head_remap(als_node *node) {
 typedef struct {
   int *line;
   int n, cap;
+  /* First syntax error the TRANSPILER itself diagnosed (0 = none). These are
+     mistakes the alcove reader can never see, because the text we emit for
+     them — a (raise 'syntax-error ...) — is perfectly valid s-expr syntax.
+     Without this channel `check-syntax` and the LSP would call a stray `]`
+     clean and only the runtime would complain. */
+  int err_line;
+  char *err_msg; /* owned; freed by als_map_free */
 } als_map;
 static void als_map_push(als_map *m, int adder_line) {
   if (!m)
@@ -774,6 +821,13 @@ static void als_map_push(als_map *m, int adder_line) {
   }
   m->line[m->n++] = adder_line;
 }
+/* Record the FIRST transpiler-diagnosed syntax error; later ones are noise. */
+static void als_map_err(als_map *m, int line, const char *msg) {
+  if (!m || m->err_line)
+    return;
+  m->err_line = line;
+  m->err_msg = als_xstrdup(msg);
+}
 static int als_map_lookup(const als_map *m, int gen_line) {
   if (!m || gen_line < 1 || gen_line > m->n)
     return 0;
@@ -782,6 +836,9 @@ static int als_map_lookup(const als_map *m, int gen_line) {
 static void als_map_free(als_map *m) {
   if (m) {
     free(m->line);
+    free(m->err_msg);
+    m->err_msg = NULL;
+    m->err_line = 0;
     m->line = NULL;
     m->n = m->cap = 0;
   }
@@ -808,6 +865,25 @@ static void als_emit(als_node *x, als_buf *b) {
 static int als_starts_with(const char *s, const char *kw, size_t kwlen) {
   return strncmp(s, kw, kwlen) == 0 &&
          (s[kwlen] == '\0' || s[kwlen] == ' ' || s[kwlen] == '\t');
+}
+
+/* Emit `(raise 'syntax-error "adder line N: msg")` as a top-level form AND
+   record it in the map. Two channels on purpose: the raise is what a plain
+   run reports (loudly, with a source-mapped caret), the map entry is what
+   check-syntax / the LSP read — they parse the GENERATED text, in which the
+   raise is perfectly valid syntax and would otherwise look clean. */
+static void als_syntax_error(als_node *roots, als_map *map, int line,
+                             const char *what) {
+  char msg[192], quoted[196];
+  snprintf(msg, sizeof msg, "adder line %d: %s", line, what);
+  snprintf(quoted, sizeof quoted, "\"%s\"", msg);
+  als_node *err = als_list();
+  als_push(err, als_atom("raise", 5));
+  als_push(err, als_atom("'syntax-error", 13));
+  als_push(err, als_atom(quoted, strlen(quoted)));
+  als_push(roots, err);
+  als_map_push(map, line);
+  als_map_err(map, line, msg);
 }
 
 /* ---- top level: src -> s-expr string (+ optional source map) ----
@@ -844,6 +920,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
      we have already reported a mix — see the check in the line loop. */
   char indent_style = 0;
   int mix_reported = 0;
+  int str_carry = 0; /* inside a multi-line string literal at line start */
 #define ALS_NOTE_WRAP(p, i)                                                    \
   do {                                                                         \
     if (nwrap == cwrap) {                                                      \
@@ -868,6 +945,63 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
     memcpy(raw, src + i, rawlen);
     raw[rawlen] = 0;
     i = j + 1;
+    int line_start = cur_line; /* this LOGICAL line's first physical line */
+
+    /* ---- implicit line joining ----------------------------------------
+       A line that ends with brackets still open continues onto the next
+       physical line, exactly as inside `(`/`[`/`{` in Python. Without this
+       the transpiler emitted one form per physical line, so `prn (list 1`
+       / `2)` produced `(prn (list 1))` and `(2 ))` — two malformed roots,
+       silently. Continuation lines contribute no indentation: the logical
+       line's block level is the FIRST line's, and the joined text is what
+       the block/indent engine below sees. */
+    int extra_lines = 0, depth = 0, str_after = str_carry;
+    for (;;) {
+      char *probe = als_strip_comment(raw);
+      str_after = str_carry;
+      depth = als_bracket_depth(probe, &str_after);
+      free(probe);
+      /* A line that starts or ends inside a string literal is never joined
+         and never judged: its brackets are string CONTENT, and joining would
+         splice a space into the string. Multi-line strings survive the way
+         they always have — emitted verbatim, reassembled by alcove's reader
+         (this is text -> text). */
+      if (str_carry || str_after)
+        break;
+      if (depth <= 0 || i > slen)
+        break;
+      size_t j2 = i;
+      while (j2 < slen && src[j2] != '\n')
+        j2++;
+      size_t s2 = i; /* drop the continuation line's own indentation */
+      while (s2 < j2 && (src[s2] == ' ' || src[s2] == '\t'))
+        s2++;
+      size_t add = j2 - s2, rl = strlen(raw);
+      raw = (char *)als_xrealloc(raw, rl + add + 2);
+      raw[rl] = ' ';
+      memcpy(raw + rl + 1, src + s2, add);
+      raw[rl + add + 1] = 0;
+      i = j2 + 1;
+      extra_lines++;
+    }
+    cur_line += extra_lines;
+
+    /* Whatever bracket depth survives the join is a real error: >0 means the
+       source ran out while a bracket was open, <0 a closer with no opener.
+       Both used to fall through and emit malformed s-expr text, which the
+       alcove reader then rejected somewhere else entirely ("call to macro
+       char ) unkown!"), pointing at the wrong line. */
+    {
+      int d = (str_carry || str_after) ? 0 : depth;
+      str_carry = str_after; /* set BEFORE any continue below */
+      if (d != 0) {
+        als_syntax_error(roots, map, line_start,
+                         d > 0 ? "unterminated ( [ or { — reached end of input"
+                               : "unexpected ) ] or } with no matching opener");
+        free(raw);
+        continue;
+      }
+    }
 
     char *nocom = als_strip_comment(raw);
     free(raw);
@@ -902,17 +1036,8 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
         indent_style = has_tab ? '\t' : ' ';
       if ((has_sp && has_tab) ||
           (indent_style && (indent_style == ' ' ? has_tab : has_sp))) {
-        als_node *err = als_list();
-        char msg[160];
-        snprintf(msg, sizeof msg,
-                 "\"adder line %d: indentation mixes tabs and spaces; pick "
-                 "one\"",
-                 cur_line);
-        als_push(err, als_atom("raise", 5));
-        als_push(err, als_atom("'syntax-error", 13));
-        als_push(err, als_atom(msg, strlen(msg)));
-        als_push(roots, err);
-        als_map_push(map, cur_line);
+        als_syntax_error(roots, map, line_start,
+                         "indentation mixes tabs and spaces; pick one");
         mix_reported = 1; /* one diagnostic per transpile, not one per line */
       }
     }
@@ -974,17 +1099,11 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
            parses into the enclosing block — a top-level error is reported and
            execution continues — but the diagnostic names the line and column
            problem, and the process exits non-zero.) */
-        als_node *err = als_list();
-        char msg[160];
-        snprintf(msg, sizeof msg,
-                 "\"adder line %d: `%s:` has no matching `if` at this "
-                 "indentation\"",
-                 cur_line, is_else ? "else" : "elif");
-        als_push(err, als_atom("raise", 5));
-        als_push(err, als_atom("'syntax-error", 13));
-        als_push(err, als_atom(msg, strlen(msg)));
-        als_push(roots, err);
-        als_map_push(map, cur_line);
+        char what[96];
+        snprintf(what, sizeof what,
+                 "`%s:` has no matching `if` at this indentation",
+                 is_else ? "else" : "elif");
+        als_syntax_error(roots, map, line_start, what);
       }
       free(body);
       continue;
@@ -1046,8 +1165,8 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
     if (sp > 0) {
       als_push(node_stack[sp - 1], node);
     } else {
-      als_push(roots, node);       /* defer emit until tree is complete */
-      als_map_push(map, cur_line); /* this root → its Adder start line */
+      als_push(roots, node);         /* defer emit until tree is complete */
+      als_map_push(map, line_start); /* this root → its Adder start line */
     }
 
     if (block && sp < MAXD) {

@@ -992,6 +992,20 @@ exp_t *checksyntaxcmd(exp_t *e, env_t *env) {
   als_map lmap;
   memset(&lmap, 0, sizeof lmap);
   char *gen = als_to_sexpr_mapped(src, &lmap);
+  /* Errors the TRANSPILER diagnosed (stray else/elif, mixed indentation,
+     unbalanced brackets) never reach the reader below: we emit them as a
+     (raise ...) form, which is valid s-expr text. Report them from the map
+     instead, before parsing, so a stray `]` is a syntax error here and not
+     just at runtime. */
+  if (lmap.err_line > 0) {
+    exp_t *n1 = make_node(MAKE_FIX(lmap.err_line));
+    exp_t *n2 =
+        make_node(make_string((char *)lmap.err_msg, (int)strlen(lmap.err_msg)));
+    n1->next = n2;
+    free(gen);
+    als_map_free(&lmap);
+    CLEAN_RETURN_1(srcexp, n1);
+  }
   FILE *stream = gen ? fmemopen(gen, strlen(gen), "r") : NULL;
 #else
   FILE *stream = fmemopen((void *)src, strlen(src), "r");

@@ -70,9 +70,16 @@ class Reader:
             elif c == ";":
                 while self.i < self.n and self.s[self.i] != "\n":
                     self.i += 1
-            elif c == "#" and self.s[self.i + 1:self.i + 2] in (" ", "\t", ""):
+            elif c == "#" and self.s[self.i + 1:self.i + 2] in (" ", "\t", "",
+                                                               "!"):
                 # `# ...` line comment (alcove + adder share this rule); a `#`
                 # glued to a token is a dispatch literal, handled in form().
+                # `#!` is a comment too (shebang) — the alcove reader has the
+                # matching rule. Without it the shebang read as a SYMBOL and
+                # was re-emitted inline, where Adder's own `#!` rule then ate
+                # the rest of the line: `(assert "…" (do #!… 42) 42)` came out
+                # as a two-arg `assert` that raised at runtime instead of
+                # testing anything.
                 while self.i < self.n and self.s[self.i] != "\n":
                     self.i += 1
             else:
