@@ -1,12 +1,23 @@
 ; perf-gate kernel: dense 128x128 float mat-mul via the tensor builtins.
-; Sized ~0.5s on a dev box so the interleaved min-of-N in
+; Sized ~0.2s on a dev box so the interleaved min-of-N in
 ; tools/bench_gate.sh sits well above timer/startup noise.
 ; Prints a checksum so a wrong answer fails the gate too.
-(= n 256)
+;
+; n is 128, NOT larger, and that is load-bearing on a shared CI runner. The
+; three matrices ARE the working set: at n=128 they are 3x128KB = 384KB and
+; fit a private L2, so this measures mat-mul's compute. At n=256 they were
+; 3x512KB = 1.5MB, which spills to L3 — and on a cloud runner L3 is shared
+; with whatever else is on the socket. That made this the one kernel whose
+; time depended on a neighbour: it tripped the gate at +17% and +25% on runs
+; where the other six sat at 99-100%, and never reproduced on a quiet box.
+; min-of-15 does not rescue it — the contention outlasts the measurement
+; window and lands unevenly on the two interleaved binaries.
+; Iterations scale to keep the FLOPs (128^3 * 960 ~ 256^3 * 120).
+(= n 128)
 (= a (vec (* n n) 1.5))
 (= b (vec (* n n) 0.25))
 (= acc 0.0)
-(each i (range 0 120)
+(each i (range 0 960)
   (= c (mat-mul a b n))
   (= acc (+ acc (vec-sum c))))
 (prn acc)
