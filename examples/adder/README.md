@@ -1,19 +1,18 @@
 # Adder -> alcove
 
-`adr.py` (repo root) is a homoiconic reader for the Python-like
-indentation syntax described in `adder-spec.md`. It turns source
-into Lisp *forms* (not an AST) and emits alcove.
+Adder is a homoiconic reader for the Python-like indentation syntax
+described in `adder-spec.md`. It turns source into Lisp *forms* (not an
+AST) and emits alcove. The transpiler is `adr.h`, compiled into the
+`./adder` binary — there is no separate offline forward tool.
+
+To see the s-expressions a file transpiles to:
 
 ```sh
-python3 adr.py examples/adder/demo.adr            # to stdout
-python3 adr.py examples/adder/demo.adr -o out.alc # to a file
-python3 adr.py examples/adder/demo.adr | ./alcove --noload
+./adder -e 'pr (adder->sexpr (string-join (read-lines "demo.adr") "\n"))'
 ```
 
-This is **not** the same as `alcove-py.py`, which compiles *real* Python
-(`return`, `range`, `elif`, ...) via `ast`. Adder has no Python
-semantics: bare words are symbols, there is no `return`, a line is just
-a list.
+Adder has no Python *semantics*: bare words are symbols, there is no
+`return`, a line is just a list.
 
 ## Native binary: ./adder
 
@@ -42,6 +41,7 @@ In the REPL a one-line form submits on Enter. A line ending in `:`
 In [1]: def fib (n):
    ...:   if (< n 2):
    ...:     n
+   ...:   else:
    ...:     + (fib (- n 1)) (fib (- n 2))
    ...:                       <- blank line here evaluates the def
 Out[1]: #<procedure:fib>
@@ -50,8 +50,11 @@ In [2]: prn (fib 10)
 ```
 
 `adder.c` simply `#include`s `alcove.c` (renaming its `main`); the
-transpiler lives in `adr.h` and is a C port of `adr.py`.
-`alc2adr.py` / `adr.py` remain useful as offline batch tools.
+transpiler lives in `adr.h`. (`adr.py`, the original Python reader it
+was ported from, was removed in 2026-08: nothing built or tested it, so
+it silently fell behind `adr.h` — by the end it mis-transpiled `else:`
+into an orphan `(else ...)` form. `alc2adr.py`, the reverse `.alc` →
+`.adr` direction, is still live and gated by `make gen-test-adr`.)
 
 ## Reader rules
 

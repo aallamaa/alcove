@@ -2887,14 +2887,17 @@ int jit_compile(bytecode_t *bc) {
   if (n > (int)(sizeof(insns) / sizeof(insns[0])))
     return 0;
   size_t sz = (size_t)n * 4;
-  size_t pagesz = 4096;
+  size_t pagesz = jit_pagesize();
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
   void *page = jit_alloc(mapsz);
   if (!page)
     return 0;
   jit_write_begin();
   memcpy(page, insns, sz);
-  jit_write_end(page, sz);
+  if (!jit_write_end(page, sz)) { /* mprotect failed — page is not executable */
+    munmap(page, mapsz);
+    return 0;
+  }
   bc->jit = (exp_t * (*)(env_t *)) page;
   bc->jit_mem = page;
   bc->jit_size = mapsz;

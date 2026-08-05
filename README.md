@@ -544,9 +544,8 @@ def fib (n):
 ```
 
 Adder is accepted at the prompt, in `.adr` files, piped
-stdin, and `-e`; `alcove` itself is unchanged. `adr.py` (forward)
-and `alc2adr.py` (`.alc` → `.adr`, with builder laddering) are
-offline tools. See [`examples/adder/`](examples/adder/)
+stdin, and `-e`; `alcove` itself is unchanged. `alc2adr.py`
+(`.alc` → `.adr`, with builder laddering) is an offline tool. See [`examples/adder/`](examples/adder/)
 and [`adder-spec.md`](adder-spec.md).
 
 **Customizing the REPL prompt.** The `In [N]:` / `Out[N]:` prompts are

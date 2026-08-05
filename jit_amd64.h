@@ -153,9 +153,9 @@ static int x64_cqo(uint8_t *buf) {
 }
 
 /* idiv r64 — signed divide rdx:rax by r/m64; quotient → rax,
-   remainder → rdx. REX.W 0xF7 /7. For low regs: 0xF8|reg in ModR/M. */
+   remainder → rdx. REX.W(+B) 0xF7 /7; 0xF8|reg in ModR/M. */
 static int x64_idiv_reg(uint8_t *buf, int divisor) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXB(divisor));
   buf[1] = 0xF7;
   buf[2] = (uint8_t)(0xF8 | (divisor & 7));
   return 3;
@@ -163,7 +163,7 @@ static int x64_idiv_reg(uint8_t *buf, int divisor) {
 
 /* cmovz r64, r64 — REX.W 0x0F 0x44 ModR/M. dst gets src if ZF=1. */
 static int x64_cmovz_reg_reg(uint8_t *buf, int dst, int src) {
-  buf[0] = 0x48;
+  buf[0] = (uint8_t)(0x48 | X64_REXR(dst) | X64_REXB(src));
   buf[1] = 0x0F;
   buf[2] = 0x44;
   buf[3] = (uint8_t)(0xC0 | ((dst & 7) << 3) | (src & 7));
@@ -186,17 +186,24 @@ static int x64_pop_reg(uint8_t *buf, int reg) {
   buf[n++] = (uint8_t)(0x58 + (reg & 7));
   return n;
 }
-/* call r/m64 — 0xFF /2. Register form for low 8 regs: 0xFF 0xD0+r (2 bytes). */
+/* call r/m64 — 0xFF /2 (0xFF 0xD0+r), with a REX.B prefix for r8-r11.
+   Byte-identical to the old 2-byte form for r0-r7. */
 static int x64_call_reg(uint8_t *buf, int reg) {
-  buf[0] = 0xFF;
-  buf[1] = (uint8_t)(0xD0 + (reg & 7));
-  return 2;
+  int n = 0;
+  if (reg >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXB(reg));
+  buf[n++] = 0xFF;
+  buf[n++] = (uint8_t)(0xD0 + (reg & 7));
+  return n;
 }
 /* jmp reg  (FF /4) — tail call; callee's ret returns to our caller. */
 static int x64_jmp_reg(uint8_t *buf, int reg) {
-  buf[0] = 0xFF;
-  buf[1] = (uint8_t)(0xE0 + (reg & 7));
-  return 2;
+  int n = 0;
+  if (reg >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXB(reg));
+  buf[n++] = 0xFF;
+  buf[n++] = (uint8_t)(0xE0 + (reg & 7));
+  return n;
 }
 /* call rel32 — 0xE8 imm32 (5 bytes). disp from end of instruction.
    Used for direct intra-buffer self-calls — the JIT emits a relative
@@ -3336,14 +3343,17 @@ int jit_compile(bytecode_t *bc) {
   if (n > (int)sizeof(buf))
     return 0;
   size_t sz = (size_t)n;
-  size_t pagesz = 4096;
+  size_t pagesz = jit_pagesize();
   size_t mapsz = (sz + pagesz - 1) & ~(pagesz - 1);
   void *page = jit_alloc(mapsz);
   if (!page)
     return 0;
   jit_write_begin();
   memcpy(page, buf, sz);
-  jit_write_end(page, sz);
+  if (!jit_write_end(page, sz)) { /* mprotect failed — page is not executable */
+    munmap(page, mapsz);
+    return 0;
+  }
   bc->jit = (exp_t * (*)(env_t *)) page;
   bc->jit_mem = page;
   bc->jit_size = mapsz;

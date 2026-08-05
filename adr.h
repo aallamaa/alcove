@@ -1,6 +1,8 @@
 /* adr.h — Adder -> alcove S-expression transpiler, in C.
  *
- * A self-contained port of adr.py. One entry point:
+ * Originally ported from a Python reader (adr.py, removed 2026-08 — it was
+ * built and tested by nothing and had silently fallen behind this file).
+ * One entry point:
  *
  *     char *als_to_sexpr(const char *src);   // malloc'd; caller frees
  *
@@ -670,7 +672,7 @@ static char *als_strip_comment(const char *line) {
        A `#` glued to any other character is a dispatch token (#[ vector,
        #{ set, #b"..." blob) and passes through to the reader untouched.
        This one rule replaces a per-token exception list — see the matching
-       rule in adr.py / als_read_one. */
+       rule in als_read_one. */
     if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' || line[i + 1] == '\t' ||
                      line[i + 1] == '!'))
       break;
@@ -838,6 +840,10 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
     int idx;
   } *wraps = NULL;
   int nwrap = 0, cwrap = 0;
+  /* Indentation character this source committed to (' ' or '\t'), and whether
+     we have already reported a mix — see the check in the line loop. */
+  char indent_style = 0;
+  int mix_reported = 0;
 #define ALS_NOTE_WRAP(p, i)                                                    \
   do {                                                                         \
     if (nwrap == cwrap) {                                                      \
@@ -869,6 +875,47 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
     int indent = 0;
     while (nocom[indent] == ' ' || nocom[indent] == '\t')
       indent++;
+    /* Indentation is COLUMN-counted, one column per byte, so a tab is worth
+       exactly 1 — the same as a space. That is self-consistent only while a
+       file sticks to one character: mix them and a tab-indented line scores
+       BELOW a space-indented one at the same visual depth, silently popping
+       the block stack and re-parenting the line. Reject the mix (Python's
+       TabError, same reasoning) rather than pick a tab width — any width we
+       chose would still disagree with somebody's editor. */
+    /* Blank/whitespace-only lines carry no indentation: skip them, or a file
+       indented with spaces trips on one stray tab-only line. */
+    int blank_line = 1;
+    for (int k = indent; nocom[k]; k++)
+      if (nocom[k] != ' ' && nocom[k] != '\t' && nocom[k] != '\r') {
+        blank_line = 0;
+        break;
+      }
+    if (indent > 0 && !blank_line && !mix_reported) {
+      int has_sp = 0, has_tab = 0;
+      for (int k = 0; k < indent; k++) {
+        if (nocom[k] == '\t')
+          has_tab = 1;
+        else
+          has_sp = 1;
+      }
+      if (!indent_style && !(has_sp && has_tab))
+        indent_style = has_tab ? '\t' : ' ';
+      if ((has_sp && has_tab) ||
+          (indent_style && (indent_style == ' ' ? has_tab : has_sp))) {
+        als_node *err = als_list();
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "\"adder line %d: indentation mixes tabs and spaces; pick "
+                 "one\"",
+                 cur_line);
+        als_push(err, als_atom("raise", 5));
+        als_push(err, als_atom("'syntax-error", 13));
+        als_push(err, als_atom(msg, strlen(msg)));
+        als_push(roots, err);
+        als_map_push(map, cur_line);
+        mix_reported = 1; /* one diagnostic per transpile, not one per line */
+      }
+    }
     /* if_stack is indexed by indentation COLUMN (not nesting depth), so clamp
        the index — pathologically deep indentation (hostile / fuzzed input)
        must not write out of bounds. Real source never nears 256 columns. */

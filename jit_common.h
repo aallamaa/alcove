@@ -322,6 +322,19 @@ static exp_t *jit_call_global1_drop(bytecode_t *bc, env_t *env,
   return NULL;
 }
 
+/* Runtime page size. NOT a hardcoded 4096: arm64 Linux is commonly built with
+   16K or 64K pages, where rounding a length up to 4096 leaves the tail of the
+   real page unprotected and mprotect's alignment requirement is missed. Cached
+   because sysconf is a call, and clamped to a sane floor in case it fails. */
+static size_t jit_pagesize(void) {
+  static size_t ps = 0;
+  if (!ps) {
+    long v = sysconf(_SC_PAGESIZE);
+    ps = (v > 0) ? (size_t)v : 4096;
+  }
+  return ps;
+}
+
 /* Page allocation + W^X dance — shared by both backends. */
 static void *jit_alloc(size_t sz) {
   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -341,7 +354,10 @@ static void jit_write_begin(void) {
   pthread_jit_write_protect_np(0);
 #endif
 }
-static void jit_write_end(void *p, size_t sz) {
+/* Returns 1 on success. A FAILED mprotect must abort the compile: the page
+   stays non-executable, so installing bc->jit would jump into it and take
+   SIGSEGV on the first call. The caller unmaps and falls back to the VM. */
+static int jit_write_end(void *p, size_t sz) {
 #ifdef __APPLE__
   pthread_jit_write_protect_np(1);
 #else
@@ -349,11 +365,13 @@ static void jit_write_end(void *p, size_t sz) {
      first execution — we never hold a simultaneously writable+executable
      mapping (W^X), and hardened kernels that reject RWX won't refuse us.
      mmap is page-aligned, so round the protected length up to a page. */
-  size_t pagesz = 4096;
+  size_t pagesz = jit_pagesize();
   size_t protlen = (sz + pagesz - 1) & ~(pagesz - 1);
-  mprotect(p, protlen, PROT_READ | PROT_EXEC);
+  if (mprotect(p, protlen, PROT_READ | PROT_EXEC) != 0)
+    return 0;
 #endif
   __builtin___clear_cache((char *)p, (char *)p + sz);
+  return 1;
 }
 
 /* Shared JIT helper used by both arm64 and x64 shape emitters.

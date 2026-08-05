@@ -8877,6 +8877,13 @@ assert "stray elif raises"    (string-contains? (adder->sexpr "if a:\n  b\n  eli
 assert "aligned else is fine" (string-trim (adder->sexpr "if a:\n  b\nelse:\n  d\n")) "(if a b d)"
 assert "elif-prefixed name is a plain call" (string-trim (adder->sexpr "elifoo x:\n  b\n")) "(elifoo x b)"
 
+# Indentation is column-counted one-per-byte, so a tab scores the same as a
+# space. That is only self-consistent while a file sticks to one character;
+# mixing silently re-parents lines. Rejected, like Python's TabError.
+assert "tabs alone are consistent"  (string-trim (adder->sexpr "if a:\n\tb\nelse:\n\tc\n")) "(if a b c)"
+assert "mixed indent across lines raises" (string-contains? (adder->sexpr "def f():\n  a\n\tb\n") "mixes tabs and spaces") t
+assert "mixed indent within a line raises" (string-contains? (adder->sexpr "def f():\n \tb\n") "mixes tabs and spaces") t
+
 prn (str "TEST RESULT: " _test_pass " passed, " _test_fail " failed")
 
 exit (if (> _test_fail 0) 1 0)

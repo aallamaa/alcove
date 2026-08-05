@@ -646,6 +646,17 @@ tailrec: {
 
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env) {
+  /* Stack-overflow guard, same as the lambda path. A macro whose expansion
+     re-invokes itself — (defmacro m (x) (list 'm x)) — recurses
+     expandmacro -> EVAL -> invokemacro -> expandmacro with no lambda frame
+     in between, so the guard at the invocation site never sees it and the
+     C stack blows. `e` is BORROWED here (invokemacro unrefs it), so build
+     the error and return without unref'ing. */
+  if (stack_guard_exhausted())
+    return error(ERROR_ILLEGAL_VALUE, e, env,
+                 "macro expansion too deep: (macroexpand-1 ...) it to see the "
+                 "expansion — a macro whose expansion re-invokes itself never "
+                 "terminates");
   env_t *newenv = make_env(NULL); // NULL instead of env
   exp_t *ret;
 
@@ -1171,8 +1182,17 @@ static char **alcove_rl_completer(const char *text, int start, int end) {
   return rl_completion_matches(text, alcove_completion_generator);
 }
 
-/* Quick paren depth — comments and string literals don't count. Returns
-   the running depth (0 = balanced, >0 = need more, <0 = extra closer). */
+/* Quick bracket depth — comments, char literals and string literals don't
+   count. Returns the running depth (0 = balanced, >0 = need more, <0 = extra
+   closer).
+
+   ALL THREE bracket pairs count, not just parens: `#[1 2` (vector), `[x ...]`
+   (bracket lambda) and `{:a 1` (dict/set) are unterminated forms exactly like
+   `(f 1`, and counting only `(`/`)` made the REPL submit them as complete
+   input — the next line then arrived as a separate form and died on a bare
+   closer ("call to macro char ] unkown!"). They are not tracked as a typed
+   stack: mismatched closers are the reader's error to report, and this only
+   answers "does the user owe us more input?". */
 static int rl_paren_depth(const char *s) {
   int depth = 0, in_string = 0;
   while (*s) {
@@ -1185,15 +1205,29 @@ static int rl_paren_depth(const char *s) {
       } else
         s++;
     } else {
+      /* `#\X` char literal: the value byte may itself be a bracket, a quote
+         or a comment char — skip all three bytes. Mirrors als_strip_comment. */
+      if (*s == '#' && s[1] == '\\') {
+        s += s[2] ? 3 : 2;
+        continue;
+      }
       if (*s == '"') {
         in_string = 1;
         s++;
-      } else if (*s == '(') {
+      } else if (*s == '(' || *s == '[' || *s == '{') {
         depth++;
         s++;
-      } else if (*s == ')') {
+      } else if (*s == ')' || *s == ']' || *s == '}') {
         depth--;
         s++;
+#ifdef ALCOVE_ALS
+        /* Adder's line comment is `#` + space/tab/EOL (or a `#!` shebang);
+           `#` glued to anything else is a dispatch token (#[ #{ #b"). */
+      } else if (*s == '#' &&
+                 (!s[1] || s[1] == ' ' || s[1] == '\t' || s[1] == '!')) {
+        while (*s && *s != '\n')
+          s++;
+#endif
       } else if (*s == ';') {
         while (*s && *s != '\n')
           s++;
