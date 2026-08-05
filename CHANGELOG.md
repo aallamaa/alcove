@@ -7,21 +7,26 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
-### Changed
-- **BREAKING (Adder): an `if` block body is now a statement sequence, as in
-  Python.** Previously the general "a `:`-block appends its indented forms to
-  the line's list" rule applied to `if` too, so a two-statement then-branch
-  silently became then/else — `if c:` / `A` / `B` read as `(if c A B)`, and an
-  `else:` after it landed in the *third* arm where it could never run. Writing
-  `when` instead was the only way to get a multi-statement guard. Now a branch
-  with 2+ statements is wrapped in `(do ...)`; a single-statement branch is
-  emitted bare, so existing one-statement `if` forms are byte-identical.
-  `elif`/`else` chains still flatten to alcove's Arc-style multi-arg `if`.
-  The `adder fmt` printer, the `.alc`→Adder converter, and `alc2adr.py` all
-  emit if/elif/else ladders to match. Shipped `lib/*.adr` and the examples
-  were migrated; code relying on the old folding must add an explicit `else:`.
-
 ### Added
+- **Adder: implicit line joining inside brackets.** A line that ends with
+  `(`/`[`/`{` still open continues onto the next physical line, as in
+  Python. Multi-line forms previously did not work at all — the transpiler
+  is line-oriented, so `prn (list 1` / `2)` emitted `(prn (list 1))` and
+  `(2 ))`, two malformed roots, with no diagnostic. String literals may
+  span lines too: there the newline and the continuation's leading
+  whitespace are string CONTENT, so the joiner keeps every byte and joins
+  with `\n` rather than a space.
+- **Adder: real syntax errors from the transpiler.** An unterminated
+  bracket, an unexpected closer, an unterminated string, a stray
+  `else:`/`elif:`, and mixed tab/space indentation now raise
+  `'syntax-error` naming the line, instead of emitting malformed text that
+  the reader rejected somewhere else entirely. They also reach
+  `check-syntax` and the LSP: the text emitted for them is a valid
+  `(raise ...)` form, so the reader alone would call a stray `]` clean —
+  the line map carries the first error out of band.
+- `match(c, ...)` / `ifmatch(c, ...)` (`match.h`) for value-set tests,
+  replacing long `==` chains at 70 sites. NOTE: this claims the identifier
+  `match` build-wide.
 - **Types-for-JIT payoff: the numeric-loop JIT now compiles mixed
   int/float kernels.** The canonical hinted loop — `:f64` accumulators
   driven by an `:int` counter pair, e.g.
@@ -41,6 +46,53 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 - **docs/multithreading.md: `-R` reactor-pool thread-safety contract**
   (design only): stop-the-world park/unpark on REPL global mutation,
   with rulings on the TLS allocator and epoch-reclamation corners.
+
+### Changed
+- **BREAKING (Adder): an `if` block body is now a statement sequence, as in
+  Python.** Previously the general "a `:`-block appends its indented forms to
+  the line's list" rule applied to `if` too, so a two-statement then-branch
+  silently became then/else — `if c:` / `A` / `B` read as `(if c A B)`, and an
+  `else:` after it landed in the *third* arm where it could never run. Writing
+  `when` instead was the only way to get a multi-statement guard. Now a branch
+  with 2+ statements is wrapped in `(do ...)`; a single-statement branch is
+  emitted bare, so existing one-statement `if` forms are byte-identical.
+  `elif`/`else` chains still flatten to alcove's Arc-style multi-arg `if`.
+  The `adder fmt` printer, the `.alc`→Adder converter, and `alc2adr.py` all
+  emit if/elif/else ladders to match. Shipped `lib/*.adr` and the examples
+  were migrated; code relying on the old folding must add an explicit `else:`.
+
+### Fixed
+- **Macro expansion had no stack guard**: a macro whose expansion re-invokes
+  itself (`(defmacro m (x) (list 'm x))`) recursed with no lambda frame in
+  between, so the guard at the invocation site never saw it and the process
+  took SIGSEGV. Now a catchable error, like deep non-tail recursion.
+- **REPL input continuation counted only `(`/`)`**, so `#[1 2` and `{:a 1`
+  submitted as complete and the next line died on a bare closer. All three
+  bracket pairs count, plus `#\X` char literals and Adder `#`-comments.
+- **The REPL continuation prompt was two spaces**, which is undeletable
+  screen real estate: backspacing to column 0 still looked indented, and a
+  correctly-aligned `else:` rendered as though nested one level in. Now
+  empty, so screen indentation is buffer indentation.
+- `alc2adr.py` did not treat `#!` as a comment, so a shebang inside a form
+  was re-emitted inline where Adder's own `#!` rule ate the rest of the
+  line, turning a generated assert into a two-arg call that raised instead
+  of testing anything.
+- JIT: page size comes from `sysconf(_SC_PAGESIZE)` instead of a hardcoded
+  4096 (arm64 Linux ships 16K/64K pages, where the old rounding
+  under-protected and `mprotect` failed), and a failed `mprotect` now falls
+  back to the VM instead of leaving a page we would jump into.
+- amd64 JIT: `idiv`/`cmovz`/`call`/`jmp` register encoders masked with `& 7`
+  and emitted no REX, so `r8`-`r11` would have silently encoded as
+  `rax`/`rcx`. No call site passed a high register, so nothing mis-emitted;
+  widened anyway now that the numloop pool reaches `r8`-`r11`.
+- Removed `adr.py`: the Python original `adr.h` was ported from. Nothing
+  built or tested it and it had rotted to emitting an orphan `(else ...)`,
+  while the examples README still recommended it.
+- `benchmark/gate-mat.alc` is sized to a private cache (n=128, 384KB)
+  rather than L3 (n=256, 1.5MB). On a shared CI runner L3 is contended by
+  other tenants, which made this the one kernel whose timing tracked a
+  neighbour — it tripped the perf gate at +17% and +25% while the other six
+  sat at 99-100%, and never reproduced on a quiet box.
 
 ## [0.5.0] — 2026-07-09
 

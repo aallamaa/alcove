@@ -510,11 +510,14 @@ static node *parse(const char *src) {
       free(raw);
       if (codeb.len > pre)
         any = 1; /* this line contributed code */
-      /* Multi-line accumulation is ALCOVE-only: real .alc s-exprs span lines.
-         Adder is line-based exactly like adr.h — each physical line is its own
-         form, and an unclosed paren auto-closes at EOL (line_node's reader does
-         this), so `(do #!comment` becomes `(do)`, matching adr.h. */
-      if ((depth <= 0 && !in_str) || !g_alcove_mode)
+      /* Multi-line accumulation applies to BOTH dialects. It used to be
+         Alcove-only, because Adder was line-based — each physical line its
+         own form, an unclosed bracket auto-closing at EOL. adr.h now joins
+         a line that ends with brackets open or inside a string literal, so
+         the formatter has to follow: otherwise it re-emits a multi-line
+         string as separate lines and the meaning-preservation gate catches
+         it (a space appears where the newline was). */
+      if (depth <= 0 && !in_str)
         break;
       buf_putc(&codeb, '\n'); /* keep newline between continued lines */
       if (i > slen)

@@ -918,7 +918,6 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
      we have already reported a mix — see the check in the line loop. */
   char indent_style = 0;
   int mix_reported = 0;
-  int str_carry = 0; /* inside a multi-line string literal at line start */
 #define ALS_NOTE_WRAP(p, i)                                                    \
   do {                                                                         \
     if (nwrap == cwrap) {                                                      \
@@ -953,30 +952,31 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
        silently. Continuation lines contribute no indentation: the logical
        line's block level is the FIRST line's, and the joined text is what
        the block/indent engine below sees. */
-    int extra_lines = 0, depth = 0, str_after = str_carry;
+    int extra_lines = 0, depth = 0, str_after = 0;
     for (;;) {
       char *probe = als_strip_comment(raw);
-      str_after = str_carry;
+      str_after = 0;
       depth = als_bracket_depth(probe, &str_after);
       free(probe);
-      /* A line that starts or ends inside a string literal is never joined
-         and never judged: its brackets are string CONTENT, and joining would
-         splice a space into the string. Multi-line strings survive the way
-         they always have — emitted verbatim, reassembled by alcove's reader
-         (this is text -> text). */
-      if (str_carry || str_after)
+      if (i > slen) /* no more input to pull in */
         break;
-      if (depth <= 0 || i > slen)
+      if (!str_after && depth <= 0) /* logical line is complete */
         break;
       size_t j2 = i;
       while (j2 < slen && src[j2] != '\n')
         j2++;
-      size_t s2 = i; /* drop the continuation line's own indentation */
-      while (s2 < j2 && (src[s2] == ' ' || src[s2] == '\t'))
-        s2++;
+      size_t s2 = i;
+      /* Inside a string literal the newline and the next line's leading
+         whitespace are string CONTENT: join with '\n' and keep every byte.
+         Outside one, the continuation contributes no indentation, so drop
+         it and join with a space. Getting this backwards silently rewrites
+         the user's string. */
+      if (!str_after)
+        while (s2 < j2 && (src[s2] == ' ' || src[s2] == '\t'))
+          s2++;
       size_t add = j2 - s2, rl = strlen(raw);
       raw = (char *)als_xrealloc(raw, rl + add + 2);
-      raw[rl] = ' ';
+      raw[rl] = str_after ? '\n' : ' ';
       memcpy(raw + rl + 1, src + s2, add);
       raw[rl + add + 1] = 0;
       i = j2 + 1;
@@ -990,8 +990,13 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
        alcove reader then rejected somewhere else entirely ("call to macro
        char ) unkown!"), pointing at the wrong line. */
     {
-      int d = (str_carry || str_after) ? 0 : depth;
-      str_carry = str_after; /* set BEFORE any continue below */
+      if (str_after) { /* ran out of input mid-string */
+        als_syntax_error(roots, map, line_start,
+                         "unterminated string literal — reached end of input");
+        free(raw);
+        continue;
+      }
+      int d = depth;
       if (d != 0) {
         als_syntax_error(roots, map, line_start,
                          d > 0 ? "unterminated ( [ or { — reached end of input"

@@ -80,6 +80,7 @@ contracts; prefer `grep '^name'` (definitions start at column 0) and the
 | Fragment | Responsibility |
 |---|---|
 | `char.h` | character-class tables (`chrmap`, `chr2hex`) used by the reader |
+| `match.h` | `match(c, ...)` / `ifmatch(c, ...)` — is `c` any of these values? Replaces long `==` chains. Depends on nothing, so `adr.h` and the separate-TU `adfmt.c` can use it too |
 | `adr.h` | Adder → Alcove s-expr transpiler (`als_to_sexpr`); string→string |
 | `alcove.h` | the master header: `exp_t`, tags, the `exp_error_t` / `EXP_*` / opcode X-macro enums, refcount macros, prototypes |
 | `lfkv.h` | lock-free keyspace for the RESP server (design + decls) |
@@ -121,10 +122,20 @@ contracts; prefer `grep '^name'` (definitions start at column 0) and the
 | `repl_builtins.h` | Lisp-facing REPL editing, diagnostics (check-syntax), and key-binding builtins |
 | `resp.c` | RESP2 (Redis protocol) server; `--threads` multi-reactor |
 
-Two fragments are pulled in indirectly rather than by a line in `alcove.c`:
-`char.h` and `mpsc.h` (MPSC queue, used by resp under threads) are `#include`d
-by `alcove.h`; `resp.c` is `#include`d by `repl_builtins.h` (~455). They are
-still part of the one TU — grep for the `#include` if you need the exact spot.
+Some fragments are pulled in indirectly rather than by a line in `alcove.c`:
+`char.h`, `match.h` and `mpsc.h` (MPSC queue, used by resp under threads) are
+`#include`d by `alcove.h`; `resp.c` is `#include`d by `repl_builtins.h` (~455).
+They are still part of the one TU — grep for the `#include` if you need the
+exact spot. `match.h` is ALSO included directly by `adr.h` (which is
+self-contained and comes before `alcove.h`) and by `adfmt.c` (a separate TU).
+
+**`match` is a build-wide identifier.** `match(c, ...)` is a function-like
+macro, so it expands at any `match(` — a local variable or function named
+`match` will not compile. `matchcmd` and `match_*` are different tokens and
+are fine. The subject is substituted once per alternative, so pass a variable
+or a plain subscript, never a call or anything with a side effect. `ifmatch`
+is listed in `.clang-format`'s `IfMacros`; without that clang-format reads
+`else ifmatch (...) {` as a call and re-indents the block after it.
 
 Genuinely separate TUs (NOT part of alcove.c): `adfmt.c` (`adder fmt`, linked
 into `adder`) and the `*_test.c` unit harnesses.

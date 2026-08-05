@@ -370,3 +370,14 @@ assert "stray closer raises"         (string-contains? (adder->sexpr "prn 1)\n")
 assert "check-syntax sees a stray closer" (car (check-syntax "def f (x):\n  + x 1\nbad ]")) 3
 assert "check-syntax sees a stray else"   (car (check-syntax "if a:\n  b\n  else:\n    d\n")) 3
 assert "check-syntax clean input is nil"  (check-syntax "def f (x):\n  + x 1\n") nil
+
+# A string literal may span physical lines. The newline and the continuation
+# line's leading whitespace are string CONTENT, so the joiner keeps every byte
+# and joins with '\n' — joining with a space (as it does outside a string)
+# would silently rewrite the user's text.
+def adr-ml-str():
+  "one
+two"
+assert "multi-line string keeps its newline" (adr-ml-str) "one\ntwo"
+assert "multi-line string joins verbatim"    (string-trim (adder->sexpr "prn \"a\nb\"\n")) "(prn \"a\nb\")"
+assert "unterminated string raises"          (string-contains? (adder->sexpr "prn \"oops\n") "unterminated string") t
