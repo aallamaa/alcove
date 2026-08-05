@@ -114,7 +114,7 @@ exp_t *readlinecmd(exp_t *e, env_t *env) {
     free(line);
     return refexp(NIL_EXP);
   }
-  while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+  while (n > 0 && match(line[n - 1], '\n', '\r'))
     n--;
   exp_t *ret = make_string(line, (int)n);
   free(line);
@@ -743,7 +743,7 @@ exp_t *opencmd(exp_t *e, env_t *env) {
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "(open path mode): two strings expected"));
   const char *m = (const char *)exp_text(modeexp);
-  if (!m[0] || m[1] || (m[0] != 'r' && m[0] != 'w' && m[0] != 'a'))
+  if (!m[0] || m[1] || !match(m[0], 'r', 'w', 'a'))
     CLEAN_RETURN_2(pathexp, modeexp,
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "open: mode must be \"r\", \"w\", or \"a\""));

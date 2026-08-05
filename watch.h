@@ -239,7 +239,7 @@ exp_t *watchcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(obj, fn,
                    error(ERROR_ILLEGAL_VALUE, e, env,
                          "watch!: obj must be a hash-map/deque/vector/set"));
-  if (!is_ptr(fn) || !(fn->type == EXP_LAMBDA || fn->type == EXP_INTERNAL))
+  if (!is_ptr(fn) || !match(fn->type, EXP_LAMBDA, EXP_INTERNAL))
     CLEAN_RETURN_2(
         obj, fn,
         error(ERROR_ILLEGAL_VALUE, e, env, "watch!: fn must be a function"));

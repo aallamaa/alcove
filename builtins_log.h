@@ -272,7 +272,7 @@ static void logfmt_value(char **b, size_t *n, size_t *cap, exp_t *v) {
   }
   int needq = (tn == 0);
   for (size_t i = 0; i < tn && !needq; i++)
-    if (tmp[i] == ' ' || tmp[i] == '=' || tmp[i] == '"' || tmp[i] == '\n')
+    ifmatch (tmp[i], ' ', '=', '"', '\n')
       needq = 1;
   if (!needq) {
     str_buf_put(b, n, cap, tmp ? tmp : "", tn);

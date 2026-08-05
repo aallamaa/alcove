@@ -601,13 +601,12 @@ static int match_simple_tail_loop(bytecode_t *bc,
   int pc = 0, at_cmp, at_arith, at_tail, at_load;
   uint8_t cmp_op, arith_op;
   BC_TAKE_ANY(at_cmp, cmp_op);
-  if (cmp_op != OP_SLOT_GT_FIX && cmp_op != OP_SLOT_LT_FIX &&
-      cmp_op != OP_SLOT_GE_FIX && cmp_op != OP_SLOT_LE_FIX &&
-      cmp_op != OP_SLOT_IS_FIX)
+  if (!match(cmp_op, OP_SLOT_GT_FIX, OP_SLOT_LT_FIX, OP_SLOT_GE_FIX,
+             OP_SLOT_LE_FIX, OP_SLOT_IS_FIX))
     return 0;
   BC_EAT(OP_BR_IF_FALSE);
   BC_TAKE_ANY(at_arith, arith_op);
-  if (arith_op != OP_SLOT_SUB_FIX && arith_op != OP_SLOT_ADD_FIX)
+  if (!match(arith_op, OP_SLOT_SUB_FIX, OP_SLOT_ADD_FIX))
     return 0;
   BC_TAKE(at_tail, OP_TAIL_SELF);
   if (BC_ARG(at_tail, 0) != 1)
@@ -706,11 +705,11 @@ static int match_float_acc_loop(bytecode_t *bc,
   BC_TAKE(at_lim, OP_LOAD_CONST);
   uint8_t lim_idx = BC_ARG(at_lim, 0);
   BC_EAT_ANY(cmp_op);
-  if (cmp_op != OP_LT && cmp_op != OP_GT && cmp_op != OP_LE && cmp_op != OP_GE)
+  if (!match(cmp_op, OP_LT, OP_GT, OP_LE, OP_GE))
     return 0;
   BC_EAT(OP_BR_IF_FALSE);
   BC_TAKE_ANY(at_step, step_op);
-  if (step_op != OP_SLOT_ADD_FIX && step_op != OP_SLOT_SUB_FIX)
+  if (!match(step_op, OP_SLOT_ADD_FIX, OP_SLOT_SUB_FIX))
     return 0;
   if (BC_ARG(at_step, 0) != cslot)
     return 0;
@@ -720,7 +719,7 @@ static int match_float_acc_loop(bytecode_t *bc,
   BC_TAKE(at_fc, OP_LOAD_CONST);
   uint8_t fc_idx = BC_ARG(at_fc, 0);
   BC_EAT_ANY(fop);
-  if (fop != OP_ADD && fop != OP_SUB && fop != OP_MUL)
+  if (!match(fop, OP_ADD, OP_SUB, OP_MUL))
     return 0;
   BC_TAKE(at_tail, OP_TAIL_SELF);
   if (BC_ARG(at_tail, 0) != 2)

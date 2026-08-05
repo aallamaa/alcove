@@ -6254,8 +6254,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       int spec_ok = 1;
       for (size_t k = 0; k + 1 < spec_len; k++) {
         char sc = printf_fmt[1 + k];
-        if (!(sc == '-' || sc == '+' || sc == ' ' || sc == '#' || sc == '.' ||
-              (sc >= '0' && sc <= '9'))) {
+        if (!(match(sc, '-', '+', ' ', '#', '.') || (sc >= '0' && sc <= '9'))) {
           spec_ok = 0;
           break;
         }
@@ -6278,8 +6277,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
       char *out = tmp;
       char *heap = NULL;
       int n = 0;
-      if (ftype == 'd' || ftype == 'i' || ftype == 'o' || ftype == 'u' ||
-          ftype == 'x' || ftype == 'X') {
+      ifmatch (ftype, 'd', 'i', 'o', 'u', 'x', 'X') {
         int64_t iv = isnumber(v)  ? FIX_VAL(v)
                      : isfloat(v) ? (int64_t)v->f
                                   : 0LL;
@@ -6291,8 +6289,7 @@ exp_t *fmtcmd(exp_t *e, env_t *env) {
         safe_fmt[spec_len + 2] = ftype;
         safe_fmt[spec_len + 3] = '\0';
         n = snprintf(tmp, sizeof(tmp), safe_fmt, iv);
-      } else if (ftype == 'f' || ftype == 'e' || ftype == 'E' || ftype == 'g' ||
-                 ftype == 'G') {
+      } else ifmatch (ftype, 'f', 'e', 'E', 'g', 'G') {
         double dv = isfloat(v) ? v->f : isnumber(v) ? (double)FIX_VAL(v) : 0.0;
         n = snprintf(tmp, sizeof(tmp), printf_fmt, dv);
       } else if (ftype == 's') {

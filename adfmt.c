@@ -18,6 +18,8 @@
  * (Phase 3 wires the same engine into the `adder fmt` subcommand.)
  */
 
+#include "match.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -139,13 +141,10 @@ typedef struct {
 } lex;
 
 static int is_delim(char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(' ||
-         c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == '"' ||
-         c == '\'' || c == '`' || c == ',';
+  return match(c, ' ', '\t', '\n', '\r', '(', ')', '[', ']', '{', '}', '"',
+               '\'', '`', ',');
 }
-static int is_ws(char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
+static int is_ws(char c) { return match(c, ' ', '\t', '\n', '\r'); }
 static node *read_one(lex *r);
 static void read_forms(lex *r, char term, node *out);
 
@@ -333,9 +332,9 @@ static int inline_colon(const char *body) {
       in_str = 1;
       continue;
     }
-    if (c == '(' || c == '[' || c == '{')
+    ifmatch (c, '(', '[', '{')
       depth++;
-    else if (c == ')' || c == ']' || c == '}')
+    else ifmatch (c, ')', ']', '}')
       depth--;
     else if (c == ':' && depth == 0 && i + 1 < n && i > 0 &&
              body[i - 1] != ' ' && body[i - 1] != '\t' &&
@@ -403,9 +402,9 @@ static void scan_line(const char *line, buf *out, int *depth, int *in_str,
       buf_putc(out, c);
       continue;
     }
-    if (c == '(' || c == '[' || c == '{')
+    ifmatch (c, '(', '[', '{')
       (*depth)++;
-    else if (c == ')' || c == ']' || c == '}') {
+    else ifmatch (c, ')', ']', '}') {
       if (*depth > 0)
         (*depth)--;
     }

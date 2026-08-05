@@ -348,8 +348,7 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
     c->failed = 1;
     return;
   }
-  if ((op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE) &&
-      a->next->next) {
+  if (match(op, OP_LT, OP_GT, OP_LE, OP_GE) && a->next->next) {
     c->failed = 1;
     return;
   }
@@ -360,8 +359,8 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
   /* Canonicalize (+ K slot) → (+ slot K) for commutative ops so the
      slot-fix peephole and JIT shape matchers see the canonical form.
      Binary-only — the peephole below doesn't handle >2 args anyway. */
-  if (is_binary && (op == OP_ADD || op == OP_MUL || op == OP_IS) &&
-      isnumber(arg1) && issymbol(arg2)) {
+  if (is_binary && match(op, OP_ADD, OP_MUL, OP_IS) && isnumber(arg1) &&
+      issymbol(arg2)) {
     exp_t *tmp = arg1;
     arg1 = arg2;
     arg2 = tmp;

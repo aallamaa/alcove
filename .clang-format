@@ -4,3 +4,7 @@
 # pre-commit hook formats only the lines you change (via git clang-format), so
 # day-to-day commits don't rewrite history.
 BasedOnStyle: LLVM
+# `ifmatch(c, a, b, ...)` (match.h) is a control statement, not a call: without
+# this clang-format treats `else ifmatch (...) {` as a macro invocation and
+# re-indents the block that follows it.
+IfMacros: [ifmatch]

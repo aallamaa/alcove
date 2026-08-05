@@ -1214,17 +1214,16 @@ static int rl_paren_depth(const char *s) {
       if (*s == '"') {
         in_string = 1;
         s++;
-      } else if (*s == '(' || *s == '[' || *s == '{') {
+      } else ifmatch (*s, '(', '[', '{') {
         depth++;
         s++;
-      } else if (*s == ')' || *s == ']' || *s == '}') {
+      } else ifmatch (*s, ')', ']', '}') {
         depth--;
         s++;
 #ifdef ALCOVE_ALS
         /* Adder's line comment is `#` + space/tab/EOL (or a `#!` shebang);
            `#` glued to anything else is a dispatch token (#[ #{ #b"). */
-      } else if (*s == '#' &&
-                 (!s[1] || s[1] == ' ' || s[1] == '\t' || s[1] == '!')) {
+      } else if (*s == '#' && match(s[1], '\0', ' ', '\t', '!')) {
         while (*s && *s != '\n')
           s++;
 #endif
@@ -1260,8 +1259,7 @@ static int alc_sym_char(unsigned char c) {
      comma, comment-start, or string delimiter. */
   if (c <= ' ')
     return 0;
-  if (c == '(' || c == ')' || c == '\'' || c == '`' || c == ',' || c == ';' ||
-      c == '"')
+  ifmatch (c, '(', ')', '\'', '`', ',', ';', '"')
     return 0;
   return 1;
 }

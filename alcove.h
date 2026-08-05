@@ -16,6 +16,7 @@
 #define ALCOVE_API_VERSION 1
 
 #include "char.h"
+#include "match.h"
 #include <stdint.h>
 #include <stdio.h> /* FILE — used in the dump/load declarations below; keeps
                       alcove.h self-contained for native-module authors who
@@ -306,8 +307,7 @@ enum {
 
 /* Helper for fast-path refcounting */
 #define is_immortal(e)                                                         \
-  (!is_ptr(e) || (e) == nil_singleton || (e) == true_singleton ||              \
-   (e) == gen_done_singleton)
+  (!is_ptr(e) || match(e, nil_singleton, true_singleton, gen_done_singleton))
 
 #define car(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->content : NULL)
 #define cdr(e) ((is_ptr(e) && (e)->type == EXP_PAIR) ? (e)->next : NULL)

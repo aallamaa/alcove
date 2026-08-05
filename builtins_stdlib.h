@@ -628,20 +628,18 @@ exp_t *is_acmd(exp_t *e, env_t *env) {
   uint32_t target = TYPE_ID(t);
   uint32_t actual = get_actual_type_id(x);
 
-  int match =
+  int is_match =
       (target == TYPE_ANY) || (actual == target) ||
-      (target == TYPE_BOOL && (!x || x == NIL_EXP || x == TRUE_EXP)) ||
+      (target == TYPE_BOOL && (!x || match(x, NIL_EXP, TRUE_EXP))) ||
       (target == TYPE_NUMBER &&
-       (actual == TYPE_INT || actual == TYPE_FLOAT || actual == TYPE_RATIONAL ||
-        actual == TYPE_DECIMAL)) ||
+       match(actual, TYPE_INT, TYPE_FLOAT, TYPE_RATIONAL, TYPE_DECIMAL)) ||
       (target == TYPE_LIST && is_proper_list(x)) ||
       (target == TYPE_DICT && isdict(x)) ||
       (target >= TYPE_USER_MIN &&
        alc_user_type_conforms(dict_user_type_id(x), target)) ||
-      (target == TYPE_FN &&
-       (actual == TYPE_LAMBDA || actual == TYPE_BUILTIN || actual == TYPE_FFI));
+      (target == TYPE_FN && match(actual, TYPE_LAMBDA, TYPE_BUILTIN, TYPE_FFI));
 
-  CLEAN_RETURN_2(x, t, refexp(match ? TRUE_EXP : NIL_EXP));
+  CLEAN_RETURN_2(x, t, refexp(is_match ? TRUE_EXP : NIL_EXP));
 }
 
 /* (instance? T) — a predicate-MAKER: returns a closure (fn (v) (is-a? v T)).
@@ -801,10 +799,10 @@ static int defclass_buf_addf(defclass_buf_t *b, const char *fmt, ...) {
 }
 
 static int defclass_ident_ok(const char *s) {
-  if (!s || !*s || s[0] == ':' || s[0] == '.')
+  if (!s || !*s || match(s[0], ':', '.'))
     return 0;
   for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-    if (!(isalnum(*p) || *p == '_' || *p == '-' || *p == '/'))
+    if (!(isalnum(*p) || match(*p, '_', '-', '/')))
       return 0;
   }
   return 1;
@@ -3856,7 +3854,7 @@ static void inspect_value(exp_t *v) {
   }
 
   printf("-- data union --\n");
-  if (v->type == EXP_SYMBOL || v->type == EXP_STRING || v->type == EXP_ERROR) {
+  ifmatch (v->type, EXP_SYMBOL, EXP_STRING, EXP_ERROR) {
     if (v->flags & FLAG_INLINE_TXT) {
       printf("istr:\t'%.8s'\n", v->istr);
     } else {

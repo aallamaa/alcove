@@ -284,7 +284,7 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
         continue; /* freelist tenant or never-allocated bump tail */
       int64_t ci = c * EXP_BUMP_CHUNK + i;
       g.state[ci] |= GC_LIVE;
-      if (p == nil_singleton || p == true_singleton || p == gen_done_singleton)
+      ifmatch (p, nil_singleton, true_singleton, gen_done_singleton)
         continue; /* immortal: pre-marked as a root below, never walked */
       if (gc_walkable(p)) {
         g.state[ci] |= GC_WALK;

@@ -201,8 +201,7 @@ static int js_encode(exp_t *v, js_buf *m, int indent, int depth) {
 /* ---------- decoder ---------- */
 
 static void js_skip_ws(const char *b, size_t len, size_t *pos) {
-  while (*pos < len && (b[*pos] == ' ' || b[*pos] == '\t' || b[*pos] == '\n' ||
-                        b[*pos] == '\r'))
+  while (*pos < len && match(b[*pos], ' ', '\t', '\n', '\r'))
     (*pos)++;
 }
 
@@ -412,10 +411,10 @@ static exp_t *js_decode_number(const char *b, size_t len, size_t *pos) {
     while (*pos < len && b[*pos] >= '0' && b[*pos] <= '9')
       (*pos)++;
   }
-  if (*pos < len && (b[*pos] == 'e' || b[*pos] == 'E')) {
+  if (*pos < len && match(b[*pos], 'e', 'E')) {
     isfloat_tok = 1;
     (*pos)++;
-    if (*pos < len && (b[*pos] == '+' || b[*pos] == '-'))
+    if (*pos < len && match(b[*pos], '+', '-'))
       (*pos)++;
     if (*pos >= len || b[*pos] < '0' || b[*pos] > '9')
       return NULL;

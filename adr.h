@@ -25,6 +25,8 @@
 #ifndef ALCOVE_ALS_H
 #define ALCOVE_ALS_H
 
+#include "match.h"
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,9 +149,7 @@ typedef struct {
 } als_lr;
 
 static int als_is_delim(char c) {
-  return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' ||
-         c == '\'' || c == '`' || c == ',' || c == '[' || c == ']' ||
-         c == '{' || c == '}';
+  return match(c, ' ', '\t', '(', ')', '"', '\'', '`', ',', '[', ']', '{', '}');
 }
 
 static als_node *als_read_one(als_lr *r);
@@ -166,7 +166,7 @@ static als_node *als_read_one(als_lr *r);
 static int als_is_attr_token(const char *s, size_t n) {
   if (n < 3)
     return 0;
-  if (s[0] == ':' || s[0] == '.' || s[0] == '"' || s[0] == '#')
+  ifmatch (s[0], ':', '.', '"', '#')
     return 0; /* keyword / leading dot / string / dispatch token */
   if (s[0] >= '0' && s[0] <= '9')
     return 0; /* a number-leading token is never attribute access */
@@ -673,8 +673,7 @@ static char *als_strip_comment(const char *line) {
        #{ set, #b"..." blob) and passes through to the reader untouched.
        This one rule replaces a per-token exception list — see the matching
        rule in als_read_one. */
-    if (c == '#' && (i + 1 >= n || line[i + 1] == ' ' || line[i + 1] == '\t' ||
-                     line[i + 1] == '!'))
+    if (c == '#' && (i + 1 >= n || match(line[i + 1], ' ', '\t', '!')))
       break;
     out[o++] = c;
     if (c == '"')
@@ -715,9 +714,9 @@ static int als_bracket_depth(const char *t, int *in_str_io) {
     }
     if (c == '"')
       in_str = 1;
-    else if (c == '(' || c == '[' || c == '{')
+    else ifmatch (c, '(', '[', '{')
       d++;
-    else if (c == ')' || c == ']' || c == '}')
+    else ifmatch (c, ')', ']', '}')
       d--;
     k++;
   }
@@ -743,7 +742,7 @@ static int als_opens_block(char *t) {
     return 0;
   t[n - 1] = 0;
   /* rstrip */
-  for (size_t i = strlen(t); i > 0 && (t[i - 1] == ' ' || t[i - 1] == '\t');)
+  for (size_t i = strlen(t); i > 0 && match(t[i - 1], ' ', '\t');)
     t[--i] = 0;
   return 1;
 }
@@ -769,7 +768,7 @@ static int als_inline_colon(const char *t) {
       in_str = 1;
       continue;
     }
-    if (t[i] == ':' && (t[i + 1] == ' ' || t[i + 1] == '\t')) {
+    if (t[i] == ':' && match(t[i + 1], ' ', '\t')) {
       /* require real content after the colon — else it's trailing junk */
       for (size_t j = i + 1; t[j]; j++)
         if (t[j] != ' ' && t[j] != '\t')
@@ -863,8 +862,7 @@ static void als_emit(als_node *x, als_buf *b) {
 
 /* Check if trimmed body starts with a keyword (null-terminated kwlen chars). */
 static int als_starts_with(const char *s, const char *kw, size_t kwlen) {
-  return strncmp(s, kw, kwlen) == 0 &&
-         (s[kwlen] == '\0' || s[kwlen] == ' ' || s[kwlen] == '\t');
+  return strncmp(s, kw, kwlen) == 0 && match(s[kwlen], '\0', ' ', '\t');
 }
 
 /* Emit `(raise 'syntax-error "adder line N: msg")` as a top-level form AND
@@ -1020,7 +1018,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
        indented with spaces trips on one stray tab-only line. */
     int blank_line = 1;
     for (int k = indent; nocom[k]; k++)
-      if (nocom[k] != ' ' && nocom[k] != '\t' && nocom[k] != '\r') {
+      if (!match(nocom[k], ' ', '\t', '\r')) {
         blank_line = 0;
         break;
       }
@@ -1048,8 +1046,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
     /* trim both ends into `body` */
     char *body = als_xstrdup(nocom + indent);
     for (size_t k = strlen(body);
-         k > 0 &&
-         (body[k - 1] == ' ' || body[k - 1] == '\t' || body[k - 1] == '\r');)
+         k > 0 && (match(body[k - 1], ' ', '\t', '\r'));)
       body[--k] = 0;
     free(nocom);
     if (body[0] == 0) { /* blank */

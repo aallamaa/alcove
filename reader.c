@@ -47,11 +47,11 @@ exp_t *make_atom_from_token(token_t *token) {
   {
     const char *p = stro;
     int neg = 0;
-    if (*p == '+' || *p == '-') {
+    ifmatch (*p, '+', '-') {
       neg = (*p == '-');
       p++;
     }
-    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') && p[2]) {
+    if (p[0] == '0' && match(p[1], 'x', 'X') && p[2]) {
       const char *q = p + 2;
       int all_hex = 1;
       for (; *q; q++) {
@@ -85,7 +85,7 @@ exp_t *make_atom_from_token(token_t *token) {
   {
     const char *p = stro;
     int neg = 0;
-    if (*p == '+' || *p == '-') {
+    ifmatch (*p, '+', '-') {
       neg = (*p == '-');
       p++;
     }
@@ -127,7 +127,7 @@ exp_t *make_atom_from_token(token_t *token) {
           dot = 1;
         } else if (ch >= '0' && ch <= '9')
           dig++;
-        else if ((ch == '+' || ch == '-') && k == 0)
+        else if (match(ch, '+', '-') && k == 0)
           ; /* leading sign */
         else {
           ok = 0;
@@ -153,7 +153,7 @@ exp_t *make_atom_from_token(token_t *token) {
     case '-':
       /* sign is legal only at the very start (test 0) or right after the
          exponent marker (test 7); anywhere else ends the number */
-      if (test == 1 || test == 3)
+      ifmatch (test, 1, 3)
         goto scanned;
       else if (test == 7)
         test = 15; /* exponent sign */
@@ -178,7 +178,7 @@ exp_t *make_atom_from_token(token_t *token) {
     case '0' ... '9':
       if (test <= 3)
         test = 3;
-      else if (test == 7 || test == 15 || test == 31)
+      else ifmatch (test, 7, 15, 31)
         test = 31;
       else
         goto scanned;
@@ -197,7 +197,7 @@ scanned:
       return make_symbol_from_token(token);
     else if ((test == 3) && !dot)
       ATOM_NUM_RETURN(make_integer(stro));
-    else if ((test == 31) || (test == 3))
+    else ifmatch (test, 31, 3)
       ATOM_NUM_RETURN(make_float(stro));
     else
       return make_symbol_from_token(token);
@@ -473,7 +473,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
       if (x == '#') {
         // Dispatch macro — or a `# ` line comment.
         if ((y = RGETC(stream)) != EOF) {
-          if (y == ' ' || y == '\t' || y == '\n') {
+          ifmatch (y, ' ', '\t', '\n') {
             /* `# ...` line comment, running to end of line (Adder uses the
                same rule). Only `#` + whitespace is a comment; `#` glued to a
                token stays a dispatch macro (#\ char, #[ vector, #{ set,
@@ -527,7 +527,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
                same value. (Plain `{...}` is the hash-map literal.) */
             return reader_collect(stream, '}',
                                   make_node(make_symbol("hash-set", 8)));
-          } else if (y == 'l' || y == 'g' || y == 's' || y == 'd') {
+          } else ifmatch (y, 'l', 'g', 's', 'd') {
             /* Comprehension sugar:
                  #l[…] / #g[…] → (lfor …) / (gfor …)   — sequence-shaped
                  #s{…} / #d{…} → (sfor …) / (dfor …)   — collection-shaped

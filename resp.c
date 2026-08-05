@@ -656,7 +656,7 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
       n++;
       if (n > RESP_MAX_ARGS)
         return -1;
-      while (p < line_end && buf[p] != ' ' && buf[p] != '\t')
+      while (p < line_end && !match(buf[p], ' ', '\t'))
         p++;
     }
     if (n == 0)
@@ -669,12 +669,12 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
     long ai = 0;
     p = 0;
     while (p < line_end && ai < n) {
-      while (p < line_end && (buf[p] == ' ' || buf[p] == '\t'))
+      while (p < line_end && match(buf[p], ' ', '\t'))
         p++;
       if (p >= line_end)
         break;
       size_t s = p;
-      while (p < line_end && buf[p] != ' ' && buf[p] != '\t')
+      while (p < line_end && !match(buf[p], ' ', '\t'))
         p++;
       argv[ai] = buf + s;
       argl[ai] = (long)(p - s);
@@ -2906,7 +2906,7 @@ static size_t resp_repl_consume_form(const char *acc, size_t len) {
         return i + 1; /* complete parenthesised form */
       continue;
     }
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+    ifmatch (c, ' ', '\t', '\n', '\r') {
       if (saw_token && depth == 0)
         return i + 1; /* bare top-level token terminated by ws */
       continue;
@@ -2961,13 +2961,12 @@ static size_t resp_repl_consume_als(const char *acc, size_t len) {
       line_no++;
       int blank = 1;
       for (size_t j = ls; j < i; j++)
-        if (acc[j] != ' ' && acc[j] != '\t' && acc[j] != '\r') {
+        if (!match(acc[j], ' ', '\t', '\r')) {
           blank = 0;
           break;
         }
       size_t k = i; /* last non-whitespace char of this line */
-      while (k > ls &&
-             (acc[k - 1] == ' ' || acc[k - 1] == '\t' || acc[k - 1] == '\r'))
+      while (k > ls && (match(acc[k - 1], ' ', '\t', '\r')))
         k--;
       int opens = (k > ls && acc[k - 1] == ':');
       if (depth == 0) {

@@ -647,7 +647,7 @@ exp_t *ffistructcmd(exp_t *e, env_t *env) {
       f->arg_structs[i] = refexp(fields[i]);
     } else if (isstring(fields[i]) &&
                alc_ffi_typeof((char *)exp_text(fields[i]), &t, &ft) == 0 &&
-               t != AFFI_VOID && t != AFFI_STRING) {
+               !match(t, AFFI_VOID, AFFI_STRING)) {
       fsize = ft->size;
       falign = ft->alignment;
     } else {
