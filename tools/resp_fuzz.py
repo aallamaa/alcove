@@ -138,15 +138,19 @@ def main():
     ap.add_argument("--seed", type=int, default=20260806)
     ap.add_argument("--bin", default=os.path.join(ROOT, "alcove"))
     ap.add_argument("--port", type=int, default=int(os.environ.get("RESP_FUZZ_PORT", 7793)))
+    # In CI we control the environment, so "skipped" is a lane quietly doing
+    # nothing — which is worse than a failure, because it still reports green.
+    ap.add_argument("--strict", action="store_true",
+                    help="treat a skip (missing binary / no bind) as a failure")
     a = ap.parse_args()
 
     # Resolve BEFORE use: the server is spawned with cwd=<tempdir>, so a
     # relative --bin would be looked up there and vanish.
     a.bin = os.path.abspath(a.bin)
     if not os.path.exists(a.bin):
-        print(f"  ({a.bin} missing — RESP fuzz skipped)")
-        print("==> RESP FUZZ SKIPPED")
-        return 0
+        print(f"  ({a.bin} missing — RESP fuzz {'REQUIRED' if a.strict else 'skipped'})")
+        print("==> RESP FUZZ " + ("FAILED" if a.strict else "SKIPPED"))
+        return 1 if a.strict else 0
 
     srv = Server(a.bin, a.port)
     if not srv.alive() or not srv.ping():
@@ -157,11 +161,11 @@ def main():
             except Exception:
                 pass
         srv.stop()
-        print(f"  (server did not come up on :{a.port} — RESP fuzz skipped)")
+        print(f"  (server did not come up on :{a.port})")
         if err:
             print("  " + err.decode(errors="replace").strip()[:400])
-        print("==> RESP FUZZ SKIPPED")
-        return 0
+        print("==> RESP FUZZ " + ("FAILED" if a.strict else "SKIPPED"))
+        return 1 if a.strict else 0
 
     rng = random.Random(a.seed)
     sent = 0

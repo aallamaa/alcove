@@ -179,7 +179,7 @@ jobs:
       # connection — under ASan+UBSan, where a mis-sized bulk read is a hard
       # failure rather than quiet corruption.
       - name: RESP protocol fuzz (ASan+UBSan, real socket)
-        run: make resp-fuzz-asan RESPFUZZ_ARGS='--cases 400'
+        run: make resp-fuzz-asan RESPFUZZ_ARGS='--cases 400 --strict'
 
   # arm64 JIT backend, cross-compiled and run under qemu-user. Every other job
   # here is x86-64, so without this lane jit_arm64.h is exercised by nothing on
