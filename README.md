@@ -713,6 +713,19 @@ alcove -r 6379                  # RESP2 server mode
 alcove --dev                    # allow defclass to REDEFINE a class (REPL iteration)
 ```
 
+**Embedding alcove in a C program.** Alcove is a unity build, so you embed it
+by compiling its single translation unit into your program — there is no
+`libalcove.so` to link. `make install-dev` ships the sources plus a
+pkg-config file:
+
+```sh
+make install-dev
+cc -O2 -fno-strict-aliasing -o host host.c $(pkg-config --cflags --libs alcove)
+```
+
+See [docs/embedding.md](docs/embedding.md) and the worked example in
+[`examples/embed/`](examples/embed/).
+
 ---
 
 ## Documentation

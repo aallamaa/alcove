@@ -8,6 +8,8 @@ alcoveil
 # Scoped to the repo root so docs/alcove-language.md and similar
 # nested files aren't accidentally ignored by the alcove-* glob.
 /alcove.*
+# the pkg-config TEMPLATE is tracked; alcove.pc itself is generated
+!/alcove.pc.in
 /alcove-*
 !/alcove.c
 !/alcove.h

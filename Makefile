@@ -259,8 +259,39 @@ install: jit adder
 	install -m 755 alcove "$(DESTDIR)$(BINDIR)/alcove"
 	install -m 755 adder "$(DESTDIR)$(BINDIR)/adder"
 
+# Embedder install. Alcove is a UNITY BUILD — you embed it by compiling its
+# single TU into your program (#define ALCOVE_NO_MAIN + #include "alcove.c"),
+# so there is no .a/.so to ship: what an embedder needs is the SOURCES on an
+# include path, plus the libs that TU links. Hence a headers+sources install
+# and a pkg-config file whose --cflags is the include path. See
+# docs/embedding.md.
+INCLUDEDIR   ?= $(PREFIX)/include
+PKGCONFIGDIR ?= $(PREFIX)/lib/pkgconfig
+# The fragments alcove.c #includes, plus alcove.c itself. NOT the standalone
+# TUs (adfmt.c, adder.c, *_test.c) — those are tools, not part of the engine.
+EMBED_SRCS := alcove.c reader.c epoch.c lfkv.c resp.c $(wildcard *.h)
+
+install-dev: alcove.pc
+	install -d "$(DESTDIR)$(INCLUDEDIR)/alcove"
+	install -m 644 $(EMBED_SRCS) "$(DESTDIR)$(INCLUDEDIR)/alcove/"
+	install -d "$(DESTDIR)$(PKGCONFIGDIR)"
+	install -m 644 alcove.pc "$(DESTDIR)$(PKGCONFIGDIR)/alcove.pc"
+	@echo "  embedder files -> $(DESTDIR)$(INCLUDEDIR)/alcove"
+	@echo "  pkg-config     -> $(DESTDIR)$(PKGCONFIGDIR)/alcove.pc"
+	@echo "  try:  cc -o host host.c \$$(pkg-config --cflags --libs alcove)"
+
+# Generated so the paths and the lib set match THIS build's autodetection —
+# a .pc claiming -lffi on a box that built without FFI would not link.
+alcove.pc: alcove.pc.in Makefile
+	@sed -e 's|@PREFIX@|$(PREFIX)|g' \
+	     -e 's|@VERSION@|$(shell sed -n 's/.*ALCOVE_VERSION "\(.*\)".*/\1/p' alcove.h)|g' \
+	     -e 's|@LIBS@|-lm $(FFI_LIBS) $(RL_LIBS)|g' alcove.pc.in > $@
+	@echo "  generated alcove.pc"
+
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/alcove" "$(DESTDIR)$(BINDIR)/adder"
+	rm -rf "$(DESTDIR)$(INCLUDEDIR)/alcove"
+	rm -f "$(DESTDIR)$(PKGCONFIGDIR)/alcove.pc"
 # -Os removed
 
 # Print just the dependency status without rebuilding. Handy when a user
@@ -645,7 +676,7 @@ coverage:
 	@rm -f alcove_cov
 
 clean:
-	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov adfmt.o alcove_respfuzz
+	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov adfmt.o alcove_respfuzz alcove.pc
 	rm -f *.gcno *.gcda *.gcov
 	rm -f web/alcove-core.js web/alcove-core.wasm web/adder-core.js web/adder-core.wasm
 
@@ -943,4 +974,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: dev-redefine-test resp-fuzz resp-fuzz-asan arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: install-dev dev-redefine-test resp-fuzz resp-fuzz-asan arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

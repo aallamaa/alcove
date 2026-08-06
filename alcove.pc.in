@@ -1,0 +1,18 @@
+prefix=@PREFIX@
+includedir=${prefix}/include
+
+Name: alcove
+Description: Embeddable JIT-compiled numeric Lisp (and its Adder surface dialect)
+URL: https://github.com/aallamaa/alcove
+Version: @VERSION@
+# Alcove is a UNITY BUILD: there is no library to link against. You embed it by
+# compiling its single translation unit into your program —
+#
+#     #define ALCOVE_NO_MAIN
+#     #include "alcove.c"
+#
+# — so Cflags points at the installed sources and Libs carries only what that
+# TU itself needs. `pkg-config --cflags alcove` is therefore the include path,
+# not a link line for a .a/.so that does not exist. See docs/embedding.md.
+Cflags: -I${includedir}/alcove
+Libs: @LIBS@
