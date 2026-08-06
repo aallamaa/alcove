@@ -8066,6 +8066,57 @@ assert "gc-cycles frees a cycle holding globally reachable data" (do (let ((d (h
 
 assert "globally reachable data survives the sweep intact" _gc_keep (list 100 200 300)
 
+def _gc_mk_cycle (dummy):
+  let v (vector 0):
+    do:
+      vec-set! v 0 (fn (x) v)
+      nil
+
+assert "gc-cycles reclaims a closure<->vector cycle" (do (_gc_mk_cycle 0) (> (gc-cycles) 0)):
+  t
+
+assert "closure cycles collect repeatedly, not just once" (do (_gc_mk_cycle 0) (_gc_mk_cycle 0) (> (gc-cycles) 1)):
+  t
+
+def _gc_mk_counter (dummy):
+  let n 0:
+    fn (d):
+      setf n (+ n 1)
+
+def _gc_mk_held (dummy):
+  let v (vector 0):
+    do:
+      vec-set! v 0 (fn (x) v)
+      v
+
+def _gc_mk_shared (dummy):
+  let s (vector 7):
+    list (fn (x) s) (fn (y) s)
+
+setf _gc_counter (_gc_mk_counter 0)
+
+_gc_counter 0
+
+setf _gc_held (_gc_mk_held 0)
+
+setf _gc_shared (_gc_mk_shared 0)
+
+gc-cycles()
+
+assert "closure with live captured state survives the sweep" (_gc_counter 0) 2
+
+assert "a reachable closure cycle is NOT collected" (fn? (vec-ref _gc_held 0)):
+  t
+
+assert "closures sharing one env both survive" (list (fn? (car _gc_shared)) (fn? (car (cdr _gc_shared)))):
+  list t t
+
+assert "a shared captured env still resolves" (list (vec-ref ((car _gc_shared) 0) 0) (vec-ref ((car (cdr _gc_shared)) 0) 0)):
+  list 7 7
+
+assert "second sweep does not disturb the survivors" (do (gc-cycles) (_gc_counter 0)):
+  3
+
 assert "gc-cycles is idempotent" (gc-cycles) 0
 
 assert "allocation after gc-cycles reuses the freelist cleanly" (do (gc-cycles) (length (list 1 2 3 4 5))):

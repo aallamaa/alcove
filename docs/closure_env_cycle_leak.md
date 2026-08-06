@@ -184,13 +184,34 @@ captures a dict that holds the callback, etc. There is still **no tracing GC**
 (a settled non-goal), but since 2026-07 the growth is no longer unbounded:
 **`(gc-cycles)`** (gc.h) is an on-demand trial-deletion collector that sweeps
 the calling thread's arena and reclaims container-threaded cycles explicitly,
-at zero cost to the hot paths. Its one deliberate gap is cycles threaded
-through closure captures (the callback↔dict shape): those are conservatively
-kept. For that shape, **`(weak v)`** (weak.h) is the designed answer — hold
-the back-pointer weakly and the cycle never forms; `(weak-get w)` returns
-nil once the target is freed. Otherwise break the cycle by hand (nil the
-key) before dropping the last reference, or accept the leak and monitor
-with the audit below.
+at zero cost to the hot paths.
+
+**As of 2026-08 that includes cycles threaded through closure captures** —
+the callback↔container shape that used to be its one deliberate gap. Those
+cycles run through TWO refcount domains: `container → lambda → env_t →
+binding → container`, and `env_t` is not an `exp_t`, so a sweep of the value
+arena could only ever see half of one. Envs are now collector nodes in their
+own right, **discovered through a lambda's capture** rather than enumerated:
+`destroy_env` abandons non-top arena slots without a liveness bit, so walking
+the env arena would read dead slots. An env we never discover is simply never
+a candidate — i.e. a root — which errs in the safe direction.
+
+Two consequences worth knowing when touching gc.h:
+
+- A **compiled** lambda unions `content` with `bc`, so its params list and its
+  entire **constant pool** are owned through the bytecode, not through
+  `content`. Miss those and the pool's cells look unreferenced. This is why
+  the collector walks `bc->content` and `bc->consts[]`, and why freeing a dead
+  lambda frees the bytecode STRUCTURE without `bytecode_free`'s unrefs.
+- Over-reporting an edge is **fatal**, under-reporting is merely conservative.
+  A lambda must NOT be charged for the bindings its captured env holds — if
+  two closures share one env, charging both double-counts every binding, and a
+  live object then looks like garbage. That is exactly what the "closures
+  sharing one env both survive" test in test.alc pins.
+
+**`(weak v)`** (weak.h) remains the right answer when you want the cycle never
+to form at all rather than to be swept later: hold the back-pointer weakly and
+`(weak-get w)` returns nil once the target is freed.
 
 `(heap-stats)` is the audit handle. It returns a property list for the calling
 thread's `exp_t` arena:

@@ -89,9 +89,21 @@ static int gc_walkable(exp_t *e) {
     return 1;
   case EXP_VECTOR:
     return vec_kind(e) == VEC_KIND_GEN;
+  case EXP_LAMBDA:
+  case EXP_MACRO:
+    return 1;
   default:
     return 0;
   }
+}
+
+/* The env a lambda/macro captured, or NULL. Lives on the WRAPPER node
+   (e->next->meta), set by fncmd/defcmd/defmacrocmd and released by
+   unrefexp_free's destroy_env. */
+static env_t *gc_captured_env(exp_t *e) {
+  if (e->type != EXP_LAMBDA && e->type != EXP_MACRO)
+    return NULL;
+  return (e->next && e->next->meta) ? (env_t *)e->next->meta : NULL;
 }
 
 typedef void (*gc_edge_fn)(exp_t *child, void *ud);
@@ -141,9 +153,51 @@ static void gc_visit_edges(exp_t *e, gc_edge_fn fn, void *ud) {
         fn(vec_gen_at(e, i), ud);
     break;
   }
+  case EXP_LAMBDA:
+  case EXP_MACRO:
+    /* Owned exp_t children, mirroring unrefexp_free + bytecode_free. A
+       COMPILED lambda unions e->content with e->bc, so its params list and
+       its whole CONSTANT POOL are owned through bc instead — miss those and
+       the pool's cells look unreferenced. An AST lambda owns content
+       directly. Both own the wrapper/body node.
+       The captured env is NOT an exp_t: it is a node in the env domain
+       (gc_visit_env_edges). Reporting its bindings here instead would
+       over-count them against the lambda, and an over-count frees live
+       objects. */
+    if (e->flags & FLAG_COMPILED) {
+      bytecode_t *bc = e->bc;
+      if (bc) {
+        if (bc->content)
+          fn(bc->content, ud);
+        for (int ci = 0; ci < bc->nconsts; ci++)
+          if (bc->consts[ci])
+            fn(bc->consts[ci], ud);
+      }
+    } else if (e->content) {
+      fn(e->content, ud);
+    }
+    if (e->next)
+      fn(e->next, ud);
+    break;
   default:
     break;
   }
+}
+
+/* Owned exp_t children of an env, mirroring destroy_env exactly: the inline
+   slots, the overflow dict's values, and callingfnc. The parent (root) is an
+   ENV ref, walked separately. */
+static void gc_visit_env_edges(env_t *v, gc_edge_fn fn, void *ud) {
+  for (int i = 0; i < v->n_inline; i++)
+    if (v->inline_vals[i])
+      fn(v->inline_vals[i], ud);
+  if (v->d) {
+    DICT_FOREACH(v->d, kv, 0, 1)
+    if (kv->val)
+      fn((exp_t *)kv->val, ud);
+  }
+  if (v->callingfnc)
+    fn(v->callingfnc, ud);
 }
 
 /* ---- collector state + phase callbacks ---- */
@@ -153,6 +207,24 @@ static void gc_visit_edges(exp_t *e, gc_edge_fn fn, void *ud) {
 #define GC_MARK 4u
 #define GC_DEAD 8u
 
+/* ---- env nodes -----------------------------------------------------------
+   A closure cycle runs through TWO refcount domains: container -> lambda ->
+   env_t -> (env binding) -> container. env_t is not an exp_t and does not
+   live in the exp_t arena, so the cell sweep alone can never see the second
+   half, which is why closures were conservatively kept.
+
+   Envs are therefore modelled as collector nodes in their own right — but
+   only the ones DISCOVERED through a lambda's capture. That is deliberate:
+   we cannot enumerate live envs (destroy_env abandons non-top arena slots
+   without a liveness bit, so a walk of the arena would read dead slots), and
+   an env we never discover is simply never a candidate, i.e. treated as a
+   root. Conservative in the safe direction. */
+typedef struct {
+  env_t *env;
+  uint32_t interns; /* refs from within the candidate set */
+  uint8_t state;    /* GC_* bits, same meaning as for cells */
+} gc_envnode_t;
+
 typedef struct {
   exp_t **sorted;    /* sorted chunk bases */
   int64_t nchunks;   /* chunks (and sorted length) */
@@ -161,13 +233,60 @@ typedef struct {
   uint8_t *state;    /* per-cell GC_* flag bits */
   exp_t **stack;     /* mark stack; each cell pushed at most once */
   int64_t sp;
+  gc_envnode_t *envs; /* discovered env nodes */
+  int64_t nenv, envcap;
+  env_t **estack; /* mark stack for env nodes */
+  int64_t esp;
+  int failed; /* an allocation failed — abandon the collection, free nothing */
 } gc_ctx_t;
+
+static int64_t gc_env_index(gc_ctx_t *g, env_t *e) {
+  for (int64_t i = 0; i < g->nenv; i++)
+    if (g->envs[i].env == e)
+      return i;
+  return -1;
+}
+
+/* Register an env as a candidate node. Returns its index, or -1 if we could
+   not (allocation failure) — the caller then abandons the whole collection
+   rather than proceeding with an incomplete edge picture. */
+static int64_t gc_env_add(gc_ctx_t *g, env_t *e) {
+  int64_t at = gc_env_index(g, e);
+  if (at >= 0)
+    return at;
+  if (g->nenv == g->envcap) {
+    int64_t cap = g->envcap ? g->envcap * 2 : 32;
+    gc_envnode_t *grown =
+        (gc_envnode_t *)realloc(g->envs, (size_t)cap * sizeof *grown);
+    if (!grown) {
+      g->failed = 1;
+      return -1;
+    }
+    g->envs = grown;
+    g->envcap = cap;
+  }
+  g->envs[g->nenv].env = e;
+  g->envs[g->nenv].interns = 0;
+  g->envs[g->nenv].state = GC_LIVE;
+  return g->nenv++;
+}
 
 static void gc_count_edge(exp_t *child, void *ud) {
   gc_ctx_t *g = (gc_ctx_t *)ud;
   int64_t ci = gc_cell_index(g->sorted, g->nchunks, child);
   if (ci >= 0)
     g->interns[ci]++;
+}
+
+/* Mark an ENV node and queue it. Kept separate from gc_mark_edge because the
+   two domains have separate tables; an env is never an exp_t cell. */
+static void gc_mark_env(gc_ctx_t *g, env_t *v) {
+  int64_t ei = gc_env_index(g, v);
+  if (ei < 0 || (g->envs[ei].state & GC_MARK))
+    return;
+  g->envs[ei].state |= GC_MARK;
+  if (g->envs[ei].state & GC_WALK)
+    g->estack[g->esp++] = v;
 }
 
 static void gc_mark_edge(exp_t *child, void *ud) {
@@ -190,6 +309,45 @@ static void gc_release_edge(exp_t *child, void *ud) {
                       whose only holders were dead cells */
 }
 
+/* Free a dead env's OWN structure. Children and parent were released above,
+   so this only reclaims the dict and the arena slot — the tail of
+   destroy_env after its unref loop, with the refcount dance skipped because
+   the env is provably unreachable. */
+static void gc_free_dead_env(env_t *v) {
+  if (v->d) {
+    /* destroy_dict would unref the values; they were handled by
+       gc_release_edge, so free the table structure only. */
+    for (int i = 0; i < 2; i++) {
+      if (!v->d->ht[i].table)
+        continue;
+      for (unsigned long j = 0; j < v->d->ht[i].size; j++) {
+        keyval_t *kv = v->d->ht[i].table[j];
+        while (kv) {
+          keyval_t *nx = kv->next;
+          free(kv->key);
+          free(kv);
+          kv = nx;
+        }
+      }
+      free(v->d->ht[i].table);
+    }
+    free(v->d);
+    v->d = NULL;
+  }
+  v->n_inline = 0;
+  v->has_closure = 0;
+  v->callingfnc = NULL;
+  v->root = NULL;
+  v->nref = 0;
+  shard_t *sh = current_shard;
+  if (v >= sh->arena && v < sh->arena_end) {
+    if (v + 1 == sh->arena_sp)
+      sh->arena_sp = v; /* LIFO top: hand the slot back */
+  } else {
+    free(v);
+  }
+}
+
 /* Free a dead cell's OWN payload without recursing into children (edges were
    handled by gc_release_edge), then push the cell to the freelist. Mirrors
    unrefexp_free's payload logic for the walkable types only — dead ⊆
@@ -200,6 +358,29 @@ static void gc_free_dead_cell(exp_t *e) {
   if (e->flags & FLAG_WATCHED)
     watch_on_target_free(e);
   switch (e->type) {
+  case EXP_LAMBDA:
+  case EXP_MACRO:
+    /* meta is the self-name header (owned, plain malloc). The captured env
+       was released in the sweep and content/next were edges, so all that is
+       left is the bytecode STRUCTURE — freed here without bytecode_free's
+       unrefs, which would double-release the pool cells gc_release_edge
+       already handled. */
+    if ((e->flags & FLAG_COMPILED) && e->bc) {
+      bytecode_t *bc = e->bc;
+      free(bc->consts);
+      free(bc->gcache);
+      free(bc->code);
+      free(bc->locs);
+#ifdef ALCOVE_JIT
+      if (bc->jit_mem)
+        munmap(bc->jit_mem, bc->jit_size);
+#endif
+      free(bc);
+      e->bc = NULL;
+    }
+    free(e->meta);
+    e->meta = NULL;
+    break;
   case EXP_DICT:
   case EXP_SET: {
     dict_t *d = (dict_t *)e->ptr;
@@ -266,11 +447,15 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
   g.interns = (uint32_t *)calloc((size_t)g.ncells, sizeof *g.interns);
   g.state = (uint8_t *)calloc((size_t)g.ncells, sizeof *g.state);
   g.stack = (exp_t **)malloc((size_t)g.ncells * sizeof *g.stack);
-  if (!g.sorted || !g.interns || !g.state || !g.stack) {
+  g.envcap = 32;
+  g.envs = (gc_envnode_t *)malloc((size_t)g.envcap * sizeof *g.envs);
+  if (!g.sorted || !g.interns || !g.state || !g.stack || !g.envs) {
     free(g.sorted);
     free(g.interns);
     free(g.state);
     free(g.stack);
+    free(g.envs);
+    free(g.estack);
     return error(ERROR_ILLEGAL_VALUE, NULL, env, "gc-cycles: out of memory");
   }
   memcpy(g.sorted, exp_chunk_bases, (size_t)g.nchunks * sizeof *g.sorted);
@@ -289,6 +474,18 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
       if (gc_walkable(p)) {
         g.state[ci] |= GC_WALK;
         gc_visit_edges(p, gc_count_edge, &g);
+        /* Discover the captured env (and its parent chain). Registering is
+           what makes the second half of a closure cycle visible at all. */
+        for (env_t *v = gc_captured_env(p); v; v = v->root) {
+          int64_t ei = gc_env_add(&g, v);
+          if (ei < 0)
+            goto gc_abandon;
+          g.envs[ei].interns++; /* the lambda's / child env's ref to v */
+          if (g.envs[ei].state & GC_WALK)
+            break; /* chain already counted from a previous lambda */
+          g.envs[ei].state |= GC_WALK;
+          gc_visit_env_edges(v, gc_count_edge, &g);
+        }
       }
     }
   }
@@ -310,8 +507,41 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
       }
     }
   }
-  while (g.sp > 0)
-    gc_visit_edges(g.stack[--g.sp], gc_mark_edge, &g);
+  /* Sized only now: the env set is closed after phase 1, and gc_mark_env
+     pushes each env at most once. Sizing it off g.ncells earlier would have
+     been a guess — a deep parent chain can put more envs in the table than
+     there are cells. */
+  g.estack = (env_t **)malloc((size_t)(g.nenv ? g.nenv : 1) * sizeof *g.estack);
+  if (!g.estack)
+    goto gc_abandon;
+
+  /* Env roots: an env referenced from OUTSIDE the candidate set (a live call
+     frame, a closure we declined to walk) has nref above the refs we counted,
+     so it and everything it binds stay. An undiscovered env was never a
+     candidate and is a root by construction. */
+  for (int64_t ei = 0; ei < g.nenv; ei++)
+    if (!(g.envs[ei].state & GC_MARK) &&
+        (uint32_t)g.envs[ei].env->nref > g.envs[ei].interns)
+      gc_mark_env(&g, g.envs[ei].env);
+
+  /* Marking alternates between the two domains until both stacks drain: a
+     cell can reach an env (a lambda's capture) and an env can reach cells
+     (its bindings). */
+  while (g.sp > 0 || g.esp > 0) {
+    while (g.sp > 0) {
+      exp_t *p = g.stack[--g.sp];
+      gc_visit_edges(p, gc_mark_edge, &g);
+      env_t *cap = gc_captured_env(p);
+      if (cap)
+        gc_mark_env(&g, cap);
+    }
+    while (g.esp > 0) {
+      env_t *v = g.estack[--g.esp];
+      gc_visit_env_edges(v, gc_mark_edge, &g);
+      if (v->root)
+        gc_mark_env(&g, v->root);
+    }
+  }
 
   /* Phase 3: sweep — flag the dead set first (gc_release_edge consults it),
      then release outbound edges, then free payloads. */
@@ -319,10 +549,42 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
   for (int64_t ci = 0; ci < g.ncells; ci++)
     if ((g.state[ci] & (GC_LIVE | GC_WALK | GC_MARK)) == (GC_LIVE | GC_WALK))
       g.state[ci] |= GC_DEAD;
+  for (int64_t ei = 0; ei < g.nenv; ei++)
+    if ((g.envs[ei].state & (GC_LIVE | GC_WALK | GC_MARK)) ==
+        (GC_LIVE | GC_WALK))
+      g.envs[ei].state |= GC_DEAD;
   for (int64_t c = 0; c < g.nchunks; c++)
     for (int i = 0; i < EXP_BUMP_CHUNK; i++)
       if (g.state[c * EXP_BUMP_CHUNK + i] & GC_DEAD)
         gc_visit_edges(g.sorted[c] + i, gc_release_edge, &g);
+  /* A dead lambda's ref to a SURVIVING env is a real ref that must be
+     dropped; to a dead env it dissolves with the cycle. Same rule as
+     gc_release_edge, one domain over. */
+  for (int64_t c = 0; c < g.nchunks; c++)
+    for (int i = 0; i < EXP_BUMP_CHUNK; i++) {
+      if (!(g.state[c * EXP_BUMP_CHUNK + i] & GC_DEAD))
+        continue;
+      exp_t *p = g.sorted[c] + i;
+      env_t *cap = gc_captured_env(p);
+      if (!cap)
+        continue;
+      int64_t ei = gc_env_index(&g, cap);
+      if (ei < 0 || !(g.envs[ei].state & GC_DEAD))
+        destroy_env(cap);
+      p->next->meta = NULL; /* never leave a dangling capture behind */
+    }
+  for (int64_t ei = 0; ei < g.nenv; ei++)
+    if (g.envs[ei].state & GC_DEAD)
+      gc_visit_env_edges(g.envs[ei].env, gc_release_edge, &g);
+  for (int64_t ei = 0; ei < g.nenv; ei++) {
+    if (!(g.envs[ei].state & GC_DEAD))
+      continue;
+    env_t *v = g.envs[ei].env;
+    int64_t pi = v->root ? gc_env_index(&g, v->root) : -1;
+    if (v->root && (pi < 0 || !(g.envs[pi].state & GC_DEAD)))
+      destroy_env(v->root); /* surviving parent: drop this env's ref */
+    gc_free_dead_env(v);
+  }
   for (int64_t c = 0; c < g.nchunks; c++) {
     for (int i = 0; i < EXP_BUMP_CHUNK; i++) {
       if (g.state[c * EXP_BUMP_CHUNK + i] & GC_DEAD) {
@@ -332,9 +594,18 @@ exp_t *gccyclescmd(exp_t *e, env_t *env) {
     }
   }
 
+gc_done:
   free(g.sorted);
   free(g.interns);
   free(g.state);
   free(g.stack);
+  free(g.envs);
+  free(g.estack);
   return make_integeri(freed);
+
+gc_abandon:
+  /* Ran out of memory building the env node set. With an incomplete edge
+     picture every conclusion is unsafe, so free NOTHING and report 0. */
+  freed = 0;
+  goto gc_done;
 }
