@@ -326,7 +326,7 @@ extern const char doc_vecpush[], doc_vecpop[], doc_vecunshift[], doc_vecshift[];
    line so they can use the RESP exp_t-backed keyspace directly. */
 extern const char doc_redis_count[], doc_redis_keys[], doc_redis_type[],
     doc_redis_get[], doc_redis_val[], doc_redis_set[], doc_redis_del[],
-    doc_redis_flush[], doc_redis_port[], doc_redis_defcmd[],
+    doc_redis_cas[], doc_redis_flush[], doc_redis_port[], doc_redis_defcmd[],
     doc_redis_undefcmd[], doc_redis_cmds[], doc_redis_watch_bang[],
     doc_redis_watch_dropped[], doc_redis_next_event_bang[],
     doc_redis_wait_event_bang[], doc_redis_drain_events_bang[];
@@ -417,6 +417,7 @@ exp_t *redisgetcmd(exp_t *e, env_t *env);
 exp_t *redisvalcmd(exp_t *e, env_t *env);
 exp_t *redissetcmd(exp_t *e, env_t *env);
 exp_t *redisdelcmd(exp_t *e, env_t *env);
+exp_t *rediscascmd(exp_t *e, env_t *env);
 exp_t *redisflushcmd(exp_t *e, env_t *env);
 exp_t *redisportcmd(exp_t *e, env_t *env);
 exp_t *rediscmddefcmd(exp_t *e, env_t *env);

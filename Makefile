@@ -645,7 +645,7 @@ coverage:
 	@rm -f alcove_cov
 
 clean:
-	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov adfmt.o
+	rm -f alcove adder mpsc_test mpsc_test_tsan alcove_cov adfmt.o alcove_respfuzz
 	rm -f *.gcno *.gcda *.gcov
 	rm -f web/alcove-core.js web/alcove-core.wasm web/adder-core.js web/adder-core.wasm
 
@@ -792,6 +792,24 @@ bench-gate:
 resp-watch-test: jit
 	sh tools/test_resp_watch.sh
 
+# RESP protocol fuzzer: malformed frames, truncation at every byte boundary,
+# split writes, pipelining and binary payloads against a REAL socket. The
+# other fuzzers reach the engine through APIs an attacker does not control;
+# this is the one surface driven by bytes off the wire. Oracle: the server
+# must stay alive and answer a later PING. Skips cleanly if it can't bind.
+resp-fuzz: jit
+	python3 tools/resp_fuzz.py $(RESPFUZZ_ARGS)
+
+# Same fuzzer against an ASan+UBSan server, where a mis-sized bulk read or an
+# off-by-one in the framer becomes a hard failure instead of quiet corruption.
+alcove_respfuzz: alcove.c
+	$(CC) -Wall -W $(ASAN_BUILD) $(MARCH) $(JIT_FLAGS) -o $@ alcove.c \
+	  $(FFI_FLAGS) -lm $(FFI_LIBS)
+
+resp-fuzz-asan: alcove_respfuzz
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 \
+	  python3 tools/resp_fuzz.py --bin ./alcove_respfuzz --port 7794 $(RESPFUZZ_ARGS)
+
 # RESP expiry semantics over a real localhost server. Expired keys must be
 # absent for TTL/PTTL, EXISTS, DEL, SET NX/XX, PERSIST, EXPIRE, and DBSIZE.
 resp-expiry-test: jit
@@ -919,4 +937,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: resp-fuzz resp-fuzz-asan arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

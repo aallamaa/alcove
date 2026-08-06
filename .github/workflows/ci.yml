@@ -172,6 +172,13 @@ jobs:
         run: make msgpack-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
       - name: libFuzzer — JSON decoder
         run: make json-fuzz FUZZ_ARGS='-max_total_time=60 -print_final_stats=0'
+      # The libFuzzer targets above all reach the engine through APIs an
+      # attacker does not control. The RESP framer is the one state machine
+      # driven by bytes off a socket, so it gets a protocol fuzzer over a real
+      # connection — under ASan+UBSan, where a mis-sized bulk read is a hard
+      # failure rather than quiet corruption.
+      - name: RESP protocol fuzz (ASan+UBSan, real socket)
+        run: make resp-fuzz-asan RESPFUZZ_ARGS='--cases 400'
 
   # arm64 JIT backend, cross-compiled and run under qemu-user. Every other job
   # here is x86-64, so without this lane jit_arm64.h is exercised by nothing on

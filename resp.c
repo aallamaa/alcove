@@ -3836,6 +3836,90 @@ exp_t *redisdelcmd(exp_t *e, env_t *env) {
   return MAKE_FIX(removed ? 1 : 0);
 }
 
+/* Value equality for two STORED values (the blob/deque/hash-map forms
+   resp_lisp_to_store_value produces). Blobs compare by bytes — pointer
+   identity is useless here, since the caller's `expected` is freshly built.
+   Non-blob containers fall back to pointer identity: CAS on a whole deque is
+   not a use case, and a wrong answer there would be worse than refusing. */
+static int resp_store_value_eq(exp_t *a, exp_t *b) {
+  if (a == b)
+    return 1;
+  if (!a || !b)
+    return 0;
+  if (isblob(a) && isblob(b)) {
+    alc_blob_t *x = (alc_blob_t *)a->ptr, *y = (alc_blob_t *)b->ptr;
+    if (!x || !y)
+      return x == y;
+    return x->len == y->len && memcmp(x->bytes, y->bytes, x->len) == 0;
+  }
+  return 0;
+}
+
+const char doc_redis_cas[] =
+    "(redis-cas k expected new) — atomic compare-and-set on the RESP "
+    "keyspace. Replaces k's value with new ONLY if it currently equals "
+    "expected (compared by bytes, like the stored form); a nil `new` "
+    "deletes the key. Returns t on success, nil if the key is absent or "
+    "holds something else. The language previously had atomicity only via "
+    "the RESP INCR command — this is the general primitive lib/swarm.adr "
+    "worked around.";
+exp_t *rediscascmd(exp_t *e, env_t *env) {
+  if (g_in_client_cmd)
+    return resp_cb_readonly_error(env);
+  RESP_EVAL_KEY(kx, e, env, "redis-cas");
+  exp_t *ex = EVAL(caddr(e), env);
+  if (iserror(ex))
+    CLEAN_RETURN_2(kx, e, ex);
+  exp_t *nx = EVAL(cadddr(e), env);
+  if (iserror(nx)) {
+    unrefexp(ex);
+    CLEAN_RETURN_2(kx, e, nx);
+  }
+  /* Both sides go through the SAME conversion redis-set uses, so the
+     comparison is against the form actually in the store, not the Lisp
+     value the caller happened to type. */
+  exp_t *want = resp_lisp_to_store_value(ex);
+  exp_t *fresh = (nx && nx != NIL_EXP) ? resp_lisp_to_store_value(nx) : NULL;
+  int bad = !want || (nx && nx != NIL_EXP && !fresh);
+  if (bad) {
+    if (want)
+      unrefexp(want);
+    if (fresh)
+      unrefexp(fresh);
+    unrefexp(ex);
+    unrefexp(nx);
+    unrefexp(kx);
+    unrefexp(e);
+    return error(ERROR_ILLEGAL_VALUE, NULL, env,
+                 "redis-cas: expected/new must be storable values "
+                 "(string/blob/number/char, or a deque/hash-map of those)");
+  }
+  const char *ks;
+  size_t klen;
+  resp_key_bytes(kx, &ks, &klen);
+  resp_kv_ensure();
+  lfkv_t *kv = resp_kv_current();
+  int ok = 0;
+  /* lfkv_cas compares by POINTER, which a Lisp caller can never supply. So
+     read the live pointer, compare it BY VALUE here, then CAS on that exact
+     pointer: if another writer swaps in an equal-but-different value in
+     between, the CAS fails and we report failure — which is what a CAS is
+     supposed to do, not a bug to retry around. */
+  exp_t *cur = kv ? lfkv_get(kv, ks, klen) : NULL;
+  if (cur && resp_store_value_eq(cur, want))
+    ok = lfkv_cas(kv, ks, klen, cur, fresh) == 1;
+  if (cur)
+    unrefexp(cur);
+  if (!ok && fresh)
+    unrefexp(fresh); /* lfkv_cas consumed it only on success */
+  unrefexp(want);
+  unrefexp(ex);
+  unrefexp(nx);
+  unrefexp(kx);
+  unrefexp(e);
+  return ok ? TRUE_EXP : refexp(NIL_EXP);
+}
+
 const char doc_redis_flush[] =
     "(redis-flush) — remove every key from the RESP db (FLUSHDB). Returns t.";
 exp_t *redisflushcmd(exp_t *e, env_t *env) {

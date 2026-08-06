@@ -31,7 +31,20 @@ if ! $CC -fsanitize=thread -O1 -g -fno-strict-aliasing -pthread -o "$BIN" alcove
   echo "  build failed:"; cat "$D/build.err"; echo "==> RESP TSAN FAILED"; exit 1
 fi
 
-echo '(redis-defcmd "BUMP" (fn (a) (str "ok=" (+ 1 2))))' > "$D/.init.alc"
+# Watch ENABLED for the run: every SET/DEL below then emits into the layer-2
+# MPSC queue from whichever reactor served it, so the 4 threads are contending
+# on the keyspace AND multi-producing into the event queue at the same time.
+# That producer-side interleaving is the part TSan can see here.
+#
+# The other half the roadmap imagined — enable/disable/drain racing the
+# producers — is structurally impossible, not merely untested: the MPSC queue
+# permits ONE consumer, so redis-watch!/next-event!/drain-events! are
+# main-thread-only and REFUSED from a RESP callback (g_resp_cb_guard). Design
+# beats a test here; the consumer side is gated by make resp-watch-test.
+{
+  echo '(redis-defcmd "BUMP" (fn (a) (str "ok=" (+ 1 2))))'
+  echo '(redis-watch! t)'
+} > "$D/.init.alc"
 ( cd "$D" && exec "$BIN" -r "$PORT" --threads 4 --noload ) >/dev/null 2>"$D/srv.err" &
 SRV=$!
 up=0; i=0
@@ -63,5 +76,6 @@ if [ "${n:-0}" -gt 0 ]; then
   grep -A12 "WARNING: ThreadSanitizer" "$D/srv.err" | sed 's/\x1b\[[0-9;]*m//g' | head -48
   echo "==> RESP TSAN FAILED"; exit 1
 fi
-echo "  OK — 4-reactor server data-race-clean under concurrent load"
+echo "  OK — 4-reactor server data-race-clean under concurrent load (keyspace"
+echo "       contention + layer-2 watch multi-producer emission)"
 echo "==> RESP TSAN PASSED"

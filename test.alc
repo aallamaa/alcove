@@ -3204,6 +3204,33 @@
         (do (redis-set "alcove:test:number" 42)
             (blob->string (redis-get "alcove:test:number")))
         "42")
+;; (redis-cas k expected new) — the general atomicity primitive. Before this,
+;; the language could only get atomicity through the RESP INCR command, which
+;; is why lib/swarm.adr's blackboard aggregates server-side.
+(redis-set "alcove:test:cas" "v1")
+(assert "redis-cas wrong expected fails"
+        (redis-cas "alcove:test:cas" "nope" "v2") nil)
+(assert "redis-cas leaves the value alone on failure"
+        (blob->string (redis-get "alcove:test:cas")) "v1")
+(assert "redis-cas right expected swaps"
+        (redis-cas "alcove:test:cas" "v1" "v2") t)
+(assert "redis-cas stored the new value"
+        (blob->string (redis-get "alcove:test:cas")) "v2")
+(assert "redis-cas compares by BYTES, not identity"
+        (redis-cas "alcove:test:cas" (string-concat "v" "2") "v3") t)
+(assert "redis-cas accepts a number (same conversion as redis-set)"
+        (do (redis-set "alcove:test:cas2" 41)
+            (redis-cas "alcove:test:cas2" 41 42))
+        t)
+(assert "redis-cas nil new deletes"
+        (redis-cas "alcove:test:cas" "v3" nil) t)
+(assert "redis-cas deleted the key"
+        (redis-get "alcove:test:cas") nil)
+(assert "redis-cas on an absent key fails"
+        (redis-cas "alcove:test:cas" "v3" "v4") nil)
+(assert "redis-cas does not resurrect an absent key"
+        (redis-get "alcove:test:cas") nil)
+
 (assert "redis-set deque type"
         (do (redis-set "alcove:test:list" (deque "a" (string->blob "b") 3))
             (redis-type "alcove:test:list"))

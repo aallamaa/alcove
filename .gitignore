@@ -126,3 +126,4 @@ adfmt.o
 
 # editor backups
 *~
+alcove_respfuzz

@@ -1083,6 +1083,7 @@ lispProc lispProcList[] = {
     LISPCMD("redis-val", redisvalcmd, doc_redis_val),
     LISPCMD("redis-set", redissetcmd, doc_redis_set),
     LISPCMD("redis-del", redisdelcmd, doc_redis_del),
+    LISPCMD("redis-cas", rediscascmd, doc_redis_cas),
     LISPCMD("with-db", withdbcmd, doc_withdb),
     LISPCMD("redis-flush", redisflushcmd, doc_redis_flush),
     LISPCMD_UNSAFE("redis-port", redisportcmd, doc_redis_port),
