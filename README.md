@@ -710,6 +710,7 @@ alcove --noload                 # skip auto-load of ./db.dump
 alcove --db saved.dump file.alc # load vars from saved.dump first
 alcove -e '(+ 1 2)'             # evaluate one expression
 alcove -r 6379                  # RESP2 server mode
+alcove --dev                    # allow defclass to REDEFINE a class (REPL iteration)
 ```
 
 ---

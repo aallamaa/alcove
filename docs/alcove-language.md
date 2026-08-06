@@ -49,6 +49,7 @@ alcove --db foo.dump file.alc      # load persistent vars from foo.dump
 alcove --no-init    # skip running .init.alc on startup
 alcove -e '(+ 1 2)' # evaluate expression and exit
 alcove -r 6379      # RESP2 server on port 6379
+alcove --dev        # permit defclass redefinition (see below)
 ```
 
 Script execution prints the value of each top-level form unless it is
@@ -881,7 +882,13 @@ recorded, JIT-inert:
 
 Honest limitations, by design for this first cut: a class **cannot be
 redefined** in a session (`(defclass Account ...)` again errors — is-a?
-identity would go stale); `defclass` **refuses to clobber** an already-bound
+identity would go stale), **unless the binary was started with `--dev`**, in
+which case a redefinition re-registers over the existing entry, KEEPING its
+type id: instances made before the change stay `is-a?`/`type-of` correct and
+the new schema's validator is the one enforced from then on. `--dev` is a CLI
+switch rather than a form on purpose — it is a REPL-iteration affordance, not
+language surface, so a shipped program cannot depend on it. `defclass`
+**refuses to clobber** an already-bound
 name, and rolls registration back on any failure so the name stays available
 for a corrected retry; `savedb`/`loaddb` round-trips an instance's **data and
 type tag** but not the validator, so a reloaded instance answers `(type

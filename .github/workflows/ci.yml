@@ -42,6 +42,7 @@ jobs:
           set -e
           echo "::group::defclass-persist-test"; make defclass-persist-test; echo "::endgroup::"
           echo "::group::resp-expiry-test";      make resp-expiry-test;      echo "::endgroup::"
+          echo "::group::dev-redefine-test";    make dev-redefine-test;    echo "::endgroup::"
       - name: Formatter verification (make adfmt-test)
         run: make adfmt-test
       # C formatting. This gate did not exist until 2026-07-25, and in its

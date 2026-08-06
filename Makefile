@@ -823,6 +823,12 @@ resp-expiry-test: jit
 defclass-persist-test: jit
 	sh tools/test_defclass_persist.sh
 
+# --dev class-redefinition gate: a normal build must still REFUSE a defclass
+# redefinition, and a --dev build must accept it while keeping the type id
+# (old instances stay is-a? correct) and enforcing the NEW validator.
+dev-redefine-test: jit
+	sh tools/test_dev_redefine.sh
+
 # Swarm smoke: a multi-process worker swarm over the RESP keyspace blackboard
 # (examples/swarm). Starts a server, seeds candidates, runs 2 workers that claim
 # + score them via atomic INCR tickets, and asserts convergence. Pure alcove (no
@@ -937,4 +943,4 @@ hooks:
 	@echo "pre-commit hook installed (core.hooksPath=.githooks)."
 	@echo "It formats + lints only the lines you stage."
 
-.PHONY: resp-fuzz resp-fuzz-asan arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks
+.PHONY: dev-redefine-test resp-fuzz resp-fuzz-asan arm64-test print-fmt-version parser speed nojit mono jit jit-mono adder embed-example native-module-example als alcoves gen-test-adr gen-web-battery jit-fuzz eval-fuzz oom-test resp-tsan resp-expiry-test defclass-persist-test swarm-smoke obs-test adfmt-test coverage alcove-with-metrics adder-with-metrics adfmt install uninstall deps test test-asan test-all benchmark benchmark-mlp benchmark-mono benchmark-jit benchmark-compare mpsc-test mpsc-test-tsan web clean fmt fmt-check tidy parser-test fuzz adr-test adr-fuzz msgpack-fuzz hamt-test dict-test blob-test set-test vector-test msgpack-test utf8-test test-web hooks

@@ -484,6 +484,13 @@ static inline int form_col(exp_t *e) {
    the callback's own frame — those remain the caller's responsibility and are
    documented in doc_redis_defcmd. */
 static ALCOVE_TLS int g_resp_cb_guard = 0;
+/* --dev: permit defclass to REDEFINE an existing class (see defclasscmd).
+   Off by default and never inferred — redefinition is rejected by design so a
+   session cannot end up with two incompatible shapes for one name. The flag
+   is a CLI switch rather than a new form on purpose: the roadmap's DON'T list
+   bans speculative language surface, and this is a REPL-iteration affordance,
+   not a language feature. */
+static int g_dev_mode = 0;
 static int g_resp_multi = 0;
 /* Set (TLS) while executing a RESP client's command callback, on ANY reactor
    count — the security-sandbox signal: invoke_internal refuses FLAG_UNSAFE
@@ -8469,6 +8476,11 @@ int main(int argc, char *argv[]) {
   {
     int dst = 1, src;
     for (src = 1; src < argc; src++) {
+      if (strcmp(argv[src], "--dev") == 0) {
+        g_dev_mode = 1;
+        src++;
+        continue;
+      }
       if (strcmp(argv[src], "--noload") == 0 || strcmp(argv[src], "-n") == 0) {
         auto_load = 0;
       } else if (strcmp(argv[src], "--version") == 0) {

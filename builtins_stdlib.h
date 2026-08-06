@@ -1156,6 +1156,23 @@ exp_t *defclasscmd(exp_t *e, env_t *env) {
      class (constructor != NULL) still reserves the name and cannot be
      redefined. A builtin-reserved name is always rejected. */
   alc_user_type_t *claim = alc_user_type_by_name(cname);
+  /* --dev: turn a fully-defined class back into a claimable entry so this
+     defclass re-registers over it. The ID and name are KEPT, which is the
+     whole point — existing instances stay is-a?/type-of correct and pick up
+     the new schema's validator, instead of becoming orphans of a dead type.
+     Everything below then runs the ordinary claim path. */
+  if (g_dev_mode && claim && claim->constructor) {
+    unrefexp(claim->constructor);
+    claim->constructor = NULL;
+    if (claim->validator) {
+      unrefexp(claim->validator);
+      claim->validator = NULL;
+    }
+    if (claim->schema) {
+      unrefexp(claim->schema);
+      claim->schema = NULL;
+    }
+  }
   int is_claim = claim && !claim->constructor;
   int reserved_hit =
       reserved_symbol &&
