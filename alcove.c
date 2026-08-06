@@ -2462,9 +2462,13 @@ inline exp_t *make_integer(char *str) {
   errno = 0;
   char *end;
   long long v = strtoll(str, &end, 10);
-  int64_t fix_max = ((int64_t)1 << 60) - 1;
-  int64_t fix_min = -((int64_t)1 << 60);
-  if (errno == ERANGE || v > fix_max || v < fix_min) {
+  /* Range-check with FIX_FITS, NOT a hardcoded 2^60: the fixnum width is
+     pointer-width - 3, so it is 61 bits on a 64-bit host but 29 on wasm32.
+     The hardcoded bound passed literals that MAKE_FIX then truncated, so
+     `1073741823` read back as -1 in the browser build — a silent wrap, which
+     is precisely what this language does not do. FIX_FITS round-trips through
+     MAKE_FIX/FIX_VAL and is correct on any pointer width by construction. */
+  if (errno == ERANGE || !FIX_FITS(v)) {
     /* Out of fixnum range. Explicit over implicit: an integer literal that
        doesn't fit is an error, not a silent float — write a float literal
        (1e24), a rational (n/d), or a decimal (...m) if that's what you mean. */

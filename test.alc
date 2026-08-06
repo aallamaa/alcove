@@ -976,6 +976,17 @@
 (assert "decimal+float refuses"    (error? (+ (decimal "1") 2.0))   t)
 (assert "decimal+rational refuses" (error? (+ (decimal "1") 1/2))   t)
 (assert "integer overflow is an error"  (error? (* 1152921504606846975 1000000000))  t)
+;; An out-of-range integer LITERAL is an error too, never a wrap — checked via
+;; the reader so the width is whatever this build has. make_integer used to
+;; range-check against a hardcoded 2^60 while the real fixnum width is
+;; pointer-width - 3, so on wasm32 (29 bits) a literal between 2^28 and 2^60
+;; passed the check and was then truncated by the tagging: 1073741823 read
+;; back as -1 in the browser. It now checks with FIX_FITS, which round-trips
+;; through the tag macros and is correct on any pointer width.
+(assert "an out-of-range integer literal is an error, not a wrap"
+        (error? (read-string-sexpr "123456789012345678901234567890")) t)
+(assert "an in-range integer literal still reads"
+        (error? (read-string-sexpr "42")) nil)
 ;; Infix: (value op value) -> (op value value); a function head stays a call.
 (assert "infix (1 + 2) = 3"        (1 + 2)                  3)
 (assert "infix (3 < 5) = t"        (3 < 5)                  t)

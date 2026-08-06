@@ -223,12 +223,36 @@ callback nor `--safe` is active (one never-taken branch).
 
 ### The web build (wasm)
 
-The browser/wasm build runs the same language with three differences:
-`(shell ...)` returns an error (no subprocesses in a browser), FFI and the
-RESP server are compiled out, and the filesystem is emscripten's in-memory
-MEMFS (file ops work, but against a sandbox). Everything else — JSON,
-regex, tensors, the JIT-less VM — behaves identically; the wasm smoke
-battery (`make test-web`) pins that.
+The browser/wasm build runs the same language with four differences.
+
+Three are environmental: `(shell ...)` returns an error (no subprocesses in a
+browser), FFI and the RESP server are compiled out, and the filesystem is
+emscripten's in-memory MEMFS (file ops work, but against a sandbox).
+
+The fourth is **semantic, and worth knowing before you port numeric code**:
+wasm32 has 32-bit pointers, and a fixnum is `pointer-width - 3` bits, so the
+fixnum range is **29 bits (±2^28)** rather than the 61 bits of a native
+build — `alcove --version` prints the width (`fixnum29` vs `fixnum61`). The
+consequences are all the same one: integers a native build holds exactly
+become out-of-range sooner. An out-of-range *literal* is an error, and a
+computed overflow is an error, in both builds — alcove never wraps — so what
+you see on wasm is an error where native gave you a number, never a wrong
+number.
+
+(That was not true until 2026-08: `make_integer` range-checked against a
+hardcoded 2^60 instead of the actual fixnum width, so a literal between 2^28
+and 2^60 passed the check and was then truncated by the tagging — `1073741823`
+read back as `-1` in the browser. It now checks with `FIX_FITS`, which
+round-trips through the tag macros and is right on any pointer width.)
+
+The web build also needs an explicit `-sSTACK_SIZE` (the Makefile sets 8 MiB):
+emscripten's 64 KB default overflows on ordinary recursion depths.
+
+Everything else — JSON, regex, tensors, the JIT-less VM — behaves
+identically; the wasm smoke battery (`make test-web`) pins that, and its
+expected values are GENERATED from native output (`make gen-web-battery`), so
+a divergence on either the success or the error path shows up as a failure
+rather than as a stale hand-maintained list.
 
 ---
 

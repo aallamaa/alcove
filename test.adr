@@ -1522,6 +1522,12 @@ assert "decimal+rational refuses" (error? (+ (decimal "1") 1/2)) t
 assert "integer overflow is an error" (error? (* 1152921504606846975 1000000000)):
   t
 
+assert "an out-of-range integer literal is an error, not a wrap" (error? (read-string-sexpr "123456789012345678901234567890")):
+  t
+
+assert "an in-range integer literal still reads" (error? (read-string-sexpr "42")):
+  nil
+
 assert "infix (1 + 2) = 3" (1 + 2) 3
 
 assert "infix (3 < 5) = t" (3 < 5) t
