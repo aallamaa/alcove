@@ -8117,6 +8117,81 @@ assert "a shared captured env still resolves" (list (vec-ref ((car _gc_shared) 0
 assert "second sweep does not disturb the survivors" (do (gc-cycles) (_gc_counter 0)):
   3
 
+def _fp_noop_watcher (o ev):
+  nil
+
+def _fp_watched_cycle (dummy):
+  let d (hash-map):
+    do:
+      watch! d _fp_noop_watcher
+      assoc! d "self" d
+      nil
+
+assert "a WATCHED object inside a collected cycle is swept (slot released)" (do (_fp_watched_cycle 0) (> (gc-cycles) 0)):
+  t
+
+setf _fp_live (hash-map)
+
+setf _fp_wlive (weak _fp_live)
+
+assert "weak ref resolves while its target is live" (isnt (weak-get _fp_wlive) nil):
+  t
+
+def _fp_mk_cycle (dummy):
+  let d (hash-map):
+    do:
+      assoc! d "self" d
+      d
+
+setf _fp_cyc (_fp_mk_cycle 0)
+
+setf _fp_wcyc (weak _fp_cyc)
+
+setf _fp_cyc nil
+
+assert "weak ref still resolves into an uncollected cycle" (isnt (weak-get _fp_wcyc) nil):
+  t
+
+gc-cycles()
+
+assert "weak ref NILS OUT when gc-cycles frees its target" (weak-get _fp_wcyc):
+  nil
+
+setf _fp_all (hash-map)
+
+set-validator! _fp_all (fn (o op k nv) t)
+
+watch! _fp_all (fn (o ev) nil)
+
+setf _fp_wall (weak _fp_all)
+
+assoc! _fp_all "a" 1
+
+assert "validator + watcher + weak coexist on one object" (list (get _fp_all "a") (isnt (weak-get _fp_wall) nil)):
+  list 1 t
+
+setf _fp_keep nil
+
+def _fp_self_watch (dummy):
+  let vv (vector 0):
+    do:
+      vec-set! vv 0 (fn (x) vv)
+      watch! vv (fn (o ev) vv)
+      setf _fp_keep vv
+      nil
+
+_fp_self_watch 0
+
+assert "a self-capturing WATCHER roots its cycle (not collected)" (gc-cycles):
+  0
+
+unwatch! _fp_keep
+
+setf _fp_keep nil
+
+assert "...and the same cycle collects once the watch is removed" (> (gc-cycles) 0):
+  t
+
 assert "gc-cycles is idempotent" (gc-cycles) 0
 
 assert "allocation after gc-cycles reuses the freelist cleanly" (do (gc-cycles) (length (list 1 2 3 4 5))):

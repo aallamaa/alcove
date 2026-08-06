@@ -5247,6 +5247,64 @@
 (assert "second sweep does not disturb the survivors"
         (do (gc-cycles) (_gc_counter 0)) 3)
 
+;; --- free-path interaction audit (weak / watch / validator / gc) --------
+;; Four subsystems hook the free path — weak_on_target_free, watch_on_target_free,
+;; the validator slot, and gc_free_dead_cell. Each was tested alone; these pin
+;; the PAIRWISE behaviour, which is where a hook that fires on the wrong path
+;; (or not at all) would show up.
+;; The watcher is a GLOBAL fn on purpose: an inline (fn ...) here would
+;; capture the frame that binds d, and the watch registry's ref on the
+;; watcher would then root d — collectable on the compiled tier (no capture
+;; is emitted for a closure with no free variables) but not under
+;; --interpret. A named global captures no local, so both tiers agree.
+(def _fp_noop_watcher (o ev) nil)
+(def _fp_watched_cycle (dummy)
+  (let d (hash-map) (do (watch! d _fp_noop_watcher) (assoc! d "self" d) nil)))
+(assert "a WATCHED object inside a collected cycle is swept (slot released)"
+        (do (_fp_watched_cycle 0) (> (gc-cycles) 0)) t)
+
+(= _fp_live (hash-map))
+(= _fp_wlive (weak _fp_live))
+(assert "weak ref resolves while its target is live"
+        (isnt (weak-get _fp_wlive) nil) t)
+
+(def _fp_mk_cycle (dummy) (let d (hash-map) (do (assoc! d "self" d) d)))
+(= _fp_cyc (_fp_mk_cycle 0))
+(= _fp_wcyc (weak _fp_cyc))
+(= _fp_cyc nil)
+(assert "weak ref still resolves into an uncollected cycle"
+        (isnt (weak-get _fp_wcyc) nil) t)
+(gc-cycles)
+(assert "weak ref NILS OUT when gc-cycles frees its target"
+        (weak-get _fp_wcyc) nil)
+
+(= _fp_all (hash-map))
+(set-validator! _fp_all (fn (o op k nv) t))
+(watch! _fp_all (fn (o ev) nil))
+(= _fp_wall (weak _fp_all))
+(assoc! _fp_all "a" 1)
+(assert "validator + watcher + weak coexist on one object"
+        (list (get _fp_all "a") (isnt (weak-get _fp_wall) nil)) (list 1 t))
+
+;; A watcher whose closure env binds the target is an EXTERNAL root: the watch
+;; registry holds the watcher, the watcher's env holds the object, and the
+;; collector cannot see registry refs. So the cycle is conservatively kept —
+;; which is exactly what (watch!)'s docstring warns about ("capture obj weakly
+;; ... or the pair leaks"). Removing the watch makes it collectable again,
+;; which is what proves the registry is the root and not a collector bug.
+(= _fp_keep nil)
+(def _fp_self_watch (dummy)
+  (let vv (vector 0)
+    (do (vec-set! vv 0 (fn (x) vv)) (watch! vv (fn (o ev) vv))
+        (= _fp_keep vv) nil)))
+(_fp_self_watch 0)
+(assert "a self-capturing WATCHER roots its cycle (not collected)"
+        (gc-cycles) 0)
+(unwatch! _fp_keep)
+(= _fp_keep nil)
+(assert "...and the same cycle collects once the watch is removed"
+        (> (gc-cycles) 0) t)
+
 (assert "gc-cycles is idempotent" (gc-cycles) 0)
 (assert "allocation after gc-cycles reuses the freelist cleanly"
         (do (gc-cycles) (length (list 1 2 3 4 5))) 5)
