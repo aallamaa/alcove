@@ -41,12 +41,63 @@ Slots then live in disjoint physical register files for the whole loop — float
 in xmm/d, ints in a GPR pool — which is what makes the generated code fast and
 also why a class mix-up is a correctness bug rather than a slowdown.
 
+
+## `:vec` — f64 vector slots (amd64, 2026-08)
+
+`:f64` types a *value*; `:vec` types a *container the loop reads through*, and
+it buys something different. A `:vec` parameter that the loop passes through
+unchanged is **loop-invariant**, so everything the loop needs about it is
+derived once, at entry, next to the type guards:
+
+```
+base = (double *)((char *)v->ptr + sizeof(alc_vec_t)) + v->vec_win.start
+len  = v->vec_win.end - v->vec_win.start
+```
+
+What is left in the loop body is what the C you would have written by hand
+contains: a bounds check and an indexed load. The measured case — a hinted sum
+over a 1M-element f64 vector — went from 46ms in the VM (it did not JIT at all)
+to 1ms.
+
+```lisp
+(def vsum (v :vec i :int n :int acc :f64)
+  (if (< i n) (vsum v (+ i 1) n (+ acc (vec-ref v i))) acc))
+```
+
+Things worth knowing before relying on it:
+
+- **Invariance is checked, not assumed.** The analyzer requires the slot's
+  tail-call argument to be the slot itself. A loop that reassigns the vector
+  declines rather than hoisting a stale base pointer.
+- **Only `VEC_KIND_F64`.** A GEN vector would need boxing and an i64 one a
+  convert, neither of which the emitted load does. The kind is an entry guard
+  like every other class assumption here — wrong kind costs a deopt, and the
+  VM's answer is identical (asserted in the corpus for i64, GEN and
+  non-vector arguments).
+- **A vector slot costs 2 GPRs** (base + length) plus one shared scratch for
+  the untagged index. They are allocated from the *top* of the int pool while
+  int homes grow from the bottom, because the entry sequence uses rax/rdx as
+  scratch — a vector home landing on either would be clobbered by the code
+  computing it.
+- **One vector slot per kernel** in this slice. With one, the operand of a
+  `(vec-ref v i)` is unambiguous; a second needs stack provenance — which slot
+  each VEC stack entry came from — and that, not register pressure, is the
+  work a mat-mul shape would need.
+- **amd64 only so far.** arm64 declines vector slots and runs the VM, so the
+  corpus asserts VALUES here rather than `(jit? ...)`: a tier-divergent
+  `assert-jits` would fail on one architecture by construction.
+
+Bounds failures **deopt** rather than fault: one unsigned compare catches
+`i < 0` and `i >= len` together, and the VM then raises the real
+index-out-of-range error, so the tiers still agree.
+
 ### Register budgets
 
 | | amd64 | arm64 |
 |---|---|---|
 | float homes + temps | 16 (xmm0-15) | 24 (d0-d7, d16-d31) |
 | int homes + temps | 8 (`NL_X64_IPOOL`: rcx/rbx/rdx/rax + r8-r11) | 8 (`NL_A64_IPOOL`: x1-x7, x11) |
+| f64 vector slots | 2 GPRs each + 1 shared scratch, from the top of the int pool | not emitted yet |
 
 The two int pools are deliberately kept **equal**. The corpus asserts
 `assert-jits` on specific kernels and runs on both architectures, so a kernel
