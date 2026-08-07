@@ -156,6 +156,7 @@ static uint32_t arm64_cmp_reg_asr(int rn, int rm, int sh) {
 
 #define ARM64_COND_NE 0x1
 #define ARM64_COND_VS 0x6 /* overflow set */
+#define ARM64_COND_HS 0x2 /* unsigned >= (carry set) */
 /* ASR Xd, Xn, #shift  (arithmetic shift right; sign-extends top bit).
    Encoded via SBFM Xd, Xn, #shift, #63. */
 static uint32_t arm64_asr_imm(int rd, int rn, int shift) {
@@ -296,6 +297,20 @@ static uint32_t arm64_ldr_d_imm(int rt, int rn, int byte_offset) {
   uint32_t imm12 = (uint32_t)(byte_offset / 8) & 0xfff;
   return 0xFD400000u | (imm12 << 10) | ((uint32_t)(rn & 0x1f) << 5) |
          (uint32_t)(rt & 0x1f);
+}
+/* LDRSW Xt, [Xn, #off] — load a signed 32-bit field (vec_win.start/end are
+   int32) into a 64-bit register. Unsigned-offset form, scaled by 4. */
+static uint32_t arm64_ldrsw_imm(int rt, int rn, int byte_offset) {
+  uint32_t imm12 = (uint32_t)(byte_offset / 4) & 0xfff;
+  return 0xB9800000u | (imm12 << 10) | ((uint32_t)(rn & 0x1f) << 5) |
+         (uint32_t)(rt & 0x1f);
+}
+/* LDR Dt, [Xn, Xm, LSL #3] — the indexed f64 load an in-loop (vec-ref v i)
+   compiles to. Register-offset form with option=011 (LSL, 64-bit index) and
+   S=1 so the index is scaled by the 8-byte element size. */
+static uint32_t arm64_ldr_d_reg_lsl3(int rt, int rn, int rm) {
+  return 0xFC607800u | ((uint32_t)(rm & 0x1f) << 16) |
+         ((uint32_t)(rn & 0x1f) << 5) | (uint32_t)(rt & 0x1f);
 }
 /* FMOV Dd, Xn — copy the 64 raw bits of Xn into Dd (no conversion). Used to
    load a precomputed double bit-pattern (the float const) into a D-reg.
@@ -1017,7 +1032,16 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
   /* Vector slots are analyzed but not yet emitted here — decline rather than
      fall through, which would treat the slot as an int home and read a
      vector's exp_t* as a tagged fixnum. */
-  if (nl.nvslots)
+  if (nl.nvslots > 1)
+    return 0; /* one vector slot per kernel — see OP_VEC_REF */
+  /* Same top-of-pool layout as amd64. Here it is symmetry rather than
+     necessity: this backend's guard scratch is x9/x10, which are NOT pool
+     entries, so a vector home cannot be clobbered by the code deriving it
+     (on amd64 it can — rax/rdx are both scratch and pool). Keeping the two
+     allocators the same shape keeps them reviewable side by side. */
+  int vscratch = NL_A64_IPOOL - 1 - 2 * nl.nvslots;
+  int vreg0 = NL_A64_IPOOL - 2 * nl.nvslots;
+  if (nl.nvslots && (nl.nislots + nl.max_itmp) > vscratch)
     return 0;
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
@@ -1056,6 +1080,39 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
          61-bit fixnum overflow (the VM raises there — deopt, never wrap),
          and RET pays no retag. Same representation as the amd64 backend
          and the tail-counter shapes. */
+    } else if (nl.slot_class[s] == NLC_VEC) {
+      /* Loop-INVARIANT f64 vector: guard the type and kind, then derive the
+         two values the body needs, once.
+           base = (char *)v->ptr + sizeof(alc_vec_t) + start*8
+           len  = end - start
+         x9/x10 are the shared guard scratch (not pool registers). */
+      int rbase = ipool[vreg0 + 2 * nl.vidx[s]];
+      int rlen = ipool[vreg0 + 2 * nl.vidx[s] + 1];
+      out[n++] = arm64_ldr_imm(9, 0, off); /* x9 = slot value */
+      out[n++] = arm64_and_imm7(10, 9);
+      dj0[ndj0++] = n;
+      out[n++] = 0; /* cbnz x10,deopt0 (tagged immediate, not a pointer) */
+      dj0[ndj0++] = n;
+      out[n++] = 0; /* cbz x9,deopt0 (null) */
+      out[n++] = arm64_ldrh_imm(10, 9, toff);
+      out[n++] = arm64_cmp_imm(10, EXP_VECTOR);
+      dj0[ndj0++] = n;
+      out[n++] = 0; /* b.ne deopt0 (not a vector) */
+      /* kind == VEC_KIND_F64 is (flags & 0b110000) == 0b100000, i.e. bit5 set
+         and bit4 clear. Two bit-tests say that directly and avoid hand-rolling
+         a logical-immediate for the mask. */
+      out[n++] = arm64_ldrh_imm(10, 9, (int)offsetof(exp_t, flags));
+      dj0[ndj0++] = n;
+      out[n++] = 0; /* tbz x10,#5,deopt0 (bit5 clear -> GEN/i64) */
+      dj0[ndj0++] = n;
+      out[n++] = 0; /* tbnz x10,#4,deopt0 (bit4 set -> not F64) */
+      out[n++] = arm64_ldrsw_imm(rlen, 9, (int)offsetof(exp_t, vec_win.end));
+      out[n++] = arm64_ldrsw_imm(10, 9, (int)offsetof(exp_t, vec_win.start));
+      out[n++] = arm64_sub_reg(rlen, rlen, 10); /* len = end - start */
+      out[n++] = arm64_ldr_imm(rbase, 9, (int)offsetof(exp_t, ptr));
+      out[n++] = arm64_add_imm(rbase, rbase, (int)sizeof(alc_vec_t));
+      out[n++] = arm64_lsl_imm(10, 10, 3);        /* start*8 */
+      out[n++] = arm64_add_reg(rbase, rbase, 10); /* base */
     } else {
       int hd = DFR(nl.fidx[s]);
       out[n++] = arm64_ldr_imm(9, 0, off); /* x9 = slot ptr */
@@ -1101,12 +1158,35 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
     switch (op) {
     case OP_LOAD_SLOT: {
       uint8_t s = c[pc + 1];
+      if (nl.slot_class[s] == NLC_VEC)
+        break; /* no register: base/len live in their entry-hoisted homes and
+                  OP_VEC_REF reads them there. The int arm below would index
+                  ipool[iidx] with the -1 a vector slot carries. */
       if (nl.slot_class[s] == NLC_FLOAT)
         out[n++] =
             arm64_fmov_d_d(DFR(nl_freg(st, d, nl.nfslots)), DFR(nl.fidx[s]));
       else
         out[n++] =
             arm64_mov_reg(ipool[nl_ireg(st, d, nl.nislots)], ipool[nl.iidx[s]]);
+      break;
+    }
+    case OP_VEC_REF: {
+      /* [.., VEC@d-2, INT@d-1] -> FLOAT. Only the index is live (the vector's
+         base/len were hoisted at entry). Untag into the shared scratch,
+         bounds-check, load. One UNSIGNED compare covers both ends: a negative
+         index becomes a huge unsigned value, so HS catches i<0 and i>=len
+         together. Out of range deopts, so the VM raises the real
+         index-out-of-range error and the tiers agree. */
+      int rbase = ipool[vreg0], rlen = ipool[vreg0 + 1];
+      int rscratch = ipool[vscratch];
+      int ridx = ipool[nl_ireg(st, d - 1, nl.nislots)];
+      int rdst = DFR(nl_freg(st, d - 2, nl.nfslots));
+      out[n++] = arm64_asr_imm(rscratch, ridx, 3); /* untag ((i<<3)|1) -> i */
+      out[n++] = arm64_cmp_reg(rscratch, rlen);
+      djfc[ndjf] = ARM64_COND_HS;
+      djf[ndjf++] = n;
+      out[n++] = 0; /* b.hs -> framed deopt */
+      out[n++] = arm64_ldr_d_reg_lsl3(rdst, rbase, rscratch);
       break;
     }
     case OP_LOAD_CONST: {
@@ -1264,6 +1344,10 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
     }
     case OP_TAIL_SELF: {
       for (int i = 0; i < np; i++) {
+        if (nl.slot_class[i] == NLC_VEC)
+          continue; /* loop-INVARIANT: the analyzer proved the tail passes the
+                       slot through unchanged, so there is nothing to move —
+                       and ipool[iidx] would be ipool[-1]. */
         if (nl.slot_class[i] == NLC_FLOAT) {
           int src = DFR(nl_freg(st, i, nl.nfslots)), dst = DFR(nl.fidx[i]);
           if (src != dst)
@@ -1344,6 +1428,20 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
     for (int s = 0; s < np && gi < ndj0; s++) {
       if (nl.slot_class[s] == NLC_INT) {
         out[dj0[gi]] = arm64_tbz(ipool[nl.iidx[s]], 0, deopt0_pc - dj0[gi]);
+        gi++;
+      } else if (nl.slot_class[s] == NLC_VEC) {
+        /* Must mirror the emit order above exactly — this patcher re-walks
+           the slots and fills placeholders positionally, so an arm that emits
+           a different number of them silently misaligns every later slot. */
+        out[dj0[gi]] = arm64_cbnz(10, deopt0_pc - dj0[gi]);
+        gi++;
+        out[dj0[gi]] = arm64_cbz(9, deopt0_pc - dj0[gi]);
+        gi++;
+        out[dj0[gi]] = arm64_b_cond(1 /*NE*/, deopt0_pc - dj0[gi]); /* type */
+        gi++;
+        out[dj0[gi]] = arm64_tbz(10, 5, deopt0_pc - dj0[gi]); /* kind bit5 */
+        gi++;
+        out[dj0[gi]] = arm64_tbnz(10, 4, deopt0_pc - dj0[gi]); /* kind bit4 */
         gi++;
       } else {
         out[dj0[gi]] = arm64_cbnz(10, deopt0_pc - dj0[gi]);

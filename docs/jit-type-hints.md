@@ -83,9 +83,11 @@ Things worth knowing before relying on it:
   `(vec-ref v i)` is unambiguous; a second needs stack provenance — which slot
   each VEC stack entry came from — and that, not register pressure, is the
   work a mat-mul shape would need.
-- **amd64 only so far.** arm64 declines vector slots and runs the VM, so the
-  corpus asserts VALUES here rather than `(jit? ...)`: a tier-divergent
-  `assert-jits` would fail on one architecture by construction.
+- **Both backends emit it** (amd64 and arm64, 2026-08), which is why the
+  corpus can `assert-jits` on this shape: the int pools are kept equal
+  precisely so a kernel's JIT-vs-VM decision cannot differ by architecture.
+  `make arm64-test` checks the shape JITs under qemu and returns the same
+  value as amd64.
 
 Bounds failures **deopt** rather than fault: one unsigned compare catches
 `i < 0` and `i >= len` together, and the VM then raises the real
@@ -97,7 +99,7 @@ index-out-of-range error, so the tiers still agree.
 |---|---|---|
 | float homes + temps | 16 (xmm0-15) | 24 (d0-d7, d16-d31) |
 | int homes + temps | 8 (`NL_X64_IPOOL`: rcx/rbx/rdx/rax + r8-r11) | 8 (`NL_A64_IPOOL`: x1-x7, x11) |
-| f64 vector slots | 2 GPRs each + 1 shared scratch, from the top of the int pool | not emitted yet |
+| f64 vector slots | 2 GPRs each + 1 shared scratch, from the top of the int pool | same |
 
 The two int pools are deliberately kept **equal**. The corpus asserts
 `assert-jits` on specific kernels and runs on both architectures, so a kernel

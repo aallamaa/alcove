@@ -8,14 +8,14 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
-- **`:vec`-hinted f64 vector loops now JIT (amd64).** A `:vec` parameter the
+- **`:vec`-hinted f64 vector loops now JIT.** A `:vec` parameter the
   loop passes through unchanged is loop-invariant, so the `VEC_KIND_F64`
   guard, the base pointer and the length are derived once at loop entry and
   the body reduces to a bounds check plus an indexed load. The measured
   kernel — a hinted sum over a 1M-element f64 vector — went from 46ms in the
   VM (it did not JIT) to 1ms; `gate-vecsum` pins it. Out-of-range indices and
-  the other vector kinds deopt to the VM, so every tier still agrees. arm64
-  declines this shape for now and runs the VM. See
+  the other vector kinds deopt to the VM, so every tier still agrees. Emitted
+  by BOTH backends (amd64 and arm64). See
   [docs/jit-type-hints.md](docs/jit-type-hints.md).
 
 ## [0.6.0] — 2026-08-07

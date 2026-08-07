@@ -8215,6 +8215,8 @@ setf _vf (vec 64 0.0)
 for _i 0 63:
   vec-set! _vf _i (+ (* _i 0.25) 0.5)
 
+assert-jits "f64 vector loop JITs" vsum-h
+
 assert "f64 vector loop matches the VM" (vsum-h _vf 0 64 0.0):
   vsum-vm _vf 0 64 0.0
 

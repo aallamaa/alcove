@@ -5319,15 +5319,16 @@
 ;; --- :f64 vector loops (2026-08) -----------------------------------------
 ;; A :vec-hinted loop-invariant f64 vector lets the JIT hoist the kind guard,
 ;; base pointer and length to loop entry, leaving (vec-ref v i) as a bounds
-;; check plus an indexed load. These assert VALUES, not (jit? ...): amd64
-;; emits the shape and arm64 does not yet, and a tier-divergent assert-jits
-;; would fail on one arch by construction.
+;; check plus an indexed load. BOTH backends emit this shape as of 2026-08, so
+;; assert-jits is safe here — the int pools are kept equal precisely so a
+;; kernel's JIT-vs-VM decision cannot differ by architecture.
 (def vsum-h (v :vec i :int n :int acc :f64)
   (if (< i n) (vsum-h v (+ i 1) n (+ acc (vec-ref v i))) acc))
 (def vsum-vm (v i n acc)   ; unhinted twin: never takes the vector path
   (if (< i n) (vsum-vm v (+ i 1) n (+ acc (vec-ref v i))) acc))
 (= _vf (vec 64 0.0))
 (for _i 0 63 (vec-set! _vf _i (+ (* _i 0.25) 0.5)))
+(assert-jits "f64 vector loop JITs" vsum-h)
 (assert "f64 vector loop matches the VM"     (vsum-h _vf 0 64 0.0) (vsum-vm _vf 0 64 0.0))
 (assert "f64 vector loop, zero iterations"   (vsum-h _vf 0 0 0.0) 0.0)
 (assert "f64 vector loop, single element"    (vsum-h _vf 0 1 0.0) (vsum-vm _vf 0 1 0.0))

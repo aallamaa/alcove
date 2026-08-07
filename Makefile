@@ -769,12 +769,14 @@ arm64-test:
 	@out=$$($(ARM64_QEMU) $(ARM64_BIN) --noload --no-init -e \
 	  '(def m (x :f64 r :f64 i :int n :int) (if (< i n) (m (* r (* x (- 1.0 x))) r (+ i 1) n) x)) \
 	   (def c (i :int n :int) (if (< i n) (c (+ i 1) n) i)) \
-	   (pr (jit? m) " " (jit? c) " " (m 0.5 3.57 0 1000))' 2>/dev/null \
+	   (def vs (v :vec i :int n :int a :f64) (if (< i n) (vs v (+ i 1) n (+ a (vec-ref v i))) a)) \
+	   (= vv (vec 4 0.0)) (for k 0 3 (vec-set! vv k (+ k 1.5))) \
+	   (pr (jit? m) " " (jit? c) " " (jit? vs) " " (m 0.5 3.57 0 1000) " " (vs vv 0 4 0.0))' 2>/dev/null \
 	  | sed 's/\x1b\[[0-9;]*m//g'); \
-	  echo "  jit?(mixed) jit?(int-pair) result = $$out"; \
+	  echo "  jit?(mixed) jit?(int-pair) jit?(vec) results = $$out"; \
 	  case "$$out" in \
-	    "t t 0.47511") echo "  OK — both numloop shapes JIT on arm64, result matches amd64";; \
-	    *) echo "  ARM64 JIT REGRESSION: expected 't t 0.47511'"; exit 1;; \
+	    "t t t 0.47511 12") echo "  OK — all three numloop shapes JIT on arm64, results match amd64";; \
+	    *) echo "  ARM64 JIT REGRESSION: expected 't t t 0.47511 12'"; exit 1;; \
 	  esac
 
 jit-fuzz:
