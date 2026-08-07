@@ -1012,12 +1012,20 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
      length, both loop-invariant and hoisted at entry), plus one shared
      scratch for the untagged index inside the loop. Budgeting them here
      rather than in the analyzer keeps the arch-specific pressure arch-side. */
-  int vreg0 = nl.nislots + nl.max_itmp; /* first GPR index for vector homes */
-  int vscratch = vreg0 + 2 * nl.nvslots;
   if (nl.nvslots > 1)
     return 0; /* one vector slot per kernel in this slice — see OP_VEC_REF */
-  if (nl.nvslots && vscratch + 1 > NL_X64_IPOOL)
-    return 0;
+  /* Vector homes are allocated from the TOP of the pool (r11 downward) while
+     int homes grow from the bottom. That is not cosmetic: the entry sequence
+     below uses rax and rdx as scratch while deriving base/len, and both are
+     pool entries (indices 3 and 2). Allocating vectors bottom-up let a home
+     land ON rax or rdx and be clobbered by the very code computing it —
+     which showed up as 3 failing asserts in some build variants and not
+     others, because which registers a kernel reaches depends on its int
+     pressure. Growing from opposite ends keeps vectors clear of both. */
+  int vscratch = NL_X64_IPOOL - 1 - 2 * nl.nvslots; /* untagged-index scratch */
+  int vreg0 = NL_X64_IPOOL - 2 * nl.nvslots;        /* first vector home */
+  if (nl.nvslots && (nl.nislots + nl.max_itmp) > vscratch)
+    return 0; /* int homes/temps would collide with the vector block */
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
   /* Int homes+temps. rcx/rbx/rdx/rax first (rbx is the only callee-saved one
@@ -1060,7 +1068,9 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* rbx is callee-saved: save it when the int pool reaches it (index 1) or
      when the framed make_floatf call needs the 16-alignment push anyway.
      One push serves both; every post-push exit must pop (see the sleds). */
-  int gpr_used = nl.nvslots ? vscratch + 1 : nl.nislots + nl.max_itmp;
+  /* rbx is pool index 1; vectors sit at the top, so any vector kernel reaches
+     past it and must save rbx regardless of int pressure. */
+  int gpr_used = nl.nvslots ? NL_X64_IPOOL : nl.nislots + nl.max_itmp;
   int use_rbx = gpr_used >= 2; /* pool index 1 is rbx */
   int save_rbx = framed || use_rbx;
 
@@ -1179,6 +1189,13 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
     switch (op) {
     case OP_LOAD_SLOT: {
       uint8_t s = c[pc + 1];
+      if (nl.slot_class[s] == NLC_VEC)
+        break; /* A VEC stack entry occupies no register — base/len live in
+                  their entry-hoisted homes and OP_VEC_REF reads them there.
+                  The int branch below would index ipool[iidx] with the -1 a
+                  vector slot carries. UBSan caught this one; the emitted
+                  garbage move is why the corresponding TAIL_SELF bug showed
+                  up as a single-iteration loop rather than a crash. */
       if (nl.slot_class[s] == NLC_FLOAT) {
         int dst = nl_freg(st, d, nl.nfslots), src = nl.fidx[s];
         n += x64_movsd_xmm_xmm(buf + n, dst, src);
@@ -1372,6 +1389,14 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
       /* move each tail-arg temp → its slot home (temps and homes are disjoint
          register sets, so the parallel move is conflict-free), then loop. */
       for (int i = 0; i < np; i++) {
+        if (nl.slot_class[i] == NLC_VEC)
+          continue; /* loop-INVARIANT: base/len were hoisted at entry and the
+                       analyzer proved the tail passes the slot through
+                       unchanged, so there is nothing to move. Falling into
+                       the int branch here would index ipool[iidx] with the
+                       -1 a vector slot carries — it read a bogus register and
+                       clobbered a home, which showed up as the loop running
+                       exactly one iteration. */
         if (nl.slot_class[i] == NLC_FLOAT) {
           int src = nl_freg(st, i, nl.nfslots), dst = nl.fidx[i];
           if (src != dst)
