@@ -7,6 +7,13 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-07
+
+The atomicity, collection & embedding release: compare-and-set on the RESP
+keyspace, a cycle collector that finally reaches closure captures, packaging
+for embedders, and a protocol fuzzer on the one surface driven by bytes off a
+wire. Also a BREAKING Adder change — see Changed.
+
 ### Added
 - **`(redis-cas k expected new)` — atomic compare-and-set on the RESP
   keyspace.** The C keyspace has had CAS since the lock-free rewrite, but
@@ -551,7 +558,8 @@ what is frozen vs experimental.
   Python-flavored dialect (Adder), with three prebuilt artifacts and an Adder
   playground.
 
-[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/aallamaa/alcove/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/aallamaa/alcove/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/aallamaa/alcove/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/aallamaa/alcove/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aallamaa/alcove/compare/v0.2.0...v0.3.0
