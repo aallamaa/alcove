@@ -1014,6 +1014,11 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
      the corpus asserts `assert-jits` on these shapes and runs on both. */
   if (nl.nfslots + nl.max_ftmp > 24 || nl.nislots + nl.max_itmp > NL_A64_IPOOL)
     return 0;
+  /* Vector slots are analyzed but not yet emitted here — decline rather than
+     fall through, which would treat the slot as an int home and read a
+     vector's exp_t* as a tagged fixnum. */
+  if (nl.nvslots)
+    return 0;
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
   /* x1-x7 and x11 are all caller-saved (AAPCS) and disjoint from the x9/x10

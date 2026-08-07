@@ -965,6 +965,11 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
      before int homes are loaded (see the two entry passes). */
   if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > NL_X64_IPOOL)
     return 0;
+  /* Vector slots are analyzed but not yet emitted here — decline rather than
+     fall through, which would treat the slot as an int home and read a
+     vector's exp_t* as a tagged fixnum. */
+  if (nl.nvslots)
+    return 0;
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
   /* Int homes+temps. rcx/rbx/rdx/rax first (rbx is the only callee-saved one

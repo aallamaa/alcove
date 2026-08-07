@@ -1835,6 +1835,12 @@ static int match_predicate_cons_loop(bytecode_t *bc) {
 #define NLC_INT 1
 #define NLC_FLOAT 2
 #define NLC_BOOL 3
+/* A LOOP-INVARIANT f64 vector slot. Not a value the loop computes with: the
+   emitters keep its BASE POINTER and LENGTH in two GPRs, hoisted at entry
+   alongside the kind guard, so an in-loop (vec-ref v i) is a bounds check and
+   an indexed load. Invariance is required, not assumed — see the TAIL_SELF
+   check, which insists the slot's tail argument is the slot itself. */
+#define NLC_VEC 4
 #define NL_MAXPC 256
 #define NL_MAXSTK 16
 
@@ -1842,6 +1848,8 @@ typedef struct {
   uint8_t slot_class[ENV_INLINE_SLOTS]; /* NLC_INT / NLC_FLOAT per param slot */
   int nparams;
   int nfslots, nislots;       /* # float / # int slots */
+  int nvslots;                /* # f64-vector slots (2 GPRs each) */
+  int vidx[ENV_INLINE_SLOTS]; /* slot → vector-home index, else -1 */
   int fidx[ENV_INLINE_SLOTS]; /* slot → float-home index (FLOAT slots), else -1
                                */
   int iidx[ENV_INLINE_SLOTS]; /* slot → int-home index (INT slots), else -1 */
@@ -1871,8 +1879,9 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
      claim that the slot is an integer. Slots promote to FLOAT via the
      tail-self fixed point regardless, and a wrong seed only costs a deopt. */
   for (int i = 0; i < np; i++)
-    nl->slot_class[i] =
-        (bc->param_hints[i] == TYPE_FLOAT) ? NLC_FLOAT : NLC_INT;
+    nl->slot_class[i] = (bc->param_hints[i] == TYPE_FLOAT)    ? NLC_FLOAT
+                        : (bc->param_hints[i] == TYPE_VECTOR) ? NLC_VEC
+                                                              : NLC_INT;
 
   /* Two phases: (1) iterate the abstract sim to a fixed point, PROMOTING slot
      classes (an int op whose operands haven't promoted yet is tolerated); then
@@ -1939,6 +1948,25 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
         }
         st[nd++] = NLC_INT;
         break;
+      case OP_VEC_REF: {
+        /* (vec-ref v i) on an f64 vector: consumes a VEC and an INT, yields a
+           FLOAT. Only this exact shape — a GEN vector would need boxing and an
+           i64 one a convert, neither of which the emitted load does. The KIND
+           is not knowable here, so it is an entry guard, like every other
+           class assumption in this analyzer: guess, guard, deopt if wrong. */
+        if (nd < 2) {
+          ok = 0;
+          goto stop;
+        }
+        uint8_t iv = st[nd - 1], vv = st[nd - 2];
+        if (vv != NLC_VEC || iv != NLC_INT) {
+          ok = 0;
+          goto stop;
+        }
+        nd -= 2;
+        st[nd++] = NLC_FLOAT;
+        break;
+      }
       case OP_ADD:
       case OP_SUB:
       case OP_MUL:
@@ -2050,6 +2078,13 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
             goto stop;
           }
           if (ac == NLC_FLOAT && nl->slot_class[i] != NLC_FLOAT) {
+            /* A VEC slot never promotes: the hint is a claim about what the
+               emitter may hoist, and a float flowing into it means the kernel
+               is not the shape we thought. Decline instead of reclassifying. */
+            if (nl->slot_class[i] == NLC_VEC) {
+              ok = 0;
+              goto stop;
+            }
             nl->slot_class[i] = NLC_FLOAT;
             changed = 1;
           }
@@ -2141,16 +2176,22 @@ static int numloop_analyze(bytecode_t *bc, numloop_t *nl) {
       strict = 1; /* classes converged → do one strict pass next */
   }
 
-  nl->nfslots = nl->nislots = 0;
+  nl->nfslots = nl->nislots = nl->nvslots = 0;
   for (int i = 0; i < np; i++) {
     if (env_slot_off_checked((uint8_t)i) < 0)
       return 0;
     if (nl->slot_class[i] == NLC_FLOAT) {
       nl->fidx[i] = nl->nfslots++;
       nl->iidx[i] = -1;
+      nl->vidx[i] = -1;
+    } else if (nl->slot_class[i] == NLC_VEC) {
+      nl->vidx[i] = nl->nvslots++;
+      nl->fidx[i] = -1;
+      nl->iidx[i] = -1;
     } else {
       nl->iidx[i] = nl->nislots++;
       nl->fidx[i] = -1;
+      nl->vidx[i] = -1;
     }
   }
   /* Loose sanity bound only (stack arrays are NL_MAXSTK). Each backend applies
