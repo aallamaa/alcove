@@ -5316,6 +5316,36 @@
 (assert "...and the same cycle collects once the watch is removed"
         (> (gc-cycles) 0) t)
 
+;; --- :f64 vector loops (2026-08) -----------------------------------------
+;; A :vec-hinted loop-invariant f64 vector lets the JIT hoist the kind guard,
+;; base pointer and length to loop entry, leaving (vec-ref v i) as a bounds
+;; check plus an indexed load. These assert VALUES, not (jit? ...): amd64
+;; emits the shape and arm64 does not yet, and a tier-divergent assert-jits
+;; would fail on one arch by construction.
+(def vsum-h (v :vec i :int n :int acc :f64)
+  (if (< i n) (vsum-h v (+ i 1) n (+ acc (vec-ref v i))) acc))
+(def vsum-vm (v i n acc)   ; unhinted twin: never takes the vector path
+  (if (< i n) (vsum-vm v (+ i 1) n (+ acc (vec-ref v i))) acc))
+(= _vf (vec 64 0.0))
+(for _i 0 63 (vec-set! _vf _i (+ (* _i 0.25) 0.5)))
+(assert "f64 vector loop matches the VM"     (vsum-h _vf 0 64 0.0) (vsum-vm _vf 0 64 0.0))
+(assert "f64 vector loop, zero iterations"   (vsum-h _vf 0 0 0.0) 0.0)
+(assert "f64 vector loop, single element"    (vsum-h _vf 0 1 0.0) (vsum-vm _vf 0 1 0.0))
+;; An index off either end deopts to the VM's error rather than faulting or
+;; reading past the window — one unsigned compare covers i<0 and i>=len.
+(assert "vector loop past the end raises"
+        (error? (try (vsum-h _vf 0 999 0.0) (fn (e) e))) t)
+(assert "vector loop negative index raises"
+        (error? (try (vsum-h _vf -1 1 0.0) (fn (e) e))) t)
+;; A wrong hint must cost a deopt and nothing more: the other vector kinds and
+;; a non-vector all fall back and still agree with the VM.
+(= _vi (vec 5 3))
+(assert "i64 vector deopts and still matches" (vsum-h _vi 0 5 0.0) (vsum-vm _vi 0 5 0.0))
+(= _vg (vector 1.5 2.5))
+(assert "gen vector deopts and still matches" (vsum-h _vg 0 2 0.0) (vsum-vm _vg 0 2 0.0))
+(assert "non-vector argument raises"
+        (error? (try (vsum-h "nope" 0 1 0.0) (fn (e) e))) t)
+
 (assert "gc-cycles is idempotent" (gc-cycles) 0)
 (assert "allocation after gc-cycles reuses the freelist cleanly"
         (do (gc-cycles) (length (list 1 2 3 4 5))) 5)

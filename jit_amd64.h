@@ -296,6 +296,49 @@ static int x64_cvtsi2sd_xmm_reg(uint8_t *buf, int xmm, int gp) {
   buf[4] = (uint8_t)(0xC0 | ((xmm & 7) << 3) | (gp & 7));
   return 5;
 }
+/* movsxd r64, dword [base + disp32]  →  REX.W 0x63 /r disp32. Sign-extends a
+   32-bit field (vec_win.start/end are int32) into a 64-bit register. */
+static int x64_movsxd_reg_mem32(uint8_t *buf, int dst, int base, int32_t disp) {
+  buf[0] = (uint8_t)(0x48 | X64_REXR(dst) | X64_REXB(base));
+  buf[1] = 0x63;
+  buf[2] = (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7));
+  memcpy(buf + 3, &disp, 4);
+  return 7;
+}
+/* sub r64, r64  →  REX.W 0x29 /r */
+static int x64_sub_reg_reg(uint8_t *buf, int dst, int src) {
+  buf[0] = (uint8_t)(0x48 | X64_REXR(src) | X64_REXB(dst));
+  buf[1] = 0x29;
+  buf[2] = (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7));
+  return 3;
+}
+/* lea r64, [base + index*8]  →  REX.W 0x8D /r SIB(scale=3) disp8=0.
+   mod=01/disp8 rather than mod=00 so a base of rbp/r13 (rm=101, which mod=00
+   reinterprets as disp32-no-base) needs no special case. */
+static int x64_lea_reg_base_idx8(uint8_t *buf, int dst, int base, int idx) {
+  buf[0] =
+      (uint8_t)(0x48 | X64_REXR(dst) | (idx >= 8 ? 0x02 : 0) | X64_REXB(base));
+  buf[1] = 0x8D;
+  buf[2] = (uint8_t)(0x40 | ((dst & 7) << 3) | 4); /* rm=100 → SIB */
+  buf[3] = (uint8_t)((3 << 6) | ((idx & 7) << 3) | (base & 7));
+  buf[4] = 0;
+  return 5;
+}
+/* movsd xmm, [base + index*8]  →  F2 [REX] 0F 10 /r SIB(scale=3) disp8=0.
+   The indexed f64 load an in-loop (vec-ref v i) compiles to. */
+static int x64_movsd_xmm_base_idx8(uint8_t *buf, int xmm, int base, int idx) {
+  int n = 0;
+  buf[n++] = 0xF2;
+  if (xmm >= 8 || base >= 8 || idx >= 8)
+    buf[n++] = (uint8_t)(0x40 | X64_REXR(xmm) | (idx >= 8 ? 0x02 : 0) |
+                         X64_REXB(base));
+  buf[n++] = 0x0F;
+  buf[n++] = 0x10;
+  buf[n++] = (uint8_t)(0x40 | ((xmm & 7) << 3) | 4);
+  buf[n++] = (uint8_t)((3 << 6) | ((idx & 7) << 3) | (base & 7));
+  buf[n++] = 0;
+  return n;
+}
 /* movsd xmm, [base + disp32]  →  F2 [REX] 0F 10 /r disp32 (mod=10). */
 static int x64_movsd_xmm_mem(uint8_t *buf, int xmm, int base, int32_t disp) {
   int n = 0;
@@ -965,10 +1008,15 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
      before int homes are loaded (see the two entry passes). */
   if (nl.nfslots + nl.max_ftmp > 16 || nl.nislots + nl.max_itmp > NL_X64_IPOOL)
     return 0;
-  /* Vector slots are analyzed but not yet emitted here — decline rather than
-     fall through, which would treat the slot as an int home and read a
-     vector's exp_t* as a tagged fixnum. */
-  if (nl.nvslots)
+  /* Each f64-vector slot costs TWO GPRs from the same pool (base pointer +
+     length, both loop-invariant and hoisted at entry), plus one shared
+     scratch for the untagged index inside the loop. Budgeting them here
+     rather than in the analyzer keeps the arch-specific pressure arch-side. */
+  int vreg0 = nl.nislots + nl.max_itmp; /* first GPR index for vector homes */
+  int vscratch = vreg0 + 2 * nl.nvslots;
+  if (nl.nvslots > 1)
+    return 0; /* one vector slot per kernel in this slice — see OP_VEC_REF */
+  if (nl.nvslots && vscratch + 1 > NL_X64_IPOOL)
     return 0;
   uint8_t *c = bc->code;
   int ncode = bc->ncode, np = nl.nparams;
@@ -1012,7 +1060,8 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   /* rbx is callee-saved: save it when the int pool reaches it (index 1) or
      when the framed make_floatf call needs the 16-alignment push anyway.
      One push serves both; every post-push exit must pop (see the sleds). */
-  int use_rbx = (nl.nislots + nl.max_itmp) >= 2;
+  int gpr_used = nl.nvslots ? vscratch + 1 : nl.nislots + nl.max_itmp;
+  int use_rbx = gpr_used >= 2; /* pool index 1 is rbx */
   int save_rbx = framed || use_rbx;
 
   /* ---- entry: load + guard each slot home, FLOAT SLOTS FIRST ----
@@ -1038,6 +1087,50 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
   }
   if (save_rbx)
     n += x64_push_reg(buf + n, X64_RBX);
+  /* ---- entry: guard + hoist each f64-vector slot ----
+     Still before the rbx push, because these guards also use rax/rdx as
+     scratch. Everything about a vector that the loop needs is loop-INVARIANT
+     (the analyzer proved the slot is passed through unchanged), so the kind
+     check and the two derived values are computed exactly once here:
+       base = (double *)((char *)v->ptr + sizeof(alc_vec_t)) + v->vec_win.start
+       len  = v->vec_win.end - v->vec_win.start
+     leaving an in-loop (vec-ref v i) as a bounds check and an indexed load. */
+  for (int s = 0; s < np; s++) {
+    if (nl.slot_class[s] != NLC_VEC)
+      continue;
+    int off = env_slot_off((uint8_t)s);
+    int rbase = ipool[vreg0 + 2 * nl.vidx[s]];
+    int rlen = ipool[vreg0 + 2 * nl.vidx[s] + 1];
+    n += x64_mov_reg_mem(buf + n, X64_RAX, X64_RDI, off);
+    n += x64_test_reg8_imm8(buf + n, X64_RAX, 7); /* tagged immediate? */
+    djf[ndjf++] = n;
+    n += x64_jcc_rel32(buf + n, 0x05, 0); /* jnz post-push deopt */
+    n += x64_test_reg_reg(buf + n, X64_RAX, X64_RAX);
+    djf[ndjf++] = n;
+    n += x64_jcc_rel32(buf + n, 0x04, 0); /* jz post-push deopt (null) */
+    n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX,
+                             (int)offsetof(exp_t, type));
+    n += x64_cmp_imm32(buf + n, X64_RDX, EXP_VECTOR);
+    djf[ndjf++] = n;
+    n += x64_jcc_rel32(buf + n, 0x05,
+                       0); /* jne post-push deopt (not a vector) */
+    n += x64_movzx_reg_mem16(buf + n, X64_RDX, X64_RAX,
+                             (int)offsetof(exp_t, flags));
+    n += x64_and_imm32(buf + n, X64_RDX, (int32_t)VEC_KIND_MASK);
+    n += x64_cmp_imm32(buf + n, X64_RDX, (int32_t)VEC_KIND_F64);
+    djf[ndjf++] = n;
+    n += x64_jcc_rel32(buf + n, 0x05,
+                       0); /* jne post-push deopt (GEN or i64 kind) */
+    /* len = end - start; base = (char*)ptr + sizeof(alc_vec_t) + start*8 */
+    n += x64_movsxd_reg_mem32(buf + n, rlen, X64_RAX,
+                              (int)offsetof(exp_t, vec_win.end));
+    n += x64_movsxd_reg_mem32(buf + n, X64_RDX, X64_RAX,
+                              (int)offsetof(exp_t, vec_win.start));
+    n += x64_sub_reg_reg(buf + n, rlen, X64_RDX);
+    n += x64_mov_reg_mem(buf + n, rbase, X64_RAX, (int)offsetof(exp_t, ptr));
+    n += x64_add_imm32(buf + n, rbase, (int32_t)sizeof(alc_vec_t));
+    n += x64_lea_reg_base_idx8(buf + n, rbase, rbase, X64_RDX);
+  }
   for (int s = 0; s < np; s++) {
     if (nl.slot_class[s] != NLC_INT)
       continue;
@@ -1116,6 +1209,30 @@ static int try_jit_numloop(bytecode_t *bc, uint8_t *buf, int *outn) {
       int dst = ipool[nl_ireg(st, d, nl.nislots)];
       n += x64_mov_imm64(buf + n, dst,
                          (uint64_t)((((int64_t)v) << 3) | 1)); /* tagged */
+      break;
+    }
+    case OP_VEC_REF: {
+      /* (vec-ref v i): stack is [.., VEC@d-2, INT@d-1] -> FLOAT.
+         The vector operand carries no register — base/len were hoisted at
+         entry — so only the index is live. Untag it into the shared scratch,
+         bounds-check, load.
+         ONE unsigned compare covers both ends: a negative index becomes a
+         huge unsigned value, so `jae` catches i<0 and i>=len together. Out of
+         range DEOPTS rather than faulting, so the VM raises the real
+         index-out-of-range error and the tiers still agree.
+         Single-vector kernels only (checked at entry): with one vector slot
+         the operand is unambiguous, and tracking which slot each stack entry
+         came from is the whole reason a second one is not free. */
+      int rbase = ipool[vreg0], rlen = ipool[vreg0 + 1];
+      int rscratch = ipool[vscratch];
+      int ridx = ipool[nl_ireg(st, d - 1, nl.nislots)];
+      int rdst = nl_freg(st, d - 2, nl.nfslots);
+      n += x64_mov_reg_reg(buf + n, rscratch, ridx);
+      n += x64_sar_imm8(buf + n, rscratch, 3); /* untag ((i<<3)|1) -> i */
+      n += x64_cmp_reg_reg(buf + n, rscratch, rlen);
+      djf[ndjf++] = n;
+      n += x64_jcc_rel32(buf + n, 0x03, 0); /* jae -> deopt (unsigned) */
+      n += x64_movsd_xmm_base_idx8(buf + n, rdst, rbase, rscratch);
       break;
     }
     case OP_ADD:

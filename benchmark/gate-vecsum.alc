@@ -1,0 +1,18 @@
+; perf-gate kernel: :f64-hinted sum over an f64 vector via the numloop JIT's
+; vector slot class. The vector is loop-INVARIANT, so the kind guard, base
+; pointer and length hoist to loop entry and the body is a bounds check plus
+; an indexed load.
+;
+; n is 200k and stays there: 200k doubles = 1.6MB, which is L2/L3-resident.
+; Do NOT scale it up chasing a longer runtime — gate-mat was tripping this
+; gate for exactly that reason (a working set in shared L3 times the runner's
+; neighbours, not the kernel). Reps carry the duration instead.
+; Prints a checksum so a wrong answer fails the gate too.
+(def vsum (v :vec i :int n :int acc :f64)
+  (if (< i n) (vsum v (+ i 1) n (+ acc (vec-ref v i))) acc))
+(= n 200000)
+(= v (vec n 0.5))
+(= acc 0.0)
+(each r (range 0 800)
+  (= acc (+ acc (vsum v 0 n 0.0))))
+(prn acc)
