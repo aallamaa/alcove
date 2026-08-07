@@ -8,6 +8,34 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
 ## [Unreleased]
 
 ### Added
+- **`(redis-cas k expected new)` — atomic compare-and-set on the RESP
+  keyspace.** The C keyspace has had CAS since the lock-free rewrite, but
+  Lisp could only get atomicity through the RESP `INCR` command — which is
+  why `lib/swarm.adr`'s blackboard aggregates server-side. A nil `new`
+  deletes. Compared BY VALUE against the stored form, then CAS'd on the
+  exact pointer that was compared, so a racing equal-but-different write
+  makes it fail rather than silently succeed.
+- **`gc-cycles` now collects cycles threaded through closure captures** —
+  the one leak class it kept by design. Such a cycle runs
+  `container → lambda → env → binding → container`, and `env_t` is not an
+  `exp_t`, so a sweep of the value arena could only ever see half of one.
+  Environments are now collector nodes discovered through the captures.
+  The documented reproducer returns to baseline exactly.
+- **`--dev` permits `defclass` redefinition**, keeping the type id: instances
+  built before the change stay `is-a?`/`type-of` correct and the new schema's
+  validator is enforced. A CLI switch rather than a form, so a shipped program
+  cannot depend on it — a normal build still refuses. `make dev-redefine-test`.
+- **`make install-dev` + pkg-config, for embedding alcove in a C program.**
+  Ships the engine sources and a generated `alcove.pc`; see the new
+  [docs/embedding.md](docs/embedding.md). Note there is no `libalcove.so` and
+  will not be one — alcove is a unity build, so you compile its translation
+  unit into your program and `pkg-config --cflags alcove` is an include path,
+  not a link line.
+- **RESP protocol fuzzer** (`make resp-fuzz`, and `resp-fuzz-asan` in CI):
+  malformed frames, lengths that disagree with their payload, truncation at
+  every byte boundary, split writes, pipelining and binary keys, against a
+  real socket. The other fuzzers reach the engine through APIs an attacker
+  does not control; this is the one state machine driven by bytes off a wire.
 - **Adder: implicit line joining inside brackets.** A line that ends with
   `(`/`[`/`{` still open continues onto the next physical line, as in
   Python. Multi-line forms previously did not work at all — the transpiler
@@ -62,6 +90,14 @@ caveats spelled out in [docs/stability.md](docs/stability.md).
   were migrated; code relying on the old folding must add an explicit `else:`.
 
 ### Fixed
+- **An out-of-range integer literal could WRAP on wasm32.** `make_integer`
+  range-checked against a hardcoded 2^60, but the fixnum width is
+  pointer-width − 3 — 61 bits natively, **29** on wasm32 — so every literal
+  between 2^28 and 2^60 passed the check and was then truncated by the
+  tagging. `1073741823` read back as `-1` in the browser. It now checks with
+  `FIX_FITS`, which round-trips through the tag macros and is correct on any
+  pointer width. Only the arithmetic path had honoured the "overflow is an
+  error, never a wrap" invariant; the literal path does now too.
 - **Macro expansion had no stack guard**: a macro whose expansion re-invokes
   itself (`(defmacro m (x) (list 'm x))`) recursed with no lambda frame in
   between, so the guard at the invocation site never saw it and the process
