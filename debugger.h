@@ -1190,7 +1190,7 @@ static char **alcove_rl_completer(const char *text, int start, int end) {
    (bracket lambda) and `{:a 1` (dict/set) are unterminated forms exactly like
    `(f 1`, and counting only `(`/`)` made the REPL submit them as complete
    input — the next line then arrived as a separate form and died on a bare
-   closer ("call to macro char ] unkown!"). They are not tracked as a typed
+   closer ("call to macro char ] unknown!"). They are not tracked as a typed
    stack: mismatched closers are the reader's error to report, and this only
    answers "does the user owe us more input?". */
 static int rl_paren_depth(const char *s) {

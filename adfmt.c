@@ -572,7 +572,12 @@ static node *parse(const char *src) {
       nd->block = 1; /* inline head: body — printer may keep inline */
       free(tail);
     } else {
-      char *b2 = xstrndup(body, block ? strlen(body) - 1 : strlen(body));
+      /* `block` implies a trailing ':' (opens_block requires a non-empty
+         body), so the -1 cannot underflow — but that invariant lives in
+         another function, and `strlen(body) - 1` on a size_t is one edit away
+         from SIZE_MAX. Make the guard local and visible. */
+      size_t blen = strlen(body);
+      char *b2 = xstrndup(body, (block && blen) ? blen - 1 : blen);
       for (size_t k = strlen(b2); k && (b2[k - 1] == ' ' || b2[k - 1] == '\t');)
         b2[--k] = 0;
       nd = line_node(b2);
@@ -1087,6 +1092,10 @@ char *adder_format(const char *src) {
  *   --infix        emit operator infix (n < 0) — readable but deopts hot loops
  *   --diff         print a unified-ish before/after marker per changed file
  */
+/* Returns NULL on a READ ERROR, which is distinct from end of input: fread
+   returns 0 for both, so without the ferror check a disk error mid-file would
+   be silently formatted as if the file simply ended there — and with --write
+   that truncation would be written back over the original. */
 static char *read_all(FILE *f) {
   buf in;
   buf_init(&in);
@@ -1094,6 +1103,10 @@ static char *read_all(FILE *f) {
   size_t r;
   while ((r = fread(tmp, 1, sizeof tmp, f)) > 0)
     buf_putn(&in, tmp, r);
+  if (ferror(f)) {
+    free(in.p);
+    return NULL;
+  }
   return in.p;
 }
 
@@ -1159,6 +1172,10 @@ int adfmt_cli_main(int argc, char **argv) {
     }
     g_alcove_mode = force_alcove;
     char *src = read_all(stdin);
+    if (!src) {
+      perror("adfmt: stdin");
+      return 2;
+    }
     char *out = adder_format(src);
     fputs(out, stdout);
     free(out);
@@ -1177,6 +1194,11 @@ int adfmt_cli_main(int argc, char **argv) {
     g_alcove_mode = force_alcove || is_alcove_path(files[i]);
     char *src = read_all(f);
     fclose(f);
+    if (!src) {
+      perror(files[i]);
+      rc = 2;
+      continue;
+    }
     char *out = adder_format(src);
     int changed = strcmp(src, out) != 0;
     if (check) {

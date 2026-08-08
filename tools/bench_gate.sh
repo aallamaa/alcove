@@ -85,13 +85,19 @@ for k in $KERNELS; do
     head_out=$o
   done
   status="PASS"
+  diverged=""
   if [ "$base_out" != "$head_out" ]; then
-    status="FAIL (output: base='$base_out' head='$head_out')"
+    diverged=" [CHECKSUM DIVERGED: base='$base_out' head='$head_out']"
+    status="FAIL (output diverged)"
     FAIL=1
   fi
   ratio_pct=$((head_min * 100 / (base_min > 0 ? base_min : 1)))
   if [ "$ratio_pct" -gt "$THRESHOLD" ]; then
-    status="FAIL (+$((ratio_pct - 100))% > $((THRESHOLD - 100))%)"
+    # A wrong ANSWER outranks a slow one: keep the divergence visible instead
+    # of letting the ratio message overwrite it. Both conditions can fire at
+    # once, and when they do the divergence is the one that explains the
+    # ratio — a kernel that stopped doing the work is also fast.
+    status="FAIL (+$((ratio_pct - 100))% > $((THRESHOLD - 100))%)$diverged"
     FAIL=1
   fi
   printf '%-11s base=%5dms head=%5dms ratio=%d%% %s\n' \

@@ -342,7 +342,7 @@ static exp_t *callmacrochar_inner(FILE *stream, unsigned char x) {
 
   else
     return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
-                 "call to macro char %c unkown!", x);
+                 "call to macro char %c unknown!", x);
 
   if (lnode)
     return lnode;
@@ -393,7 +393,7 @@ exp_t *escapereader(FILE *stream, token_t **ptoken, int lastchar) {
   return NULL;
 error:
   return error(EXP_ERROR_PARSING_ESCAPE, NULL, NULL,
-               "invalid escape %c unkown!", nchar);
+               "invalid escape %c unknown!", nchar);
 }
 
 /* Consume the continuation bytes (0x80..0xBF) of a multi-byte UTF-8 sequence
@@ -575,7 +575,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
             continue;
           } else
             return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
-                         "call to dispatch macro char %c unkown!", y);
+                         "call to dispatch macro char %c unknown!", y);
         } else
           return READER_EOF_ERR();
       }

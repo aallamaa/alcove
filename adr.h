@@ -988,7 +988,7 @@ char *als_to_sexpr_mapped(const char *src, als_map *map) {
        source ran out while a bracket was open, <0 a closer with no opener.
        Both used to fall through and emit malformed s-expr text, which the
        alcove reader then rejected somewhere else entirely ("call to macro
-       char ) unkown!"), pointing at the wrong line. */
+       char ) unknown!"), pointing at the wrong line. */
     {
       if (str_after) { /* ran out of input mid-string */
         als_syntax_error(roots, map, line_start,
