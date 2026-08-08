@@ -41,8 +41,23 @@ static void *xrealloc(void *p, size_t n) {
   }
   return q;
 }
+static void *xcalloc(size_t n) {
+  void *p = calloc(n ? n : 1, 1);
+  if (!p) {
+    fputs("adfmt: out of memory\n", stderr);
+    exit(2);
+  }
+  return p;
+}
 static char *xstrndup(const char *s, size_t n) {
-  char *p = xmalloc(n + 1);
+  /* calloc, not malloc: the n+1'th byte is the NUL and the rest is overwritten
+     immediately, so zeroing costs a second pass over one source line and buys
+     something worth more here — the static analyzer can then see the result is
+     an initialized, NUL-terminated string. With malloc it cannot (it would
+     have to prove strlen() of a buffer it just watched being written), and the
+     two false positives that produced are what kept adfmt.c out of `make
+     tidy` entirely. */
+  char *p = xcalloc(n + 1);
   memcpy(p, s, n);
   p[n] = 0;
   return p;
@@ -1100,9 +1115,12 @@ static char *read_all(FILE *f) {
   buf in;
   buf_init(&in);
   char tmp[4096];
-  size_t r;
-  while ((r = fread(tmp, 1, sizeof tmp, f)) > 0)
+  while (!feof(f) && !ferror(f)) {
+    size_t r = fread(tmp, 1, sizeof tmp, f);
+    if (r == 0)
+      break;
     buf_putn(&in, tmp, r);
+  }
   if (ferror(f)) {
     free(in.p);
     return NULL;
@@ -1157,7 +1175,7 @@ int adfmt_cli_main(int argc, char **argv) {
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       adfmt_usage(stdout);
       return 0;
-    } else if (a[0] == '-' && a[1] && strcmp(a, "-")) {
+    } else if (a[0] == '-' && a[1] && strcmp(a, "-") != 0) {
       fprintf(stderr, "adfmt: unknown option %s\n", a);
       return adfmt_usage(stderr);
     } else if (nfiles < (int)(sizeof files / sizeof *files))

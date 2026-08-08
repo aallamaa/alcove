@@ -970,6 +970,11 @@ print-fmt-version:
 tidy:
 	$(TIDY) alcove.c -- $(TIDY_CFLAGS)
 	$(TIDY) adder.c  -- -DALCOVE_ALS=1 $(TIDY_CFLAGS)
+	# adfmt.c is its OWN translation unit (the `adder fmt` formatter, linked
+	# into the adder binary), so the two lines above never reach it. It was
+	# unlinted until 2026-08 — which is how a read-error-as-EOF bug and an
+	# unguarded size_t subtraction sat there unseen.
+	$(TIDY) adfmt.c  -- -std=gnu11
 
 hooks:
 	git config core.hooksPath .githooks
