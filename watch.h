@@ -168,7 +168,11 @@ static exp_t *watch_notify(exp_t *obj, const char *op, exp_t *k, exp_t *old,
   exp_t *ev = watch_make_event(op, k, old, nw);
   obj->flags &= (unsigned short)~FLAG_WATCHED; /* reentrancy guard */
   exp_t *err = NULL;
-  for (exp_t *c = s->fns; c && c->content; c = c->next) {
+  for (exp_t *c = s->fns; c && c->content;) {
+    /* Save next BEFORE EVAL: a watcher callback can call (unwatch! obj)
+       which unrefexp's s->fns, freeing c and c->next. Reading c->next
+       after EVAL would be a use-after-free. */
+    exp_t *next = c->next;
     /* Synthesize (fn obj 'ev): the closure and the container self-evaluate,
        the event list must be quoted. The form takes its own refs. */
     exp_t *call = make_node(refexp(c->content));
@@ -181,6 +185,7 @@ static exp_t *watch_notify(exp_t *obj, const char *op, exp_t *k, exp_t *old,
       break;
     }
     unrefexp(r);
+    c = next;
   }
   unrefexp(ev);
   /* Restore the flag unless a watcher unwatched its own object. */

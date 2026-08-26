@@ -928,10 +928,10 @@ exp_t *set_return_point(env_t *env);
 dict_t *create_dict();
 int destroy_dict(dict_t *d);
 int dump_dict(dict_t *d, FILE *stream);
-unsigned int bernstein_hash(unsigned char *key, int len);
+unsigned int bernstein_hash(unsigned char *key, size_t len);
 unsigned int
 bernstein_hash_z(const char *key); /* fused strlen+hash, C-strings */
-unsigned int bernstein_uhash(unsigned char *key, int len);
+unsigned int bernstein_uhash(unsigned char *key, size_t len);
 keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val);
 exp_t *set_keyval_dict_timestamp(dict_t *d, char *key, int64_t timestamp);
 int64_t get_keyval_dict_timestamp(dict_t *d, char *key);

@@ -69,10 +69,15 @@ static void print_node_1(exp_t *node) {
       printf("(");
       if (node->content)
         print_node(node->content);
+      int elcount = 0;
       while ((node = node->next)) {
         if ispair (node) {
           printf(" ");
           print_node(node->content);
+          if (++elcount >= 10000) {
+            printf(" ...");
+            break;
+          }
         } else {
           printf(" . ");
           print_node(node);
@@ -98,13 +103,27 @@ static void print_node_1(exp_t *node) {
       printf("\x1B[92m#<macro@@%08lx>\x1B[39m", (long)node);
     /*  if (node->content) print_node(node->content);
         printf(")");*/
-  }
-
-  else if (node->type == EXP_SYMBOL)
+  } else if (node->type == EXP_SYMBOL)
     printf("\x1B[92m%s\x1B[39m", (char *)exp_text(node));
-  else if (node->type == EXP_STRING)
-    printf("\x1B[92m\"%s\"\x1B[39m", (char *)exp_text(node));
-  else if (node->type == EXP_FLOAT)
+  else if (node->type == EXP_STRING) {
+    /* Escape embedded quotes, backslashes, and control chars so the
+       printed form round-trips through the reader. Matches EXP_BLOB. */
+    fputs("\x1B[92m\"", stdout);
+    for (const char *s = (const char *)exp_text(node); *s; s++) {
+      if (*s == '"' || *s == '\\')
+        putchar('\\');
+      else if (*s == '\n')
+        fputs("\\n", stdout);
+      else if (*s == '\t')
+        fputs("\\t", stdout);
+      else if (*s == '\r')
+        fputs("\\r", stdout);
+      else if ((unsigned char)*s < 0x20)
+        printf("\\x%02x", (unsigned char)*s);
+      putchar(*s);
+    }
+    fputs("\"\x1B[39m", stdout);
+  } else if (node->type == EXP_FLOAT)
     printf("\x1B[92m%g\x1B[39m", node->f);
   else if (node->type == EXP_RATIONAL) {
     alc_rat_t *r = (alc_rat_t *)node->ptr;

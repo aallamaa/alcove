@@ -425,7 +425,7 @@ static als_node *als_read_one(als_lr *r) {
     size_t start = r->i++;
     while (r->i < r->n) {
       if (r->s[r->i] == '\\') {
-        r->i += 2;
+        r->i = (r->i + 1 < r->n) ? r->i + 2 : r->i + 1;
         continue;
       }
       if (r->s[r->i] == '"') {
@@ -538,7 +538,7 @@ static als_node *als_read_one(als_lr *r) {
     size_t start = r->i++; /* keep the string (with quotes/escapes) verbatim */
     while (r->i < r->n) {
       if (r->s[r->i] == '\\') {
-        r->i += 2;
+        r->i = (r->i + 1 < r->n) ? r->i + 2 : r->i + 1;
         continue;
       }
       if (r->s[r->i] == '"') {

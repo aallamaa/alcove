@@ -67,11 +67,9 @@ exp_t *make_atom_from_token(token_t *token) {
            is UB. Treat it as out-of-range and let the symbol path
            take it. */
         if (errno != ERANGE && !(neg && hv == LLONG_MIN)) {
-          int64_t fix_max = ((int64_t)1 << 60) - 1;
-          int64_t fix_min = -((int64_t)1 << 60);
           if (neg)
             hv = -hv;
-          if (hv >= fix_min && hv <= fix_max)
+          if (FIX_FITS((int64_t)hv))
             ATOM_NUM_RETURN(MAKE_FIX((int64_t)hv));
         }
       }
@@ -419,17 +417,31 @@ static exp_t *reader_consume_utf8_tail(FILE *stream, token_t *token) {
 /* Build a literal-collecting list `(head elem elem …)` by reading forms until
    the matching `close` delimiter. Shared by the #[ vector and #{ set readers,
    which differ only in `head` symbol and `close`. On a sub-form error the
-   partial list is freed and the error propagated. */
+   partial list is freed and the error propagated.
+
+   Depth-guarded: the #-dispatch literals (#[ #{ #l[ #g[ #s{ #d{) reach
+   reader_collect DIRECTLY, bypassing callmacrochar (the only site that
+   increments g_reader_depth). Without this guard, input like
+   #[#[#[…#[1]…]]] recurses reader → #-dispatch → reader_collect → reader
+   with no depth accounting and exhausts the C stack. */
 static exp_t *reader_collect(FILE *stream, unsigned char close, exp_t *head) {
+  if (g_reader_depth >= ALCOVE_READER_MAX_DEPTH) {
+    unrefexp(head);
+    return error(EXP_ERROR_PARSING_MACROCHAR, NULL, NULL,
+                 "nesting too deep (max %d)", ALCOVE_READER_MAX_DEPTH);
+  }
+  g_reader_depth++;
   exp_t *cur = head;
   exp_t *v;
   while ((v = reader(stream, close, 0))) {
     if (iserror(v)) {
       unrefexp(head);
+      g_reader_depth--;
       return v;
     }
     cur = cur->next = make_node(v);
   }
+  g_reader_depth--;
   return head;
 }
 

@@ -494,6 +494,11 @@ exp_t *hamtassoccmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(m, k, v);
   REQUIRE_TYPE(m, ishamt, CLEAN_RETURN_3(m, k, v, _alc_e), ERROR_ILLEGAL_VALUE,
                e, env, "hamt-assoc: not a hamt");
+  if (isfloat(k) && k->f != k->f) {
+    CLEAN_RETURN_3(m, k, v,
+                   error(ERROR_ILLEGAL_VALUE, e, env,
+                         "hamt-assoc: NaN is not a valid key"));
+  }
   hamt_t *h = (hamt_t *)m->ptr;
   int added = 0;
   hamt_node *nr = hamt_node_assoc(h->root, k, v, hamt_hashkey(k), 0, &added);

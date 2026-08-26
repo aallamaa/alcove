@@ -260,12 +260,19 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
   case 0xcc:                 /* uint8 */
   case 0xcd:                 /* uint16 */
   case 0xce:                 /* uint32 */
-  case 0xcf: /* uint64 (reinterpreted as int64) */ {
+  case 0xcf: /* uint64 */ {
     int nb = (c == 0xcc) ? 1 : (c == 0xcd) ? 2 : (c == 0xce) ? 4 : 8;
     MP_NEED((size_t)nb);
-    int64_t v = (int64_t)mp_get_be(b, *pos, nb);
+    uint64_t uv = mp_get_be(b, *pos, nb);
     *pos += nb;
-    return MAKE_FIX(v);
+    /* Values > INT64_MAX can't fit a fixnum; fall through to float
+       rather than silently wrapping via signed reinterpretation. */
+    if (nb < 8 || uv <= (uint64_t)INT64_MAX) {
+      int64_t v = (nb < 8) ? (int64_t)mp_sext(uv, nb) : (int64_t)uv;
+      if (FIX_FITS(v))
+        return MAKE_FIX(v);
+    }
+    return make_floatf((double)uv);
   }
   case 0xd0: /* int8 */
   case 0xd1: /* int16 */
@@ -327,6 +334,12 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
+    /* Cap: a 4-byte length can claim billions of elements from a small
+       input. The depth cap bounds nesting, but a flat 4B-element array
+       would still OOM. Reject if n exceeds remaining bytes (each element
+       is at least 1 byte). */
+    if (n > len - *pos)
+      return NULL;
     return mp_decode_array(b, len, pos, n, depth);
   }
   case 0xde:
@@ -335,6 +348,8 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     size_t n = (size_t)mp_get_be(b, *pos, nb);
     *pos += nb;
+    if (n > len - *pos)
+      return NULL;
     return mp_decode_map(b, len, pos, n, depth);
   }
   default:

@@ -1076,6 +1076,16 @@ static int sform_lookup(const char *s) {
 static void compile_expr(compiler_t *c, exp_t *e, int tail) {
   if (c->failed)
     return;
+  /* C-stack depth guard: compile_expr recurses for every sub-expression.
+     A deeply-nested AST would exhaust the C stack before the runtime
+     stack_guard_exhausted() in vm_run can fire. Use the same
+     frame-pointer-based guard the evaluator uses — it measures actual
+     C-stack consumption, so sibling (non-nested) expressions don't
+     accumulate a false count. */
+  if (stack_guard_exhausted()) {
+    c->failed = 1;
+    return;
+  }
   emit_loc(c,
            e); /* stamp pc→source line for this form (cold; error-path only) */
   /* Tagged fixnum literal: if it fits in int16, inline; else const pool. */

@@ -1595,22 +1595,35 @@ exp_t *vecpushcmd(exp_t *e, env_t *env) {
           vexp, valexp,
           error(ERROR_ILLEGAL_VALUE, e, env, "vec-push!: grow failed"));
   }
-  /* Extend the window by one. The new slot is uninitialised; for GEN
-     we pre-write NIL so vec_set_boxed's unrefexp doesn't read garbage. */
+  /* Write the new element FIRST, then extend the window. If the write
+     triggers a type promotion (vec_promote_to_gen), the promotion copies
+     `live = end - start` elements — incrementing end before the store
+     would include the not-yet-written slot in that copy. The buffer is
+     calloc-zeroed so the stale slot reads as 0 (benign), but the
+     ordering is wrong in principle. vec_set_boxed writes by index
+     (vec_win.start + off), not by end, so deferring is safe. */
   int32_t off = vexp->vec_win.end - vexp->vec_win.start; /* new logical idx */
-  vexp->vec_win.end++;
   if (vec_kind(vexp) == VEC_KIND_GEN) {
     exp_t **cells = (exp_t **)((char *)vexp->ptr + sizeof(alc_vec_t));
     cells[vexp->vec_win.start + off] = refexp(NIL_EXP);
   }
   exp_t *ret = refexp(valexp);
   if (!vec_set_boxed(vexp, off, valexp)) {
-    vexp->vec_win.end--; /* roll back */
     exp_t *err = error(ERROR_ILLEGAL_VALUE, e, env, "vec-push!: write failed");
     unrefexp(ret);
     unrefexp(vexp);
     unrefexp(e);
     return err;
+  }
+  vexp->vec_win.end++; /* extend window only after successful store */
+  if (vexp->flags & FLAG_WATCHED) {
+    exp_t *werr = watch_notify(vexp, "vec-push!", NULL, NULL, ret, env);
+    if (werr) {
+      unrefexp(ret);
+      unrefexp(vexp);
+      unrefexp(e);
+      return werr;
+    }
   }
   /* valexp consumed by vec_set_boxed. */
   unrefexp(vexp);
@@ -1640,6 +1653,13 @@ exp_t *vecpopcmd(exp_t *e, env_t *env) {
     unrefexp(cells[n - 1]);
   }
   vexp->vec_win.end--;
+  if (vexp->flags & FLAG_WATCHED) {
+    exp_t *werr = watch_notify(vexp, "vec-pop!", NULL, ret, NULL, env);
+    if (werr) {
+      unrefexp(ret);
+      CLEAN_RETURN_1(vexp, werr);
+    }
+  }
   CLEAN_RETURN_1(vexp, ret);
 }
 

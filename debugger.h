@@ -657,7 +657,14 @@ exp_t *expandmacro(exp_t *e, exp_t *fn, env_t *env) {
                  "macro expansion too deep: (macroexpand-1 ...) it to see the "
                  "expansion — a macro whose expansion re-invokes itself never "
                  "terminates");
-  env_t *newenv = make_env(NULL); // NULL instead of env
+  /* Use the macro's captured lexical environment (stored by defmacrocmd
+     in fn->next->meta) as the parent, so free variables in the macro
+     body resolve in the defining scope. Falls back to the caller env
+     (which chains to global) when no env was captured — matching the
+     lambda invoke path. */
+  env_t *captured =
+      (fn->next && fn->next->meta) ? (env_t *)fn->next->meta : env;
+  env_t *newenv = make_env(captured);
   exp_t *ret;
 
   if ((ret = var2env(e, fn->content, e->next, newenv, false))) {

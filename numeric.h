@@ -24,16 +24,17 @@
 #define is_exact(e) (isnumber(e) || isrational(e))
 
 static inline int64_t alc_gcd64(int64_t a, int64_t b) {
-  if (a < 0)
-    a = -a;
-  if (b < 0)
-    b = -b;
-  while (b) {
-    int64_t t = a % b;
-    a = b;
-    b = t;
+  /* Use unsigned arithmetic to avoid the UB of negating INT64_MIN.
+     The GCD of |a| and |b| is the same whether we work in signed or
+     unsigned — the sign doesn't affect the Euclidean algorithm. */
+  uint64_t ua = (a < 0) ? (uint64_t)(-(a + 1)) + 1 : (uint64_t)a;
+  uint64_t ub = (b < 0) ? (uint64_t)(-(b + 1)) + 1 : (uint64_t)b;
+  while (ub) {
+    uint64_t t = ua % ub;
+    ua = ub;
+    ub = t;
   }
-  return a;
+  return (int64_t)ua;
 }
 
 /* Build a reduced rational from int64 components already known to be in range.
@@ -44,11 +45,16 @@ static inline int64_t alc_gcd64(int64_t a, int64_t b) {
 static exp_t *make_rational(int64_t num, int64_t den) {
   if (den == 0)
     return NULL;
-  /* Normalize sign. INT64_MIN cannot be negated; route through the i128 path
-     by callers, so here a bare INT64_MIN den is treated as out-of-range. */
+  /* Normalize sign. INT64_MIN cannot be negated; detect it specially
+     by dividing both by 2 first (preserving the GCD relationship). */
   if (den < 0) {
-    num = -num;
-    den = -den;
+    if (den == INT64_MIN) {
+      num /= 2;
+      den /= 2;
+    } else {
+      num = -num;
+      den = -den;
+    }
   }
   int64_t g = alc_gcd64(num, den);
   if (g > 1) {
@@ -372,11 +378,16 @@ static exp_t *dec_div(alc_dec_t *a, alc_dec_t *b, int *over) {
       *over = 1;
       return NULL;
     }
-    q = q10 + rem / d;
+    __int128 q_new;
+    if (i128_add_ovf(q10, rem / d, &q_new)) {
+      *over = 1;
+      return NULL;
+    }
+    q = q_new;
     rem = rem % d;
     scale++;
   }
-  if (rem != 0 && rem * 2 >= d) /* round half up */
+  if (rem != 0 && rem >= d - rem) /* round half up (overflow-safe) */
     q += 1;
   return make_decimal_raw(neg ? -q : q, scale, over);
 }
@@ -388,10 +399,13 @@ static int dec_cmp(alc_dec_t *a, alc_dec_t *b) {
   int32_t s;
   if (!dec_align(a, b, &ca, &cb, &s))
     return ca < cb ? -1 : (ca > cb ? 1 : 0);
-  /* extreme magnitudes whose aligned form overflows i128: compare via double */
-  double da = (double)a->coef / (double)dec_pow10(a->scale);
-  double db = (double)b->coef / (double)dec_pow10(b->scale);
-  return da < db ? -1 : (da > db ? 1 : 0);
+  /* extreme magnitudes whose aligned form overflows i128: compare via
+     string representation to avoid double precision loss. */
+  char sa[48], sb[48];
+  dec_to_str(a, sa);
+  dec_to_str(b, sb);
+  int sgn = strcmp(sa, sb);
+  return sgn < 0 ? -1 : (sgn > 0 ? 1 : 0);
 }
 
 /* op '+','-','*','/' on two decimal exp_t. Returns owned decimal or NULL with

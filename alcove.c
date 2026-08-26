@@ -3127,10 +3127,12 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
           unrefexp(keyv);
           unrefexp(val);
           return fret;
-        } else {
           unrefexp(key);
           unrefexp(val);
-          return NULL; // SHOULD BE ERROR
+          fret = error(ERROR_ILLEGAL_VALUE, keyv, env,
+                       "=: unsupported place form (head must be car/cdr)");
+          unrefexp(keyv);
+          return fret;
         }
       }
     }
@@ -4794,7 +4796,8 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
     alcove_set_db_path(path);
     unrefexp(path_arg);
   }
-  return e;
+  unrefexp(e);
+  return TRUE_EXP;
 }
 
 /* Inverse of savedb: walk the on-disk dump (which is a series of

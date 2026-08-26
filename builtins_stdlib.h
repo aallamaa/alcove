@@ -2842,7 +2842,12 @@ exp_t *trycmd(exp_t *e, env_t *env) {
       e->next->next->next ? e->next->next->next->content : NULL;
   g_try_depth++; /* an error in the body is about to be caught — no debugger
                     break */
+  int outer_tail = in_tail_position;
+  in_tail_position = 0; /* body eval is NOT in tail position — the tail
+                           applies to the try form itself, and a tail call
+                           escaping the handler would bypass the catch */
   exp_t *result = EVAL(e->next->content, env);
+  in_tail_position = outer_tail;
   g_try_depth--;
   exp_t *ret;
   if (!result || !iserror(result)) {

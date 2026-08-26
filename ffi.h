@@ -465,7 +465,15 @@ static void alc_ffi_closure_dispatch(ffi_cif *cif, void *ret, void **args,
 }
 
 /* (ffi-callback ret-type (arg-types...) fn) — wrap an alcove lambda in a
-   libffi closure so it can be passed to C as a function pointer. */
+   libffi closure so it can be passed to C as a function pointer.
+
+   LIFETIME: the callback exp MUST be kept alive (referenced from Lisp)
+   for as long as C may invoke it. If the exp is GC'd (refcount → 0),
+   alc_ffi_free frees the closure and the trampoline code page — a C
+   call through the stale function pointer is a use-after-free. This
+   matches the libffi convention: the caller owns the closure lifetime.
+   For async/event callbacks where C retains the pointer, store the exp
+   in a top-level variable for the duration. */
 exp_t *fficallbackcmd(exp_t *e, env_t *env) {
   exp_t *cur = e->next;
   exp_t *rtype = NULL, *atlist = NULL, *fn = NULL, *err = NULL, *ret = NULL;
@@ -735,6 +743,19 @@ exp_t *ffipackcmd(exp_t *e, env_t *env) {
   for (int i = 0; i < nv; i++) {
     exp_t *v = vals[i];
     void *slot = buf + d->offsets[i];
+    /* Defense-in-depth: verify the field offset is within the struct
+       buffer. Offsets are computed by ffistructcmd and should always
+       be in-bounds, but a future layout change without this guard
+       would write past the buffer. */
+    static const int field_sizes[] = {0, 4, 8, 8, 8, 8, 0};
+    int fsz = (int)d->arg_tags[i] <
+                      (int)(sizeof(field_sizes) / sizeof(field_sizes[0]))
+                  ? field_sizes[d->arg_tags[i]]
+                  : 0;
+    if (d->arg_tags[i] == AFFI_STRUCT && d->arg_structs[i])
+      fsz = (int)((alc_ffi_t *)d->arg_structs[i]->ptr)->struct_size;
+    if (d->offsets[i] + fsz > d->struct_size)
+      goto badfield;
     switch (d->arg_tags[i]) {
     case AFFI_INT:
       if (!(isnumber(v) || isfloat(v) || ischar(v)))

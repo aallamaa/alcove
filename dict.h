@@ -9,10 +9,9 @@
 static unsigned int bernstein_seed = 3102;
 
 /* Bernstein Hash Function */
-unsigned int bernstein_hash(unsigned char *key, int len) {
+unsigned int bernstein_hash(unsigned char *key, size_t len) {
   unsigned int hash = bernstein_seed;
-  int i;
-  for (i = 0; i < len; ++i)
+  for (size_t i = 0; i < len; ++i)
     hash = (hash + (hash << 5)) ^ key[i];
   return hash;
 }
@@ -28,11 +27,19 @@ unsigned int bernstein_hash_z(const char *key) {
   return hash;
 }
 
+/* Checked strdup: uses memalloc so OOM triggers oom_raise/longjmp
+   instead of returning NULL (which would crash bernstein_hash_z /
+   strcmp on the stored key). */
+char *dict_strdup(const char *s) {
+  size_t n = strlen(s) + 1;
+  char *p = (char *)memalloc(n, 1);
+  memcpy(p, s, n);
+  return p;
+}
 /* Bernstein Hash Function not key sensitive*/
-unsigned int bernstein_uhash(unsigned char *key, int len) {
+unsigned int bernstein_uhash(unsigned char *key, size_t len) {
   unsigned int hash = bernstein_seed;
-  int i;
-  for (i = 0; i < len; ++i)
+  for (size_t i = 0; i < len; ++i)
     hash = (hash + (hash << 5)) ^ tolower(key[i]);
   return hash;
 }
@@ -216,14 +223,14 @@ keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val) {
         else {
           k = k->next = memalloc(1, sizeof(keyval_t));
           d->ht[0].used++;
-          k->key = strdup(key);
+          k->key = dict_strdup(key);
         }
       }
     } else if (val) {
       k = d->ht[0].table[h & (d->ht[0].sizemask)] =
           memalloc(1, sizeof(keyval_t));
       d->ht[0].used++;
-      k->key = strdup(key);
+      k->key = dict_strdup(key);
     }
   }
 
@@ -233,7 +240,7 @@ keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val) {
     d->ht[0].table = memalloc(d->ht[0].size, sizeof(keyval_t *));
     k = d->ht[0].table[h & d->ht[0].sizemask] = memalloc(1, sizeof(keyval_t));
     d->ht[0].used++;
-    k->key = strdup(key);
+    k->key = dict_strdup(key);
   };
 
   if (val) {
@@ -242,7 +249,8 @@ keyval_t *set_get_keyval_dict(dict_t *d, char *key, exp_t *val) {
        per insert and avoids the historical 32-bucket cap that turned
        large global envs into linked-list scans. */
     if (d->ht[0].used >= d->ht[0].size)
-      dict_rehash(d, d->ht[0].size * 2);
+      dict_rehash(d, d->ht[0].size >= (UINT_MAX / 2) ? d->ht[0].size
+                                                     : d->ht[0].size * 2);
   } else {
     if (k && (strcmp(key, k->key) != 0))
       return NULL;

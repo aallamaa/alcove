@@ -65,6 +65,12 @@
    SYN flood. Excess connections get the next select() iteration. */
 #define RESP_ACCEPT_BURST 32
 #define RESP_LISTEN_BACKLOG 64
+#define RESP_MAX_CLIENTS 10000
+/* select()-based reactors use fd_set, whose FD_SETSIZE is 1024 on glibc.
+   A client fd >= FD_SETSIZE corrupts the stack-allocated fd_set. In
+   select mode, cap connections below FD_SETSIZE so FD_SET is always
+   in-bounds; poll/epoll backends are unaffected. */
+#define RESP_SELECT_MAX_CLIENTS (FD_SETSIZE - 1)
 #define RESP_MAX_BULK (512 * 1024 * 1024)
 #define RESP_MAX_ARGS 1048576
 #define RESP_ARGV_POOL_INIT 8 /* covers SET k v, HSET h f v, etc. */
@@ -118,6 +124,9 @@ typedef struct resp_client {
 /* Per-reactor client list. Each reactor owns its own clients (acquired
    via accept on its own SO_REUSEPORT socket); never touched by peers. */
 static ALCOVE_TLS resp_client_t *resp_clients = NULL;
+/* Per-reactor connection count, capped at RESP_MAX_CLIENTS (or
+   RESP_SELECT_MAX_CLIENTS in select mode — see resp_accept_drain). */
+static ALCOVE_TLS int resp_nclients = 0;
 /* Global lock-free keyspace shared by every reactor. Lazy-allocated on
    first SET via resp_kv_ensure(). Each shard_t.kv points at this same
    `g_resp_kv` so the existing `current_shard->kv` access pattern stays
@@ -446,6 +455,8 @@ static void resp_client_unlink(resp_client_t *c) {
   if (*pp)
     *pp = c->next;
   resp_client_free(c);
+  if (resp_nclients > 0)
+    resp_nclients--;
 }
 
 static char *resp_write_reserve(resp_client_t *c, size_t n) {
@@ -469,8 +480,12 @@ static char *resp_write_reserve(resp_client_t *c, size_t n) {
       while (cap < need)
         cap *= 2;
       char *nb = realloc(c->wbuf, cap);
-      if (!nb)
-        graceful_shutdown("Fatal error: out of memory (resp wbuf)");
+      if (!nb) {
+        c->wfail = 1; /* OOM: flag for drop instead of killing the server */
+        return c->wbuf +
+               c->wlen; /* best-effort: caller writes into old tail,
+                           wfail ensures the reactor drops this client */
+      }
       c->wbuf = nb;
       c->wcap = cap;
     }
@@ -1573,6 +1588,11 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
     alc_blob_t *tb = (alc_blob_t *)target->val->ptr;
     size_t blen = tb->len;
     char *bcopy = malloc(blen);
+    if (blen && !bcopy) {
+      unrefexp(cur);
+      resp_write_err(c, "ERR out of memory");
+      return;
+    }
     if (blen)
       memcpy(bcopy, tb->bytes, blen);
     int ok;
@@ -2236,6 +2256,7 @@ static resp_client_t *resp_client_new(int cfd) {
   }
   cl->next = resp_clients;
   resp_clients = cl;
+  resp_nclients++;
 #ifdef ALCOVE_METRICS
   metric_bump(g_m_conns, 1); /* one accepted connection */
 #endif
@@ -2269,9 +2290,11 @@ static inline int resp_client_handle_events(resp_client_t *cur, int readable,
           cap = RESP_RBUF_MAX;
         char *nb = realloc(cur->rbuf, cap);
         if (!nb)
-          graceful_shutdown("Fatal error: out of memory (resp rbuf)");
-        cur->rbuf = nb;
-        cur->rcap = cap;
+          drop = 1; /* OOM on rbuf: drop this client, not the server */
+        else {
+          cur->rbuf = nb;
+          cur->rcap = cap;
+        }
       }
     }
     if (!drop) {
@@ -2305,6 +2328,8 @@ static inline int resp_client_handle_events(resp_client_t *cur, int readable,
 
 static inline int resp_client_handle_io(resp_client_t *cur, fd_set *rfds,
                                         fd_set *wfds) {
+  if (cur->fd >= FD_SETSIZE)
+    return 0; /* skipped in resp_build_fdset; nothing to do */
   return resp_client_handle_events(cur, FD_ISSET(cur->fd, rfds),
                                    FD_ISSET(cur->fd, wfds));
 }
@@ -2637,7 +2662,17 @@ static int resp_backend_wait(resp_backend_t *b, int timeout_ms) {
    or under SO_REUSEPORT a peer reactor grabbed the connection). EMFILE/
    ENFILE are real fd-exhaustion problems we want surfaced. */
 static void resp_accept_drain(int srv, resp_backend_t *backend) {
+  int max_clients =
+      resp_backend_active(backend) ? RESP_MAX_CLIENTS : RESP_SELECT_MAX_CLIENTS;
   for (int i = 0; i < RESP_ACCEPT_BURST; i++) {
+    if (resp_nclients >= max_clients) {
+      /* Over cap: accept then immediately close so the client gets a
+         clean ECONNRESET instead of a hanging SYN. */
+      int cfd = accept(srv, NULL, NULL);
+      if (cfd >= 0)
+        close(cfd);
+      break;
+    }
     int cfd = accept(srv, NULL, NULL);
     if (cfd < 0) {
       if (errno == EINTR)
@@ -2667,6 +2702,10 @@ static inline int resp_build_fdset(int srv, int extra_rfd, fd_set *rfds,
       maxfd = extra_rfd;
   }
   for (resp_client_t *cl = resp_clients; cl; cl = cl->next) {
+    if (cl->fd >= FD_SETSIZE)
+      continue; /* select() can't handle fds >= FD_SETSIZE; cap
+                   in resp_accept_drain should prevent this, but
+                   skip defensively rather than corrupt the fd_set. */
     FD_SET(cl->fd, rfds);
     if (cl->wlen > cl->whead)
       FD_SET(cl->fd, wfds);
@@ -2777,7 +2816,13 @@ int resp_serve(int port) {
      lists know about us. epoch_tick at the top of each select() iter
      publishes our quiescent point — between iterations no command is
      mid-flight, so any pointer we loaded is stale. */
-  epoch_register();
+  if (epoch_register() < 0) {
+    fprintf(stderr,
+            "alcove: thread limit reached (%d); cannot start reactor.\n",
+            EPOCH_MAX_THREADS);
+    resp_stop = 1;
+    return 1;
+  }
 
   while (!resp_stop) {
     epoch_tick();
@@ -3117,7 +3162,13 @@ int resp_repl_serve(int port, env_t *global) {
   if (!use_thread)
     resp_set_nonblock(0); /* raw path: nonblocking stdin in the select set */
 
-  epoch_register();
+  if (epoch_register() < 0) {
+    fprintf(stderr,
+            "alcove: thread limit reached (%d); cannot start reactor.\n",
+            EPOCH_MAX_THREADS);
+    resp_stop = 1;
+    return 1;
+  }
   while (!resp_stop) {
     epoch_tick();
     resp_kv_maybe_sweep();

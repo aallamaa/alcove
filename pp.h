@@ -69,6 +69,7 @@ static int pp_flat_width(exp_t *e) {
 }
 
 static void pp_form(exp_t *e, int indent);
+static void pp_form_body(exp_t *e, int indent);
 
 /* Print one body form, then a newline. Used for the body lists in
    def/fn/let/do where each top-level form starts a fresh line. */
@@ -82,6 +83,20 @@ static void pp_body(exp_t *body, int indent) {
 }
 
 static void pp_form(exp_t *e, int indent) {
+  /* Depth guard: the persistence loader allows 16384 nesting levels;
+     without this cap, printing such a form via (source fn) could
+     overflow the C stack. Fall back to print_node (which has its own
+     depth guard) beyond a reasonable limit. */
+  static ALCOVE_TLS int pp_depth = 0;
+  if (pp_depth >= ALCOVE_READER_MAX_DEPTH) {
+    print_node(e);
+    return;
+  }
+  pp_depth++;
+  pp_form_body(e, indent);
+  pp_depth--;
+}
+static void pp_form_body(exp_t *e, int indent) {
   if (!ispair(e) || !istrue(e)) {
     print_node(e);
     return;

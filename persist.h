@@ -491,6 +491,18 @@ static exp_t *load_callable(exp_t *e, FILE *stream, int compile) {
   }
   exp_t *params = (flags & 1) ? load_exp_t(stream) : NULL;
   exp_t *body = (flags & 2) ? load_exp_t(stream) : NULL;
+  if ((flags & 1) && !params) { /* truncated stream mid-read */
+    free(name);
+    unrefexp(e);
+    return NULL;
+  }
+  if ((flags & 2) && !body) { /* truncated stream mid-read */
+    if (params)
+      unrefexp(params);
+    free(name);
+    unrefexp(e);
+    return NULL;
+  }
   /* Mirror defcmd's lambda shape: e->content = params, e->next is a
      wrapping node whose content is the body list. */
   e->content = params;

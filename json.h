@@ -277,6 +277,8 @@ static exp_t *js_decode_string(const char *b, size_t len, size_t *pos) {
       uint32_t cp;
       if (!js_hex4(b, len, *pos, &cp))
         goto bad;
+      if (cp == 0)
+        goto bad; /* NUL breaks strlen-based key encoding */
       *pos += 4;
       if (cp >= 0xd800 && cp <= 0xdbff) { /* high surrogate: need a low one */
         uint32_t lo;
@@ -436,9 +438,9 @@ static exp_t *js_decode_number(const char *b, size_t len, size_t *pos) {
   if (!isfloat_tok) {
     errno = 0;
     long long v = strtoll(tmp, NULL, 10);
-    if (errno != ERANGE)
+    if (errno != ERANGE && FIX_FITS((int64_t)v))
       return MAKE_FIX((int64_t)v);
-    /* doesn't fit int64 → fall through to double */
+    /* doesn't fit fixnum range → fall through to double */
   }
   return make_floatf(strtod(tmp, NULL));
 }

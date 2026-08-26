@@ -168,7 +168,7 @@ static node *read_string(lex *r) {
   size_t start = r->i++;
   while (r->i < r->n) {
     if (r->s[r->i] == '\\') {
-      r->i += 2;
+      r->i = (r->i + 1 < r->n) ? r->i + 2 : r->i + 1;
       continue;
     }
     if (r->s[r->i] == '"') {
@@ -251,7 +251,7 @@ static node *read_one(lex *r) {
       r->i++;    /* opening quote */
       while (r->i < r->n) {
         if (r->s[r->i] == '\\') {
-          r->i += 2;
+          r->i = (r->i + 1 < r->n) ? r->i + 2 : r->i + 1;
           continue;
         }
         if (r->s[r->i] == '"') {
@@ -497,9 +497,21 @@ static node *parse(const char *src) {
       while (rl && raw[rl - 1] == '\r')
         raw[--rl] = 0;
       if (first_indent < 0) {
-        int ind = 0;
-        while (raw[ind] == ' ' || raw[ind] == '\t')
+        int ind = 0, has_sp = 0, has_tab = 0;
+        while (raw[ind] == ' ' || raw[ind] == '\t') {
+          if (raw[ind] == ' ')
+            has_sp = 1;
+          else
+            has_tab = 1;
           ind++;
+        }
+        if (has_sp && has_tab) {
+          free(raw);
+          free(codeb.p);
+          free(comment);
+          freenode(roots);
+          return NULL;
+        }
         first_indent = ind;
       }
       size_t pre = codeb.len;
@@ -1091,8 +1103,9 @@ static void emit_form(const node *x, int col, buf *o) {
 
 char *adder_format(const char *src) {
   node *roots = parse(src);
+  if (!roots)
+    return strdup("Error: indentation mixes tabs and spaces; pick one\n");
   buf o;
-  buf_init(&o);
   for (int k = 0; k < roots->n; k++)
     emit_form(roots->kid[k], 0, &o);
   freenode(roots);
