@@ -50,6 +50,10 @@ static regex_t *re_compiled(const char *pat, char *errbuf, size_t errn) {
     regfree(&slot->re);
   }
   slot->pat = strdup(pat);
+  if (!slot->pat) {
+    regfree(&re);
+    return NULL;
+  }
   slot->re = re;
   return &slot->re;
 }
@@ -112,8 +116,11 @@ exp_t *rematchcmd(exp_t *e, env_t *env) {
     return refexp(NIL_EXP);
   }
   size_t ng = re->re_nsub + 1;
-  if (ng > RE_MAX_GROUPS)
-    ng = RE_MAX_GROUPS;
+  if (ng > RE_MAX_GROUPS) {
+    RE_CLEANUP(pat, s);
+    return error(ERROR_ILLEGAL_VALUE, e, env,
+                 "re-match: too many capture groups (max %d)", RE_MAX_GROUPS);
+  }
   exp_t *head = NULL, *tail = NULL;
   for (size_t g = 0; g < ng; g++) {
     exp_t *el;

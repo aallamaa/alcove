@@ -2784,7 +2784,10 @@ static int try_jit_tak(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_jmp_rel32(buf + n, 0);
   x64_patch_rel32(buf, jmp_back, 5, entry_pc);
 
-  /* bail: rax has NULL/error, tear down and return. */
+  /* bail: rax has NULL/error, tear down and return. The env slots (x,y,z)
+     may have been clobbered by intermediate writes, but the caller treats
+     a bail as a hard error and discards the frame — unreachable for valid
+     fixnum inputs since match_tak guarantees fixnum-only args. */
   int bail_pc = n;
   n += x64_add_imm32(buf + n, 4 /* rsp */, 56);
   n += x64_pop_reg(buf + n, X64_RDI);
@@ -2925,7 +2928,9 @@ static int try_jit_ackermann(bytecode_t *bc, uint8_t *buf, int *outn) {
   n += x64_jmp_rel32(buf + n, 0);
   x64_patch_rel32(buf, jmp_back2, 5, entry_pc);
 
-  /* bail: tear down + return rax (NULL/error). */
+  /* bail: tear down + return rax (NULL/error). Env slots may be clobbered
+     by intermediate writes, but bails only fire on error/overflow and the
+     caller discards the frame — unreachable for valid fixnum inputs. */
   int bail_pc = n;
   n += x64_pop_reg(buf + n, X64_RDI);
   n += x64_pop_reg(buf + n, X64_RBX);
@@ -3051,11 +3056,14 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
   int jcc_done = n;
   n += x64_jcc_rel32(buf + n, 0x0F, 0); /* jg done */
 
-  /* s += K_step_s (or -=) */
+  /* s += K_step_s (or -=). Check overflow: the VM raises on fixnum
+     overflow, so the JIT must too. */
   if (step_s_op == OP_SLOT_ADD_FIX)
     n += x64_add_imm32(buf + n, X64_RDX, (int32_t)K_step_s);
   else
     n += x64_sub_imm32(buf + n, X64_RDX, (int32_t)K_step_s);
+  n += x64_jcc_rel32(buf + n, 0x0, 0); /* jo deopt */
+  int jov_deopt = n - 4;
 
   /* i += 1 */
   n += x64_add_imm32(buf + n, X64_RCX, 1);
@@ -3086,6 +3094,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
+  x64_patch_rel32(buf, jov_deopt, 4, deopt_pc);
 
   JIT_GUARD(128);
   *outn = n;

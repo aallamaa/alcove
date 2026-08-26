@@ -48,13 +48,10 @@ static exp_t *make_rational(int64_t num, int64_t den) {
   /* Normalize sign. INT64_MIN cannot be negated; detect it specially
      by dividing both by 2 first (preserving the GCD relationship). */
   if (den < 0) {
-    if (den == INT64_MIN) {
-      num /= 2;
-      den /= 2;
-    } else {
-      num = -num;
-      den = -den;
-    }
+    if (den == INT64_MIN)
+      return NULL; /* |INT64_MIN| > INT64_MAX: cannot normalize */
+    num = -num;
+    den = -den;
   }
   int64_t g = alc_gcd64(num, den);
   if (g > 1) {

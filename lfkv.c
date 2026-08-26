@@ -163,7 +163,7 @@ static lfslot_t *probe(lfkv_t *kv, uint32_t h, const char *k, size_t klen,
 int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
   lfentry_t *new_entry = entry_alloc(val, 0);
   if (!new_entry)
-    return -1;
+    return 0;
 
   LFKV_PROBE(kv, k, klen, h, i, tomb, s);
 
@@ -175,7 +175,7 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
   lfslot_t *fresh = slot_alloc(h, k, klen, new_entry);
   if (!fresh) {
     entry_free_wrapper(new_entry);
-    return -1;
+    return 0;
   }
 
   for (;;) {
@@ -205,7 +205,7 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     }
     free(fresh);
     entry_free_wrapper(new_entry);
-    return -1; /* full */
+    return 0; /* full */
   try_claim:
     continue;
   }
@@ -346,14 +346,14 @@ int64_t lfkv_get_expiry(lfkv_t *kv, const char *k, size_t klen) {
   for (;;) {
     LFKV_PROBE(kv, k, klen, h, i, tomb, s);
     if (!s)
-      return -1;
+      return 0;
     lfentry_t *ent = atomic_load_explicit(&s->entry, memory_order_acquire);
     if (!ent || !ent->val)
-      return -1;
+      return 0;
     if (entry_expired(ent, now)) {
       lfentry_t *expected = ent;
       if (slot_retire_entry(kv, s, &expected))
-        return -1;
+        return 0;
       continue;
     }
     return ent->expiry_us;
@@ -393,7 +393,7 @@ int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
       }
       lfentry_t *new_entry = entry_alloc(val, 0);
       if (!new_entry)
-        return -1;
+        return 0;
       if (slot_install_if_null(kv, s, new_entry))
         return 1;
       entry_free_wrapper(new_entry);
@@ -402,11 +402,11 @@ int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
 
     lfentry_t *new_entry = entry_alloc(val, 0);
     if (!new_entry)
-      return -1;
+      return 0;
     lfslot_t *fresh = slot_alloc(h, k, klen, new_entry);
     if (!fresh) {
       entry_free_wrapper(new_entry);
-      return -1;
+      return 0;
     }
 
     for (;;) {
@@ -437,7 +437,7 @@ int lfkv_set_nx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
       }
       free(fresh);
       entry_free_wrapper(new_entry);
-      return -1; /* full */
+      return 0; /* full */
     try_claim:
       continue;
     }
@@ -463,7 +463,7 @@ int lfkv_set_xx(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     }
     lfentry_t *new_entry = entry_alloc(val, 0);
     if (!new_entry)
-      return -1;
+      return 0;
     lfentry_t *expected = ent;
     if (atomic_compare_exchange_strong_explicit(&s->entry, &expected, new_entry,
                                                 memory_order_release,
@@ -496,7 +496,7 @@ int lfkv_cas(lfkv_t *kv, const char *k, size_t klen, exp_t *expected,
     if (new_val) {
       new_entry = entry_alloc(new_val, ent->expiry_us);
       if (!new_entry)
-        return -1;
+        return 0;
     }
     lfentry_t *old = ent;
     if (atomic_compare_exchange_strong_explicit(&s->entry, &old, new_entry,

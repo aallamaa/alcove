@@ -139,13 +139,16 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv, exp_t *e_err,
       }
       exp_t *pred = EVAL(rest->content, eval_env);
       if (!pred || iserror(pred)) {
-        *err = pred ? pred : NIL_EXP;
+        *err = pred ? pred
+                    : error(ERROR_ILLEGAL_VALUE, e_err, eval_env,
+                            "match: guard predicate evaluation failed");
         return -1;
       }
       exp_t *r = alc_apply1(pred, val ? val : NIL_EXP, eval_env);
-      unrefexp(pred);
       if (!r || iserror(r)) {
-        *err = r ? r : NIL_EXP;
+        *err = r ? r
+                 : error(ERROR_ILLEGAL_VALUE, e_err, eval_env,
+                         "match: guard predicate call failed");
         return -1;
       }
       int ok = istrue(r);
@@ -322,6 +325,10 @@ static exp_t *alc_gen_step(exp_t *g, env_t *env) {
     int done = (stp > 0) ? (cur >= end) : (cur <= end);
     if (done)
       return GEN_DONE;
+    if (!FIX_FITS(cur + stp)) {
+      gen_dict_set(g, GK_CUR, eend); /* force done on next call */
+      return MAKE_FIX(cur);
+    }
     gen_dict_set(g, GK_CUR, MAKE_FIX(cur + stp));
     return MAKE_FIX(cur);
   }
@@ -331,10 +338,13 @@ static exp_t *alc_gen_step(exp_t *g, env_t *env) {
     exp_t *fn = gen_dict_get(g, GK_FN);
     if (!inner || !fn)
       return GEN_DONE;
-    /* refexp fn before the recursive step: user code inside alc_gen_step
-       could drop the last external ref to g, freeing the dict and fn. */
+    /* refexp fn AND inner before the recursive step: user code inside
+       alc_gen_step could drop the last external ref to g, freeing the
+       dict and both fn and inner with it. */
     refexp(fn);
+    refexp(inner);
     exp_t *v = alc_gen_step(inner, env);
+    unrefexp(inner);
     if (!v || isgen_done(v)) {
       unrefexp(fn);
       return GEN_DONE;
@@ -350,17 +360,21 @@ static exp_t *alc_gen_step(exp_t *g, env_t *env) {
     exp_t *pred = gen_dict_get(g, GK_FN);
     if (!inner || !pred)
       return GEN_DONE;
-    /* refexp pred across the loop: inner step may drop the last ref to g. */
+    /* refexp pred AND inner across the loop: inner step may drop the
+       last ref to g, freeing the dict and both pred and inner. */
     refexp(pred);
+    refexp(inner);
     for (;;) {
       exp_t *v = alc_gen_step(inner, env);
       if (!v || isgen_done(v)) {
         unrefexp(pred);
+        unrefexp(inner);
         return GEN_DONE;
       }
       exp_t *ok = alc_apply1(pred, v, env);
       if (iserror(ok)) {
         unrefexp(pred);
+        unrefexp(inner);
         unrefexp(v);
         return ok;
       }
@@ -368,6 +382,7 @@ static exp_t *alc_gen_step(exp_t *g, env_t *env) {
       unrefexp(ok);
       if (pass) {
         unrefexp(pred);
+        unrefexp(inner);
         return v;
       }
       unrefexp(v);
@@ -566,8 +581,8 @@ exp_t *gencollect_cmd(exp_t *e, env_t *env) {
   return head;
 }
 
-const char doc_genmap[] =
-    "(gen-map fn g) — return a generator that yields (fn x) for each x from g.";
+const char doc_genmap[] = "(gen-map fn g) — return a generator that yields "
+                          "(fn x) for each x from g.";
 exp_t *genmap_cmd(exp_t *e, env_t *env) {
   if (!e->next || !e->next->next) {
     unrefexp(e);
@@ -624,7 +639,8 @@ exp_t *genfilter_cmd(exp_t *e, env_t *env) {
 }
 
 const char doc_forgen[] =
-    "(for-gen var gen body ...) — iterate generator gen, binding each yielded "
+    "(for-gen var gen body ...) — iterate generator gen, binding each "
+    "yielded "
     "value to var and evaluating body forms. Returns nil.";
 exp_t *forgencmd(exp_t *e, env_t *env) {
   if (!e->next || !e->next->next || !e->next->next->next) {
@@ -717,7 +733,8 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
      no args were passed. The content check makes 0-arg defs work. */
   while (curvar && curvar->content) {
     /* Rest-param marker: (a b . rest) reads as (a b . rest) — detect the
-       dot symbol and collect remaining args into a list for the next param. */
+       dot symbol and collect remaining args into a list for the next param.
+     */
     if (issymbol(curvar->content) &&
         strcmp((char *)exp_text(curvar->content), ".") == 0) {
       if (!curvar->next || !curvar->next->content ||
@@ -731,8 +748,10 @@ exp_t *var2env(exp_t *e, exp_t *var, exp_t *val, env_t *env, int evalexp) {
                             : refexp(curval->content);
         if (!rv)
           rv = NIL_EXP;
-        if (evalexp && iserror(rv))
+        if (evalexp && iserror(rv)) {
+          unrefexp(rest_head);
           return rv;
+        }
         list_append_owned(&rest_head, &rest_tail, rv);
         curval = curval->next;
       }

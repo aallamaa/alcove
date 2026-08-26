@@ -172,6 +172,9 @@ exp_t *makedircmd(exp_t *e, env_t *env) {
                NULL, env, "make-dir: path must be a string");
   const char *path = (const char *)exp_text(p);
   char *tmp = strdup(path);
+  if (!tmp)
+    CLEAN_RETURN_1(
+        p, error(ERROR_ILLEGAL_VALUE, NULL, env, "make-dir: out of memory"));
   int err = 0;
   for (char *c = tmp + 1; *c; c++) { /* +1: skip a leading '/' */
     if (*c == '/') {
@@ -581,7 +584,7 @@ exp_t *tcpsendcmd(exp_t *e, env_t *env) {
   int fd = (int)FIX_VAL(fdexp);
   const char *data = (const char *)exp_text(strexp);
   size_t len = strlen(data);
-  ssize_t sent = send(fd, data, len, 0);
+  ssize_t sent = send(fd, data, len, MSG_NOSIGNAL);
   if (sent < 0) {
     CLEAN_RETURN_2(
         fdexp, strexp,

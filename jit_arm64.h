@@ -1694,9 +1694,12 @@ static int try_jit_recurse_mul_one(bytecode_t *bc, uint32_t *out, int *outn) {
 
   if ((int)K1 < 0 || (int)K1 > 4095)
     return 0;
+  /* Reject negative K2: arm64 add_imm/sub_imm takes unsigned 12-bit,
+     so the abs+flip logic is wrong for negative K2. The amd64 twin
+     uses signed imm32. */
+  if ((int)K2 < 0)
+    return 0;
   int k2_abs = (int)K2;
-  if (k2_abs < 0)
-    k2_abs = -k2_abs;
   if (k2_abs > 4095)
     return 0;
 
@@ -2499,7 +2502,9 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
     out[cur] = arm64_b(entry_pc - cur);
   }
 
-  int bail_pc = n;
+  /* bail: env slots may be clobbered by intermediate writes, but bails
+     only fire on error/overflow and the caller discards the frame —
+     unreachable for valid fixnum inputs. */
   out[n++] = arm64_ldp_off_sp(19, 20, 16);
   out[n++] = arm64_ldp_post_sp(29, 30, 80);
   out[n++] = arm64_ret();
@@ -2619,7 +2624,8 @@ static int try_jit_ackermann(bytecode_t *bc, uint32_t *out, int *outn) {
     out[cur] = arm64_b(entry_pc - cur);
   }
 
-  /* bail: tear down + return x0 (NULL/error). */
+  /* bail: env slots may be clobbered, but bails only fire on
+     error/overflow — unreachable for valid fixnum inputs. */
   int bail_pc = n;
   out[n++] = arm64_ldp_off_sp(19, 20, 16); /* ldp x19, x20, [sp, #16] */
   out[n++] = arm64_ldp_post_sp(29, 30, 32);
@@ -2771,9 +2777,12 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
   /* K_step_s clamped to arm64 add_imm/sub_imm 12-bit range. K_step_i
      fixed at 1 (verified above). K_init_i / K_init_s arbitrary int16
      — emit via mov64 to be safe. */
+  /* Reject negative step: the arm64 add_imm/sub_imm path takes an
+     unsigned 12-bit immediate, so the sign-flip logic is wrong for
+     negative K. The amd64 twin handles this via signed imm32. */
+  if (K_step_s < 0)
+    return 0;
   int step_abs = (int)K_step_s;
-  if (step_abs < 0)
-    step_abs = -step_abs;
   if (step_abs > 4095)
     return 0;
 
@@ -2810,13 +2819,14 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* done: x0 = (s << 3) | 1, ret. */
   int done_pc = n;
-  ARM64_EMIT_RETAG_RET(3);
+  int ovf_tag;
+  ARM64_EMIT_RETAG_RET_CK(3, ovf_tag);
 
   /* deopt: x0 = NULL, ret. */
   int deopt_pc = n;
   ARM64_EMIT_DEOPT();
 
-  out[patch_done] = arm64_b_cond(12 /* GT */, done_pc - patch_done);
+  PATCH_DEOPT_BNE(ovf_tag);
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
 
   JIT_GUARD(32);

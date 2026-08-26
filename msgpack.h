@@ -268,7 +268,7 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     /* Values > INT64_MAX can't fit a fixnum; fall through to float
        rather than silently wrapping via signed reinterpretation. */
     if (nb < 8 || uv <= (uint64_t)INT64_MAX) {
-      int64_t v = (nb < 8) ? (int64_t)mp_sext(uv, nb) : (int64_t)uv;
+      int64_t v = (int64_t)uv; /* unsigned: no sign-extension */
       if (FIX_FITS(v))
         return MAKE_FIX(v);
     }
