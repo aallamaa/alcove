@@ -392,8 +392,13 @@ static exp_t *dec_div(alc_dec_t *a, alc_dec_t *b, int *over) {
     rem = rem % d;
     scale++;
   }
-  if (rem != 0 && rem >= d - rem) /* round half up (overflow-safe) */
+  if (rem != 0 && rem >= d - rem) { /* round half up (overflow-safe) */
+    if (q >= (((__int128)(((unsigned __int128)1 << 126) - 1)) + 1) * 2) {
+      *over = 1;
+      return NULL;
+    }
     q += 1;
+  }
   return make_decimal_raw(neg ? -q : q, scale, over);
 }
 
@@ -406,8 +411,8 @@ static int dec_cmp(alc_dec_t *a, alc_dec_t *b) {
     return ca < cb ? -1 : (ca > cb ? 1 : 0);
   /* extreme magnitudes whose aligned form overflows i128: compare via
      double (acceptable precision loss at these extreme magnitudes). */
-  double da = (double)a->coef * pow(10.0, a->scale);
-  double db = (double)b->coef * pow(10.0, b->scale);
+  double da = (double)a->coef * pow(10.0, -(double)a->scale);
+  double db = (double)b->coef * pow(10.0, -(double)b->scale);
   return da < db ? -1 : (da > db ? 1 : 0);
 }
 

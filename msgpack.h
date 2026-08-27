@@ -312,6 +312,8 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     if (n > len - *pos) /* underflow-safe (*pos<=len after MP_NEED); n is 32-bit
                            attacker data */
       return NULL;
+    if (n > (size_t)INT_MAX)
+      return NULL;
     exp_t *s = make_string((char *)(b + *pos), (int)n);
     *pos += n;
     return s;

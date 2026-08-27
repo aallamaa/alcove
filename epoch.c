@@ -41,6 +41,8 @@ int epoch_register(void) {
 
 static uint64_t epoch_min_quiescent(void) {
   int n = atomic_load_explicit(&epoch_nthreads, memory_order_acquire);
+  if (n > EPOCH_MAX_THREADS)
+    n = EPOCH_MAX_THREADS;
   if (n <= 0)
     return UINT64_MAX;
   uint64_t mn = UINT64_MAX;

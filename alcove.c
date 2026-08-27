@@ -545,6 +545,7 @@ typedef struct {
      before the closure can die. */
   char *inline_keys[ENV_INLINE_SLOTS];
   exp_t *inline_vals[ENV_INLINE_SLOTS]; /* OWNED refs (snapshot) */
+  dict_t *d; /* OWNED deep copy of env->d (let/with overflow bindings) */
 } vm_handler_t;
 static ALCOVE_TLS vm_handler_t *g_handlers = NULL;
 static ALCOVE_TLS int g_handler_sp = 0;  /* live entries */
@@ -576,6 +577,7 @@ static int vm_handler_push(exp_t *handler_form, exp_t *finally_form,
     h->inline_keys[i] = env->inline_keys[i];
     h->inline_vals[i] = refexp(env->inline_vals[i]);
   }
+  h->d = dict_copy(env->d); /* snapshot let/with overflow bindings */
   g_handler_sp++;
   return 1;
 }
@@ -591,6 +593,8 @@ static env_t *vm_handler_make_env(const vm_handler_t *h) {
     e->inline_keys[i] = h->inline_keys[i];
     e->inline_vals[i] = refexp(h->inline_vals[i]);
   }
+  if (h->d)
+    e->d = dict_copy(h->d); /* give the handler env its own copy */
   return e;
 }
 
@@ -5684,12 +5688,12 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
       return ret;
     }
   if (!v || !v2) {
+    exp_t *err = error(ERROR_MISSING_PARAMETER, e, env,
+                       "expt: requires exactly 2 arguments");
     unrefexp(e);
-    return error(ERROR_MISSING_PARAMETER, e, env,
-                 "expt: requires exactly 2 arguments");
+    return err;
   }
-  return error(ERROR_MISSING_PARAMETER, e, env,
-               "expt: requires exactly 2 arguments");
+  return NIL_EXP; /* unreachable — all paths return above */
 }
 
 #define FLOAT_UNARY_CMD(cname, fname, docstr, cdoc_sym)                        \

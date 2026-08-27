@@ -60,6 +60,25 @@ dict_t *create_dict() {
   return d;
 }
 
+/* Deep-copy a dict: duplicates all keyval_t entries (key strdup + val refexp).
+   Used by the VM handler snapshot to preserve let/with dict bindings across
+   tail-call env reuse. Returns NULL if src is NULL. */
+dict_t *dict_copy(dict_t *src) {
+  if (!src)
+    return NULL;
+  dict_t *dst = create_dict();
+  for (unsigned int i = 0; i < 2; i++) {
+    for (unsigned long j = 0; j < src->ht[i].size; j++) {
+      keyval_t *kv = src->ht[i].table[j];
+      while (kv) {
+        keyval_t *nk = set_get_keyval_dict(dst, kv->key, kv->val);
+        (void)nk;
+        kv = kv->next;
+      }
+    }
+  }
+  return dst;
+}
 int destroy_dict(dict_t *d) {
   // check if in use
   keyval_t *ckv;

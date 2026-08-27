@@ -805,6 +805,7 @@ typedef struct dict_t {
   void *meta;
   kvht_t ht[2];
 } dict_t;
+dict_t *dict_copy(dict_t *src);
 
 /* How many function-parameter bindings an env_t holds inline before
    spilling to the dict. Sized for the common recursive-function case

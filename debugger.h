@@ -569,7 +569,8 @@ tailrec: {
       }
 
       /* Different function: full unwind + tailrec jump. */
-      exp_t *new_fn = resolved_fn;
+      exp_t *new_fn = refexp(resolved_fn); /* keep alive across marker unref */
+      unrefexp(marker->content); /* drop refexp(fn) from make_tail_marker */
       marker->content = NULL;
       if (new_fn->meta) {
         marker->content =

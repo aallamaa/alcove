@@ -151,6 +151,13 @@ static lfslot_t *probe(lfkv_t *kv, uint32_t h, const char *k, size_t klen,
       *idx = i;
       return NULL;
     }
+    lfentry_t *ent = atomic_load_explicit(&s->entry, memory_order_acquire);
+    if (!ent) {
+      /* Tombstoned slot (key matches a deleted key, entry retired). */
+      if (*tombstone_idx == SIZE_MAX)
+        *tombstone_idx = i;
+      continue;
+    }
     if (slot_key_eq(s, h, k, klen)) {
       *idx = i;
       return s;
@@ -171,13 +178,26 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     slot_replace_entry(kv, s, new_entry);
     return 0;
   }
-
+  /* Prefer a tombstoned slot for insertion to avoid table exhaustion. */
   lfslot_t *fresh = slot_alloc(h, k, klen, new_entry);
   if (!fresh) {
     entry_free_wrapper(new_entry);
     return -1;
   }
-
+  if (!s && tomb != SIZE_MAX) {
+    lfslot_t *old =
+        atomic_load_explicit(&kv->slots[tomb], memory_order_acquire);
+    if (old && atomic_compare_exchange_strong_explicit(
+                   &kv->slots[tomb], &old, fresh, memory_order_release,
+                   memory_order_acquire)) {
+      free(old->key);
+      free(old);
+      atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
+      LFKV_EMIT(1, k, klen, val);
+      return 0;
+    }
+    /* CAS failed — another thread claimed it. Fall through to normal path. */
+  }
   for (;;) {
     lfslot_t *expected = NULL;
     if (atomic_compare_exchange_strong_explicit(&kv->slots[i], &expected, fresh,

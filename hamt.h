@@ -430,6 +430,11 @@ exp_t *load_hamt_value(exp_t *e, FILE *stream) {
       hamt_node_unref(root);
       return NULL;
     }
+    if (isfloat(k) && k->f != k->f) {
+      unrefexp(k);
+      hamt_node_unref(root);
+      return NULL;
+    }
     exp_t *v = load_exp_t(stream);
     if (!v) {
       unrefexp(k);

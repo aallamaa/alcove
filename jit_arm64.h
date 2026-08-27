@@ -1278,6 +1278,11 @@ static int try_jit_numloop(bytecode_t *bc, uint32_t *out, int *outn) {
         int sw = (pf_op == OP_LT || pf_op == OP_LE);
         int aa = sw ? pf_rb : pf_ra, bb = sw ? pf_ra : pf_rb;
         out[n++] = arm64_fcmp_d(aa, bb);
+        /* NaN (unordered) deopts to the VM, which handles it correctly. */
+        djf[ndjf] = n;
+        djfc[ndjf] = ARM64_COND_VS;
+        ndjf++;
+        out[n++] = 0; /* placeholder: b.vs deopt_framed */
         if (pf_op == OP_LT || pf_op == OP_GT)
           cond = br_true ? 12 /*GT*/ : 13 /*LE*/;
         else
@@ -2806,15 +2811,11 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* loop_top: cmp i, n_max; b.gt done */
   int loop_top = n;
-  out[n++] = arm64_cmp_reg(2, 1);
-  int patch_done = n;
-  out[n++] = 0; /* b.gt done */
-
-  /* s op= K_step_s */
   if (step_s_op == OP_SLOT_ADD_FIX)
-    out[n++] = arm64_add_imm(3, 3, step_abs);
+    out[n++] = arm64_adds_imm(3, 3, step_abs);
   else
-    out[n++] = arm64_sub_imm(3, 3, step_abs);
+    out[n++] = arm64_subs_imm(3, 3, step_abs);
+  int patch_fli_ovf = n++; /* reserve B.VS deopt */
 
   /* i++ */
   out[n++] = arm64_add_imm(2, 2, 1);
@@ -2835,6 +2836,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
 
   PATCH_DEOPT_BNE(ovf_tag);
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  out[patch_fli_ovf] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_fli_ovf);
 
   JIT_GUARD(32);
   *outn = n;

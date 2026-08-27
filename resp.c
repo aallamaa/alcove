@@ -1360,6 +1360,11 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   exp_t *fresh = make_blob(argv[2], (size_t)argl[2]);
   resp_kv_ensure();
+  if (!resp_kv) {
+    unrefexp(fresh);
+    resp_write_err(c, "ERR out of memory");
+    return;
+  }
   if (nx || xx) {
     int ok = nx ? lfkv_set_nx(resp_kv, k, klen, fresh)
                 : lfkv_set_xx(resp_kv, k, klen, fresh);
@@ -1381,11 +1386,11 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
     int64_t now = resp_now_us();
     int64_t deadline =
         (expire_us > INT64_MAX - now) ? INT64_MAX : now + expire_us;
-    /* CAS loop: ensure TTL is applied to the value we just set, not a
-       concurrent replacement. Touch-if-value matches by pointer identity. */
+    /* Use touch-if-value to ensure TTL is applied only to the value we
+       just set, not a concurrent replacement. Pointer identity check. */
     exp_t *cur = resp_kv_peek(k, klen);
     if (cur)
-      resp_kv_set_expiry(k, klen, deadline);
+      lfkv_touch_if_value(resp_kv, k, klen, cur, deadline);
   }
   resp_write_simple(c, "OK");
 }
@@ -1469,6 +1474,8 @@ static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
         }
         continue;
       }
+    } else {
+      ok = lfkv_set_nx(resp_kv, key, klen, new_blob);
       if (!ok) {
         unrefexp(new_blob);
         if (retries > 1000) {

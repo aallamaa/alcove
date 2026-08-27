@@ -915,6 +915,10 @@ static void defclass_write_form(defclass_buf_t *b, exp_t *v) {
     return;
   }
   case EXP_FLOAT:
+    if (v->f != v->f || v->f == INFINITY || v->f == -INFINITY) {
+      b->ok = 0;
+      return;
+    }
     defclass_buf_addf(b, "%.17g", v->f);
     return;
   case EXP_RATIONAL: {
@@ -2647,13 +2651,22 @@ static int sort_cmp_default(const void *a, const void *b) {
     int64_t dx = FIX_VAL(x), dy = FIX_VAL(y);
     return dx < dy ? -1 : dx > dy ? 1 : 0;
   }
-  if (isfloat(x) && isfloat(y))
+  if (isfloat(x) && isfloat(y)) {
+    if (x->f != x->f)
+      return y->f != y->f ? 0 : 1;
+    if (y->f != y->f)
+      return -1;
     return x->f < y->f ? -1 : x->f > y->f ? 1 : 0;
+  }
   if (isnumber(x) && isfloat(y)) {
+    if (y->f != y->f)
+      return -1;
     double dx = (double)FIX_VAL(x);
     return dx < y->f ? -1 : dx > y->f ? 1 : 0;
   }
   if (isfloat(x) && isnumber(y)) {
+    if (x->f != x->f)
+      return 1;
     double dy = (double)FIX_VAL(y);
     return x->f < dy ? -1 : x->f > dy ? 1 : 0;
   }
@@ -2816,7 +2829,12 @@ exp_t *errorpcmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *ret = NIL_EXP;
   if (e->next) {
     a = EVAL(e->next->content, env);
-    /* Don't propagate: we want to inspect the error, not re-raise it. */
+    /* Don't propagate: we want to inspect the error, not re-raise it.
+       But call/cc escape tokens must propagate, not be swallowed. */
+    if (a && is_cont_escape(a)) {
+      unrefexp(e);
+      return a;
+    }
     if (a && iserror(a))
       ret = TRUE_EXP;
   }
@@ -2833,6 +2851,10 @@ exp_t *errormessagecmd(exp_t *e, env_t *env) {
   exp_t *a = NULL, *ret = NIL_EXP;
   if (e->next) {
     a = EVAL(e->next->content, env);
+    if (a && is_cont_escape(a)) {
+      unrefexp(e);
+      return a;
+    }
     if (a && iserror(a) && a->ptr) {
       const char *_t = exp_text(a);
       ret = make_string((char *)_t, (int)strlen((char *)_t));
@@ -3290,13 +3312,25 @@ exp_t *repeatcmd(exp_t *e, env_t *env) {
     return ret;
   }
   unrefexp(val);
-  while (counter-- > 0) {
+  while (counter > 0) {
+    counter--;
+    { /* runaway-budget checkpoint (AST repeat) */
+      int _b = budget_check();
+      if (_b) {
+        ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                    _b == 2 ? "interrupted: memory limit exceeded"
+                            : "interrupted: time limit exceeded");
+        break;
+      }
+    }
     cur = curi;
     do {
       if (ret)
         unrefexp(ret);
       ret = EVAL(car(cur), env);
     } while ((cur = cdr(cur)) && !(ret && iserror(ret)));
+    if (ret && iserror(ret))
+      break;
   }
   if (ret && iserror(ret)) {
     unrefexp(e);
@@ -3373,6 +3407,12 @@ const char doc_no[] = "(no x) — t if x is nil or empty list/string, nil "
                       "otherwise. The canonical \"is falsey?\" test.";
 exp_t *nocmd(exp_t *e, env_t *env) {
   exp_t *cur = cdr(e);
+  if (!cur || !cur->content) {
+    exp_t *err =
+        error(ERROR_MISSING_PARAMETER, e, env, "no: requires 1 argument");
+    unrefexp(e);
+    return err;
+  }
   exp_t *tmpexp = EVAL(car(cur), env);
   if iserror (tmpexp)
     goto finish;
@@ -3700,6 +3740,15 @@ exp_t *forcmd(exp_t *e, env_t *env) {
         int64_t counter = FIX_VAL(retval);
         int64_t idx = FIX_VAL(lastidx) + 1;
         while (counter < idx) {
+          { /* runaway-budget checkpoint (AST for) */
+            int _b = budget_check();
+            if (_b) {
+              ret = error(ERROR_ILLEGAL_VALUE, e, env,
+                          _b == 2 ? "interrupted: memory limit exceeded"
+                                  : "interrupted: time limit exceeded");
+              goto error;
+            }
+          }
           /* Rebind the loop variable to a fresh tagged fixnum. */
           set_get_keyval_dict(newenv->d, exp_text(curvar->content),
                               MAKE_FIX(counter));

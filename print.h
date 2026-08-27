@@ -214,8 +214,15 @@ static void print_node_1(exp_t *node) {
           first = 0;
           if (((char *)k->key)[0] == ':')
             printf("\x1B[92m%s\x1B[39m", (char *)k->key);
-          else
-            printf("\x1B[92m\"%s\"\x1B[39m", (char *)k->key);
+          else {
+            fputs("\x1B[92m\"", stdout);
+            for (const char *ks = (const char *)k->key; *ks; ks++) {
+              if (*ks == '"' || *ks == '\\')
+                putchar('\\');
+              putchar(*ks);
+            }
+            fputs("\"\x1B[39m", stdout);
+          }
           printf(" ");
           print_node(k->val);
           k = k->next;

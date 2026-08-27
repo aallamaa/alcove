@@ -1832,6 +1832,8 @@ static void vm_handler_release(vm_handler_t *h) {
     unrefexp(h->inline_vals[i]);
   if (h->root)
     destroy_env(h->root);
+  if (h->d)
+    destroy_dict(h->d);
 }
 
 /* Unwind the heap handler stack from its current top down to `handler_base`,

@@ -195,8 +195,10 @@ static inline exp_t *vec_get_boxed(exp_t *vexp, int64_t i) {
   switch (vec_kind(vexp)) {
   case VEC_KIND_GEN:
     return refexp(((exp_t **)base)[off]);
-  case VEC_KIND_I64:
-    return MAKE_FIX(((int64_t *)base)[off]);
+  case VEC_KIND_I64: {
+    int64_t v = ((int64_t *)base)[off];
+    return FIX_FITS(v) ? MAKE_FIX(v) : make_floatf((double)v);
+  }
   case VEC_KIND_F64:
     return make_floatf((expfloat)((double *)base)[off]);
   }

@@ -403,12 +403,16 @@ static void alc_ffi_closure_dispatch(ffi_cif *cif, void *ret, void **args,
   unsigned int i;
   for (i = 0; i < cb->nargs; i++) {
     switch (cb->arg_tags[i]) {
-    case AFFI_INT:
-      argv[i] = MAKE_FIX((int64_t)*(int32_t *)args[i]);
+    case AFFI_INT: {
+      int64_t v = (int64_t)*(int32_t *)args[i];
+      argv[i] = FIX_FITS(v) ? MAKE_FIX(v) : make_floatf((double)v);
       break;
-    case AFFI_LONG:
-      argv[i] = MAKE_FIX(*(int64_t *)args[i]);
+    }
+    case AFFI_LONG: {
+      int64_t v = *(int64_t *)args[i];
+      argv[i] = FIX_FITS(v) ? MAKE_FIX(v) : make_floatf((double)v);
       break;
+    }
     case AFFI_DOUBLE:
       argv[i] = make_floatf(*(double *)args[i]);
       break;
@@ -859,9 +863,11 @@ exp_t *ffiunpackcmd(exp_t *e, env_t *env) {
     case AFFI_INT:
       v = MAKE_FIX((int64_t)*(const int32_t *)slot);
       break;
-    case AFFI_LONG:
-      v = MAKE_FIX(*(const int64_t *)slot);
+    case AFFI_LONG: {
+      int64_t lv = *(const int64_t *)slot;
+      v = FIX_FITS(lv) ? MAKE_FIX(lv) : make_floatf((double)lv);
       break;
+    }
     case AFFI_DOUBLE:
       v = make_floatf(*(const double *)slot);
       break;
@@ -1146,12 +1152,16 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
   case AFFI_VOID:
     ret = NIL_EXP;
     break;
-  case AFFI_INT:
-    ret = MAKE_FIX((int64_t)rval.i);
+  case AFFI_INT: {
+    int64_t v = (int64_t)rval.i;
+    ret = FIX_FITS(v) ? MAKE_FIX(v) : make_floatf((double)v);
     break;
-  case AFFI_LONG:
-    ret = MAKE_FIX(rval.l);
+  }
+  case AFFI_LONG: {
+    int64_t v = rval.l;
+    ret = FIX_FITS(v) ? MAKE_FIX(v) : make_floatf((double)v);
     break;
+  }
   case AFFI_DOUBLE:
     ret = make_floatf(rval.d);
     break;
