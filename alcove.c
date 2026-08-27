@@ -3803,9 +3803,10 @@ exp_t *expandmacrocmd(exp_t *e, env_t *env) {
           unrefexp(tmpexp2);
           goto finish;
         }
-  /* Not a macro — free the lookup result. */
+  /* Not a macro — free the lookup result, return the form unchanged. */
   if (tmpexp2)
     unrefexp(tmpexp2);
+  tmpexp = form ? refexp(form) : NIL_EXP;
 finish:
   unrefexp(e);
   return tmpexp;
@@ -5635,51 +5636,60 @@ exp_t *exptcmd(exp_t *e, env_t *env) {
         unrefexp(v);
         return v2;
       }
-    }
-  if ((isfloat(v) || isnumber(v)) && (isfloat(v2) || isnumber(v2))) {
-    /* Integer fast path: both args fixnums, exponent non-negative, and
-       the running product never overflows int64 nor escapes int61.
-       Repeated squaring; falls through to pow() if any step overflows. */
-    int int_overflow = 0;
-    if (isnumber(v) && isnumber(v2)) {
-      int64_t k = FIX_VAL(v2);
-      if (k >= 0) {
-        int64_t base = FIX_VAL(v);
-        int64_t r = 1;
-        int overflow = 0;
-        int64_t fix_max = ((int64_t)1 << 60) - 1;
-        int64_t fix_min = -((int64_t)1 << 60);
-        while (k > 0 && !overflow) {
-          if (k & 1)
-            overflow |= __builtin_mul_overflow(r, base, &r);
-          k >>= 1;
-          if (k > 0 && !overflow)
-            overflow |= __builtin_mul_overflow(base, base, &base);
+      if ((isfloat(v) || isnumber(v)) && (isfloat(v2) || isnumber(v2))) {
+        /* Integer fast path: both args fixnums, exponent non-negative, and
+           the running product never overflows int64 nor escapes int61.
+           Repeated squaring; falls through to pow() if any step overflows. */
+        int int_overflow = 0;
+        if (isnumber(v) && isnumber(v2)) {
+          int64_t k = FIX_VAL(v2);
+          if (k >= 0) {
+            int64_t base = FIX_VAL(v);
+            int64_t r = 1;
+            int overflow = 0;
+            int64_t fix_max = ((int64_t)1 << 60) - 1;
+            int64_t fix_min = -((int64_t)1 << 60);
+            while (k > 0 && !overflow) {
+              if (k & 1)
+                overflow |= __builtin_mul_overflow(r, base, &r);
+              k >>= 1;
+              if (k > 0 && !overflow)
+                overflow |= __builtin_mul_overflow(base, base, &base);
+            }
+            if (!overflow && r >= fix_min && r <= fix_max)
+              ret = MAKE_FIX(r);
+            else
+              int_overflow =
+                  1; /* integer result doesn't fit — error, no float */
+          }
+          /* k < 0: a negative exponent is a fractional result (2^-1 = 0.5), not
+             an overflow — that still yields a float below. */
         }
-        if (!overflow && r >= fix_min && r <= fix_max)
-          ret = MAKE_FIX(r);
-        else
-          int_overflow = 1; /* integer result doesn't fit — error, no float */
+        if (!ret) {
+          if (int_overflow)
+            ret = error(
+                ERROR_ILLEGAL_VALUE, e, env,
+                "integer overflow in expt (no implicit float; use a float "
+                "base or exponent for an inexact result)");
+          else
+            ret = make_floatf(pow(isfloat(v) ? v->f : (double)FIX_VAL(v),
+                                  isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
+        }
+      } else {
+        ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
       }
-      /* k < 0: a negative exponent is a fractional result (2^-1 = 0.5), not an
-         overflow — that still yields a float below. */
+      unrefexp(v);
+      unrefexp(v2);
+      unrefexp(e);
+      return ret;
     }
-    if (!ret) {
-      if (int_overflow)
-        ret = error(ERROR_ILLEGAL_VALUE, e, env,
-                    "integer overflow in expt (no implicit float; use a float "
-                    "base or exponent for an inexact result)");
-      else
-        ret = make_floatf(pow(isfloat(v) ? v->f : (double)FIX_VAL(v),
-                              isfloat(v2) ? v2->f : (double)FIX_VAL(v2)));
-    }
-  } else {
-    ret = error(ERROR_ILLEGAL_VALUE, e, env, "Illegal value in operation");
+  if (!v || !v2) {
+    unrefexp(e);
+    return error(ERROR_MISSING_PARAMETER, e, env,
+                 "expt: requires exactly 2 arguments");
   }
-  unrefexp(v);
-  unrefexp(v2);
-  unrefexp(e);
-  return ret;
+  return error(ERROR_MISSING_PARAMETER, e, env,
+               "expt: requires exactly 2 arguments");
 }
 
 #define FLOAT_UNARY_CMD(cname, fname, docstr, cdoc_sym)                        \
@@ -5824,11 +5834,12 @@ static void str_buf_put(char **buf, size_t *len, size_t *cap, const char *s,
   (*buf)[*len] = 0;
 }
 
-/* Grow a raw byte buffer so it can hold len+n bytes (doubling from 64). Returns
-   the possibly-moved buffer, or NULL on OOM WITHOUT freeing the old one (the
-   caller still owns it). *cap is updated only on growth. Shared by the json /
-   msgpack codecs — distinct from str_buf_put, which oom_raise()s instead of
-   returning failure, because those codecs propagate OOM as a decode error. */
+/* Grow a raw byte buffer so it can hold len+n bytes (doubling from 64).
+   Returns the possibly-moved buffer, or NULL on OOM WITHOUT freeing the old
+   one (the caller still owns it). *cap is updated only on growth. Shared by
+   the json / msgpack codecs — distinct from str_buf_put, which oom_raise()s
+   instead of returning failure, because those codecs propagate OOM as a
+   decode error. */
 static void *buf_reserve(void *b, size_t len, size_t n, size_t *cap) {
   if (len + n <= *cap)
     return b;
@@ -6210,7 +6221,8 @@ exp_t *strcmd(exp_t *e, env_t *env) {
 #define FMT_SPEC_MAX 32
 const char doc_fmt[] =
     "(fmt template arg ...) — format string with {} placeholders. Use {} for "
-    "default rendering or {:<spec>} for printf-style: {:.2f} {:%d} {:x} {:s}. "
+    "default rendering or {:<spec>} for printf-style: {:.2f} {:%d} {:x} "
+    "{:s}. "
     "Example: (fmt \"{} + {} = {:.1f}\" 1 2 3.0) → \"1 + 2 = 3.0\".";
 exp_t *fmtcmd(exp_t *e, env_t *env) {
   exp_t *fmtarg = EVAL(cadr(e), env);
@@ -6428,7 +6440,8 @@ exp_t *stringbufcmd(exp_t *e, env_t *env) {
 }
 
 const char doc_stringset[] =
-    "(string-set! s i ch) — set codepoint i of string s to char ch, in place. "
+    "(string-set! s i ch) — set codepoint i of string s to char ch, in "
+    "place. "
     "Index is codepoint-based; out of range is an error. Returns s.";
 exp_t *stringsetcmd(exp_t *e, env_t *env) {
   EVAL_ARG_3(s, idx, ch);
@@ -6512,8 +6525,9 @@ exp_t *stringcopycmd(exp_t *e, env_t *env) {
     exp_t *ret = refexp(dst);
     CLEAN_RETURN_3(dst, idx, src, ret);
   }
-  /* Rebuild dst = d[0..di) + src[0..ncopy) + d[di+ncopy..dn). Reads of d and s
-     finish before exp_set_text replaces dst's storage, so dst==src is safe. */
+  /* Rebuild dst = d[0..di) + src[0..ncopy) + d[di+ncopy..dn). Reads of d and
+     s finish before exp_set_text replaces dst's storage, so dst==src is safe.
+   */
   size_t pre_end = utf8_byte_offset(d, di);
   size_t post_start = utf8_byte_offset(d, di + ncopy);
   size_t dtotal = strlen(d);
@@ -6700,8 +6714,8 @@ static const char *src_basename(const char *path) {
 }
 
 /* Directory portion of path (everything before the last '/'), malloc'd; "."
-   when there is no slash. Caller frees. Used so `require` can resolve a module
-   relative to the file that required it. */
+   when there is no slash. Caller frees. Used so `require` can resolve a
+   module relative to the file that required it. */
 static char *path_dirname(const char *path) {
   const char *slash = strrchr(path, '/');
   if (!slash)
@@ -6782,12 +6796,13 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
      transpile to s-expressions via als_to_sexpr, and read the result from a
      memstream. ".alc" (and anything else) is read directly as s-expressions.
      This is what lets an .alc program (require) a .adr module and vice versa,
-     in either binary. `transpiled` backs the memstream and is freed at the end.
+     in either binary. `transpiled` backs the memstream and is freed at the
+     end.
    */
-  /* Slurp the whole file: we both (maybe) transpile it and keep the text so an
-     error can render a source-line caret. `filetext` is the original source
-     (Adder or s-expr); `transpiled` (when set) is the generated s-expr that
-     backs the reader for a .adr module. */
+  /* Slurp the whole file: we both (maybe) transpile it and keep the text so
+     an error can render a source-line caret. `filetext` is the original
+     source (Adder or s-expr); `transpiled` (when set) is the generated s-expr
+     that backs the reader for a .adr module. */
   size_t filelen = 0;
   char *filetext = slurp_stream(fp, &filelen);
   fclose(fp);
@@ -6856,7 +6871,8 @@ static exp_t *eval_file_forms(const char *path, env_t *env) {
         unrefexp(form);
         break;
       }
-      /* Reader syntax error: its line is g_reader_line at the failure point. */
+      /* Reader syntax error: its line is g_reader_line at the failure point.
+       */
       fclose(fp);
       result =
           annotate_error_loc(form, g_reader_src, display_line(g_reader_line));
@@ -7013,10 +7029,13 @@ exp_t *loadcmd(exp_t *e, env_t *env) {
 const char doc_ns[] =
     "(ns name) — set the current namespace. While active, top-level "
     "def/defn/defc/defmacro auto-qualify their name to name/<symbol>; "
-    "reference them from elsewhere as name/symbol. Stays active until the next "
-    "(ns ...) or the end of the file being loaded. (ns) with no arg clears it.";
+    "reference them from elsewhere as name/symbol. Stays active until the "
+    "next "
+    "(ns ...) or the end of the file being loaded. (ns) with no arg clears "
+    "it.";
 exp_t *nscmd(exp_t *e, env_t *env) {
-  /* Like def, (ns) mutates global load state — refuse from a RESP callback. */
+  /* Like def, (ns) mutates global load state — refuse from a RESP callback.
+   */
   if (g_resp_cb_guard) {
     unrefexp(e);
     return resp_cb_readonly_error(env);
@@ -7034,17 +7053,18 @@ exp_t *nscmd(exp_t *e, env_t *env) {
   return TRUE_EXP;
 }
 
-/* require's load-once + cycle bookkeeping, keyed by canonical (realpath) path.
-   Plain globals, not TLS: module loading is a startup/main-thread activity and
-   is already refused from RESP callbacks (g_resp_cb_guard). g_loaded =
-   fully-loaded modules; g_loading = modules whose load is in progress (cycle
-   guard — a require that re-enters an in-flight module returns immediately). */
+/* require's load-once + cycle bookkeeping, keyed by canonical (realpath)
+   path. Plain globals, not TLS: module loading is a startup/main-thread
+   activity and is already refused from RESP callbacks (g_resp_cb_guard).
+   g_loaded = fully-loaded modules; g_loading = modules whose load is in
+   progress (cycle guard — a require that re-enters an in-flight module
+   returns immediately). */
 static dict_t *g_loaded_modules = NULL;
 static dict_t *g_loading_modules = NULL;
 
-/* Write "<dir>/<name>" (or just "<name>" when dir is NULL) into out and return
-   1 if that file exists, else 0. The single snprintf+access check shared by all
-   of resolve_module_path's search branches. */
+/* Write "<dir>/<name>" (or just "<name>" when dir is NULL) into out and
+   return 1 if that file exists, else 0. The single snprintf+access check
+   shared by all of resolve_module_path's search branches. */
 static int module_file_at(char *out, const char *dir, const char *name) {
   if (dir) {
     if (snprintf(out, PATH_MAX, "%s/%s", dir, name) >= PATH_MAX)
@@ -7057,7 +7077,8 @@ static int module_file_at(char *out, const char *dir, const char *name) {
 
 /* Try every candidate basename (cand[0..ncand)) under `dir` (NULL = as-is),
    returning 1 and writing the first hit into out. Candidates are ordered by
-   preference (.alc before .adr), so a sibling .alc wins over a sibling .adr. */
+   preference (.alc before .adr), so a sibling .alc wins over a sibling .adr.
+ */
 static int module_try_dir(char *out, const char *dir, char cand[][PATH_MAX],
                           int ncand) {
   for (int c = 0; c < ncand; c++)
@@ -7077,7 +7098,8 @@ static int resolve_module_path(const char *spec, char *out) {
   size_t sl = strlen(spec);
   /* An explicit source (.alc/.adr) or native-module (.so/.dylib) extension is
      used verbatim; a bare name is tried as <spec>.alc then <spec>.adr (source
-     modules are primary — a native module must be named with its extension). */
+     modules are primary — a native module must be named with its extension).
+   */
   int explicit_ext = (sl >= 4 && (strcmp(spec + sl - 4, ".alc") == 0 ||
                                   strcmp(spec + sl - 4, ".adr") == 0)) ||
                      (sl >= 3 && strcmp(spec + sl - 3, ".so") == 0) ||
@@ -7142,17 +7164,17 @@ static int refer_one(const char *ns, const char *bare) {
   return 1;
 }
 
-/* Alias every <ns>/<name> binding to its unqualified <name>. Collects the hits
-   first, then binds — inserting into env->d can rehash it, so we must not
-   insert while walking it. Nested-namespace names (suffix still has a '/') are
-   left qualified. */
+/* Alias every <ns>/<name> binding to its unqualified <name>. Collects the
+   hits first, then binds — inserting into env->d can rehash it, so we must
+   not insert while walking it. Nested-namespace names (suffix still has a
+   '/') are left qualified. */
 static void refer_all(const char *ns) {
   if (!g_global_env || !g_global_env->d)
     return;
   dict_t *dp = g_global_env->d;
   size_t nslen = strlen(ns), n = 0;
-  /* A key is in namespace ns iff it starts with "ns/" and the rest is a single
-     unqualified segment (no further '/'). */
+  /* A key is in namespace ns iff it starts with "ns/" and the rest is a
+     single unqualified segment (no further '/'). */
 #define REFER_MATCH(kk)                                                        \
   (strncmp((kk), ns, nslen) == 0 && (kk)[nslen] == '/' && (kk)[nslen + 1] &&   \
    !strchr((kk) + nslen + 1, '/'))
@@ -7184,15 +7206,17 @@ static void refer_all(const char *ns) {
   GEN_BUMP();
 }
 
-/* Defined after the ffi.h include (it uses dlopen). A .so/.dylib require routes
-   here instead of eval_file_forms. */
+/* Defined after the ffi.h include (it uses dlopen). A .so/.dylib require
+   routes here instead of eval_file_forms. */
 static exp_t *load_native_module(const char *path, const char *spec,
                                  env_t *env);
 
 const char doc_require[] =
-    "(require \"path\") — load an Alcove module once. \".alc\" is appended if "
+    "(require \"path\") — load an Alcove module once. \".alc\" is appended "
+    "if "
     "absent; the file is searched relative to the requiring file, then "
-    "$ALCOVE_PATH, then cwd. A \".so\"/\".dylib\" path instead loads a native "
+    "$ALCOVE_PATH, then cwd. A \".so\"/\".dylib\" path instead loads a "
+    "native "
     "module (dlopen + its alcove_module_init). Already-loaded (or mid-load, "
     "for "
     "cycles) modules are not re-run. Returns t when it loaded, nil when "
@@ -7217,7 +7241,8 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
                                "require: module not found: '%s' (searched "
                                "requiring dir, $ALCOVE_PATH, cwd)",
                                (char *)exp_text(spec)));
-  /* Canonical path is the dedup key (so "a.alc" and "./a.alc" are one module).
+  /* Canonical path is the dedup key (so "a.alc" and "./a.alc" are one
+   * module).
    */
   char canon[PATH_MAX];
   if (!realpath(found, canon))
@@ -7230,7 +7255,8 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
 
   /* Load (unless already loaded / mid-load), recording the module's declared
      namespace so a later :refer works even when it was loaded earlier. The
-     g_loaded_modules value is the ns string, or TRUE_EXP for a ns-less module.
+     g_loaded_modules value is the ns string, or TRUE_EXP for a ns-less
+     module.
    */
   const char *module_ns = NULL;
   keyval_t *loaded = set_get_keyval_dict(g_loaded_modules, canon, NULL);
@@ -7244,28 +7270,29 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
     int is_native = (fl >= 3 && strcmp(found + fl - 3, ".so") == 0) ||
                     (fl >= 6 && strcmp(found + fl - 6, ".dylib") == 0);
     if (is_native) {
-      /* Native module: dlopen + alcove_module_init registers its own builtins.
-         No source namespace, so :refer below is a no-op (the module names its
-         own exports, qualified as it likes). */
+      /* Native module: dlopen + alcove_module_init registers its own
+         builtins. No source namespace, so :refer below is a no-op (the module
+         names its own exports, qualified as it likes). */
       exp_t *nret = load_native_module(canon, (char *)exp_text(spec), env);
-      /* canon: the realpath we deduped on (avoids a symlink swap between check
-         & load); spec: the user's arg, recorded for db re-(require). */
+      /* canon: the realpath we deduped on (avoids a symlink swap between
+         check & load); spec: the user's arg, recorded for db re-(require). */
       del_keyval_dict(g_loading_modules, canon);
       if (iserror(nret))
         CLEAN_RETURN_1(spec, nret);
       set_get_keyval_dict(g_loaded_modules, canon, TRUE_EXP);
       CLEAN_RETURN_1(spec, TRUE_EXP);
     }
-    /* require always loads into the GLOBAL env, regardless of caller scope, so
-       a module's defs are top-level (and (ns ...)-qualifiable). */
+    /* require always loads into the GLOBAL env, regardless of caller scope,
+       so a module's defs are top-level (and (ns ...)-qualifiable). */
     exp_t *ret = eval_file_forms(canon, g_global_env); /* load the realpath we
                      deduped on (canon), not the unresolved hit (found) */
     del_keyval_dict(g_loading_modules, canon);
     if (iserror(ret))
       CLEAN_RETURN_1(spec, ret); /* propagate; don't mark loaded */
     unrefexp(ret);
-    /* Record the module's declared namespace (string), or TRUE_EXP if none, so
-       a later :refer on this already-loaded module still knows the prefix. */
+    /* Record the module's declared namespace (string), or TRUE_EXP if none,
+       so a later :refer on this already-loaded module still knows the prefix.
+     */
     exp_t *nsval = g_last_module_ns ? make_string(g_last_module_ns,
                                                   (int)strlen(g_last_module_ns))
                                     : TRUE_EXP;
@@ -7301,8 +7328,8 @@ exp_t *requirecmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_1(spec, loaded ? NIL_EXP : TRUE_EXP);
 }
 
-/* db-load auto-(require): resolve `spec` and, if it's a native module, dlopen +
-   alcove_module_init it so its custom types register. Best-effort — failure
+/* db-load auto-(require): resolve `spec` and, if it's a native module, dlopen
+   + alcove_module_init it so its custom types register. Best-effort — failure
    leaves the type unresolved and the value's load aborts. Gated by --safe at
    the call site (alcove_load_unified). */
 static void auto_require_native(const char *spec) {
@@ -7342,9 +7369,9 @@ static exp_t *alc_apply2(exp_t *fn, exp_t *a, exp_t *b, env_t *env);
 /* (ffi?) — runtime probe for FFI support. Always compiled (outside the
    ALCOVE_FFI block) so scripts/tests can branch on it; lets test.alc guard
    its FFI assertions so a no-libffi build skips them uniformly. */
-const char doc_ffip[] =
-    "(ffi?) — t if this build links libffi (ffi-fn/-callback/-struct usable), "
-    "else nil.";
+const char doc_ffip[] = "(ffi?) — t if this build links libffi "
+                        "(ffi-fn/-callback/-struct usable), "
+                        "else nil.";
 exp_t *ffipcmd(exp_t *e, env_t *env) {
   (void)env;
   unrefexp(e);
@@ -7362,7 +7389,8 @@ const char doc_ffifn[] =
     "(libc/libm). ALCOVE_FFI build only.";
 const char doc_ffivfn[] =
     "(ffi-vfn lib name ret fixed-arg-types...) — bind a VARIADIC C function "
-    "(e.g. printf). The given arg types are the fixed prefix; extra call args "
+    "(e.g. printf). The given arg types are the fixed prefix; extra call "
+    "args "
     "are passed with types inferred from their value (int->long use %ld, "
     "float->double, char->int, string->%s). ALCOVE_FFI build only.";
 const char doc_fficallback[] =
@@ -7372,7 +7400,8 @@ const char doc_fficallback[] =
     "ALCOVE_FFI build only.";
 const char doc_ffistruct[] =
     "(ffi-struct field-types...) — define a by-value C struct type. Fields: "
-    "int long double ptr. Returns a descriptor usable as an ffi-fn arg/return "
+    "int long double ptr. Returns a descriptor usable as an ffi-fn "
+    "arg/return "
     "type and with ffi-pack / ffi-unpack. ALCOVE_FFI build only.";
 const char doc_ffipack[] =
     "(ffi-pack struct-desc vals...) — pack field values into a blob laid out "
@@ -7413,9 +7442,9 @@ static exp_t *load_native_module(const char *path, const char *spec,
                  path);
   }
   /* ABI guard: if the module declares the embedding-API version it was built
-     against, refuse a mismatch here rather than let an incompatible exp_t/env_t
-     layout corrupt silently. A module without the (optional) symbol predates
-     the convention and is loaded as before. */
+     against, refuse a mismatch here rather than let an incompatible
+     exp_t/env_t layout corrupt silently. A module without the (optional)
+     symbol predates the convention and is loaded as before. */
   void *abisym = dlsym(h, "alcove_module_abi");
   if (abisym) {
     int (*abi)(void);
@@ -7452,8 +7481,9 @@ static exp_t *load_native_module(const char *path, const char *spec,
 #endif
 }
 
-/* alc_key_to_cstr is defined further down (alongside the dict builtins) but the
-   multimethod resolver in builtins_stdlib.h needs it — forward-declare it. */
+/* alc_key_to_cstr is defined further down (alongside the dict builtins) but
+   the multimethod resolver in builtins_stdlib.h needs it — forward-declare
+   it. */
 static char *alc_key_to_cstr(exp_t *k, char *tmpbuf);
 
 /* The standard-library builtins live in a dedicated #included fragment. */
@@ -7534,12 +7564,12 @@ static void var2env_bind(char *name, exp_t *val, env_t *env);
 /* Shapes the first argument of a `let` can take. Shared by letcmd (AST) and
    compile_let (bytecode) so both agree. The parens disambiguate:
      (let x 5 body)               LET_SINGLE      — bare symbol
-     (let (a b) listval body)     LET_DESTRUCTURE — all-symbol list + a val arg
-     (let (x 5 y 6) body)         LET_FLAT        — name/value pairs flattened
-     (let ((x 5) (y 6)) body)     LET_CLOJURE     — list of (name val) pairs
-   FLAT/CLOJURE are the universally-expected forms; they used to error (mis-read
-   as destructuring), so accepting them is backward-compatible. An all-symbol
-   list stays destructuring (it needs the separate value arg). */
+     (let (a b) listval body)     LET_DESTRUCTURE — all-symbol list + a val
+   arg (let (x 5 y 6) body)         LET_FLAT        — name/value pairs
+   flattened (let ((x 5) (y 6)) body)     LET_CLOJURE     — list of (name val)
+   pairs FLAT/CLOJURE are the universally-expected forms; they used to error
+   (mis-read as destructuring), so accepting them is backward-compatible. An
+   all-symbol list stays destructuring (it needs the separate value arg). */
 typedef enum {
   LET_SINGLE,
   LET_DESTRUCTURE,
@@ -7589,7 +7619,8 @@ static let_shape_t let_classify(exp_t *first) {
 const char doc_let[] =
     "(let (x 5 y 6) body...) or (let ((x 5) (y 6)) body...) — parallel "
     "bindings, local to body. (let x 5 body) — single bare binding. "
-    "(let (a b) listval body) — destructure listval (all-symbol list) into a, "
+    "(let (a b) listval body) — destructure listval (all-symbol list) into "
+    "a, "
     "b "
     "(missing elements get nil).";
 exp_t *letcmd(exp_t *e, env_t *env) {
@@ -7885,8 +7916,8 @@ static exp_t *invoke_body(exp_t *e, exp_t *fn, env_t *env);
    doccmd). The arity/level fields of lispProc are reserved (see the
    struct comment); doc is the only field we surface here. */
 const char doc_doc[] = "(doc name) — print the documentation for a builtin.";
-const char doc_help[] =
-    "(help) — list every builtin and its docstring. (help name) is (doc name).";
+const char doc_help[] = "(help) — list every builtin and its docstring. "
+                        "(help name) is (doc name).";
 
 /* Resolve the arg to a name string. Accepts:
      (doc cons)    — bare symbol (literal head — common interactive form)
@@ -7962,7 +7993,8 @@ exp_t *doccmd(exp_t *e, env_t *env) {
 
 const char doc_docstring[] =
     "(docstring name) — return a user function's docstring as a string (or "
-    "nil if none). The value-returning companion to (doc name), which prints.";
+    "nil if none). The value-returning companion to (doc name), which "
+    "prints.";
 exp_t *docstringcmd(exp_t *e, env_t *env) {
   exp_t *arg = cadr(e);
   exp_t *owned = NULL, *err = NULL, *ret = NIL_EXP;
@@ -8191,9 +8223,9 @@ static int hamt_collect_entries(exp_t *key, exp_t *val, void *ctx) {
 
 /* Associative-collection arm of the generic seq protocol (forward-declared in
    builtins_stdlib.h's coll_to_list). Defined here because it needs set.h's
-   DICT_FOREACH/set_value_clone + hamt's iterator. Set → members; dict and HAMT
-   → (key value) entries. Returns a fresh owned list, or NULL if coll isn't an
-   associative collection. */
+   DICT_FOREACH/set_value_clone + hamt's iterator. Set → members; dict and
+   HAMT → (key value) entries. Returns a fresh owned list, or NULL if coll
+   isn't an associative collection. */
 static exp_t *coll_assoc_to_list(exp_t *coll) {
   exp_t *head = NULL, *tail = NULL;
   if (isset(coll)) {
@@ -8273,18 +8305,20 @@ static void repl_readline_setup(env_t *global) {
   /* TAB indents at line start (only whitespace precedes), else completes. */
   rl_bind_key('\t', alcove_smart_tab);
   /* List all candidates immediately on an ambiguous TAB. Required because TAB
-     is bound to alcove_smart_tab, not rl_complete directly: readline's "list on
-     the 2nd consecutive TAB" check compares rl_last_func against rl_complete,
-     which is never the dispatched key here, so the match list would otherwise
-     never show (e.g. `redis-<TAB>` would ring the bell instead of listing
-     redis-*). The debugger sets this the same way for its own completion. */
+     is bound to alcove_smart_tab, not rl_complete directly: readline's "list
+     on the 2nd consecutive TAB" check compares rl_last_func against
+     rl_complete, which is never the dispatched key here, so the match list
+     would otherwise never show (e.g. `redis-<TAB>` would ring the bell
+     instead of listing redis-*). The debugger sets this the same way for its
+     own completion. */
   rl_variable_bind("show-all-if-ambiguous", "on");
   /* Ctrl-C cancels the current input (or aborts a multi-line form) and
-     reprompts; on an empty line it exits. Takes over SIGINT from readline — see
-     the handler in debugger.h. */
+     reprompts; on an empty line it exits. Takes over SIGINT from readline —
+     see the handler in debugger.h. */
   repl_install_sigint();
   /* Reassert the common Emacs editing keys after inputrc has loaded. M-f is
-     language-aware: readline's stock forward-word skips punctuation operators.
+     language-aware: readline's stock forward-word skips punctuation
+     operators.
    */
   rl_bind_key('\001', rl_beg_of_line);             /* C-a */
   rl_bind_key('\013', rl_kill_line);               /* C-k */
@@ -8304,9 +8338,9 @@ static void repl_readline_setup(env_t *global) {
   rl_redisplay_function = alcove_colored_redisplay; /* real-time highlighting */
   using_history();
   stifle_history(1000);
-  /* Apply user key bindings AFTER the defaults above, so a (bind-key ...) from
-     .init (which runs before this) overrides Tab/Shift-Tab etc. Mark readline
-     live so later (bind-key ...) calls bind immediately. */
+  /* Apply user key bindings AFTER the defaults above, so a (bind-key ...)
+     from .init (which runs before this) overrides Tab/Shift-Tab etc. Mark
+     readline live so later (bind-key ...) calls bind immediately. */
   g_rl_ready = 1;
   repl_apply_bindings();
 }
@@ -8342,12 +8376,13 @@ static void repl_history_save(void) {
   chmod(alc_hist_path, 0600); /* may have pasted secrets */
 }
 
-/* ---- programmable key bindings (Emacs-style) ----------------------------- */
+/* ---- programmable key bindings (Emacs-style) -----------------------------
+ */
 /* keyseq (the actual terminal bytes) -> Lisp handler thunk. Persistent across
    the session so (bind-key ...) from .init survives until repl_readline_setup
    applies it. g_rl_ready gates live rl_bind_keyseq calls: .init runs BEFORE
-   readline is set up (see main), so a bind from there is stored now and applied
-   in bulk at the end of repl_readline_setup. */
+   readline is set up (see main), so a bind from there is stored now and
+   applied in bulk at the end of repl_readline_setup. */
 static dict_t *g_key_bindings = NULL;
 static int g_rl_ready = 0;
 
@@ -8387,9 +8422,9 @@ static int repl_resolve_keyseq(const char *spec, char *out, size_t outsz) {
   return 1;
 }
 
-/* The single trampoline bound to every user keyseq. readline reports the exact
-   sequence that fired in rl_executing_keyseq; we look up its handler and call
-   it as a no-arg thunk, then repaint so any buffer edits show. */
+/* The single trampoline bound to every user keyseq. readline reports the
+   exact sequence that fired in rl_executing_keyseq; we look up its handler
+   and call it as a no-arg thunk, then repaint so any buffer edits show. */
 static int alcove_key_dispatch(int count, int key) {
   (void)count;
   (void)key;
@@ -8409,7 +8444,8 @@ static int alcove_key_dispatch(int count, int key) {
 }
 
 /* Record (or replace) a binding and, if readline is live, bind it now. A nil
-   handler stores nil → the key becomes an inert no-op (dispatch ignores it). */
+   handler stores nil → the key becomes an inert no-op (dispatch ignores it).
+ */
 static void repl_bind_one(const char *seq, exp_t *handler) {
   if (!g_key_bindings)
     g_key_bindings = create_dict();
@@ -8422,8 +8458,8 @@ static void repl_bind_one(const char *seq, exp_t *handler) {
 }
 
 /* Apply every recorded binding to the current keymap. Called at the end of
-   repl_readline_setup (after the default Tab/Shift-Tab binds) so user bindings
-   from .init take precedence over the defaults. */
+   repl_readline_setup (after the default Tab/Shift-Tab binds) so user
+   bindings from .init take precedence over the defaults. */
 static void repl_apply_bindings(void) {
   if (!g_key_bindings)
     return;
@@ -8446,7 +8482,8 @@ int main(int argc, char *argv[]) {
   FILE *stream;
   int evaluatingfile = 0;
   /* When running a FILE argument, the basename used to prefix file-context
-     error messages with "<src>:<line>:". NULL for stdin / -e / interactive. */
+     error messages with "<src>:<line>:". NULL for stdin / -e / interactive.
+   */
   const char *script_src = NULL;
   int idx = 0;
 
@@ -8548,20 +8585,22 @@ int main(int argc, char *argv[]) {
         g_safe_mode = 1;
       } else if (strcmp(argv[src], "--interpret") == 0) {
         /* Force the AST tree-walker (no bytecode compile) — differential
-           testing vs the default compiled path. No TCO; keep recursion bounded.
+           testing vs the default compiled path. No TCO; keep recursion
+           bounded.
          */
         g_no_compile = 1;
       } else if (strcmp(argv[src], "--no-line-info") == 0) {
         /* Disable the reader's per-form line/col stamping. Tracking is parse-
-           time only (zero runtime cost — the VM/JIT never reads it), so this is
-           a purity/minimalism switch, not a speed one: errors fall back to
+           time only (zero runtime cost — the VM/JIT never reads it), so this
+           is a purity/minimalism switch, not a speed one: errors fall back to
            top-level-form granularity and the debugger loses source lines. */
         g_track_lines = 0;
       } else if (strcmp(argv[src], "--debug") == 0 ||
                  strcmp(argv[src], "-d") == 0) {
-        /* gdb-style debugger: force the AST walker (every frame a live env_t),
-           track source lines, and arm the per-form hook. Starts in continue
-           mode — a startup prompt lets you set breakpoints, then run. */
+        /* gdb-style debugger: force the AST walker (every frame a live
+           env_t), track source lines, and arm the per-form hook. Starts in
+           continue mode — a startup prompt lets you set breakpoints, then
+           run. */
         g_no_compile = 1;
         g_track_lines = 1;
         g_debug = 1;
@@ -8747,17 +8786,18 @@ int main(int argc, char *argv[]) {
     /* sx intentionally outlives this scope: it backs `stream` for the
        remainder of the run and is reclaimed by the OS at exit. */
     if (evaluatingfile) {
-      /* A .adr file or -e: keep the ORIGINAL Adder source + the generated→Adder
-         line map so an error renders an Adder-source caret (and keeps the file
-         label, since the map translates the reader's lines back). slurp.p and m
-         outlive this scope and are reclaimed at exit. */
+      /* A .adr file or -e: keep the ORIGINAL Adder source + the
+         generated→Adder line map so an error renders an Adder-source caret
+         (and keeps the file label, since the map translates the reader's
+         lines back). slurp.p and m outlive this scope and are reclaimed at
+         exit. */
       g_reader_srctext = slurp.p;
       g_reader_srctext_len = slurp.len;
       g_adder_map = m;
     } else {
-      /* Piped stdin: no retained source (keeps the generated web battery, which
-         pipes expressions through stdin, identical — web carets are a separate
-         step). */
+      /* Piped stdin: no retained source (keeps the generated web battery,
+         which pipes expressions through stdin, identical — web carets are a
+         separate step). */
       free(slurp.p);
       als_map_free(m);
       free(m);
@@ -8769,7 +8809,8 @@ int main(int argc, char *argv[]) {
 #ifndef ALCOVE_ALS
   /* Retain the source text so an error can render a caret on the offending
      line. -e already holds it; a file argument is slurped into a memstream
-     (the FILE* alone gives no text). Piped/interactive stdin is left as-is. */
+     (the FILE* alone gives no text). Piped/interactive stdin is left as-is.
+   */
   if (eval_string) {
     g_reader_srctext = eval_string;
     g_reader_srctext_len = strlen(eval_string);
@@ -8798,9 +8839,10 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
-  /* Debugger startup prompt (gdb's `(gdb)` before `run`): set breakpoints, then
-     `c` to run (or `s` to step from the start). Applies to both a file and the
-     interactive REPL; breakpoints / (break) then stop with fully live frames.
+  /* Debugger startup prompt (gdb's `(gdb)` before `run`): set breakpoints,
+     then `c` to run (or `s` to step from the start). Applies to both a file
+     and the interactive REPL; breakpoints / (break) then stop with fully live
+     frames.
    */
   if (g_debug)
     debug_repl(NIL_EXP, global);
@@ -8873,7 +8915,8 @@ interactive_readline:
 #ifdef ALCOVE_READLINE
           /* `-i` dropping into the REPL: arm readline now (it was off at
              startup because `stream` was the script file) so Tab completion,
-             history and line editing work just like a bare interactive run. */
+             history and line editing work just like a bare interactive run.
+           */
           if (isatty(fileno(stdin))) {
             rl_active = 1;
             repl_readline_setup(global);
@@ -8958,7 +9001,8 @@ endcleanly:
   }
   /* Exit non-zero if a script (file arg or -e) had a top-level parse/eval
      error, so runners/CI can detect failure. Interactive / piped-stdin REPL
-     sessions never set g_script_error, so they still exit 0 on normal quit. */
+     sessions never set g_script_error, so they still exit 0 on normal quit.
+   */
   return g_script_error;
 }
 #endif /* ALCOVE_NO_MAIN — a C embedder defines this to supply its own main */
@@ -9002,8 +9046,9 @@ __attribute__((used)) int alcove_web_eval(const char *src) {
       if (strf != NIL_EXP) {
         print_node(strf);
         printf("\n");
-        /* an uncaught error: show the captured call backtrace (the web path has
-           no source-file caret, but the call chain is the useful part). */
+        /* an uncaught error: show the captured call backtrace (the web path
+           has no source-file caret, but the call chain is the useful part).
+         */
         if (iserror(strf))
           render_backtrace(stdout);
       }

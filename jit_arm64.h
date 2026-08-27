@@ -512,9 +512,10 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_bcond = n;
   out[n++] = 0; /* placeholder b.cond end */
   if (arith_op == OP_SLOT_SUB_FIX)
-    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+    out[n++] = arm64_subs_imm(1, 1, arith_delta);
   else
-    out[n++] = arm64_add_imm(1, 1, arith_delta);
+    out[n++] = arm64_adds_imm(1, 1, arith_delta);
+  int patch_ovf = n++; /* reserve B.VS deopt */
   /* tag bit preserved across ±(K2<<3); subsequent loads stay tagged. */
   out[n++] = arm64_str_imm(1, 0, slot_off); /* str x1, [x0,#off] */
   /* Compute the rel-to-loop-top displacement from the branch's OWN PC
@@ -535,6 +536,7 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   /* deopt: */
   int deopt_pc = n;
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  out[patch_ovf] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf);
   ARM64_EMIT_DEOPT();
 
   /* Worst case: ~16 instructions (load, tbz, up-to-4 movz/movk for a wide
@@ -608,9 +610,10 @@ static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint32_t *out,
   int patch_bcond = n;
   out[n++] = 0; /* placeholder b.eq end */
   if (arith_op == OP_SLOT_SUB_FIX)
-    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+    out[n++] = arm64_subs_imm(1, 1, arith_delta);
   else
-    out[n++] = arm64_add_imm(1, 1, arith_delta);
+    out[n++] = arm64_adds_imm(1, 1, arith_delta);
+  int patch_ovf_eq = n++;                   /* reserve B.VS deopt */
   out[n++] = arm64_str_imm(1, 0, slot_off); /* str x1, [x0,#off] */
   {
     int cur = n++;
@@ -622,8 +625,8 @@ static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint32_t *out,
   out[n++] = arm64_mov_reg(0, 1); /* x0 = x1 (last value, == K) */
   out[n++] = arm64_ret();
   /* deopt: */
-  int deopt_pc = n;
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  out[patch_ovf_eq] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf_eq);
   ARM64_EMIT_DEOPT();
 
   JIT_GUARD(24);
@@ -1519,9 +1522,10 @@ static int try_jit_wide_counter_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   int patch_bcond = n;
   out[n++] = 0; /* b.<exit_cc> end */
   if (arith_op == OP_SLOT_SUB_FIX)
-    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+    out[n++] = arm64_subs_imm(1, 1, arith_delta);
   else
-    out[n++] = arm64_add_imm(1, 1, arith_delta);
+    out[n++] = arm64_adds_imm(1, 1, arith_delta);
+  int patch_ovf_wcl = n++; /* reserve B.VS deopt */
   out[n++] = arm64_str_imm(1, 0, slot_off);
   {
     int cur = n++;
@@ -1531,8 +1535,8 @@ static int try_jit_wide_counter_loop(bytecode_t *bc, uint32_t *out, int *outn) {
   out[patch_bcond] = arm64_b_cond(cond, end_pc - patch_bcond);
   out[n++] = arm64_mov_reg(0, 1); /* x0 = final counter */
   out[n++] = arm64_ret();
-  int deopt_pc = n;
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  out[patch_ovf_wcl] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf_wcl);
   ARM64_EMIT_DEOPT();
 
   JIT_GUARD(24);
@@ -2358,9 +2362,10 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
 
   out[n++] = arm64_ldr_imm(1, 19, slot_off);
   if (arith_op == OP_SLOT_SUB_FIX)
-    out[n++] = arm64_sub_imm(1, 1, arith_delta);
+    out[n++] = arm64_subs_imm(1, 1, arith_delta);
   else
-    out[n++] = arm64_add_imm(1, 1, arith_delta);
+    out[n++] = arm64_adds_imm(1, 1, arith_delta);
+  int patch_ovf_tlc = n++; /* reserve B.VS deopt */
   out[n++] = arm64_str_imm(1, 19, slot_off);
   {
     int cur = n++;
@@ -2386,6 +2391,7 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
   out[patch_err] = arm64_cbnz(0, err_pc - patch_err);
   out[patch_end] = arm64_b_cond(inv_cc, end_pc - patch_end);
   PATCH_DEOPT_TBZ(patch_deopt, 1, 0);
+  out[patch_ovf_tlc] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf_tlc);
 
   JIT_GUARD(64);
   *outn = n;
@@ -2505,6 +2511,7 @@ static int try_jit_tak(bytecode_t *bc, uint32_t *out, int *outn) {
   /* bail: env slots may be clobbered by intermediate writes, but bails
      only fire on error/overflow and the caller discards the frame —
      unreachable for valid fixnum inputs. */
+  int bail_pc = n;
   out[n++] = arm64_ldp_off_sp(19, 20, 16);
   out[n++] = arm64_ldp_post_sp(29, 30, 80);
   out[n++] = arm64_ret();

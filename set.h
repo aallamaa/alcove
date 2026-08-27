@@ -53,8 +53,11 @@ static char *set_key_for_value(exp_t *v) {
     return buf;
   }
   if (isfloat(v)) {
+    double f = v->f;
+    if (f == 0.0)
+      f = 0.0; /* normalize -0.0 → +0.0 */
     uint64_t bits = 0;
-    memcpy(&bits, &v->f, sizeof bits);
+    memcpy(&bits, &f, sizeof bits);
     snprintf(tmp, sizeof tmp, "F:%016llx", (unsigned long long)bits);
     set_key_put(&buf, &len, &cap, tmp);
     return buf;

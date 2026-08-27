@@ -185,6 +185,10 @@ static exp_t *watch_notify(exp_t *obj, const char *op, exp_t *k, exp_t *old,
       break;
     }
     unrefexp(r);
+    /* A watcher may have called (unwatch! obj), freeing the entire list.
+       Detect this by checking if s->fns was nulled, and stop iterating. */
+    if (!s->fns)
+      break;
     c = next;
   }
   unrefexp(ev);

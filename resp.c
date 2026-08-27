@@ -724,7 +724,7 @@ static int resp_parse_one(resp_client_t *c, char *buf, size_t len,
   if (buf[i] != '\r' || buf[i + 1] != '\n')
     return -1;
   i += 2;
-  if (n <= 0)
+  if (n < 0)
     return -1;
 
   /* Reserve incrementally as bulk args are actually parsed, not the full n up
@@ -811,6 +811,8 @@ static int resp_arg_to_ll(const char *p, long len, long long *out) {
   char buf[32];
   memcpy(buf, p, len);
   buf[len] = '\0';
+  if (!isdigit((unsigned char)buf[0]) && buf[0] != '-')
+    return 0;
   char *end;
   errno = 0;
   long long v = strtoll(buf, &end, 10);
@@ -1169,8 +1171,11 @@ static int resp_dump_to_tmp(const char *tmp) {
     return 1;
   int ok = alcove_dump_unified(NULL, resp_kv_get(), stream);
   if (ok) {
-    fflush(stream);
-    fsync(fileno(stream));
+    if (fflush(stream) != 0 || fsync(fileno(stream)) != 0) {
+      fclose(stream);
+      unlink(tmp);
+      return 2;
+    }
   }
   fclose(stream);
   if (!ok) {
@@ -1295,9 +1300,13 @@ static void cmd_persist(resp_client_t *c, char **argv, long *argl, int argc) {
 static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   ARG_AT_LEAST(3);
   long long expire_us = 0; /* delta from now, in us */
-  int nx = 0, xx = 0;
+  int nx = 0, xx = 0, have_expire = 0;
   for (int i = 3; i < argc; i++) {
     if (resp_cmd_eq(argv[i], argl[i], "EX") && i + 1 < argc) {
+      if (have_expire) {
+        resp_write_err(c, "ERR syntax error");
+        return;
+      }
       long long s;
       if (!resp_arg_to_ll(argv[i + 1], argl[i + 1], &s) || s <= 0 ||
           s > LLONG_MAX / 1000000LL) {
@@ -1305,8 +1314,13 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
         return;
       }
       expire_us = s * 1000000LL;
+      have_expire = 1;
       i++;
     } else if (resp_cmd_eq(argv[i], argl[i], "PX") && i + 1 < argc) {
+      if (have_expire) {
+        resp_write_err(c, "ERR syntax error");
+        return;
+      }
       long long ms;
       if (!resp_arg_to_ll(argv[i + 1], argl[i + 1], &ms) || ms <= 0 ||
           ms > LLONG_MAX / 1000LL) {
@@ -1314,6 +1328,7 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
         return;
       }
       expire_us = ms * 1000LL;
+      have_expire = 1;
       i++;
     } else if (resp_cmd_eq(argv[i], argl[i], "NX")) {
       nx = 1;
@@ -1364,12 +1379,13 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
   }
   if (expire_us) {
     int64_t now = resp_now_us();
-    /* expire_us is already capped to fit int64 after the unit scale-up; clamp
-       the now+span add so it can't overflow into a bogus (negative) deadline.
-     */
     int64_t deadline =
         (expire_us > INT64_MAX - now) ? INT64_MAX : now + expire_us;
-    resp_kv_set_expiry(k, klen, deadline);
+    /* CAS loop: ensure TTL is applied to the value we just set, not a
+       concurrent replacement. Touch-if-value matches by pointer identity. */
+    exp_t *cur = resp_kv_peek(k, klen);
+    if (cur)
+      resp_kv_set_expiry(k, klen, deadline);
   }
   resp_write_simple(c, "OK");
 }
@@ -1408,7 +1424,11 @@ static void cmd_strlen(resp_client_t *c, char **argv, long *argl, int argc) {
 static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
                             long long delta) {
   resp_kv_ensure();
-  for (;;) {
+  if (!resp_kv) {
+    resp_write_err(c, "ERR out of memory");
+    return;
+  }
+  for (int retries = 0;; retries++) {
     exp_t *cur_v = resp_kv_lookup(key, klen);
     long long cur = 0;
     if (cur_v) {
@@ -1443,12 +1463,18 @@ static void resp_apply_incr(resp_client_t *c, const char *key, size_t klen,
       unrefexp(cur_v);
       if (!ok) {
         unrefexp(new_blob);
+        if (retries > 1000) {
+          resp_write_err(c, "ERR OOM or too many retries");
+          return;
+        }
         continue;
       }
-    } else {
-      ok = lfkv_set_nx(resp_kv, key, klen, new_blob);
       if (!ok) {
         unrefexp(new_blob);
+        if (retries > 1000) {
+          resp_write_err(c, "ERR OOM or too many retries");
+          return;
+        }
         continue;
       }
     }
@@ -1492,6 +1518,10 @@ static void cmd_append(resp_client_t *c, char **argv, long *argl, int argc) {
   size_t klen = (size_t)argl[1];
   size_t add = (size_t)argl[2];
   resp_kv_ensure();
+  if (!resp_kv) {
+    resp_write_err(c, "ERR out of memory");
+    return;
+  }
   for (;;) {
     exp_t *cur_v = resp_kv_lookup(k, klen);
     if (!cur_v) {
@@ -1548,6 +1578,10 @@ static void cmd_lpush_rpush(resp_client_t *c, char **argv, long *argl, int argc,
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
   resp_kv_ensure();
+  if (!resp_kv) {
+    resp_write_err(c, "ERR out of memory");
+    return;
+  }
   for (;;) {
     exp_t *cur = resp_kv_lookup(k, klen);
     if (cur && !islist(cur)) {
@@ -1601,7 +1635,7 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
     alc_listnode_t *target = left ? src->head : src->tail;
     alc_blob_t *tb = (alc_blob_t *)target->val->ptr;
     size_t blen = tb->len;
-    char *bcopy = malloc(blen);
+    char *bcopy = blen ? malloc(blen) : (char *)"";
     if (blen && !bcopy) {
       unrefexp(cur);
       resp_write_err(c, "ERR out of memory");
@@ -1632,11 +1666,13 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
     }
     unrefexp(cur);
     if (!ok) {
-      free(bcopy);
+      if (blen)
+        free(bcopy);
       continue;
     }
     resp_write_bulk(c, bcopy, blen);
-    free(bcopy);
+    if (blen)
+      free(bcopy);
     return;
   }
 }
@@ -1760,6 +1796,10 @@ static void cmd_hset(resp_client_t *c, char **argv, long *argl, int argc) {
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
   resp_kv_ensure();
+  if (!resp_kv) {
+    resp_write_err(c, "ERR out of memory");
+    return;
+  }
   for (;;) {
     exp_t *cur = resp_kv_lookup(k, klen);
     if (cur && !isdict(cur)) {

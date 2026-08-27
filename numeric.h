@@ -242,13 +242,15 @@ static exp_t *make_decimal_raw(__int128 coef, int32_t scale, int *over) {
     coef /= 10;
     scale--;
   }
-  while (scale > DEC_MAX_SCALE) { /* round off excess fractional precision */
-    __int128 r = coef % 10;
-    if (r < 0)
-      r = -r;
-    coef /= 10;
-    scale--;
-    if (r >= 5)
+  if (scale > DEC_MAX_SCALE) {
+    int excess = scale - DEC_MAX_SCALE;
+    __int128 divisor = dec_pow10(excess);
+    __int128 rem = coef % divisor;
+    if (rem < 0)
+      rem = -rem;
+    coef /= divisor;
+    scale = DEC_MAX_SCALE;
+    if (rem * 2 >= divisor) /* round half away from zero */
       coef += (coef < 0 ? -1 : 1);
     while (scale > 0 && coef % 10 == 0) {
       coef /= 10;

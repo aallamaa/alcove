@@ -593,6 +593,8 @@ static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint8_t *buf,
     n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
   else
     n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  n += x64_jcc_rel32(buf + n, 0x0, 0); /* jo deopt (overflow) */
+  int jov_eq = n - 4;
   /* tag bit preserved across ±(S<<3); subsequent loads stay tagged. */
   n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, slot_off);
   /* jmp loop_top */
@@ -610,6 +612,7 @@ static int try_jit_simple_tail_loop_eq(bytecode_t *bc, uint8_t *buf,
 
   x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
   x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+  x64_patch_rel32(buf, jov_eq, 4, deopt_pc);
 
   JIT_GUARD(80);
   *outn = n;
@@ -1570,6 +1573,8 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
     n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
   else
     n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  n += x64_jcc_rel32(buf + n, 0x0, 0); /* jo deopt (overflow) */
+  int jov_tlc = n - 4;
   n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RBX, slot_off);
   {
     int jmp_start = n;
@@ -1594,6 +1599,7 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
   x64_patch_rel32(buf, jcc_end, 6, end_pc);
   x64_patch_rel32(buf, jnz_err, 6, err_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
+  x64_patch_rel32(buf, jov_tlc, 4, deopt_pc);
 
   /* Worst case ~134 bytes (entry tag-check + frame setup + ~45-byte
      call sequence + arith + jmp + exits). buf is 256 bytes. */

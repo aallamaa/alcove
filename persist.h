@@ -677,6 +677,11 @@ static exp_t *load_vec_v2(FILE *stream) {
       unrefexp(e);
       return NULL;
     }
+    for (uint32_t i = 0; i < n; i++)
+      if (!FIX_FITS(cells[i])) {
+        unrefexp(e);
+        return NULL;
+      }
   } else { /* F64 */
     double *cells = (double *)((char *)v + sizeof(alc_vec_t));
     if (n > 0 && fread(cells, sizeof(double), n, stream) != n) {

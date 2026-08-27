@@ -145,6 +145,7 @@ static int alc_match_pat(exp_t *pat, exp_t *val, env_t *newenv, exp_t *e_err,
         return -1;
       }
       exp_t *r = alc_apply1(pred, val ? val : NIL_EXP, eval_env);
+      unrefexp(pred);
       if (!r || iserror(r)) {
         *err = r ? r
                  : error(ERROR_ILLEGAL_VALUE, e_err, eval_env,
@@ -669,6 +670,7 @@ exp_t *forgencmd(exp_t *e, env_t *env) {
     if (!v || isgen_done(v))
       break;
     if (iserror(v)) {
+      unrefexp(ret);
       ret = v;
       break;
     }

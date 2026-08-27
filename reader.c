@@ -161,7 +161,7 @@ exp_t *make_atom_from_token(token_t *token) {
         goto scanned;
       break;
     case '.':
-      if (test <= 3 || !dot)
+      if (test <= 3 && !dot)
         dot += 1;
       else
         goto scanned;
@@ -485,7 +485,7 @@ exp_t *reader(FILE *stream, unsigned char clmacro, int keepwspace) {
       if (x == '#') {
         // Dispatch macro — or a `# ` line comment.
         if ((y = RGETC(stream)) != EOF) {
-          ifmatch (y, ' ', '\t', '\n') {
+          ifmatch (y, ' ', '\t', '\n', '\r') {
             /* `# ...` line comment, running to end of line (Adder uses the
                same rule). Only `#` + whitespace is a comment; `#` glued to a
                token stays a dispatch macro (#\ char, #[ vector, #{ set,

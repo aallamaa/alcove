@@ -699,6 +699,13 @@ exp_t *defstructcmd(exp_t *e, env_t *env) {
       return err;
     }
   char nbuf[128];
+  if (strlen((const char *)exp_text(nm)) >= sizeof(nbuf)) {
+    exp_t *err =
+        error(ERROR_ILLEGAL_VALUE, e, env,
+              "defstruct: name too long (max %zu chars)", sizeof(nbuf) - 1);
+    unrefexp(e);
+    return err;
+  }
   snprintf(nbuf, sizeof nbuf, "%s", (const char *)exp_text(nm));
   char *src = malloc(8192);
   if (!src) {
@@ -2046,14 +2053,13 @@ exp_t *exitcmd(exp_t *e, env_t *env) {
       code = (int)FIX_VAL(a);
     unrefexp(a);
   }
-  unrefexp(e);
   (void)env;
   exit(code);
 }
 
 /* (random n) — pseudo-random fixnum in [0, n). Seeded once from time. */
 const char doc_random[] =
-    "(random n) — uniform fixnum in [0, n). (random) gives a 64-bit value.";
+    "(random n) — uniform fixnum in [0, n). (random) returns 0.";
 exp_t *randomcmd(exp_t *e, env_t *env) {
   static int seeded = 0;
   if (!seeded) {
@@ -2063,6 +2069,10 @@ exp_t *randomcmd(exp_t *e, env_t *env) {
   int64_t n = 0;
   if (e->next) {
     exp_t *a = EVAL(e->next->content, env);
+    if (iserror(a)) {
+      unrefexp(e);
+      return a;
+    }
     if (isnumber(a))
       n = FIX_VAL(a);
     unrefexp(a);
@@ -2597,7 +2607,7 @@ exp_t *zipcmd(exp_t *e, env_t *env) {
   CLEAN_RETURN_2(xs, ys, ret);
 }
 
-/* flatten helper (non-recursive, uses a stack to avoid C stack growth) */
+/* flatten helper (recursive; depth bounded by reader's 2000-level guard) */
 static void flatten_into(exp_t *x, exp_t **ret, exp_t **tail) {
   if (!x || x == NIL_EXP)
     return;
@@ -2890,7 +2900,7 @@ exp_t *trycmd(exp_t *e, env_t *env) {
   }
   if (finally_form) {
     exp_t *fret = EVAL(finally_form, env);
-    if (fret && iserror(fret) && !iserror(ret)) {
+    if (fret && iserror(fret)) {
       unrefexp(ret);
       ret = fret;
     } else
@@ -3762,6 +3772,8 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
             unrefexp(retval);
             retval = converted ? converted : NIL_EXP;
             tmpexp = retval;
+          } else {
+            tmpexp = retval; /* pair list: save head for cleanup */
           }
           curin = curval->next;
           /* `retval->content` guard: the empty list is NIL_EXP, a pair whose

@@ -568,6 +568,10 @@ static void compile_with(compiler_t *c, exp_t *form, int tail) {
       return;
     }
     vars[n] = p->content;
+    if (!p->next->content) {
+      c->failed = 1;
+      return;
+    }
     vals[n] = p->next->content;
     n++;
     p = p->next->next;
@@ -3517,7 +3521,7 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
       /* Same wording as the AST path (var2env) so arity errors read
          identically whether the callee was reached interpreted or compiled.
        */
-      return error(ERROR_ILLEGAL_VALUE, fn, env, "too %s arguments to %s",
+      return error(ERROR_MISSING_PARAMETER, fn, env, "too %s arguments to %s",
                    nargs < fn->bc->nparams ? "few" : "many",
                    fn->meta ? (const char *)fn->meta : "function");
     }

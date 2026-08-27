@@ -110,16 +110,27 @@ static void print_node_1(exp_t *node) {
        printed form round-trips through the reader. Matches EXP_BLOB. */
     fputs("\x1B[92m\"", stdout);
     for (const char *s = (const char *)exp_text(node); *s; s++) {
-      if (*s == '"' || *s == '\\')
+      if (*s == '"' || *s == '\\') {
         putchar('\\');
-      else if (*s == '\n')
+        putchar(*s);
+        continue;
+      }
+      if (*s == '\n') {
         fputs("\\n", stdout);
-      else if (*s == '\t')
+        continue;
+      }
+      if (*s == '\t') {
         fputs("\\t", stdout);
-      else if (*s == '\r')
+        continue;
+      }
+      if (*s == '\r') {
         fputs("\\r", stdout);
-      else if ((unsigned char)*s < 0x20)
+        continue;
+      }
+      if ((unsigned char)*s < 0x20) {
         printf("\\x%02x", (unsigned char)*s);
+        continue;
+      }
       putchar(*s);
     }
     fputs("\"\x1B[39m", stdout);
