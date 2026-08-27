@@ -170,8 +170,13 @@ static void *alc_ffi_dlopen(const char *name) {
   }
   c = (struct ffi_lib_cache *)memalloc(1, sizeof(*c));
   c->name = strdup(name);
+  if (!c->name) {
+    free(c);
+    dlclose(h);
+    FFI_LIBS_UNLOCK();
+    return NULL;
+  }
   c->h = h;
-  c->next = g_ffi_libs;
   g_ffi_libs = c;
   FFI_LIBS_UNLOCK();
   return h;
@@ -421,9 +426,11 @@ static void alc_ffi_closure_dispatch(ffi_cif *cif, void *ret, void **args,
       argv[i] = s ? make_string((char *)s, (int)strnlen(s, 1u << 24)) : NIL_EXP;
       break;
     }
-    case AFFI_PTR:
-      argv[i] = MAKE_FIX((int64_t)(uintptr_t)*(void **)args[i]);
+    case AFFI_PTR: {
+      int64_t pv = (int64_t)(uintptr_t)*(void **)args[i];
+      argv[i] = FIX_FITS(pv) ? MAKE_FIX(pv) : make_floatf((double)pv);
       break;
+    }
     default:
       argv[i] = NIL_EXP;
       break;
@@ -871,9 +878,11 @@ exp_t *ffiunpackcmd(exp_t *e, env_t *env) {
     case AFFI_DOUBLE:
       v = make_floatf(*(const double *)slot);
       break;
-    case AFFI_PTR:
-      v = MAKE_FIX((int64_t)(uintptr_t)*(void *const *)slot);
+    case AFFI_PTR: {
+      int64_t pv = (int64_t)(uintptr_t)*(void *const *)slot;
+      v = FIX_FITS(pv) ? MAKE_FIX(pv) : make_floatf((double)pv);
       break;
+    }
     case AFFI_STRUCT: { /* nested struct → blob of its bytes (ffi-unpack again)
                          */
       alc_ffi_t *nd =
@@ -1178,9 +1187,11 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     }
     break;
   }
-  case AFFI_PTR:
-    ret = MAKE_FIX((int64_t)(uintptr_t)rval.p);
+  case AFFI_PTR: {
+    int64_t pv = (int64_t)(uintptr_t)rval.p;
+    ret = FIX_FITS(pv) ? MAKE_FIX(pv) : make_floatf((double)pv);
     break;
+  }
   case AFFI_STRUCT:
     /* Hand the returned struct bytes back as a blob (ffi-unpack reads it). */
     ret = make_blob(struct_buf, struct_ret_size);

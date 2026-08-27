@@ -393,10 +393,7 @@ static exp_t *dec_div(alc_dec_t *a, alc_dec_t *b, int *over) {
     scale++;
   }
   if (rem != 0 && rem >= d - rem) { /* round half up (overflow-safe) */
-    if (q >= (((__int128)(((unsigned __int128)1 << 126) - 1)) + 1) * 2) {
-      *over = 1;
-      return NULL;
-    }
+    /* q is at most 10^DEC_MAX_SCALE (<< INT128_MAX), so q+1 can't overflow. */
     q += 1;
   }
   return make_decimal_raw(neg ? -q : q, scale, over);

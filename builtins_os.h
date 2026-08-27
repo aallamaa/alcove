@@ -394,8 +394,10 @@ exp_t *pathjoincmd(exp_t *e, env_t *env) {
     size_t sl = strlen(s);
     if (sl > 0) {
       if (!first && len > 0 && buf[len - 1] != '/' && s[0] != '/') {
-        if (len + 1 >= cap) {
-          cap *= 2;
+        if (len + 2 > cap) {
+          cap = cap * 2;
+          if (cap < len + 2)
+            cap = len + 2;
           buf = xrealloc(buf, cap);
         }
         buf[len++] = '/';

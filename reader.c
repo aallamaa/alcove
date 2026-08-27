@@ -305,9 +305,13 @@ static exp_t *callmacrochar_inner(FILE *stream, unsigned char x) {
     }
   } else if (x == '\'') {
     vnode = reader(stream, 0, 0);
+    if (iserror(vnode))
+      return vnode;
     return make_quote(vnode);
   } else if (x == '`') {
     vnode = reader(stream, 0, 0);
+    if (iserror(vnode))
+      return vnode;
     exp_t *qq = make_node(make_symbol("quasiquote", 10));
     qq->next = make_node(vnode);
     return qq;
@@ -317,6 +321,8 @@ static exp_t *callmacrochar_inner(FILE *stream, unsigned char x) {
     if (!splice)
       RUNGETC(c, stream);
     vnode = reader(stream, 0, 0);
+    if (iserror(vnode))
+      return vnode;
     char *tag = splice ? "unquote-splicing" : "unquote";
     exp_t *uq = make_node(make_symbol(tag, strlen(tag)));
     uq->next = make_node(vnode);

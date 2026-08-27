@@ -4890,6 +4890,7 @@ exp_t *loaddbcmd(exp_t *e, env_t *env) {
                        "Unable to open '%s' for reading", path);
     if (path_arg)
       unrefexp(path_arg);
+    unrefexp(e);
     return err;
   }
   printf("loaded %d entries from %s\n", n, path);

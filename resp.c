@@ -338,14 +338,16 @@ static inline exp_t *resp_kv_peek(const char *key, size_t klen) {
 /* SET-style write: consumes the caller's `val` ref, clears prior TTL.
    db-aware via resp_kv_current() so (with-db n ...) writes land in db n;
    db 0 still needs resp_kv_ensure() to create the shared keyspace. */
-static inline void resp_kv_set(const char *key, size_t klen, exp_t *val) {
+static inline int resp_kv_set(const char *key, size_t klen, exp_t *val) {
   if (alcove_kv_db <= 0 || alcove_kv_db >= ALC_NDB)
     resp_kv_ensure();
   lfkv_t *kv = resp_kv_current();
   if (!kv || lfkv_set(kv, key, klen, val) < 0) {
     /* No keyspace or table full — best-effort: drop the value. */
     unrefexp(val);
+    return -1;
   }
+  return 0;
 }
 
 static inline int resp_kv_del(const char *key, size_t klen) {
@@ -1380,7 +1382,10 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
       return;
     }
   } else {
-    resp_kv_set(k, klen, fresh); /* always consumes the ref */
+    if (resp_kv_set(k, klen, fresh) < 0) {
+      resp_write_err(c, "ERR table full");
+      return;
+    }
   }
   if (expire_us) {
     int64_t now = resp_now_us();

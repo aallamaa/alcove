@@ -1592,14 +1592,17 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint8_t *buf,
   n += x64_pop_reg(buf + n, X64_RBX);
   n += x64_ret(buf + n);
 
-  /* deopt (no frame to tear down — we hadn't pushed yet). */
-  int deopt_pc = n;
+  /* deopt_framed: overflow deopt after frame was established. */
+  int deopt_framed_pc = n;
+  n += x64_pop_reg(buf + n, X64_RBX);
   X64_EMIT_DEOPT();
+  /* deopt (no frame to tear down — pre-frame tag check). */
+  int deopt_pc = n;
 
   x64_patch_rel32(buf, jcc_end, 6, end_pc);
   x64_patch_rel32(buf, jnz_err, 6, err_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
-  x64_patch_rel32(buf, jov_tlc, 4, deopt_pc);
+  x64_patch_rel32(buf, jov_tlc, 4, deopt_framed_pc);
 
   /* Worst case ~134 bytes (entry tag-check + frame setup + ~45-byte
      call sequence + arith + jmp + exits). buf is 256 bytes. */

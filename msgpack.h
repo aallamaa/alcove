@@ -59,6 +59,8 @@ static int mp_put_sized(mp_buf *m, uint8_t fixmask, size_t fixlim, uint8_t tag8,
     return mp_put1(m, tag8) && mp_put_be(m, n, 1);
   if (n <= 0xffff)
     return mp_put1(m, tag16) && mp_put_be(m, n, 2);
+  if (n > 0xffffffffULL)
+    return 0; /* too large for 32-bit length prefix */
   return mp_put1(m, tag32) && mp_put_be(m, n, 4);
 }
 static int mp_encode(exp_t *v, mp_buf *m);

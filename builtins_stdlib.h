@@ -2356,14 +2356,14 @@ exp_t *applycmd(exp_t *e, env_t *env) {
     /* Materialize args as an exp_t** so vm_invoke_values can take it. */
     int n = 0;
     exp_t *c = args;
-    while (c && c->content) {
+    while (ispair(c) && c->content) {
       n++;
       c = c->next;
     }
     exp_t **argv = (n > 0) ? memalloc(n, sizeof(exp_t *)) : NULL;
     int i = 0;
     c = args;
-    while (c && c->content && i < n) {
+    while (ispair(c) && c->content && i < n) {
       argv[i++] = refexp(c->content);
       c = c->next;
     }
@@ -2688,8 +2688,12 @@ exp_t *sortcmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_1(
         xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "sort: arg must be a list"));
   int n = 0;
-  for (exp_t *c = xs; ispair(c) && c->content; c = c->next)
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) {
+    if (n == INT_MAX)
+      CLEAN_RETURN_1(
+          xs, error(ERROR_ILLEGAL_VALUE, NULL, env, "sort: list too large"));
     n++;
+  }
   exp_t **arr = memalloc(n, sizeof *arr);
   int i = 0;
   for (exp_t *c = xs; ispair(c) && c->content; c = c->next)
@@ -2728,8 +2732,13 @@ exp_t *sortbycmd(exp_t *e, env_t *env) {
                    error(ERROR_ILLEGAL_VALUE, NULL, env,
                          "sort-by: second arg must be a list"));
   int n = 0;
-  for (exp_t *c = xs; ispair(c) && c->content; c = c->next)
+  for (exp_t *c = xs; ispair(c) && c->content; c = c->next) {
+    if (n == INT_MAX)
+      CLEAN_RETURN_2(
+          fn, xs,
+          error(ERROR_ILLEGAL_VALUE, NULL, env, "sort-by: list too large"));
     n++;
+  }
   sortby_pair *pairs = memalloc(n, sizeof *pairs);
   int i = 0;
   for (exp_t *c = xs; ispair(c) && c->content; c = c->next) {
@@ -3317,6 +3326,8 @@ exp_t *repeatcmd(exp_t *e, env_t *env) {
     { /* runaway-budget checkpoint (AST repeat) */
       int _b = budget_check();
       if (_b) {
+        if (ret)
+          unrefexp(ret);
         ret = error(ERROR_ILLEGAL_VALUE, e, env,
                     _b == 2 ? "interrupted: memory limit exceeded"
                             : "interrupted: time limit exceeded");
@@ -3446,9 +3457,7 @@ int isequal(exp_t *cur1, exp_t *cur2) {
     if (isfloat(cur1))
       ret = (cur1->f == cur2->f);
     else if (issymbol(cur1) || isstring(cur1))
-      ret = (strcmp(exp_text(cur1), exp_text(cur2)) == 0);
-    else if (iserror(cur1))
-      ret = (cur1->s64 == cur2->s64);
+      ret = (strcmp((char *)exp_text(cur1), (char *)exp_text(cur2)) == 0);
     else if (isblob(cur1)) {
       alc_blob_t *a = (alc_blob_t *)cur1->ptr;
       alc_blob_t *b = (alc_blob_t *)cur2->ptr;
@@ -3458,12 +3467,12 @@ int isequal(exp_t *cur1, exp_t *cur2) {
       /* reduced + sign-normalized, so structural equality is value equality */
       alc_rat_t *a = (alc_rat_t *)cur1->ptr;
       alc_rat_t *b = (alc_rat_t *)cur2->ptr;
-      ret = (a->num == b->num && a->den == b->den);
+      ret = (a && b && a->num == b->num && a->den == b->den);
     } else if (isdecimal(cur1)) {
       /* normalized (trailing zeros trimmed), so structural == value equality */
       alc_dec_t *a = (alc_dec_t *)cur1->ptr;
       alc_dec_t *b = (alc_dec_t *)cur2->ptr;
-      ret = (a->coef == b->coef && a->scale == b->scale);
+      ret = (a && b && a->coef == b->coef && a->scale == b->scale);
     } else
       /* Dict/list: pointer identity. Deep equality would require walking
          every entry/node and is rarely what Redis-style users want. */
@@ -3743,6 +3752,8 @@ exp_t *forcmd(exp_t *e, env_t *env) {
           { /* runaway-budget checkpoint (AST for) */
             int _b = budget_check();
             if (_b) {
+              if (ret)
+                unrefexp(ret);
               ret = error(ERROR_ILLEGAL_VALUE, e, env,
                           _b == 2 ? "interrupted: memory limit exceeded"
                                   : "interrupted: time limit exceeded");
@@ -3830,7 +3841,7 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
              empty collection would run the body once with the loop var unbound.
              A list that CONTAINS nil stores NIL_EXP as the content (non-NULL),
              so genuine nil elements still iterate. */
-          while (retval && retval->content) {
+          while (ispair(retval) && retval->content) {
             set_get_keyval_dict(newenv->d, exp_text(curvar->content),
                                 car(retval));
             curval = curin;

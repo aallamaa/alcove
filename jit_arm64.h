@@ -2388,15 +2388,20 @@ static int try_jit_tail_loop_with_call(bytecode_t *bc, uint32_t *out,
   out[n++] = arm64_ldp_post_sp(29, 30, 32);
   out[n++] = arm64_ret();
 
-  int deopt_pc = n;
+  /* deopt_framed: overflow deopt after frame was established. */
+  int deopt_framed_pc = n;
+  out[n++] = arm64_ldp_off_sp(19, 20, 16);
+  out[n++] = arm64_ldp_post_sp(29, 30, 32);
   ARM64_EMIT_DEOPT();
+  /* deopt (pre-frame tag check). */
+  int deopt_pc = n;
 
   /* Use the proper helper so the offset gets range-checked instead of
      silently truncated by the inline mask. */
   out[patch_err] = arm64_cbnz(0, err_pc - patch_err);
   out[patch_end] = arm64_b_cond(inv_cc, end_pc - patch_end);
-  PATCH_DEOPT_TBZ(patch_deopt, 1, 0);
-  out[patch_ovf_tlc] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_ovf_tlc);
+  out[patch_ovf_tlc] =
+      arm64_b_cond(ARM64_COND_VS, deopt_framed_pc - patch_ovf_tlc);
 
   JIT_GUARD(64);
   *outn = n;
@@ -2811,6 +2816,10 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
 
   /* loop_top: cmp i, n_max; b.gt done */
   int loop_top = n;
+  /* cmp i (reg2), n_max (reg1); b.gt done */
+  out[n++] = arm64_cmp_reg(2, 1);
+  int patch_done = n;
+  out[n++] = 0; /* placeholder: b.gt done */
   if (step_s_op == OP_SLOT_ADD_FIX)
     out[n++] = arm64_adds_imm(3, 3, step_abs);
   else
@@ -2836,6 +2845,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint32_t *out, int *outn) {
 
   PATCH_DEOPT_BNE(ovf_tag);
   PATCH_DEOPT_TBZ(patch_tbz, 1, 0);
+  out[patch_done] = arm64_b_cond(ARM64_COND_GT, done_pc - patch_done);
   out[patch_fli_ovf] = arm64_b_cond(ARM64_COND_VS, deopt_pc - patch_fli_ovf);
 
   JIT_GUARD(32);

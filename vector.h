@@ -174,9 +174,11 @@ static int vec_promote_to_gen(exp_t *vexp) {
   char *oldbase = (char *)old + sizeof(alc_vec_t);
   if (vec_kind(vexp) == VEC_KIND_I64) {
     int64_t *src = (int64_t *)oldbase;
-    for (int64_t i = 0; i < live; i++)
-      dst[start + i] = MAKE_FIX(src[start + i]); /* tagged immediate */
-  } else {                                       /* VEC_KIND_F64 */
+    for (int64_t i = 0; i < live; i++) {
+      int64_t v = src[start + i];
+      dst[start + i] = FIX_FITS(v) ? MAKE_FIX(v) : make_floatf((double)v);
+    }
+  } else { /* VEC_KIND_F64 */
     double *src = (double *)oldbase;
     for (int64_t i = 0; i < live; i++)
       dst[start + i] = make_floatf((expfloat)src[start + i]); /* fresh nref=1 */
@@ -283,9 +285,12 @@ static inline int vec_write_double(exp_t *vexp, int64_t i, double x) {
   case VEC_KIND_F64:
     ((double *)base)[off] = x;
     return 1;
-  case VEC_KIND_I64:
+  case VEC_KIND_I64: {
+    if (!isfinite(x) || x > (double)INT64_MAX || x < (double)INT64_MIN)
+      return 0; /* out of range — caller should promote to F64 */
     ((int64_t *)base)[off] = (int64_t)x;
     return 1;
+  }
   case VEC_KIND_GEN: {
     exp_t **cells = (exp_t **)base;
     exp_t *cur = cells[off];

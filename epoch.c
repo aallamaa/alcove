@@ -87,10 +87,9 @@ void epoch_retire(void *ptr, epoch_freer_t freer) {
       atomic_fetch_add_explicit(&epoch_global, 1, memory_order_relaxed);
   epoch_retire_t *node = malloc(sizeof *node);
   if (!node) {
-    /* OOM: best-effort immediate free. Risk: peer reader may still hold
-       the pointer. In practice the retire-list malloc is the smallest
-       allocation we make, and OOM here is fatal anyway. */
-    freer(ptr);
+    /* OOM: leak the pointer rather than freeing it — a concurrent reader
+       may still hold it (lfkv slot CAS hasn't propagated to all reactors
+       yet). Leaking is safe; freeing would be UAF. */
     return;
   }
   node->ptr = ptr;

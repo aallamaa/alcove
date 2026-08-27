@@ -219,6 +219,19 @@ static void print_node_1(exp_t *node) {
             for (const char *ks = (const char *)k->key; *ks; ks++) {
               if (*ks == '"' || *ks == '\\')
                 putchar('\\');
+              else if (*ks == '\n') {
+                fputs("\\n", stdout);
+                continue;
+              } else if (*ks == '\t') {
+                fputs("\\t", stdout);
+                continue;
+              } else if (*ks == '\r') {
+                fputs("\\r", stdout);
+                continue;
+              } else if ((unsigned char)*ks < 0x20) {
+                printf("\\x%02x", (unsigned char)*ks);
+                continue;
+              }
               putchar(*ks);
             }
             fputs("\"\x1B[39m", stdout);
