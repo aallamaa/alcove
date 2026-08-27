@@ -2208,7 +2208,17 @@ exp_t *reducecmd(exp_t *e, env_t *env) {
         int64_t r = (fast_op == 1)   ? (a + b)
                     : (fast_op == 2) ? (a - b)
                                      : (a * b);
-        acc = MAKE_FIX(r);
+        if (FIX_FITS(r))
+          acc = MAKE_FIX(r);
+        else {
+          acc = alc_apply2(fn, acc, refexp(x), env);
+          if (acc && iserror(acc)) {
+            unrefexp(xseq);
+            CLEAN_RETURN_2(fn, xs, acc);
+          }
+          if (!acc)
+            acc = NIL_EXP;
+        }
       } else {
         acc = alc_apply2(fn, acc, refexp(x), env);
         if (acc && iserror(acc)) {
@@ -2639,7 +2649,8 @@ static int sort_cmp_default(const void *a, const void *b) {
   }
   if (isstring(x) && isstring(y))
     return strcmp((char *)exp_text(x), (char *)exp_text(y));
-  return 0;
+  /* Incomparable types: order by type to maintain strict weak ordering. */
+  return TYPEOF_E(x) - TYPEOF_E(y);
 }
 
 /* (sort xs) — sort list with default < ordering (numbers, strings). */
@@ -3743,9 +3754,16 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
       if (issymbol(curvar->content)) {
         if ((retval = EVAL(curval->content, env)) == NULL)
           retval = NIL_EXP;
-        if (ispair(retval)) {
+        if (ispair(retval) || isvector(retval) || isstring(retval) ||
+            islist(retval) || isset(retval) || isdict(retval) ||
+            ishamt(retval)) {
+          if (!ispair(retval)) {
+            exp_t *converted = coll_to_list(retval);
+            unrefexp(retval);
+            retval = converted ? converted : NIL_EXP;
+            tmpexp = retval;
+          }
           curin = curval->next;
-          tmpexp = retval;
           /* `retval->content` guard: the empty list is NIL_EXP, a pair whose
              content is NULL (and proper lists terminate at it). Without it an
              empty collection would run the body once with the loop var unbound.
@@ -3771,7 +3789,7 @@ exp_t *eachcmd(exp_t *e, env_t *env) {
             ret = refexp(retval);
           else
             ret = error(ERROR_ILLEGAL_VALUE, e, env,
-                        "Illegal value (not list) in each");
+                        "Illegal value (not seq) in each");
           goto finish;
         }
 
@@ -4685,10 +4703,7 @@ exp_t *takewhilecmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   exp_t *curr = xs;
   while (curr && ispair(curr) && curr->content) {
-    exp_t *arg_node = make_node(refexp(curr->content));
-    exp_t *call = make_node(refexp(pred));
-    call->next = arg_node;
-    exp_t *res = EVAL(call, env);
+    exp_t *res = alc_apply1(pred, refexp(curr->content), env);
     if (iserror(res)) {
       unrefexp(head);
       CLEAN_RETURN_2(pred, xs, res);
@@ -4714,10 +4729,7 @@ exp_t *dropwhilecmd(exp_t *e, env_t *env) {
   }
   exp_t *curr = xs;
   while (curr && ispair(curr) && curr->content) {
-    exp_t *arg_node = make_node(refexp(curr->content));
-    exp_t *call = make_node(refexp(pred));
-    call->next = arg_node;
-    exp_t *res = EVAL(call, env);
+    exp_t *res = alc_apply1(pred, refexp(curr->content), env);
     if (iserror(res)) {
       CLEAN_RETURN_2(pred, xs, res);
     }

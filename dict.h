@@ -148,6 +148,9 @@ static int is_fully_dumpable(exp_t *e, int depth) {
   return 1;
 }
 
+/* DEPRECATED: dead code — no active call sites. Use dump_lisp_section
+   (alcove.c) instead, which has proper error propagation and
+   is_fully_dumpable pre-checks. Retained for ABI compatibility. */
 int dump_dict(dict_t *d, FILE *stream) {
   // check if in use
   keyval_t *ckv;

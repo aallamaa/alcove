@@ -3127,13 +3127,14 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
           unrefexp(keyv);
           unrefexp(val);
           return fret;
-          unrefexp(key);
-          unrefexp(val);
-          fret = error(ERROR_ILLEGAL_VALUE, keyv, env,
-                       "=: unsupported place form (head must be car/cdr)");
-          unrefexp(keyv);
-          return fret;
         }
+        /* key evaluated to a non-string: unsupported place form. */
+        unrefexp(key);
+        unrefexp(val);
+        fret = error(ERROR_ILLEGAL_VALUE, keyv, env,
+                     "=: unsupported place form (head must be car/cdr/str)");
+        unrefexp(keyv);
+        return fret;
       }
     }
 
@@ -3789,22 +3790,22 @@ const char doc_macroexpand[] =
     "return the resulting code.";
 exp_t *expandmacrocmd(exp_t *e, env_t *env) {
   exp_t *tmpexp;
-  exp_t *tmpexp2;
+  exp_t *tmpexp2 = NULL;
 
   exp_t *form = cadr(cadr(e)); /* the (quoted) form passed in */
   tmpexp = car(form);
   if (tmpexp)
     if (issymbol(tmpexp))
-      if ((tmpexp2 = lookup(refexp(tmpexp), env)))
+      if ((tmpexp2 = lookup(tmpexp, env)))
         if ismacro (tmpexp2) {
-          tmpexp = expandmacro(refexp(form), tmpexp2, env);
+          /* expandmacro borrows both e and fn — we must free our refs. */
+          tmpexp = expandmacro(form, tmpexp2, env);
+          unrefexp(tmpexp2);
           goto finish;
         }
-
-  /* Not a macro call — return the form unchanged (standard Lisp behavior),
-     so macroexpand-1 works as an identity in expand-if-macro loops rather
-     than erroring on ordinary forms. */
-  tmpexp = form ? refexp(form) : NIL_EXP;
+  /* Not a macro — free the lookup result. */
+  if (tmpexp2)
+    unrefexp(tmpexp2);
 finish:
   unrefexp(e);
   return tmpexp;
@@ -7405,10 +7406,12 @@ static exp_t *load_native_module(const char *path, const char *spec,
   /* void* → function pointer: not strictly portable C, but POSIX dlsym
      guarantees it (memcpy to dodge the -pedantic cast warning). */
   void *sym = dlsym(h, "alcove_module_init");
-  if (!sym)
+  if (!sym) {
+    dlclose(h);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "require: native module '%s' exports no alcove_module_init",
                  path);
+  }
   /* ABI guard: if the module declares the embedding-API version it was built
      against, refuse a mismatch here rather than let an incompatible exp_t/env_t
      layout corrupt silently. A module without the (optional) symbol predates
@@ -7418,11 +7421,13 @@ static exp_t *load_native_module(const char *path, const char *spec,
     int (*abi)(void);
     memcpy(&abi, &abisym, sizeof abi);
     int mod_abi = abi();
-    if (mod_abi != ALCOVE_API_VERSION)
+    if (mod_abi != ALCOVE_API_VERSION) {
+      dlclose(h);
       return error(ERROR_ILLEGAL_VALUE, NULL, env,
                    "require: native module '%s' built against alcove API v%d, "
                    "but this host is API v%d — rebuild the module",
                    path, mod_abi, ALCOVE_API_VERSION);
+    }
   }
   int (*init)(void);
   memcpy(&init, &sym, sizeof init);
@@ -7430,9 +7435,11 @@ static exp_t *load_native_module(const char *path, const char *spec,
   g_current_module_spec = spec; /* alcove_register_type reads this */
   int rc = init();
   g_current_module_spec = prev_spec;
-  if (rc != 0)
+  if (rc != 0) {
+    dlclose(h);
     return error(ERROR_ILLEGAL_VALUE, NULL, env,
                  "require: native module '%s' alcove_module_init failed", path);
+  }
   GEN_BUMP(); /* new builtins registered → invalidate global-resolution caches
                */
   return TRUE_EXP;

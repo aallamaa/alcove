@@ -403,8 +403,9 @@ exp_t *vecrefcmd(exp_t *e, env_t *env) {
         vexp, iexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-ref v i): bad args"));
 
-  int64_t i = isnumber(iexp) ? FIX_VAL(iexp)
-                             : (int64_t)iexp->f; /* float idx truncates */
+  int64_t i = isnumber(iexp)   ? FIX_VAL(iexp)
+              : isnan(iexp->f) ? -1
+                               : (int64_t)iexp->f;
   if (i < 0 || i >= vec_len(vexp))
     CLEAN_RETURN_2(
         vexp, iexp,
@@ -424,8 +425,9 @@ exp_t *vecsetcmd(exp_t *e, env_t *env) {
         vexp, iexp, valexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "(vec-set! v i val): bad args"));
 
-  int64_t i = isnumber(iexp) ? FIX_VAL(iexp)
-                             : (int64_t)iexp->f; /* float idx truncates */
+  int64_t i = isnumber(iexp)   ? FIX_VAL(iexp)
+              : isnan(iexp->f) ? -1
+                               : (int64_t)iexp->f;
   if (i < 0 || i >= vec_len(vexp))
     CLEAN_RETURN_3(vexp, iexp, valexp,
                    error(ERROR_INDEX_OUT_OF_RANGE, e, env,
@@ -656,9 +658,10 @@ exp_t *veccopycmd(exp_t *e, env_t *env) {
     CLEAN_RETURN_2(
         dexp, sexp,
         error(ERROR_ILLEGAL_VALUE, e, env, "vec-copy!: length mismatch"));
+  if (dexp == sexp)
+    CLEAN_RETURN_2(dexp, sexp, refexp(dexp)); /* self-copy is a no-op */
   unsigned kd = vec_kind(dexp), ks = vec_kind(sexp);
   if (kd == ks && kd != VEC_KIND_GEN) {
-    /* Same typed kind — raw memcpy of cells (8 bytes each, all kinds). */
     char *dst =
         (char *)dexp->ptr + sizeof(alc_vec_t) + 8u * dexp->vec_win.start;
     char *src =
@@ -1703,6 +1706,15 @@ exp_t *vecunshiftcmd(exp_t *e, env_t *env) {
         vexp, valexp,
         error(ERROR_ILLEGAL_VALUE, NULL, env, "vec-unshift!: write failed"));
   }
+  if (vexp->flags & FLAG_WATCHED) {
+    exp_t *werr = watch_notify(vexp, "vec-unshift!", NULL, NULL, ret, env);
+    if (werr) {
+      unrefexp(ret);
+      unrefexp(vexp);
+      unrefexp(e);
+      return werr;
+    }
+  }
   unrefexp(vexp);
   unrefexp(e);
   return ret;
@@ -1727,6 +1739,13 @@ exp_t *vecshiftcmd(exp_t *e, env_t *env) {
     unrefexp(cells[0]);
   }
   vexp->vec_win.start++;
+  if (vexp->flags & FLAG_WATCHED) {
+    exp_t *werr = watch_notify(vexp, "vec-shift!", NULL, NULL, ret, env);
+    if (werr) {
+      unrefexp(ret);
+      CLEAN_RETURN_1(vexp, werr);
+    }
+  }
   CLEAN_RETURN_1(vexp, ret);
 }
 

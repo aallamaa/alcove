@@ -482,9 +482,8 @@ static char *resp_write_reserve(resp_client_t *c, size_t n) {
       char *nb = realloc(c->wbuf, cap);
       if (!nb) {
         c->wfail = 1; /* OOM: flag for drop instead of killing the server */
-        return c->wbuf +
-               c->wlen; /* best-effort: caller writes into old tail,
-                           wfail ensures the reactor drops this client */
+        c->wlen = c->wcap; /* pretend buffer is full so future reserves skip */
+        return NULL;       /* caller must check wfail */
       }
       c->wbuf = nb;
       c->wcap = cap;
@@ -496,7 +495,9 @@ static char *resp_write_reserve(resp_client_t *c, size_t n) {
 }
 
 static void resp_write(resp_client_t *c, const char *p, size_t n) {
-  memcpy(resp_write_reserve(c, n), p, n);
+  char *dst = resp_write_reserve(c, n);
+  if (dst)
+    memcpy(dst, p, n);
 }
 
 /* Drain a window's worth of pending output. Returns 1 to signal the
@@ -526,6 +527,8 @@ static inline void resp_write_line(resp_client_t *c, char lead, const char *s,
     metric_bump(g_m_errs, 1);
 #endif
   char *dst = resp_write_reserve(c, n + 3);
+  if (!dst)
+    return;
   dst[0] = lead;
   memcpy(dst + 1, s, n);
   dst[n + 1] = '\r';
@@ -576,9 +579,10 @@ static int resp_i64_to_ascii(char *out, int64_t v) {
   }
   return resp_u64_to_ascii(out, (uint64_t)v);
 }
-
 static void resp_write_int(resp_client_t *c, long long v) {
   char *buf = resp_write_reserve(c, 32);
+  if (!buf)
+    return;
   buf[0] = ':';
   int n = 1 + resp_i64_to_ascii(buf + 1, (int64_t)v);
   buf[n++] = '\r';
@@ -593,6 +597,8 @@ static void resp_write_bulk(resp_client_t *c, const char *p, size_t n) {
   hdr[hn++] = '\r';
   hdr[hn++] = '\n';
   char *dst = resp_write_reserve(c, (size_t)hn + n + 2);
+  if (!dst)
+    return;
   memcpy(dst, hdr, (size_t)hn);
   memcpy(dst + hn, p, n);
   dst[hn + n] = '\r';
@@ -603,6 +609,8 @@ static void resp_write_nil(resp_client_t *c) { resp_write(c, "$-1\r\n", 5); }
 
 static void resp_write_array_hdr(resp_client_t *c, long long n) {
   char *hdr = resp_write_reserve(c, 32);
+  if (!hdr)
+    return;
   hdr[0] = '*';
   int hn = 1 + resp_i64_to_ascii(hdr + 1, (int64_t)n);
   hdr[hn++] = '\r';
@@ -1342,7 +1350,13 @@ static void cmd_set(resp_client_t *c, char **argv, long *argl, int argc) {
                 : lfkv_set_xx(resp_kv, k, klen, fresh);
     if (!ok) {
       unrefexp(fresh);
-      resp_write_nil(c);
+      /* Distinguish OOM (key absent but set_nx failed, or key present
+         but set_xx failed) from condition-not-met. */
+      exp_t *peek = resp_kv_peek(k, klen);
+      if ((nx && !peek) || (xx && peek))
+        resp_write_err(c, "ERR OOM in SET");
+      else
+        resp_write_nil(c);
       return;
     }
   } else {

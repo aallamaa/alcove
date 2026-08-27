@@ -20,7 +20,9 @@ static void pp_indent(int n) {
    print_node would emit, ignoring ANSI escapes. Returns INT_MAX-ish
    on cycles or very large structures so the pretty-printer falls
    back to multi-line. */
-static int pp_flat_width(exp_t *e) {
+static int pp_flat_width_d(exp_t *e, int depth) {
+  if (depth > ALCOVE_READER_MAX_DEPTH)
+    return PP_WIDTH * 4; /* too deep — force multi-line fallback */
   if (e == NULL)
     return 3; /* "nil" */
   if (isnumber(e)) {
@@ -51,13 +53,13 @@ static int pp_flat_width(exp_t *e) {
     int first = 1;
     for (cur = e; cur; cur = cur->next) {
       if (cur->type != EXP_PAIR) {
-        w += 3 + pp_flat_width(cur); /* " . X" */
+        w += 3 + pp_flat_width_d(cur, depth + 1); /* " . X" */
         break;
       }
       if (!first)
         w += 1;
       first = 0;
-      w += pp_flat_width(cur->content);
+      w += pp_flat_width_d(cur->content, depth + 1);
       if (w > PP_WIDTH * 4)
         return PP_WIDTH * 4; /* short-circuit on big forms */
     }
@@ -67,6 +69,7 @@ static int pp_flat_width(exp_t *e) {
     return 16;
   }
 }
+static int pp_flat_width(exp_t *e) { return pp_flat_width_d(e, 0); }
 
 static void pp_form(exp_t *e, int indent);
 static void pp_form_body(exp_t *e, int indent);

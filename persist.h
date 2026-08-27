@@ -315,7 +315,9 @@ exp_t *load_number(exp_t *e, FILE *stream) {
     unrefexp(e);
   if (fread(&v, sizeof(v), 1, stream) != 1)
     return NULL;
-  return MAKE_FIX(v);
+  if (FIX_FITS(v))
+    return MAKE_FIX(v);
+  return make_floatf((double)v);
 }
 
 /* EXP_FLOAT — heap exp_t with `f` field (double). 8 raw bytes. */
@@ -427,13 +429,17 @@ exp_t *load_pair(exp_t *e, FILE *stream) {
     return NULL;
   if (flags & 1) {
     e->content = load_exp_t(stream);
-    if (!e->content)
+    if (!e->content) {
+      unrefexp(e);
       return NULL; /* propagate sub-read failure */
+    }
   }
   if (flags & 2) {
     e->next = load_exp_t(stream);
-    if (!e->next)
+    if (!e->next) {
+      unrefexp(e);
       return NULL; /* propagate sub-read failure */
+    }
   }
   return e;
 }

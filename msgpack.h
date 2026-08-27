@@ -282,7 +282,9 @@ static exp_t *mp_decode(const uint8_t *b, size_t len, size_t *pos, int depth) {
     MP_NEED((size_t)nb);
     int64_t v = mp_sext(mp_get_be(b, *pos, nb), nb);
     *pos += nb;
-    return MAKE_FIX(v);
+    if (FIX_FITS(v))
+      return MAKE_FIX(v);
+    return make_floatf((double)v);
   }
   case 0xca: {
     MP_NEED(4);

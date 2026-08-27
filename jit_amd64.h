@@ -122,6 +122,8 @@ static int x64_test_reg8_imm8(uint8_t *buf, int reg, uint8_t imm) {
   int n = 0;
   if (reg >= 8)
     buf[n++] = (uint8_t)(0x40 | X64_REXB(reg)); /* r8b-r11b */
+  else if (reg >= 4)
+    buf[n++] = 0x40; /* bare REX: force SPL/BPL/SIL/DIL, not AH/CH/DH/BH */
   buf[n++] = 0xF6;
   buf[n++] = (uint8_t)(0xC0 | (reg & 7));
   buf[n++] = imm;
@@ -506,7 +508,8 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
     n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
   else
     n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
-  /* tag bit preserved across ±(K2<<3); subsequent loads stay tagged. */
+  n += x64_jcc_rel32(buf + n, 0x0, 0); /* jo deopt (overflow) */
+  int jov_start = n - 4;
   n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, slot_off);
   /* jmp loop_top */
   {
@@ -523,6 +526,7 @@ static int try_jit_simple_tail_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
   x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+  x64_patch_rel32(buf, jov_start, 4, deopt_pc);
 
   /* Worst case ~55 bytes (load, test, jcc, cmp, jcc, sub/add, mov,
      jmp, mov, ret, xor, ret + slack). Caller's buffer is uint8_t buf[256]. */
@@ -1656,6 +1660,8 @@ static int try_jit_wide_counter_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
     n += x64_sub_imm32(buf + n, X64_RCX, arith_delta);
   else
     n += x64_add_imm32(buf + n, X64_RCX, arith_delta);
+  n += x64_jcc_rel32(buf + n, 0x0, 0); /* jo deopt (overflow) */
+  int jov_wcl = n - 4;
   n += x64_mov_mem_reg(buf + n, X64_RCX, X64_RDI, slot_off);
   {
     int jmp_start = n;
@@ -1668,6 +1674,7 @@ static int try_jit_wide_counter_loop(bytecode_t *bc, uint8_t *buf, int *outn) {
   X64_EMIT_DEOPT();
   x64_patch_rel32(buf, jcc_end_start, 6, end_pc);
   x64_patch_rel32(buf, jz_start, 6, deopt_pc);
+  x64_patch_rel32(buf, jov_wcl, 4, deopt_pc);
 
   JIT_GUARD(80);
   *outn = n;
@@ -3075,11 +3082,11 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
 
   /* done: re-tag s into rax and return. */
   int done_pc = n;
-  /* shl rdx, 3 →  REX.W 0xC1 /4 imm8.  ModR/M = 0xE0 | (rdx&7) = 0xE2 */
-  buf[n++] = 0x48;
-  buf[n++] = 0xC1;
-  buf[n++] = (uint8_t)(0xE0 | (X64_RDX & 7));
-  buf[n++] = 3;
+  /* done: re-tag s into rax and return. Use IMUL rdx,rdx,8 (sets OF on
+     overflow) + jo deopt, matching all other retag paths. */
+  n += x64_imul_reg_reg_imm32(buf + n, X64_RDX, X64_RDX, 8);
+  n += x64_jcc_rel32(buf + n, 0x0, 0); /* jo deopt */
+  int jov2_deopt = n - 4;
   /* or rdx, 1  →  REX.W 0x83 /1 imm8.  ModR/M = 0xC8 | (rdx&7) = 0xCA */
   buf[n++] = 0x48;
   buf[n++] = 0x83;
@@ -3095,6 +3102,7 @@ static int try_jit_for_loop_inc(bytecode_t *bc, uint8_t *buf, int *outn) {
   x64_patch_rel32(buf, jcc_done, 6, done_pc);
   x64_patch_rel32(buf, jz_deopt, 6, deopt_pc);
   x64_patch_rel32(buf, jov_deopt, 4, deopt_pc);
+  x64_patch_rel32(buf, jov2_deopt, 4, deopt_pc);
 
   JIT_GUARD(128);
   *outn = n;

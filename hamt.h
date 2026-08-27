@@ -34,6 +34,8 @@ static uint32_t hamt_hashkey(exp_t *k) {
   }
   if (isfloat(k)) {
     double v = k->f;
+    if (v == 0.0)
+      v = 0.0; /* normalize -0.0 → +0.0 so both hash identically */
     return bernstein_hash((unsigned char *)&v, sizeof v);
   }
   if (isstring(k) || issymbol(k)) {
@@ -461,6 +463,11 @@ exp_t *hamtcmd(exp_t *e, env_t *env) {
       break;
     }
     exp_t *k = EVAL(cur->content, env);
+    if (isfloat(k) && k->f != k->f) {
+      unrefexp(k);
+      err = error(ERROR_ILLEGAL_VALUE, e, env, "hamt: NaN is not a valid key");
+      break;
+    }
     if (iserror(k)) {
       err = k;
       break;

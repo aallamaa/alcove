@@ -50,6 +50,8 @@ static exp_t *make_rational(int64_t num, int64_t den) {
   if (den < 0) {
     if (den == INT64_MIN)
       return NULL; /* |INT64_MIN| > INT64_MAX: cannot normalize */
+    if (num == INT64_MIN)
+      return NULL; /* same: -INT64_MIN is UB */
     num = -num;
     den = -den;
   }
@@ -253,6 +255,10 @@ static exp_t *make_decimal_raw(__int128 coef, int32_t scale, int *over) {
       scale--;
     }
   }
+  if (coef == (__int128)1 << 127) {
+    *over = 1;
+    return NULL;
+  }
   __int128 mag = coef < 0 ? -coef : coef;
   if (mag >= dec_pow10(29)) {
     *over = 1;
@@ -397,12 +403,10 @@ static int dec_cmp(alc_dec_t *a, alc_dec_t *b) {
   if (!dec_align(a, b, &ca, &cb, &s))
     return ca < cb ? -1 : (ca > cb ? 1 : 0);
   /* extreme magnitudes whose aligned form overflows i128: compare via
-     string representation to avoid double precision loss. */
-  char sa[48], sb[48];
-  dec_to_str(a, sa);
-  dec_to_str(b, sb);
-  int sgn = strcmp(sa, sb);
-  return sgn < 0 ? -1 : (sgn > 0 ? 1 : 0);
+     double (acceptable precision loss at these extreme magnitudes). */
+  double da = (double)a->coef * pow(10.0, a->scale);
+  double db = (double)b->coef * pow(10.0, b->scale);
+  return da < db ? -1 : (da > db ? 1 : 0);
 }
 
 /* op '+','-','*','/' on two decimal exp_t. Returns owned decimal or NULL with

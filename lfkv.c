@@ -163,7 +163,7 @@ static lfslot_t *probe(lfkv_t *kv, uint32_t h, const char *k, size_t klen,
 int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
   lfentry_t *new_entry = entry_alloc(val, 0);
   if (!new_entry)
-    return 0;
+    return -1;
 
   LFKV_PROBE(kv, k, klen, h, i, tomb, s);
 
@@ -175,7 +175,7 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
   lfslot_t *fresh = slot_alloc(h, k, klen, new_entry);
   if (!fresh) {
     entry_free_wrapper(new_entry);
-    return 0;
+    return -1;
   }
 
   for (;;) {
@@ -205,7 +205,7 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     }
     free(fresh);
     entry_free_wrapper(new_entry);
-    return 0; /* full */
+    return -1; /* full */
   try_claim:
     continue;
   }
@@ -346,14 +346,14 @@ int64_t lfkv_get_expiry(lfkv_t *kv, const char *k, size_t klen) {
   for (;;) {
     LFKV_PROBE(kv, k, klen, h, i, tomb, s);
     if (!s)
-      return 0;
+      return -1; /* key absent */
     lfentry_t *ent = atomic_load_explicit(&s->entry, memory_order_acquire);
     if (!ent || !ent->val)
-      return 0;
+      return -1; /* key absent */
     if (entry_expired(ent, now)) {
       lfentry_t *expected = ent;
       if (slot_retire_entry(kv, s, &expected))
-        return 0;
+        return -1; /* expired → absent */
       continue;
     }
     return ent->expiry_us;

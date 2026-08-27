@@ -348,7 +348,8 @@ static void compile_arith(compiler_t *c, exp_t *form, int op) {
     c->failed = 1;
     return;
   }
-  if (match(op, OP_LT, OP_GT, OP_LE, OP_GE) && a->next->next) {
+  if (match(op, OP_LT, OP_GT, OP_LE, OP_GE, OP_IS, OP_ISO, OP_MOD) &&
+      a->next->next) {
     c->failed = 1;
     return;
   }
@@ -3008,7 +3009,7 @@ l_cons: {
      For (cons a nil) we drop the explicit nil tail to match conscmd. */
   exp_t *b = POP(), *a = POP();
   exp_t *pair = make_node(a); /* transfers a's ref into pair->content */
-  if (istrue(b))
+  if (b && b != NIL_EXP)
     pair->next = b; /* transfers b's ref */
   else {
     unrefexp(b);
@@ -3150,7 +3151,9 @@ l_vec_ref: {
      that arrived as a float instead of a fixnum — e.g. (/ a b) taking the
      float path on a 32-bit target — where the truncated result is still
      the correct index. */
-  int64_t i = isnumber(iexp) ? FIX_VAL(iexp) : (int64_t)iexp->f;
+  int64_t i = isnumber(iexp)   ? FIX_VAL(iexp)
+              : isnan(iexp->f) ? -1
+                               : (int64_t)iexp->f;
   if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(iexp);
     unrefexp(vexp);
@@ -3170,8 +3173,9 @@ l_vec_set: {
     unrefexp(vexp);
     RUNTIME_ERR("vec-set!: bad args");
   }
-  int64_t i = isnumber(iexp) ? FIX_VAL(iexp)
-                             : (int64_t)iexp->f; /* float idx truncates */
+  int64_t i = isnumber(iexp)   ? FIX_VAL(iexp)
+              : isnan(iexp->f) ? -1
+                               : (int64_t)iexp->f;
   if (i < 0 || i >= vec_len(vexp)) {
     unrefexp(valexp);
     unrefexp(iexp);
@@ -3389,8 +3393,8 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
        arm on its two head paths; this keeps compiled bodies in sync. */
     int i;
     /* (s op rhs) infix on a container LHS -> (op s rhs): a 2-arg call whose
-       first arg is an operator/function is infix, not indexing. Matches the AST
-       container arms (ast_container_infix). argv[0]=op, argv[1]=rhs. */
+       first arg is an operator/function is infix, not indexing. Matches the
+       AST container arms (ast_container_infix). argv[0]=op, argv[1]=rhs. */
     if (nargs == 2) {
       int oi = infix_op_index(argv[0]);
       if (oi >= 0 || infix_is_fn(argv[0])) {
@@ -3429,16 +3433,16 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
   }
 #endif
   if (isinternal(fn)) {
-    /* An applicative builtin called from compiled bytecode (FLAG_APPLICATIVE —
-       see compile_expr's fast path). If it registered a values fast-path
-       (lispCmdV in ->meta), call it directly with the evaluated argv — no call
-       form synthesized, so nothing to leak. Otherwise alc_apply_n wraps the
-       args in the canonical (fn args...) form and calls fn->fnc (which must
-       consume that form). Both consume the argv refs. */
+    /* An applicative builtin called from compiled bytecode (FLAG_APPLICATIVE
+       — see compile_expr's fast path). If it registered a values fast-path
+       (lispCmdV in ->meta), call it directly with the evaluated argv — no
+       call form synthesized, so nothing to leak. Otherwise alc_apply_n wraps
+       the args in the canonical (fn args...) form and calls fn->fnc (which
+       must consume that form). Both consume the argv refs. */
     /* Sandbox gate, hoisted above both arms: alc_apply_n routes through
-       invoke_internal (gated), but the values fast-path calls fv() directly, so
-       refuse a FLAG_UNSAFE builtin here to keep the "single gate" invariant on
-       every compiled path. Consume the owned argv refs first. */
+       invoke_internal (gated), but the values fast-path calls fv() directly,
+       so refuse a FLAG_UNSAFE builtin here to keep the "single gate"
+       invariant on every compiled path. Consume the owned argv refs first. */
     if ((g_safe_mode || g_in_client_cmd) && (fn->flags & FLAG_UNSAFE)) {
       int i;
       for (i = 0; i < nargs; i++)
@@ -3458,9 +3462,9 @@ static exp_t *vm_invoke_values(exp_t *fn, int nargs, exp_t **argv, env_t *env) {
     return alc_apply_n(fn, nargs, argv, env);
   }
   if (!islambda(fn)) {
-    /* Infix: a non-callable head with exactly 2 args whose operator value is a
-       binary builtin -> (op head rhs). e.g. (1 + 2), or (a + b) where a is a
-       number. argv[0] is the evaluated operator, argv[1] the rhs. */
+    /* Infix: a non-callable head with exactly 2 args whose operator value is
+       a binary builtin -> (op head rhs). e.g. (1 + 2), or (a + b) where a is
+       a number. argv[0] is the evaluated operator, argv[1] the rhs. */
     int idx;
     if (nargs == 2 && (idx = infix_op_index(argv[0])) >= 0) {
       exp_t *r = infix_apply(idx, fn, argv[1], env);
@@ -3510,8 +3514,9 @@ bind_lambda:; /* a plain (non-MULTI) lambda jumps straight here */
       for (i = 0; i < nargs; i++)
         unrefexp(argv[i]);
       destroy_env(newenv);
-      /* Same wording as the AST path (var2env) so arity errors read identically
-         whether the callee was reached interpreted or compiled. */
+      /* Same wording as the AST path (var2env) so arity errors read
+         identically whether the callee was reached interpreted or compiled.
+       */
       return error(ERROR_ILLEGAL_VALUE, fn, env, "too %s arguments to %s",
                    nargs < fn->bc->nparams ? "few" : "many",
                    fn->meta ? (const char *)fn->meta : "function");
