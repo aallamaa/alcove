@@ -3058,10 +3058,16 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
       if (strcmp(exp_text(key), "car") == 0) // form (= (car x) 'z)
       {
         key = EVAL(cadr(keyv), env);
-        if iserror (key) {
+        if (!key || iserror(key)) {
+          if (key && iserror(key)) {
+            unrefexp(keyv);
+            unrefexp(val);
+            return key;
+          }
           unrefexp(keyv);
           unrefexp(val);
-          return key;
+          return error(ERROR_MISSING_PARAMETER, keyv, env,
+                       "=: (car) requires an argument");
         }
         unrefexp(key->content);
         key->content = refexp(val);
@@ -3070,10 +3076,16 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
 
       } else if (strcmp(exp_text(key), "cdr") == 0) {
         key = EVAL(cadr(keyv), env);
-        if iserror (key) {
+        if (!key || iserror(key)) {
+          if (key && iserror(key)) {
+            unrefexp(keyv);
+            unrefexp(val);
+            return key;
+          }
           unrefexp(keyv);
           unrefexp(val);
-          return key;
+          return error(ERROR_MISSING_PARAMETER, keyv, env,
+                       "=: (cdr) requires an argument");
         }
         unrefexp(key->next);
         key->next = refexp(val);
@@ -3086,6 +3098,11 @@ exp_t *updatebang(exp_t *keyv, env_t *env, exp_t *val) {
            gap that silently no-op'd whenever i wasn't a literal. */
         exp_t *idx = NULL;
         key = EVAL(key, env);
+        if (iserror(key)) {
+          unrefexp(keyv);
+          unrefexp(val);
+          return key;
+        }
         if (isstring(key)) {
           idx = EVAL(cadr(keyv), env);
           if iserror (idx) {
@@ -4771,13 +4788,13 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   char *path_snap = (path == alcove_db_path) ? NULL : strdup(path);
   FILE *stream = fopen(path, "w");
   if (!stream) {
-    if (path_arg)
-      unrefexp(path_arg);
-    unrefexp(e);
     exp_t *err =
         error(ERROR_ILLEGAL_VALUE, NULL, env, "Unable to open '%s' for writing",
               path_snap ? path_snap : path);
+    if (path_arg)
+      unrefexp(path_arg);
     free(path_snap);
+    unrefexp(e);
     return err;
   }
   /* Unified writer: section L (this env) + section R (resp_kv if a
@@ -4786,13 +4803,13 @@ exp_t *savedbcmd(exp_t *e, env_t *env) {
   int ok = alcove_dump_unified(env, resp_kv_get(), stream);
   fclose(stream);
   if (!ok) {
-    if (path_arg)
-      unrefexp(path_arg);
-    unrefexp(e);
     exp_t *err =
         error(ERROR_ILLEGAL_VALUE, NULL, env, "savedb: I/O error writing '%s'",
               path_snap ? path_snap : path);
+    if (path_arg)
+      unrefexp(path_arg);
     free(path_snap);
+    unrefexp(e);
     return err;
   }
   free(path_snap);

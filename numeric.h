@@ -257,7 +257,7 @@ static exp_t *make_decimal_raw(__int128 coef, int32_t scale, int *over) {
       scale--;
     }
   }
-  if (coef == (__int128)1 << 127) {
+  if (coef == (__int128)((unsigned __int128)1 << 127)) {
     *over = 1;
     return NULL;
   }

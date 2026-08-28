@@ -2088,8 +2088,8 @@ exp_t *randomcmd(exp_t *e, env_t *env) {
 }
 
 /* (map fn list) — non-destructive; returns a new list of (fn x) values. */
-const char doc_map[] = "(map fn xs ...) — apply fn to corresponding elements "
-                       "of one or more lists; returns a new list.";
+const char doc_map[] = "(map fn list) — non-destructive; returns a new list "
+                       "of (fn x) values.";
 exp_t *mapcmd(exp_t *e, env_t *env) {
   exp_t *head = NULL, *tail = NULL;
   EVAL_ARG_2(fn, xs);

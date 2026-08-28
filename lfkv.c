@@ -178,16 +178,26 @@ int lfkv_set(lfkv_t *kv, const char *k, size_t klen, exp_t *val) {
     slot_replace_entry(kv, s, new_entry);
     return 0;
   }
-  /* Tombstone reuse was attempted in R6-4 but is unsafe: freeing a slot
-     that a concurrent prober may still dereference is a UAF, and key[]
-     is a flexible array member (free(old->key) is UB). Slots are never
-     freed except at lfkv_destroy — tombstones accumulate but the table
-     remains correct. A future fix could reuse the slot in-place (CAS
-     on fields) without freeing. */
+  /* Reuse a tombstoned slot for a new key (CAS swap). The old tombstoned
+     slot is NOT freed — a concurrent prober may still reference it.
+     Leaking it is safe and prevents table exhaustion under FLUSHDB. */
   lfslot_t *fresh = slot_alloc(h, k, klen, new_entry);
   if (!fresh) {
     entry_free_wrapper(new_entry);
     return -1;
+  }
+  if (!s && tomb != SIZE_MAX) {
+    lfslot_t *old =
+        atomic_load_explicit(&kv->slots[tomb], memory_order_acquire);
+    if (old && old->entry == NULL &&
+        atomic_compare_exchange_strong_explicit(&kv->slots[tomb], &old, fresh,
+                                                memory_order_release,
+                                                memory_order_acquire)) {
+      atomic_fetch_add_explicit(&kv->count, 1, memory_order_relaxed);
+      LFKV_EMIT(1, k, klen, val);
+      return 0;
+    }
+    /* CAS failed — fall through to normal insert. */
   }
   for (;;) {
     lfslot_t *expected = NULL;

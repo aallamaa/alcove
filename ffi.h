@@ -455,7 +455,7 @@ static void alc_ffi_closure_dispatch(ffi_cif *cif, void *ret, void **args,
   case AFFI_INT:
   case AFFI_LONG:
     *(ffi_arg *)ret =
-        (ffi_arg)(r ? (isfloat(r) ? (int64_t)r->f
+        (ffi_arg)(r ? (isfloat(r) ? (isfinite(r->f) ? (int64_t)r->f : 0)
                                   : (isnumber(r) || ischar(r) ? FIX_VAL(r) : 0))
                     : 0);
     break;
@@ -1077,13 +1077,19 @@ static exp_t *alc_ffi_call(alc_ffi_t *f, int nargs, exp_t **args) {
     case AFFI_INT:
       slots[i].i = isnumber(a) ? (int32_t)FIX_VAL(a)
                    : ischar(a) ? (int32_t)CHAR_VAL(a)
-                               : (int32_t)a->f;
+                               : (isfinite(a->f) && a->f >= INT32_MIN &&
+                                          a->f <= INT32_MAX
+                                      ? (int32_t)a->f
+                                      : 0);
       avalues[i] = &slots[i].i;
       break;
     case AFFI_LONG:
       slots[i].l = isnumber(a) ? FIX_VAL(a)
-                   : ischar(a) ? (int64_t)CHAR_VAL(a)
-                               : (int64_t)a->f;
+                   : ischar(a)
+                       ? (int64_t)CHAR_VAL(a)
+                       : (isfinite(a->f) && a->f >= -9.2e18 && a->f <= 9.2e18
+                              ? (int64_t)a->f
+                              : 0);
       avalues[i] = &slots[i].l;
       break;
     case AFFI_DOUBLE:

@@ -1534,7 +1534,11 @@ static void cmd_append(resp_client_t *c, char **argv, long *argl, int argc) {
     resp_write_err(c, "ERR out of memory");
     return;
   }
-  for (;;) {
+  for (int retries = 0;; retries++) {
+    if (retries > 1000) {
+      resp_write_err(c, "ERR OOM or too many retries");
+      return;
+    }
     exp_t *cur_v = resp_kv_lookup(k, klen);
     if (!cur_v) {
       exp_t *fresh = make_blob(argv[2], add);
@@ -1594,7 +1598,11 @@ static void cmd_lpush_rpush(resp_client_t *c, char **argv, long *argl, int argc,
     resp_write_err(c, "ERR out of memory");
     return;
   }
-  for (;;) {
+  for (int retries = 0;; retries++) {
+    if (retries > 1000) {
+      resp_write_err(c, "ERR OOM or too many retries");
+      return;
+    }
     exp_t *cur = resp_kv_lookup(k, klen);
     if (cur && !islist(cur)) {
       unrefexp(cur);
@@ -1629,7 +1637,11 @@ static void cmd_lpop_rpop(resp_client_t *c, char **argv, long *argl, int argc,
   ARGN(2);
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
-  for (;;) {
+  for (int retries = 0;; retries++) {
+    if (retries > 1000) {
+      resp_write_err(c, "ERR OOM or too many retries");
+      return;
+    }
     exp_t *cur = resp_kv_lookup(k, klen);
     if (!cur) {
       resp_write_nil(c);
@@ -1812,7 +1824,11 @@ static void cmd_hset(resp_client_t *c, char **argv, long *argl, int argc) {
     resp_write_err(c, "ERR out of memory");
     return;
   }
-  for (;;) {
+  for (int retries = 0;; retries++) {
+    if (retries > 1000) {
+      resp_write_err(c, "ERR OOM or too many retries");
+      return;
+    }
     exp_t *cur = resp_kv_lookup(k, klen);
     if (cur && !isdict(cur)) {
       unrefexp(cur);
@@ -1873,7 +1889,11 @@ static void cmd_hdel(resp_client_t *c, char **argv, long *argl, int argc) {
   ARG_AT_LEAST(3);
   const char *k = argv[1];
   size_t klen = (size_t)argl[1];
-  for (;;) {
+  for (int retries = 0;; retries++) {
+    if (retries > 1000) {
+      resp_write_err(c, "ERR OOM or too many retries");
+      return;
+    }
     exp_t *cur = resp_kv_lookup(k, klen);
     if (!cur) {
       resp_write_int(c, 0);
